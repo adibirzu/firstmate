@@ -1,0 +1,60 @@
+{
+  "_comment": "Copy to config/accounts.json (gitignored). One entry per account. 'isolation' MUST match the harness per adapters/config-dir-matrix.md. NEVER put a secret here: api-key accounts point at a key_file (a 0600 file in YOUR OWN home); fm-spawn reads it at launch. config_dir/key_file must live under your own home (foreign /home/<other> is refused).",
+
+  "claude-personal": {
+    "provider": "anthropic",
+    "harness": "claude",
+    "isolation": "config-dir-env",
+    "env": "CLAUDE_CONFIG_DIR",
+    "config_dir": "/home/adi/.claude",
+    "scopes": ["backend", "infra", "deploy"]
+  },
+  "claude-work": {
+    "provider": "anthropic",
+    "harness": "claude",
+    "isolation": "config-dir-env",
+    "env": "CLAUDE_CONFIG_DIR",
+    "config_dir": "/home/adi/.claude-accounts/work",
+    "scopes": ["backend"]
+  },
+  "codex-personal": {
+    "provider": "openai",
+    "harness": "codex",
+    "isolation": "config-dir-env",
+    "env": "CODEX_HOME",
+    "config_dir": "/home/adi/.codex",
+    "scopes": ["backend"]
+  },
+  "pi-personal": {
+    "provider": "pi",
+    "harness": "pi",
+    "isolation": "config-dir-env",
+    "env": "PI_CODING_AGENT_DIR",
+    "config_dir": "/home/adi/.pi/agent",
+    "scopes": ["long-autonomous"]
+  },
+  "cline-personal": {
+    "provider": "anthropic",
+    "harness": "cline",
+    "isolation": "config-dir-flag",
+    "flag": "--config",
+    "config_dir": "/home/adi/.cline",
+    "scopes": ["web"]
+  },
+  "grok-personal": {
+    "provider": "xai",
+    "harness": "grok",
+    "isolation": "api-key-env",
+    "env": "GROK_API_KEY",
+    "key_file": "/home/adi/.secrets/grok-personal.key",
+    "scopes": ["research"]
+  },
+  "cursor-personal": {
+    "provider": "cursor",
+    "harness": "cursor-agent",
+    "isolation": "api-key-env",
+    "env": "CURSOR_API_KEY",
+    "key_file": "/home/adi/.secrets/cursor-personal.key",
+    "scopes": ["web"]
+  }
+}
