@@ -101,7 +101,67 @@ fm_account_list() { # -> account names, one per line
   jq -r 'keys[]' "$f"
 }
 
-fm_account_list_by_harness() { # harness -> matching account names
+fm_account_list_by_harness() { # harness -> matching account names (file order)
   local h=$1 f; f=$(fm_accounts_file); [ -f "$f" ] || return 0
   jq -r --arg h "$h" 'to_entries[] | select(.value.harness==$h) | .key' "$f"
+}
+
+# --- quota-aware account selection (Phase 4, Task 12) -------------------------
+#
+# quota-axi reports headroom PER PROVIDER for the CURRENTLY-authenticated account
+# (oauth/keychain) — it cannot see several accounts at once. So per-account
+# headroom is obtained by running quota-axi UNDER each account's isolation (the
+# same env/flag the spawn uses). The binding constraint for an account is the
+# minimum percentRemaining across its windows. Pick the account with the most
+# binding headroom; ties -> first registered. Guards: unsupported provider or
+# quota-axi absent -> first registered (+ a note on stderr).
+
+# harness -> quota-axi --provider value; nonzero if quota-axi has no coverage.
+fm_account_quota_provider() { # harness
+  case "$1" in
+    claude) echo claude ;;
+    codex)  echo codex ;;
+    grok)   echo grok ;;
+    cursor-agent) echo cursor ;;
+    kimi)   echo kimi ;;
+    *) return 1 ;;   # pi, cline: not covered by quota-axi
+  esac
+}
+
+# Run quota-axi under one account's isolation; echo its min percentRemaining.
+_fm_account_headroom() { # iso env cdir kfile qbin prov
+  local iso=$1 env=$2 cdir=$3 kfile=$4 qbin=$5 prov=$6 out key
+  case "$iso" in
+    config-dir-env)  out=$(env "$env=$cdir" "$qbin" --provider "$prov" --json 2>/dev/null) ;;
+    config-dir-flag) out=$("$qbin" --provider "$prov" --json 2>/dev/null) ;;
+    api-key-env)
+      [ -r "$kfile" ] || return 0
+      key=$(head -n1 "$kfile"); [ -n "$key" ] || return 0
+      out=$(env "$env=$key" "$qbin" --provider "$prov" --json 2>/dev/null) ;;
+    *) return 0 ;;
+  esac
+  printf '%s' "$out" | jq -r --arg p "$prov" '
+    [.providers[] | select(.provider==$p) | .windows[].percentRemaining] | min // empty' 2>/dev/null
+}
+
+# fm_account_pick(harness) -> the registered account with the most headroom.
+fm_account_pick() { # harness
+  local harness=$1 prov qbin best="" best_hr=-1 acct hr line _h iso env flag cdir kfile
+  local -a accts
+  mapfile -t accts < <(fm_account_list_by_harness "$harness")
+  [ "${#accts[@]}" -gt 0 ] || { echo "fm-account: no accounts for harness '$harness'" >&2; return 1; }
+  if [ "${#accts[@]}" -eq 1 ]; then printf '%s\n' "${accts[0]}"; return 0; fi
+  prov=$(fm_account_quota_provider "$harness") \
+    || { printf '%s\n' "${accts[0]}"; echo "fm-account: no quota provider for '$harness'; picked first (${accts[0]})" >&2; return 0; }
+  qbin="${QUOTA_AXI_BIN:-quota-axi}"
+  command -v "$qbin" >/dev/null 2>&1 \
+    || { printf '%s\n' "${accts[0]}"; echo "fm-account: quota-axi absent; picked first (${accts[0]})" >&2; return 0; }
+  for acct in "${accts[@]}"; do
+    line=$(fm_account_resolve "$acct") || continue
+    IFS=$'\t' read -r _h iso env flag cdir kfile <<<"$line"
+    hr=$(_fm_account_headroom "$iso" "$env" "$cdir" "$kfile" "$qbin" "$prov")
+    [ -n "$hr" ] || hr=-1
+    if [ "$hr" -gt "$best_hr" ]; then best_hr=$hr; best=$acct; fi
+  done
+  [ -n "$best" ] && printf '%s\n' "$best" || printf '%s\n' "${accts[0]}"
 }
