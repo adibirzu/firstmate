@@ -22,5 +22,9 @@ if command -v cursor-agent >/dev/null 2>&1; then
 else
   status=unavailable
 fi
-note="usage server-side (cursor.com); set config/quota-overrides.json .cursor for a real number"
+if [ "$hr" != null ]; then
+  note="live headroom via authed usage reader (Connect GetCurrentPeriodUsage)"
+else
+  note="blind: set config/quota-overrides.json .cursor to bin/quota-cursor-usage.sh for a live number"
+fi
 printf '{"surface":"cursor","status":"%s","headroom":%s,"unit":"requests","models":["grok","claude","gpt"],"note":"%s"}\n' "$status" "$hr" "$note"
