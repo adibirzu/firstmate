@@ -1,8 +1,7 @@
 {
-  "_comment": "Canonical model family -> ORDERED surfaces (quota pools) that can serve it. A 'surface' is a quota-axi provider (claude/codex/grok/cursor/copilot/kimi) or a custom source in bin/quota-sources/<surface>.sh (e.g. cline). Routing/failover walks the list left-to-right and dispatches on the first surface with observable headroom; a surface whose quota is unobservable (server-side only, e.g. cursor/cline) is treated fail-open as a valid failover target. Same model, several pools: this is how 'grok from whichever pool has tokens' and 'kimi3 via cline' are expressed. Extend freely.",
+  "_comment": "Canonical model family -> ORDERED surfaces (quota pools) that can serve it. A 'surface' is a quota-axi provider (claude/codex/grok/cursor/copilot/kimi) or a custom source in bin/quota-sources/<surface>.sh. Routing/failover walks the list left-to-right and dispatches on the first surface with observable headroom; a surface whose quota is unobservable is treated fail-open as a valid failover target. Same model, several pools: this is how 'grok from whichever pool (grok CLI or Cursor) has tokens' is expressed. NOTE: cline is intentionally NOT a monitored surface (its usage is locked behind an internal WS-hub credential); it stays a usable crewmate harness but is out of quota routing — we let it hit its wall and route open work to other LLMs. Extend freely.",
   "grok":   ["grok", "cursor"],
-  "kimi":   ["kimi", "cline"],
-  "open":   ["cline"],
-  "claude": ["claude", "cursor", "cline"],
-  "gpt":    ["codex", "cursor", "cline"]
+  "kimi":   ["kimi"],
+  "claude": ["claude", "cursor"],
+  "gpt":    ["codex", "cursor"]
 }

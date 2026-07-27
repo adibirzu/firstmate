@@ -91,23 +91,31 @@ several pools (grok via the `grok` CLI AND via Cursor; kimi3/open models via `cl
 Three read-only, 0-token verbs expose and route on this:
 
 - `fm-fleet.sh quota` — every surface's headroom + observability status. Base rows come
-  from `quota-axi` (claude/codex/cursor/copilot/grok/kimi); surfaces `quota-axi` can't
-  see (e.g. `cline`) are added by pluggable scripts in `bin/quota-sources/<surface>.sh`,
-  each emitting one normalized `{surface,status,headroom,unit,models,note}` JSON object.
+  from `quota-axi` (claude/codex/cursor/copilot/grok/kimi); pluggable scripts in
+  `bin/quota-sources/<surface>.sh` add surfaces quota-axi can't see or attach an authed
+  reader (e.g. `cursor`), each emitting a normalized `{surface,status,headroom,unit,models,note}` object.
 - `fm-fleet.sh models` — for each model family in `config/model-surfaces.json`, the
   ordered surfaces that can serve it, each with live status + headroom.
 - `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): first
   surface with observable headroom ≥ floor → else a configured-but-unobservable surface
   (fail-open) → else the first listed. This is "grok from whichever pool has tokens".
 
-Observability limit (honest): Cursor and cline expose **no** usage locally — only
-auth-status + model lists; their real credit/quota numbers live server-side. Cursor's
-is worse: usage sits behind `cursor.com/api/dashboard/*` **browser-session-cookie** auth,
-which the CLI's `api2.cursor.sh` bearer cannot use (verified: `auth/me`→204, `usage`→401),
-so there is no CLI-token-accessible usage endpoint. Rather than ship a guessed/fragile
-reader, the authed path is an **operator-supplied escape hatch**: `config/quota-overrides.json`
-maps `<surface> → a shell command that prints one int 0-100` (percent headroom); the
+Authed readers (server-side usage): some surfaces don't report through quota-axi. The
+mechanism is an **operator-supplied escape hatch**: `config/quota-overrides.json` maps
+`<surface> → a shell command that prints one int 0-100` (percent headroom); the
 `bin/quota-sources/*.sh` scripts run it and emit that as the surface's headroom, which
 **supersedes** the quota-axi / blind row. The command owns all secret handling (read the
 token from a 0600 file, never argv). Empty/missing = blind fail-open (default). Template:
-`config/quota-overrides.json.example` (real file gitignored). Tests: `tests/federation/test_quota_surfaces.sh`.
+`config/quota-overrides.json.example` (real file gitignored).
+
+- **cursor** — SOLVED with a shipped reader `bin/quota-cursor-usage.sh`: Cursor's native
+  Connect RPC `POST api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`
+  (Content-Type: application/json, Connect-Protocol-Version: 1, x-cursor-client-* headers)
+  accepts the CLI's OWN access token from `~/.config/cursor/auth.json` — no browser cookie.
+  headroom = 100 − `planUsage.totalPercentUsed`. Wire: `"cursor": "<repo>/bin/quota-cursor-usage.sh"`.
+- **cline** — intentionally NOT monitored. Its balance is served via an internal local
+  WS Hub (`ws://127.0.0.1:25463/hub`) using a server-derived credential, not the stored
+  WorkOS token (every REST/header variant returns 401). cline stays a usable crewmate
+  harness but is out of quota routing; we let it hit its wall and route open work elsewhere.
+
+Tests: `tests/federation/test_quota_surfaces.sh`.
