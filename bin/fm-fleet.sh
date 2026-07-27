@@ -35,5 +35,8 @@ case "$cmd" in
   heartbeat) fm_fleet_heartbeat "$DIR" "$1" ;;
   leave)     fm_fleet_leave "$DIR" "$1" ;;
   budget)    fm_fleet_budget_ok && echo "ok (min headroom >= ${FM_FLEET_QUOTA_MIN:-5}%)" || { echo "below floor (< ${FM_FLEET_QUOTA_MIN:-5}%)"; exit 1; } ;;
-  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|reap|route|budget|status|view" >&2; exit 1 ;;
+  quota)     fm_fleet_quota_report ;;
+  models)    fm_fleet_models_report ;;
+  pick)      fm_fleet_pick_surface "${1:?usage: fm-fleet.sh pick <model-family>}" ;;
+  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|reap|route|budget|quota|models|pick|status|view" >&2; exit 1 ;;
 esac
