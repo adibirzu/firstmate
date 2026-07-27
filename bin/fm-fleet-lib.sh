@@ -248,6 +248,132 @@ fm_fleet_quota_now() {
   case "$min" in ''|null) printf '%s' '-' ;; *) printf '%s' "$min" ;; esac
 }
 
+# Human-readable per-surface headroom for EVERY llm/cli/app quota-axi knows about,
+# with each surface's observability status. Read-only, bash+jq, 0 LLM tokens.
+# Rationale: each CLI/app subscription is its OWN token pool, so a model reachable via
+# more than one surface (e.g. grok via the grok CLI AND via a Cursor subscription) has
+# one row per surface. A surface only contributes to routing when status is "fresh";
+# "auth_required"/"unavailable"/"error" surfaces are shown but flagged un-observable.
+fm_fleet_quota_report() {
+  command -v quota-axi >/dev/null 2>&1 || { echo "quota-axi not installed" >&2; return 1; }
+  command -v jq >/dev/null 2>&1 || { echo "jq not installed" >&2; return 1; }
+  local j; j=$(quota-axi --json 2>/dev/null) || { echo "quota-axi failed" >&2; return 1; }
+  local base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  # Collect custom-source rows once. A source is authoritative for its surface and
+  # SUPERSEDES the quota-axi row of the same name (e.g. an authed `cursor` override
+  # replaces quota-axi's blind cursor row; `cline` is added since quota-axi lacks it).
+  local -a SRC=(); local f s
+  for f in "$base"/bin/quota-sources/*.sh; do
+    [ -f "$f" ] || continue; s=$(bash "$f" 2>/dev/null) || continue
+    [ -n "$s" ] && SRC+=("$s")
+  done
+  local ex_json='[]'
+  if [ "${#SRC[@]}" -gt 0 ]; then
+    ex_json=$(printf '%s\n' "${SRC[@]}" | jq -r '.surface // empty' 2>/dev/null | jq -R . | jq -s . 2>/dev/null)
+    [ -n "$ex_json" ] || ex_json='[]'
+  fi
+  {
+    printf 'SURFACE\tHEADROOM\tSTATUS\tSOURCE\tNOTE\n'
+    printf '%s\n' "$j" | jq -r --argjson ex "$ex_json" '
+      .providers[] | select((.provider as $p | $ex | index($p)) | not)
+      | ((.quotaSemantics.effectiveAvailability // []
+           | map(select(.scope=="all_models").effectivePercentRemaining) | .[0])
+         // (.windows // [] | map(.percentRemaining) | min)) as $rem
+      | [ .provider,
+          (if $rem==null then "—" else ($rem|tostring)+"%" end),
+          (.state.status // "?"), (.source // "?"),
+          (if (.state.status // "")=="fresh" then "observable"
+           else (.state.error // "not reporting") end)
+        ] | @tsv'
+    local row
+    for row in "${SRC[@]:-}"; do
+      [ -n "$row" ] || continue
+      printf '%s\n' "$row" | jq -r '
+        [ .surface,
+          (if .headroom==null then "—" else (.headroom|tostring)+"%" end),
+          (.status // "?"), "custom", (.note // "") ] | @tsv'
+    done
+  } | { command -v column >/dev/null 2>&1 && column -t -s "$(printf '\t')" || cat; }
+}
+
+# model family -> surfaces (quota pools) with each surface's live status + headroom.
+# Answers "for model X, which pools can serve it and which have tokens?" — the basis
+# for grok/kimi failover across surfaces. Reads config/model-surfaces.json. 0 LLM tokens.
+fm_fleet_models_report() {
+  command -v jq >/dev/null 2>&1 || { echo "jq not installed" >&2; return 1; }
+  local base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  local map="$base/config/model-surfaces.json"
+  [ -f "$map" ] || { echo "no model map at $map" >&2; return 1; }
+  local j; j=$(quota-axi --json 2>/dev/null || echo '{"providers":[]}')
+  declare -A ST HR
+  local p st hr
+  while IFS=$'\t' read -r p st hr; do ST[$p]=$st; HR[$p]=$hr; done < <(
+    printf '%s\n' "$j" | jq -r '.providers[]
+      | ((.quotaSemantics.effectiveAvailability // [] | map(select(.scope=="all_models").effectivePercentRemaining) | .[0])
+         // (.windows//[]|map(.percentRemaining)|min)) as $r
+      | [.provider, (.state.status//"?"), (if $r==null then "—" else ($r|tostring)+"%" end)] | @tsv')
+  local f s surf
+  for f in "$base"/bin/quota-sources/*.sh; do
+    [ -f "$f" ] || continue; s=$(bash "$f" 2>/dev/null) || continue
+    surf=$(printf '%s' "$s" | jq -r '.surface // empty' 2>/dev/null); [ -n "$surf" ] || continue
+    ST[$surf]=$(printf '%s' "$s" | jq -r '.status//"?"')
+    HR[$surf]=$(printf '%s' "$s" | jq -r 'if .headroom==null then "—" else (.headroom|tostring)+"%" end')
+  done
+  {
+    printf 'MODEL\tSURFACES (pool: status headroom)\n'
+    local fam surfaces sfx out
+    while IFS= read -r fam; do
+      surfaces=$(jq -r --arg k "$fam" '.[$k][]?' "$map")
+      out=""
+      while IFS= read -r sfx; do
+        [ -n "$sfx" ] || continue
+        out+="${out:+  |  }${sfx}: ${ST[$sfx]:-unconfigured} ${HR[$sfx]:-—}"
+      done <<< "$surfaces"
+      printf '%s\t%s\n' "$fam" "$out"
+    done < <(jq -r 'keys_unsorted[] | select(startswith("_")|not)' "$map")
+  } | { command -v column >/dev/null 2>&1 && column -t -s "$(printf '\t')" || cat; }
+}
+
+# Failover selector: pick the best surface (quota pool) to serve a model family.
+#   pass 1: first surface with OBSERVABLE headroom >= FM_FLEET_QUOTA_MIN (has tokens)
+#   pass 2: else first surface configured/online but unobservable (fail-open target)
+#   pass 3: else the first listed surface (last resort)
+# Echoes the surface name; non-zero (with message) if the family is unknown. 0 tokens.
+# This is the "grok from whichever pool has tokens / kimi3 via cline" decision.
+fm_fleet_pick_surface() { # model-family
+  command -v jq >/dev/null 2>&1 || return 2
+  local fam=$1 base map floor=${FM_FLEET_QUOTA_MIN:-5}
+  base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  map="$base/config/model-surfaces.json"
+  [ -f "$map" ] || return 2
+  local surfaces; surfaces=$(jq -r --arg k "$fam" '.[$k][]?' "$map")
+  [ -n "$surfaces" ] || { echo "unknown model family: $fam" >&2; return 1; }
+  local j; j=$(quota-axi --json 2>/dev/null || echo '{"providers":[]}')
+  declare -A ST HR
+  local p st hr
+  while IFS=$'\t' read -r p st hr; do ST[$p]=$st; HR[$p]=$hr; done < <(
+    printf '%s\n' "$j" | jq -r '.providers[]
+      | ((.quotaSemantics.effectiveAvailability//[]|map(select(.scope=="all_models").effectivePercentRemaining)|.[0])
+         //(.windows//[]|map(.percentRemaining)|min)) as $r
+      | [.provider,(.state.status//"?"),(if $r==null then "" else ($r|tostring) end)] | @tsv')
+  local f s surf
+  for f in "$base"/bin/quota-sources/*.sh; do
+    [ -f "$f" ] || continue; s=$(bash "$f" 2>/dev/null) || continue
+    surf=$(printf '%s' "$s" | jq -r '.surface//empty' 2>/dev/null); [ -n "$surf" ] || continue
+    ST[$surf]=$(printf '%s' "$s" | jq -r '.status//"?"')
+    HR[$surf]=$(printf '%s' "$s" | jq -r 'if .headroom==null then "" else (.headroom|tostring) end')
+  done
+  local sfx h
+  while IFS= read -r sfx; do [ -n "$sfx" ] || continue
+    h=${HR[$sfx]:-}
+    if [ -n "$h" ] && [ "$h" -ge "$floor" ] 2>/dev/null; then echo "$sfx"; return 0; fi
+  done <<< "$surfaces"
+  while IFS= read -r sfx; do [ -n "$sfx" ] || continue
+    case "${ST[$sfx]:-}" in fresh|configured|online|logged_in) echo "$sfx"; return 0;; esac
+  done <<< "$surfaces"
+  printf '%s\n' "$surfaces" | head -1
+}
+
 # 0 if this operator has enough headroom to take work (min% >= FM_FLEET_QUOTA_MIN,
 # default 5). Fail-OPEN when quota is unmeasurable ('-') so a missing quota-axi never
 # blocks work; the guard only holds back a MEASURABLY-drained account.

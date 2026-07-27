@@ -83,3 +83,31 @@ exercises every code path.
   `route` skips any operator below `FM_FLEET_QUOTA_MIN` (no cross-user auth needed).
   `fm-fleet.sh budget` / `fm_fleet_budget_ok` gates a claim on local headroom.
   Missing `quota-axi` is fail-open (`quota:-`), so routing falls back to scope alone.
+
+## Per-surface token visibility & model→surface failover
+
+Each CLI/app subscription is its OWN token pool, and one model can be reachable from
+several pools (grok via the `grok` CLI AND via Cursor; kimi3/open models via `cline`).
+Three read-only, 0-token verbs expose and route on this:
+
+- `fm-fleet.sh quota` — every surface's headroom + observability status. Base rows come
+  from `quota-axi` (claude/codex/cursor/copilot/grok/kimi); surfaces `quota-axi` can't
+  see (e.g. `cline`) are added by pluggable scripts in `bin/quota-sources/<surface>.sh`,
+  each emitting one normalized `{surface,status,headroom,unit,models,note}` JSON object.
+- `fm-fleet.sh models` — for each model family in `config/model-surfaces.json`, the
+  ordered surfaces that can serve it, each with live status + headroom.
+- `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): first
+  surface with observable headroom ≥ floor → else a configured-but-unobservable surface
+  (fail-open) → else the first listed. This is "grok from whichever pool has tokens".
+
+Observability limit (honest): Cursor and cline expose **no** usage locally — only
+auth-status + model lists; their real credit/quota numbers live server-side. Cursor's
+is worse: usage sits behind `cursor.com/api/dashboard/*` **browser-session-cookie** auth,
+which the CLI's `api2.cursor.sh` bearer cannot use (verified: `auth/me`→204, `usage`→401),
+so there is no CLI-token-accessible usage endpoint. Rather than ship a guessed/fragile
+reader, the authed path is an **operator-supplied escape hatch**: `config/quota-overrides.json`
+maps `<surface> → a shell command that prints one int 0-100` (percent headroom); the
+`bin/quota-sources/*.sh` scripts run it and emit that as the surface's headroom, which
+**supersedes** the quota-axi / blind row. The command owns all secret handling (read the
+token from a 0600 file, never argv). Empty/missing = blind fail-open (default). Template:
+`config/quota-overrides.json.example` (real file gitignored). Tests: `tests/federation/test_quota_surfaces.sh`.
