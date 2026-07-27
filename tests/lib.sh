@@ -155,6 +155,12 @@ fm_test_reap_orphans
 fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
+  # Every fakebin gets the treehouse stub by default. fm-spawn.sh now EXECUTES
+  # treehouse to lease the worktree instead of sending `treehouse get` to a fake
+  # pane, so a fakebin without this stub falls through to the real binary and
+  # leases real pool slots against a test's throwaway repo. Suites that want to
+  # record the invocation call fm_fake_treehouse again with their own arguments.
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
