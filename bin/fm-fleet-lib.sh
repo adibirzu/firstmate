@@ -61,7 +61,7 @@ fm_fleet_init() {
   fm_fleet_assert_shared "$dir" || return 1
   mkdir -p "$dir/locks"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || git -C "$dir" init -q
-  [ -f "$dir/operators.md" ] || printf '# Fleet operators\n\n| operator | scope | home | accounts | status |\n|---|---|---|---|---|\n' > "$dir/operators.md"
+  [ -f "$dir/operators.md" ] || printf '# Fleet operators\n\n| operator | scope | home | accounts | status | seen | quota |\n|---|---|---|---|---|---|---|\n' > "$dir/operators.md"
   [ -f "$dir/projects.md" ]  || printf '# Fleet projects\n\n| project | owner | path |\n|---|---|---|\n' > "$dir/projects.md"
   [ -f "$dir/backlog.md" ]   || printf '# Fleet backlog\n\n## Queued\n\n## Claimed\n\n## In-flight\n\n## Done\n' > "$dir/backlog.md"
   [ -f "$dir/events.log" ]   || : > "$dir/events.log"
@@ -177,26 +177,35 @@ fm_fleet_reap() { # dir ttl_seconds
 # Echo the operator who should own a task of the given scope.
 # scope-primary: the online operator whose scope column contains the scope.
 # overflow: if none online, the operator whose scope contains "overflow".
+# Echo the operator who should own a task of the given scope.
+# An operator is ELIGIBLE only when all three hold:
+#   status:online AND heartbeat fresh (seen within FM_FLEET_HEARTBEAT_TTL, default 90s)
+#   AND published quota headroom >= FM_FLEET_QUOTA_MIN (default 5), unless quota is '-'.
+# Freshness + quota are self-healing: a crashed firstmate stops heartbeating and a
+# low-headroom operator publishes it, so routing skips both without cross-user auth.
+# 5-column legacy rows (no seen/quota) skip the freshness/quota checks (back-compat).
+# scope-primary first; else the overflow operator. One awk pass over operators.md.
 fm_fleet_route() { # dir scope
-  local dir=$1 scope=$2 owner overflow
-  owner=$(awk -F'|' -v s="$scope" '
+  local dir=$1 scope=$2 now ttl floor
+  now=$(date -u +%s); ttl=${FM_FLEET_HEARTBEAT_TTL:-90}; floor=${FM_FLEET_QUOTA_MIN:-5}
+  awk -F'|' -v s="$scope" -v now="$now" -v ttl="$ttl" -v floor="$floor" '
+    function trim(x){ gsub(/^ +| +$/,"",x); return x }
+    function epoch(iso,   c,e){ if(iso==""||iso=="-")return -1; c="date -u -d \"" iso "\" +%s 2>/dev/null"; c|getline e; close(c); return e+0 }
+    function eligible(st,seen,q,   ep){
+      if(st!="online") return 0
+      ep=epoch(seen); if(ep>0 && (now-ep)>ttl) return 0
+      if(q!="" && q!="-" && (q+0)<floor) return 0
+      return 1
+    }
     /^\| *[a-zA-Z0-9_.-]+ *\|/ {
-      op=$2; gsub(/^ +| +$/,"",op)
-      sc=$3; gsub(/ /,"",sc)
-      st=$6; gsub(/ /,"",st)
-      if (op=="operator") next
-      if (st=="online" && (","sc",") ~ (","s",")) { print op; exit }
-    }' "$dir/operators.md")
-  if [ -n "$owner" ]; then printf '%s\n' "$owner"; return 0; fi
-  overflow=$(awk -F'|' '
-    /^\| *[a-zA-Z0-9_.-]+ *\|/ {
-      op=$2; gsub(/^ +| +$/,"",op)
-      sc=$3; gsub(/ /,"",sc)
-      st=$6; gsub(/ /,"",st)
-      if (op=="operator") next
-      if (st=="online" && (","sc",") ~ /,overflow,/) { print op; exit }
-    }' "$dir/operators.md")
-  printf '%s\n' "$overflow"
+      op=trim($2); sc=$3; gsub(/ /,"",sc); st=trim($6); seen=trim($7); q=trim($8)
+      if(op=="operator") next
+      if(!eligible(st,seen,q)) next
+      if(owner=="" && (","sc",") ~ (","s",")) owner=op
+      if(ov=="" && (","sc",") ~ /,overflow,/) ov=op
+    }
+    END{ print (owner!=""?owner:ov) }
+  ' "$dir/operators.md"
 }
 
 # --- visibility ---------------------------------------------------------------
@@ -220,4 +229,94 @@ fm_fleet_status() { # dir
     last=$(awk -F'\t' -v o="$op" '$2==o{t=$1} END{print t}' "$dir/events.log" 2>/dev/null)
     printf "%-20s %-8s %-10s %s\n" "$op" "${c:-0}" "${inflt:-0}" "${last:--}"
   done < <(awk -F'|' '/^\| *[a-zA-Z0-9_.-]+ *\|/{op=$2; gsub(/^ +| +$/,"",op); if(op!="operator" && op !~ /^-+$/) print op}' "$dir/operators.md")
+}
+
+# --- operator lifecycle + token economy (each user runs these AS THEMSELVES) ---
+# operators.md row: | op | scope | home | accounts | status | seen(iso) | quota(%|-) |
+# seen + quota are self-published by that operator's own heartbeat, so routing can
+# treat a crashed (stale) or low-headroom peer as unavailable WITHOUT reading that
+# peer's home or auth. The recorded home is validated under the caller's own $HOME.
+
+# Min headroom % across providers via quota-axi (current shell's auth); '-' if
+# unavailable. Bash-only, zero LLM tokens.
+fm_fleet_quota_now() {
+  command -v quota-axi >/dev/null 2>&1 || { printf '%s' '-'; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf '%s' '-'; return 0; }
+  local j min
+  j=$(quota-axi --json 2>/dev/null) || { printf '%s' '-'; return 0; }
+  min=$(printf '%s' "$j" | jq -r '[.providers[]?.windows[]?.percentRemaining] | min // "-"' 2>/dev/null)
+  case "$min" in ''|null) printf '%s' '-' ;; *) printf '%s' "$min" ;; esac
+}
+
+# 0 if this operator has enough headroom to take work (min% >= FM_FLEET_QUOTA_MIN,
+# default 5). Fail-OPEN when quota is unmeasurable ('-') so a missing quota-axi never
+# blocks work; the guard only holds back a MEASURABLY-drained account.
+fm_fleet_budget_ok() {
+  local floor=${FM_FLEET_QUOTA_MIN:-5} q
+  q=$(fm_fleet_quota_now)
+  [ "$q" = '-' ] && return 0
+  [ "$q" -ge "$floor" ] 2>/dev/null
+}
+
+# Refuse a recorded home outside the caller's own $HOME (cross-uid safety).
+fm_fleet_assert_own_home() { # home
+  local home=${1%/}
+  case "$home" in
+    "$HOME"|"$HOME"/*) return 0 ;;
+    *) echo "error: refusing to register a home outside your own \$HOME ($HOME): $1" >&2; return 1 ;;
+  esac
+}
+
+# Upsert this operator's row (self-onboard / update). Idempotent: an existing row for
+# <op> is replaced, not duplicated. Stamps status:online, seen:now, quota:now.
+fm_fleet_register() { # dir op scopes home [accounts]
+  local dir=$1 op=$2 scopes=$3 home=$4 accounts=${5:-} ts q
+  fm_fleet_assert_own_home "$home" || return 1
+  ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
+  fm_fleet_lock "$dir" || return 1
+  grep -vE "^\| *$op *\|" "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+  printf '| %s | %s | %s | %s | online | %s | %s |\n' "$op" "$scopes" "$home" "$accounts" "$ts" "$q" >> "$dir/operators.md"
+  fm_fleet_event "$dir" "$op" register "-" "scope:$scopes"
+  fm_fleet_commit "$dir" "fleet: register $op"
+  fm_fleet_unlock
+}
+
+# Refresh this operator's liveness: seen:now + quota:now + status:online. Bash-only,
+# meant to run on a cheap timer/daemon (NOT the LLM) so being "online" costs 0 tokens.
+fm_fleet_heartbeat() { # dir op
+  local dir=$1 op=$2 ts q rc=1
+  ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
+  fm_fleet_lock "$dir" || return 1
+  if grep -qE "^\| *$op *\|" "$dir/operators.md"; then
+    awk -F'|' -v OFS='|' -v op="$op" -v ts=" $ts " -v q=" $q " '
+      function trim(x){ gsub(/^ +| +$/,"",x); return x }
+      trim($2)==op { $6=" online "; $7=ts; $8=q; NF=(NF<9?9:NF); print; next }
+      { print }
+    ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+    # No git commit / event line: heartbeat is transient liveness, not audit history.
+    # Committing every beat would bloat the KB log and churn the lock. The seen
+    # column IS the liveness record; on a same-machine shared FS the file write is
+    # visible to every operator immediately.
+    rc=0
+  fi
+  fm_fleet_unlock
+  return $rc
+}
+
+# Mark this operator offline (clean shutdown). Routing skips it immediately.
+fm_fleet_leave() { # dir op
+  local dir=$1 op=$2 rc=1
+  fm_fleet_lock "$dir" || return 1
+  if grep -qE "^\| *$op *\|" "$dir/operators.md"; then
+    awk -F'|' -v OFS='|' -v op="$op" '
+      function trim(x){ gsub(/^ +| +$/,"",x); return x }
+      trim($2)==op { $6=" offline "; print; next }
+      { print }
+    ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+    fm_fleet_event "$dir" "$op" leave "-" ""
+    fm_fleet_commit "$dir" "fleet: leave $op"
+    rc=0
+  fi
+  fm_fleet_unlock
+  return $rc
 }
