@@ -42,7 +42,11 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse pi-signed
+  fm_fake_exit0 "$fakebin" pi-signed
+  # Must come AFTER fm_fake_exit0: fm-spawn now executes treehouse to lease the
+  # worktree and reads the path off its stdout, so the exit-0-with-no-output stub
+  # would read as treehouse failing to produce a worktree at all.
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
