@@ -83,7 +83,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -783,7 +783,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -844,6 +844,16 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # cline (Cline CLI 3.0.46): `-i --tui` opens the persistent interactive TUI and
+    # a positional prompt seeds AND auto-runs the first turn (verified via tmux
+    # capture; see docs/verification/cline-adapter.md). --auto-approve true keeps the
+    # unattended crewmate autonomous (the targeted equivalent of claude's
+    # --dangerously-skip-permissions; it is on by default but passed explicitly for
+    # version robustness). Turn-end is observed by the pane classifier (the braille
+    # "esc to cancel" spinner clears and the composer returns to its idle
+    # placeholder), so no launch-side turn-end placeholder is needed. Effort maps to
+    # --thinking (see the effort helper below), never --effort.
+    cline) printf '%s' 'cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -961,7 +971,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -998,6 +1008,15 @@ effort_flag_for_harness() {
       # its --thinking flag.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    cline)
+      # cline 3.0.46 maps the reasoning-effort axis to --thinking, which accepts
+      # none|low|medium|high|xhigh (verified in `cline --help`; a live launch with
+      # `--thinking high` showed "(high)" in the model status bar). It has no `max`
+      # tier, so omit max rather than passing an unsupported value.
+      case "$effort" in
+        low|medium|high|xhigh) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
