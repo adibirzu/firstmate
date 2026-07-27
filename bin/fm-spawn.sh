@@ -78,7 +78,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -459,7 +459,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -530,6 +530,16 @@ launch_template() {
     # placeholder), so no launch-side turn-end placeholder is needed. Effort maps to
     # --thinking (see the effort helper below), never --effort.
     cline) printf '%s' 'cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # cursor-agent (Cursor CLI 2026.07): the default `agent` is a persistent interactive
+    # TUI; a positional prompt seeds AND auto-runs the first turn (verified via tmux
+    # capture) once the workspace is trusted. --force ("Run Everything") makes the
+    # crewmate autonomous (equivalent of claude's --dangerously-skip-permissions). Effort
+    # is a MODEL bracket param (e.g. 'claude-opus-4-8[effort=high]'), not a flag, so no
+    # __EFFORTFLAG__. WORKSPACE TRUST: interactive mode shows a blocking "Workspace Trust
+    # Required" dialog that --trust does NOT bypass (headless-only); answer it by
+    # pre-seeding ~/.cursor/projects/<slug>/.workspace-trusted or by sending `a` after the
+    # readiness gate (harness-adapters skill + docs/verification/cursor-agent-adapter.md).
+    cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -658,7 +668,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cline)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac

@@ -68,7 +68,7 @@
 
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel";
-# cline: "esc to cancel".
+# cline: "esc to cancel"; cursor-agent: "ctrl+c to stop".
 # Claude's current spinner has a rotating glyph and word, but every active-turn
 # line has an ellipsis followed by a parenthesized elapsed duration. Keep this
 # signature separate from the shared default because that shape is not generic
@@ -97,6 +97,12 @@ FM_TMUX_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|�
 # deliberately distinct from claude/codex "esc to interrupt": a supplied harness
 # must never borrow another's signature.
 FM_TMUX_CLINE_BUSY_REGEX_DEFAULT='esc to cancel'
+# cursor-agent (Cursor CLI 2026.07): the active-turn footer is a braille spinner plus
+# "Working" and the composer hint "ctrl+c to stop" (verified via tmux capture). The
+# "ctrl+c to stop" token is the stable busy anchor - present only mid-turn, gone when
+# idle. Bare "Working" is deliberately NOT used because pi already owns "Working...".
+# Interrupt is Ctrl-C mid-turn; the session exit command is /quit.
+FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
 
 fm_busy_lines_match() {  # [harness]
   local harness=${1:-} lines regex
@@ -112,6 +118,7 @@ fm_busy_lines_match() {  # [harness]
       grok) regex=$FM_TMUX_GROK_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_TMUX_KIMI_BUSY_REGEX_DEFAULT ;;
       cline) regex=$FM_TMUX_CLINE_BUSY_REGEX_DEFAULT ;;
+      cursor-agent) regex=$FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_TMUX_BUSY_REGEX_DEFAULT ;;
       *)
         # A supplied harness must never borrow another harness's signature.
