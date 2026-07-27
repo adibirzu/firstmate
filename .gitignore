@@ -20,3 +20,4 @@ config/wedge-alarm
 config/herdr-presentation-spaces
 config/fleet-dir
 config/accounts.json
+config/quota-overrides.json
