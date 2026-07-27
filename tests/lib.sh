@@ -187,6 +187,31 @@ SH
   chmod +x "$fakebin/$tool"
 }
 
+# fm_fake_treehouse <fakebin> [worktree]: stub treehouse for a spawn fixture.
+# fm-spawn.sh leases the worktree itself and reads the path off treehouse's
+# stdout, so an exit-0-with-no-output stub is not enough - it reads as treehouse
+# failing to produce a worktree at all. The path is <worktree> when given (for
+# fixtures that bake the path into their fake tmux), otherwise
+# FM_FAKE_TREEHOUSE_WT, otherwise FM_FAKE_PANE_PATH - which in these fixtures is
+# the same worktree the pane is made to report.
+fm_fake_treehouse() {
+  local fakebin=$1 baked=${2:-}
+  cat > "$fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+case "\${1:-}" in
+  get)
+    printf '%s\n' "\$*" >> "\${FM_FAKE_TREEHOUSE_ARGSFILE:-/dev/null}"
+    printf '%s\n' "\${HOME:-}" > "\${FM_FAKE_TREEHOUSE_HOMEFILE:-/dev/null}"
+    printf '%s\n' "\${FM_FAKE_TREEHOUSE_WT:-\${FM_FAKE_PANE_PATH:-$baked}}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
 # --- deterministic git identity and fixtures --------------------------------
 
 # fm_git_identity [name] [email]: export a fixed author/committer identity so
