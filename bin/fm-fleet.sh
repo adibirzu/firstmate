@@ -31,5 +31,9 @@ case "$cmd" in
   route)   fm_fleet_route "$DIR" "$1" ;;
   status)  fm_fleet_status "$DIR" ;;
   view)    fm_fleet_view "$DIR" "${1:-}" ;;
-  *) echo "usage: fm-fleet.sh init|queue|claim|handoff|reap|route|status|view" >&2; exit 1 ;;
+  register)  op=$1; scopes=$2; home=$3; shift 3; fm_fleet_register "$DIR" "$op" "$scopes" "$home" "${1:-}" ;;
+  heartbeat) fm_fleet_heartbeat "$DIR" "$1" ;;
+  leave)     fm_fleet_leave "$DIR" "$1" ;;
+  budget)    fm_fleet_budget_ok && echo "ok (min headroom >= ${FM_FLEET_QUOTA_MIN:-5}%)" || { echo "below floor (< ${FM_FLEET_QUOTA_MIN:-5}%)"; exit 1; } ;;
+  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|reap|route|budget|status|view" >&2; exit 1 ;;
 esac
