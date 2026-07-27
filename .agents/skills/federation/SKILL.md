@@ -34,8 +34,12 @@ exercises every code path.
 
 ## KB files (at `$FLEET`)
 
-- `operators.md` — `| operator | scope | home | accounts | status |`; `scope` is a
-  comma list; `status` is `online`/`offline`.
+- `operators.md` — `| operator | scope | home | accounts | status | seen | quota |`;
+  `scope` is a comma list; `status` is `online`/`offline`; `seen` is an ISO8601 UTC
+  heartbeat; `quota` is that operator's self-published `quota-axi` min headroom %
+  (or `-`). An operator counts as available for routing only when `status:online`
+  **and** `seen` is within `FM_FLEET_HEARTBEAT_TTL` (90s) **and** `quota` ≥
+  `FM_FLEET_QUOTA_MIN` (5). Legacy 5-column rows still route (freshness/quota skipped).
 - `backlog.md` — `## Queued / ## Claimed / ## In-flight / ## Done`; item line:
   `- [id:<ID>] scope:<S> | <desc> | [claimed-by:<op>@<ISO8601>] status:<st>`.
 - `events.log` — append-only TSV `<ISO8601>\t<op>\t<event>\t<id>\t<detail>`.
@@ -43,6 +47,10 @@ exercises every code path.
 
 ## Procedure
 
+0. **Onboard (once per operator, run AS YOURSELF):** `fm-fleet-join.sh <you> <scopes>
+   [accounts]` — verifies shared-dir access, points `config/fleet-dir` at the shared
+   KB, and registers you (`register` upserts your row: `status:online`, `seen:now`,
+   `quota:now`). Idempotent. Refuses a home outside your own `$HOME`.
 1. **Session start:** `fm-fleet.sh reap [ttl]` to requeue stale never-started
    claims from offline operators (default ttl 86400s; only `status:claimed`,
    never `status:in-flight`).
@@ -59,11 +67,19 @@ exercises every code path.
    your own account; mark the item in-flight (integration point) and `done` on land.
 6. **Visibility:** `fm-fleet.sh status` (per-operator counts) and
    `fm-fleet.sh view [--follow]` (the live cross-operator event stream).
+7. **Stay cheap (token economy):** do NOT poll for work with the LLM. Block on
+   `fm-fleet-wait.sh <you>` — bash, 0 tokens — which also heartbeats while waiting
+   and returns only when you have a fresh `status:claimed` item, so the LLM primary
+   wakes only for real work. Details: `docs/fleet-token-economy.md`.
 
 ## Notes
 
 - Every KB mutation is git-committed in the shared dir → durable "who did what
   when" audit; optionally mirror to a private GitHub repo for offsite/cross-box.
-- Quota-secondary routing consults `quota-axi` headroom across operators AND (with
-  the multi-account layer) accounts; guard for `quota-axi` absent by routing on
-  scope alone.
+  Heartbeats are the one exception — a transient file write, never committed, so
+  liveness does not bloat the log.
+- Quota-secondary routing is implemented: each operator self-publishes its
+  `quota-axi` min headroom into its `operators.md` `quota` column on heartbeat, and
+  `route` skips any operator below `FM_FLEET_QUOTA_MIN` (no cross-user auth needed).
+  `fm-fleet.sh budget` / `fm_fleet_budget_ok` gates a claim on local headroom.
+  Missing `quota-axi` is fail-open (`quota:-`), so routing falls back to scope alone.
