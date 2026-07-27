@@ -265,7 +265,7 @@ run_lib_with_devices() {  # <arg>...  (FM_TEST_BODY / FM_TEST_DEVICES in env)
   ' _ "$LIB" "$@"
 }
 
-test_pool_home_stays_home_when_the_repo_is_on_the_home_filesystem() {
+test_pool_home_stays_on_the_home_filesystem_when_not_split() {
   local repo out
   repo="$TMP_ROOT/pool-home-same"
   fm_git_init_commit "$repo"
@@ -273,9 +273,57 @@ test_pool_home_stays_home_when_the_repo_is_on_the_home_filesystem() {
   out=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
     FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
     run_lib_with_devices "$repo")
-  [ "$out" = "$HOME" ] \
-    || fail "same-filesystem repo should keep the default pool home '$HOME', got '$out'"
-  pass "a repo on \$HOME's filesystem keeps the default pool location"
+  case "$out" in
+    "$HOME"/.fm-pools/*) : ;;
+    *) fail "same-filesystem repo should pool under \$HOME/.fm-pools/, got '$out'" ;;
+  esac
+  pass "a repo on \$HOME's filesystem pools on that filesystem"
+}
+
+# Segregation is a safety property: treehouse's prune and destroy act on a pool,
+# so two projects sharing one pool means a cleanup aimed at one can reach the
+# other's worktrees - including work that exists nowhere else yet.
+test_each_project_gets_its_own_pool() {
+  local repo_a repo_b out_a out_b
+  repo_a="$TMP_ROOT/segregation-a"
+  repo_b="$TMP_ROOT/segregation-b"
+  fm_git_init_commit "$repo_a"
+  fm_git_init_commit "$repo_b"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_a=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_a")
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_b=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_b")
+  [ -n "$out_a" ] && [ -n "$out_b" ] || fail "pool home resolution produced an empty path"
+  [ "$out_a" != "$out_b" ] \
+    || fail "two projects resolved to the same pool '$out_a'; a prune for one could reach the other"
+  case "$out_a" in *segregation-a-*) : ;; *) fail "pool '$out_a' does not name its project" ;; esac
+  case "$out_b" in *segregation-b-*) : ;; *) fail "pool '$out_b' does not name its project" ;; esac
+  pass "each project resolves to its own pool root"
+}
+
+# Same directory name, different location: the discriminator must still separate
+# them, or a prune for one project would reach the other's worktrees.
+test_same_named_projects_do_not_share_a_pool() {
+  local repo_a repo_b out_a out_b
+  repo_a="$TMP_ROOT/copy-one/samename"
+  repo_b="$TMP_ROOT/copy-two/samename"
+  fm_git_init_commit "$repo_a"
+  fm_git_init_commit "$repo_b"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_a=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_a")
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_b=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_b")
+  [ "$out_a" != "$out_b" ] \
+    || fail "two same-named projects shared pool '$out_a'"
+  pass "two projects with the same directory name still get separate pools"
 }
 
 test_pool_home_moves_to_the_object_store_filesystem_when_split() {
@@ -292,8 +340,10 @@ test_pool_home_moves_to_the_object_store_filesystem_when_split() {
   [ -n "$out" ] || fail "split repo produced no pool home"
   [ "$out" != "$HOME" ] \
     || fail "a repo on another filesystem must not use \$HOME's pool"
-  [ "$out" = "$expected" ] \
-    || fail "split repo should pool at its own filesystem's mount point '$expected', got '$out'"
+  case "$out" in
+    "$expected"/.fm-pools/*) : ;;
+    *) fail "split repo should pool under $expected/.fm-pools/, got '$out'" ;;
+  esac
   pass "a repo on another filesystem pools at that filesystem's mount point"
 }
 
@@ -340,7 +390,9 @@ test_already_settled_pane_costs_one_confirm_sleep
 test_pane_is_sent_a_cd_and_never_a_home_changing_command
 test_treehouse_is_leased_under_the_resolved_pool_home
 test_pane_that_never_lands_fails_the_spawn
-test_pool_home_stays_home_when_the_repo_is_on_the_home_filesystem
+test_pool_home_stays_on_the_home_filesystem_when_not_split
+test_each_project_gets_its_own_pool
+test_same_named_projects_do_not_share_a_pool
 test_pool_home_moves_to_the_object_store_filesystem_when_split
 test_colocation_check_separates_split_from_undeterminable
 test_mount_point_resolves_to_a_real_ancestor
