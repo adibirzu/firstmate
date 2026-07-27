@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, and cline.
 user-invocable: false
 metadata:
   internal: true
@@ -391,3 +391,27 @@ The spinner match covers the full moon-phase glyph set rather than one frame, bu
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal supplements the pane busy signature, whose locale- and emoji-font-sensitive limits still apply while a turn is running.
+
+## cline (VERIFIED 2026-07-27, Cline CLI 3.0.46)
+
+Cline runs as an interactive TUI crewmate. Unlike Kimi, a positional prompt seeds AND auto-runs the first turn, so the brief rides the launch command like claude/codex/grok.
+
+| Fact | Value |
+|---|---|
+| Binary | `cline` from `PATH` (`~/.local/bin/cline`, a Node script). Detection matches `cline` in the process argv like opencode (ancestry command name may be `node`). |
+| Launch | `cline -i --tui --auto-approve true [--model <id>] [--thinking <effort>] "<brief>"`. `-i --tui` opens the persistent interactive TUI; the positional brief seeds and auto-runs the first turn (verified via tmux capture). |
+| Models | Provider/model shown in the status bar (e.g. `ClinePass: Kimi K3`); `--model`/`-m` selects within the active provider. Default provider is `cline` (ClinePass). |
+| Busy-pane signature | A braille spinner plus `Thinking... (esc to cancel)`; `esc to cancel` is the stable token and clears the instant the turn ends. Deliberately distinct from claude/codex `esc to interrupt`. |
+| Exit command | Single `Ctrl+C` exits the TUI cleanly (rc 0). There is no `/exit` slash exit. |
+| Interrupt | `Esc` cancels the current turn (the footer shows `esc to cancel`). Ctrl+C would EXIT, not interrupt — do not use it to interrupt. |
+| Autonomy | `--auto-approve true` (on by default; passed explicitly for version robustness); the status bar reads `Auto-approve all enabled`. |
+| Trust dialog | None on a clean launch with a pre-authed provider (ClinePass). |
+| Submission | Typing then Enter submits; a seeded positional prompt auto-submits on launch. |
+| Environment marker | None verified; detection relies on process ancestry (`cline` in argv). |
+| Composer | Bordered box with a bare `❯` (U+276F) agent glyph — already a verified empty-composer glyph. The idle placeholder (`What can I do for you?` on first ready, `Ask anything...` thereafter) is muted grey (truecolor `38;2;131;137;140`, luma ~136) and also drawn bold, so it survives the dim/faint ghost stripper and would misread as pending; the backend `IDLE_RE` default lists both placeholders so an empty cline composer reads empty. |
+| Effort | Maps to `--thinking none|low|medium|high|xhigh` (no `max`; omit rather than pass an unsupported value). A live `--thinking high` launch showed `(high)` in the status bar. |
+| TTY | Even `cline config` refuses without a TTY; supervise only through a pty/pane, never a bare pipe. |
+
+Turn-end is observed from the pane, not a hook: the `esc to cancel` spinner clears and the composer returns to its idle placeholder. cline exposes `--hooks-dir` and a `hook` subcommand, which is the path for a future primary-session turn-end guard (only needed when firstmate ITSELF runs on cline); a cline CREWMATE needs no launch-side turn-end placeholder. cline is not wired for secondmate launches, so no `backends/tmux.sh` agent-process liveness entry is required yet.
+
+Full empirical capture evidence: [`docs/verification/cline-adapter.md`](../../../docs/verification/cline-adapter.md).
