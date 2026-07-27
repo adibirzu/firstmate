@@ -43,14 +43,16 @@ test_existing_launch_templates_untouched() {
 
 test_cline_is_a_known_bare_adapter_name() {
   # cline must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|grok|kimi|cline)" "$SPAWN" \
+  # (Robust to later adapters appended after cline, e.g. |cline|cursor-agent).)
+  grep -Fq "|kimi|cline" "$SPAWN" \
     || fail "fm-spawn: cline not added to a known-harness allowlist"
   pass "fm-spawn: cline is recognized as a known bare adapter name"
 }
 
 test_cline_model_and_effort_flags() {
   # cline takes --model (long form of -m) and maps effort to --thinking (no max).
-  grep -Fq "claude|codex|opencode|pi|grok|kimi|cline)" "$SPAWN" \
+  # (Robust to later adapters appended after cline in the --model allowlist.)
+  grep -Fq "|kimi|cline" "$SPAWN" \
     || fail "fm-spawn: cline not in the --model allowlist"
   grep -Fq "'--thinking %s '" "$SPAWN" \
     || fail "fm-spawn: cline effort->--thinking mapping missing"

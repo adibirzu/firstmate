@@ -539,7 +539,7 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
 # and keeping the LAST match so an earlier border-shaped line (scrollback, a
 # popup) never outranks the real bottom-anchored composer row.
 FM_BACKEND_CMUX_COMPOSER_LINES=${FM_BACKEND_CMUX_COMPOSER_LINES:-20}
-FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-'^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.)$'}
+FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-'^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'}
 
 fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending|unknown
   local target=$1 expected_label=${2:-} cap line trimmed stripped="" found=0
