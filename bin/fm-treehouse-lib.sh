@@ -65,15 +65,36 @@ fm_treehouse_mount_point() {  # <existing-dir>
   printf '%s\n' "$path"
 }
 
-# The HOME to run treehouse under so this repo's pool lands on the repo's own
-# filesystem. Derived from the repo, never from a hardcoded volume: a fleet can
-# hold repos on several volumes, and the requirement is "same filesystem as this
-# repo's object store", not one fixed path.
+# A stable per-project pool identity: the repo's own directory name plus a
+# discriminator derived from the canonical object-store path, so two projects
+# that happen to share a name never share a pool.
+fm_treehouse_project_slug() {  # <canonical-object-store-path>
+  local store=$1 name discriminator
+  name=$(basename "$(dirname "$store")")
+  case "$name" in
+    ''|.|/) name=repo ;;
+  esac
+  # cksum is POSIX and present on every supported host; the value only has to be
+  # stable and collision-resistant enough to separate two same-named projects.
+  discriminator=$(printf '%s' "$store" | cksum | awk '{print $1}')
+  printf '%s-%s\n' "$name" "$discriminator"
+}
+
+# The HOME to run treehouse under, so this repo's pool lands on the repo's own
+# filesystem AND in a pool of its own. Derived from the repo, never from a
+# hardcoded volume: a fleet can hold repos on several volumes, and the
+# requirement is "same filesystem as this repo's object store", not one path.
 #
-# When $HOME is already on that filesystem the answer is $HOME, so the default
-# layout stays exactly as it was for every same-volume fleet.
+# Each project gets its own pool root under .fm-pools/<slug>/. That segregation
+# is a safety property, not tidiness: treehouse's prune and destroy operate on a
+# pool, so one shared pool means a cleanup aimed at one project can reach into
+# another project's worktrees - including ones holding work that has not been
+# pushed anywhere else. Per-project pools bound that blast radius to one project.
+#
+# Existing pooled worktrees are unaffected: they keep their absolute paths, and
+# fm-teardown.sh returns them by absolute path regardless of pool root.
 fm_treehouse_pool_home() {  # <repo-dir>
-  local repo=$1 store store_dev home_dev mount
+  local repo=$1 store store_dev home_dev base
   store=$(fm_treehouse_object_store "$repo") || {
     echo "error: cannot resolve the git object store for $repo" >&2
     return 1
@@ -85,14 +106,14 @@ fm_treehouse_pool_home() {  # <repo-dir>
     return 1
   }
   if [ -n "$home_dev" ] && [ "$store_dev" = "$home_dev" ]; then
-    printf '%s\n' "$HOME"
-    return 0
+    base=$HOME
+  else
+    base=$(fm_treehouse_mount_point "$store") || {
+      echo "error: cannot resolve the filesystem holding $store" >&2
+      return 1
+    }
   fi
-  mount=$(fm_treehouse_mount_point "$store") || {
-    echo "error: cannot resolve the filesystem holding $store" >&2
-    return 1
-  }
-  printf '%s\n' "$mount"
+  printf '%s/.fm-pools/%s\n' "$base" "$(fm_treehouse_project_slug "$store")"
 }
 
 # Check the invariant on a worktree that already exists, whoever created it.
