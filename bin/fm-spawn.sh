@@ -17,10 +17,18 @@
 #   bin/fm-backend.sh's fm_backend_detect, with cmux fallback details in
 #   docs/cmux-backend.md),
 #   then tmux.
+#   For every backend except orca, firstmate leases the task worktree itself with
+#   `treehouse get --lease`, run under a HOME that puts the pool on the repo's own
+#   filesystem (bin/fm-treehouse-lib.sh owns why that HOME is the only lever), and
+#   then sends the pane a plain cd. The lease is durable, so fm-teardown.sh returning
+#   the worktree is what frees the pool slot; a spawn that fails before publishing
+#   state/<id>.meta returns its own lease.
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
-#   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
+#   terminal, so ship/scout Orca spawns acquire no treehouse lease and firstmate
+#   cannot place their worktree - a split from the object store is reported, not
+#   refused; cmux is a session provider only, exactly like herdr/zellij, so it
+#   leases like the rest. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
@@ -177,6 +185,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-treehouse-lib.sh
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -261,6 +271,7 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -291,6 +302,17 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
+  # A treehouse lease is durable: unlike the old interactive `treehouse get`, the
+  # pool slot is NOT freed when the pane dies. If this spawn fails before the task
+  # exists in state/, teardown will never run for it, so the lease has to come back
+  # here or the slot is held with nothing to release it.
+  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
+    TREEHOUSE_LEASE_ABORT_CLEANUP=0
+    if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
+      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 \
+        || echo "warning: could not return the leased worktree $WT; run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+    fi
+  fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
@@ -899,6 +921,21 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+# A worktree split from its object store cannot run the validation pipeline at
+# all: git blocks in read_gitfile_gently and `no-mistakes init`/`axi run` hang
+# forever (bin/fm-treehouse-lib.sh owns the full explanation). Refuse the spawn
+# instead of launching a crew that is guaranteed to wedge hours later, on the one
+# path firstmate places itself. An undeterminable answer is not a violation.
+assert_worktree_colocated() {  # <worktree> <pool-home>
+  local wt=$1 pool_home=$2 status=0
+  fm_treehouse_worktree_colocated "$wt" || status=$?
+  if [ "$status" = 1 ]; then
+    echo "error: worktree $wt (filesystem $FM_TREEHOUSE_WT_DEVICE) is on a different filesystem than its object store $FM_TREEHOUSE_STORE (filesystem $FM_TREEHOUSE_STORE_DEVICE); the validation pipeline would hang in that worktree, so refusing to launch. Firstmate selected pool root $pool_home/.treehouse; a treehouse.toml in the repo root overrides that." >&2
+    exit 1
+  fi
+  return 0
+}
+
 herdr_projection_meta_field_exact() {  # <meta> <key>
   local meta=$1 key=$2 count
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
@@ -1197,6 +1234,16 @@ EOF
       exit 1
     fi
     validate_spawn_worktree "orca worktree create" "$W"
+    # Orca owns its own worktree placement - `orca worktree create` takes no root
+    # or path argument - so firstmate cannot put this one on the object store's
+    # filesystem the way it does for a treehouse pool. Report a split rather than
+    # refusing: the crew can still ship through direct-PR or local-only, and this
+    # is pre-existing Orca behavior, not something this spawn introduced.
+    ORCA_COLOCATED_STATUS=0
+    fm_treehouse_worktree_colocated "$WT" || ORCA_COLOCATED_STATUS=$?
+    if [ "$ORCA_COLOCATED_STATUS" = 1 ]; then
+      echo "warning: orca placed worktree $WT (filesystem $FM_TREEHOUSE_WT_DEVICE) on a different filesystem than its object store $FM_TREEHOUSE_STORE (filesystem $FM_TREEHOUSE_STORE_DEVICE); the no-mistakes validation pipeline will hang in that worktree. Use a delivery mode that does not run it, or configure Orca to place worktrees on the repo's filesystem." >&2
+    fi
     if [ -z "$ORCA_TERMINAL" ]; then
       ORCA_TERMINAL=$(fm_backend_orca_terminal_create "$ORCA_WORKTREE_ID" "$W") || exit 1
     fi
@@ -1297,53 +1344,60 @@ kimi_spawn_fail() {  # <detail>
 }
 
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # Firstmate acquires the worktree itself rather than sending `treehouse get` to
+  # the pane, because the pool has to land on the repo's own filesystem and the
+  # only way to select it is the HOME treehouse runs under (bin/fm-treehouse-lib.sh
+  # owns why). An interactive `treehouse get` opens the crew's shell as a child of
+  # treehouse, so that HOME would be inherited by the agent and by everything it
+  # runs - wrong ~/.claude, wrong git config, wrong gh credentials. Leasing here
+  # keeps the override inside this process: the pane only ever receives a plain cd.
+  #
+  # The lease is durable, so every exit path between here and metadata publication
+  # must return it; TREEHOUSE_LEASE_ABORT_CLEANUP arms spawn_abort_cleanup for that.
+  # fm-teardown.sh already returns the worktree by absolute path on the normal path.
+  POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
+  WT=$( cd "$PROJ_ABS" && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>/dev/null ) || {
+    echo "error: treehouse could not lease a worktree for $PROJ_ABS under pool root $POOL_HOME/.treehouse" >&2
+    exit 1
+  }
+  if [ -z "$WT" ] || [ ! -d "$WT" ]; then
+    echo "error: treehouse returned no usable worktree path for $PROJ_ABS (got '${WT:-}')" >&2
+    exit 1
+  fi
+  TREEHOUSE_LEASE_ABORT_CLEANUP=1
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  validate_spawn_worktree "treehouse get --lease" "$T"
+  assert_worktree_colocated "$WT" "$POOL_HOME"
+
+  # Move the pane into the leased worktree. `cd` is the one instruction every
+  # supported pane shell understands identically, which matters because the shell
+  # is the operator's, not ours.
+  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+
+  # Confirm the pane really landed there before anything is launched into it.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
   # worktree and tangle a hook into the primary checkout. The window id never lies.
-  # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
-  # prefix would otherwise make the pane's OS-level cwd read differ from
-  # PROJ_ABS on the very first poll, before the pane has actually moved.
-  #
-  # A single read that already differs from PROJ_ABS_REAL is not proof the pane
-  # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
-  # transiently reports an unrelated stale path (seen live as another real git
-  # checkout entirely) before the shell catches up with treehouse get's cd. That
-  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
-  # below (it resolves to a real, distinct worktree top-level too), so accepting it
-  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
-  # two consecutive reads to agree on the same non-project path before accepting it;
-  # a mismatch just becomes the new candidate rather than resetting the wait, so a
-  # pane that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
-  candidate=""
-  for _ in $(seq 1 60); do
+  # The expected path is known exactly now, so - unlike the old "any path that is
+  # not the project" wait - a transient stale pane_current_path (seen live on some
+  # tmux/WSL setups as another real git checkout entirely) can never be mistaken
+  # for arrival. Compare physically: a symlinked prefix would otherwise never match.
+  WT_REAL=$(real_path_or_raw "$WT")
+  landed=0
+  SETTLE_POLLS=${FM_SPAWN_SETTLE_POLLS:-60}
+  for _ in $(seq 1 "$SETTLE_POLLS"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ]; then
-      p_real=$(real_path_or_raw "$p")
-      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
-        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-          WT="$p"
-          break
-        fi
-        candidate="$p_real"
-      else
-        candidate=""
-      fi
-    else
-      candidate=""
+    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT_REAL" ]; then
+      landed=1
+      break
     fi
     sleep 1
   done
-  if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+  if [ "$landed" -ne 1 ]; then
+    echo "error: pane did not enter the leased worktree $WT within 60s; inspect window $T" >&2
     exit 1
   fi
-
-  validate_spawn_worktree "treehouse get" "$T"
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
@@ -1649,6 +1703,10 @@ META_WINDOW=$T
   fi
 } > "$STATE/$ID.meta"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+# The task now exists in state/, so fm-teardown.sh owns returning its worktree.
+# Returning it from here after this point would pull the lease out from under a
+# live task.
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")

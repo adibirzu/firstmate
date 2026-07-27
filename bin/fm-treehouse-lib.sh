@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Where a task worktree is allowed to live, and how firstmate puts it there.
+#
+# THE INVARIANT: a linked worktree and the object store it points at must sit on
+# ONE filesystem. When they are split, git's read_gitfile_gently blocks inside
+# open(), and `no-mistakes init` and `no-mistakes axi run` hang forever - so a
+# crew in a split worktree can never run the validation pipeline. Ordinary git
+# reads inherit the open descriptor and look completely healthy, which is what
+# makes this a trap rather than an obvious failure.
+#
+# HOW TREEHOUSE PICKS THE POOL: a repo's pool lives at {root}/.treehouse/, where
+# root comes from a treehouse.toml in the REPO ROOT (no ancestor search) and
+# otherwise defaults to $HOME. There is no environment override - TREEHOUSE_DIR
+# appears in the binary but does not select the pool; verified inert against the
+# v2.0.0 build and the v2.0.1 pin in bin/fm-install-treehouse.sh. Firstmate
+# therefore selects the pool by running treehouse under a HOME of its own
+# choosing, as a per-command assignment so that nothing else - above all not the
+# crew agent's own shell - inherits it.
+#
+# A repo-root treehouse.toml still outranks that HOME, so this file cannot make
+# placement unconditional. fm_treehouse_worktree_colocated is the backstop: it
+# checks the invariant on the acquired worktree itself, whoever placed it.
+
+fm_treehouse_device() {  # <path>
+  local path=$1
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %d "$path" 2>/dev/null
+  else
+    stat -c %d "$path" 2>/dev/null
+  fi
+}
+
+# The object store a working tree actually reads through, canonicalized.
+# --path-format=absolute needs git 2.31+; the fallback resolves the relative form
+# against the repo so an older git still answers instead of silently returning "".
+fm_treehouse_object_store() {  # <repo-or-worktree-dir>
+  local repo=$1 common
+  common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    || common=$(git -C "$repo" rev-parse --git-common-dir 2>/dev/null) \
+    || return 1
+  [ -n "$common" ] || return 1
+  case "$common" in
+    /*) ;;
+    *) common="$repo/$common" ;;
+  esac
+  [ -d "$common" ] || return 1
+  (CDPATH='' cd -- "$common" 2>/dev/null && pwd -P)
+}
+
+# The mount point of an existing directory: walk up until the device id changes.
+# Deriving it this way avoids parsing `df`, whose filesystem and mount-point
+# columns can both contain spaces.
+fm_treehouse_mount_point() {  # <existing-dir>
+  local path=$1 dev parent parent_dev
+  path=$(CDPATH='' cd -- "$path" 2>/dev/null && pwd -P) || return 1
+  dev=$(fm_treehouse_device "$path")
+  [ -n "$dev" ] || return 1
+  while [ "$path" != / ]; do
+    parent=$(dirname "$path")
+    parent_dev=$(fm_treehouse_device "$parent")
+    [ -n "$parent_dev" ] || return 1
+    [ "$parent_dev" = "$dev" ] || break
+    path=$parent
+  done
+  printf '%s\n' "$path"
+}
+
+# The HOME to run treehouse under so this repo's pool lands on the repo's own
+# filesystem. Derived from the repo, never from a hardcoded volume: a fleet can
+# hold repos on several volumes, and the requirement is "same filesystem as this
+# repo's object store", not one fixed path.
+#
+# When $HOME is already on that filesystem the answer is $HOME, so the default
+# layout stays exactly as it was for every same-volume fleet.
+fm_treehouse_pool_home() {  # <repo-dir>
+  local repo=$1 store store_dev home_dev mount
+  store=$(fm_treehouse_object_store "$repo") || {
+    echo "error: cannot resolve the git object store for $repo" >&2
+    return 1
+  }
+  store_dev=$(fm_treehouse_device "$store")
+  home_dev=$(fm_treehouse_device "${HOME:-/}")
+  [ -n "$store_dev" ] || {
+    echo "error: cannot read the filesystem of $store" >&2
+    return 1
+  }
+  if [ -n "$home_dev" ] && [ "$store_dev" = "$home_dev" ]; then
+    printf '%s\n' "$HOME"
+    return 0
+  fi
+  mount=$(fm_treehouse_mount_point "$store") || {
+    echo "error: cannot resolve the filesystem holding $store" >&2
+    return 1
+  }
+  printf '%s\n' "$mount"
+}
+
+# Check the invariant on a worktree that already exists, whoever created it.
+# Exit 0 colocated, 1 split, 2 undeterminable (never treat 2 as a violation).
+# On 0 or 1 the three FM_TREEHOUSE_* variables carry the evidence for the caller's
+# diagnostic, so a refusal can name both devices instead of asserting a verdict.
+FM_TREEHOUSE_WT_DEVICE=
+FM_TREEHOUSE_STORE=
+FM_TREEHOUSE_STORE_DEVICE=
+fm_treehouse_worktree_colocated() {  # <worktree>
+  local wt=$1 store wt_dev store_dev
+  FM_TREEHOUSE_WT_DEVICE=
+  FM_TREEHOUSE_STORE=
+  FM_TREEHOUSE_STORE_DEVICE=
+  store=$(fm_treehouse_object_store "$wt") || return 2
+  wt_dev=$(fm_treehouse_device "$wt")
+  store_dev=$(fm_treehouse_device "$store")
+  [ -n "$wt_dev" ] && [ -n "$store_dev" ] || return 2
+  # shellcheck disable=SC2034 # Read by callers after this function returns.
+  FM_TREEHOUSE_WT_DEVICE=$wt_dev
+  # shellcheck disable=SC2034 # Read by callers after this function returns.
+  FM_TREEHOUSE_STORE=$store
+  # shellcheck disable=SC2034 # Read by callers after this function returns.
+  FM_TREEHOUSE_STORE_DEVICE=$store_dev
+  [ "$wt_dev" = "$store_dev" ]
+}
