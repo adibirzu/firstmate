@@ -249,6 +249,11 @@ Malformed JSON, an empty or malformed rule/default array, an unverified harness,
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+## Fleet add-on (config/fleet-dir / config/accounts.json / FM_FLEET_*)
+
+The optional fleet add-on keeps its own operator configuration surfaces rather than duplicating them here.
+[`docs/fleet-quickstart.md`](fleet-quickstart.md) owns setup for the gitignored `config/fleet-dir`, `config/accounts.json`, and `config/quota-overrides.json` files plus the tracked `config/model-surfaces.json` failover map, and [`docs/fleet-token-economy.md`](fleet-token-economy.md) owns the `FM_FLEET_*` knobs and their defaults.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.

@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 # fm-fleet.sh — FirstMate federation CLI. Coordinates multiple operators through a
-# shared, cross-uid-safe, git-backed KB. See docs/federation.md and
-# .agents/skills/federation/SKILL.md.
+# shared, cross-uid-safe, git-backed KB. See docs/fleet-quickstart.md,
+# docs/fleet-addon.md, and .agents/skills/federation/SKILL.md.
 #
 # Usage:
 #   fm-fleet.sh init
+#   fm-fleet.sh register  <op> <scopes-csv> <home> [accounts]
+#   fm-fleet.sh heartbeat <op>
+#   fm-fleet.sh leave     <op>
 #   fm-fleet.sh queue   <id> <scope> <desc...>
 #   fm-fleet.sh claim   <id> <operator>
 #   fm-fleet.sh handoff <id> <to-operator>
 #   fm-fleet.sh reap    [ttl-seconds]        (default 86400)
 #   fm-fleet.sh route   <scope>              (echoes owning operator)
+#   fm-fleet.sh budget                       (exit 0 iff local headroom >= FM_FLEET_QUOTA_MIN)
+#   fm-fleet.sh quota                        (per-surface headroom report)
+#   fm-fleet.sh models                       (model family -> surfaces table)
+#   fm-fleet.sh pick    <model-family>       (first surface with headroom)
 #   fm-fleet.sh status
 #   fm-fleet.sh view    [--follow]
 #

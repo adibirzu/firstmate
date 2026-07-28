@@ -28,8 +28,8 @@ propagation, which cannot work across uids.
 
 ## Fleet dir resolution
 
-`--fleet <dir>` → `FM_FLEET_DIR` → `$FM_HOME/config/fleet-dir` → `/opt/agents/fleet`.
-The real shared dir needs the one-time root prereq (`docs/ROOT-PREREQ.md`): an
+`FM_FLEET_DIR` → `$FM_HOME/config/fleet-dir` → `/opt/agents/fleet`.
+The real shared dir needs the one-time root prereq (`scripts/fleet-root-prereq.sh`): an
 `agents` group + `/opt/agents/fleet` mode `2775` (setgid) + each operator's
 `umask 002`. Until then it runs against a local dev dir (single-uid), which
 exercises every code path.

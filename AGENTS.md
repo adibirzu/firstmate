@@ -483,6 +483,8 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the X-mode configuration blocker, and on any milestone or terminal wake for an X-mode-linked task before posting its completion follow-up; relevant only when X mode is on.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
+- `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
+- `multi-account` - load before launching a crewmate under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`) or selecting an account by quota headroom.
 
 ## 14. X mode
 
