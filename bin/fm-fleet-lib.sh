@@ -18,13 +18,88 @@
 
 fm_fleet_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Built-in last-resort fleet dir. Only reached when neither FM_FLEET_DIR nor
+# $FM_HOME/config/fleet-dir is set. It is a *convention*, not a guarantee: on a
+# shared host it may already belong to another team, so fm_fleet_assert_initialized
+# tells the operator exactly which dir was chosen and how it was chosen.
+FM_FLEET_DEFAULT_DIR=${FM_FLEET_DEFAULT_DIR:-/opt/agents/fleet}
+
 fm_fleet_dir() {
   local d="${FM_FLEET_DIR:-}"
   if [ -z "$d" ] && [ -n "${FM_HOME:-}" ] && [ -f "$FM_HOME/config/fleet-dir" ]; then
     d=$(head -n1 "$FM_HOME/config/fleet-dir")
   fi
-  [ -n "$d" ] || d=/opt/agents/fleet
+  [ -n "$d" ] || d=$FM_FLEET_DEFAULT_DIR
   printf '%s\n' "$d"
+}
+
+# How the dir was chosen: env|config|default. Deliberately a FUNCTION, not a global
+# set inside fm_fleet_dir: callers do `DIR=$(fm_fleet_dir)`, and a variable assigned
+# inside command substitution dies with the subshell — a global here would silently
+# read as empty and any guard keyed on it would never fire.
+fm_fleet_dir_source() {
+  if [ -n "${FM_FLEET_DIR:-}" ]; then printf 'env\n'
+  elif [ -n "${FM_HOME:-}" ] && [ -f "$FM_HOME/config/fleet-dir" ]; then printf 'config\n'
+  else printf 'default\n'; fi
+}
+
+# Guard for every verb that READS an existing fleet. Without this, an uninitialized
+# or wrong dir surfaces as `awk: fatal: cannot open .../operators.md` with exit 0 —
+# a raw internal error that also *looks* like success to a caller. Fail loudly with
+# the dir, how it was chosen, and the one command that fixes it.
+fm_fleet_assert_initialized() { # dir
+  local dir=$1 how; how=$(fm_fleet_dir_source)
+  if [ -d "$dir" ] && [ -f "$dir/operators.md" ]; then return 0; fi
+
+  {
+    printf 'fm-fleet: no initialized fleet at %s\n' "$dir"
+    case "$how" in
+      env)     printf '  (chosen by FM_FLEET_DIR)\n' ;;
+      config)  printf '  (chosen by %s/config/fleet-dir)\n' "${FM_HOME:-\$FM_HOME}" ;;
+      default) printf '  (nothing configured, so the built-in default %s was used)\n' "$FM_FLEET_DEFAULT_DIR" ;;
+    esac
+    if [ ! -d "$dir" ]; then
+      printf '  the directory does not exist.\n'
+    else
+      printf '  the directory exists but has no operators.md, so it is not a fleet.\n'
+    fi
+    printf '\nPick one:\n'
+    printf '  solo / trying it out   FM_FLEET_DIR=~/.firstmate-fleet bin/fm-fleet.sh init\n'
+    printf '  shared, multi-operator sudo bash scripts/fleet-root-prereq.sh   # then: bin/fm-fleet.sh init\n'
+    printf '  already have one       export FM_FLEET_DIR=/path/to/fleet   (or write it to %s/config/fleet-dir)\n' "${FM_HOME:-\$FM_HOME}"
+    printf '\nSee docs/fleet-quickstart.md.\n'
+  } >&2
+  return 1
+}
+
+# Refuse to silently attach to a fleet the operator never chose.
+#
+# The built-in default is a shared, conventional path. On a multi-tenant host it may
+# already be a DIFFERENT team's fleet, and those dirs are group-writable/world-readable
+# by design — so a bare clone that configured nothing could read another team's
+# operator table and event log without ever asking. Membership is the opt-in signal:
+# if you are already an operator in that fleet it is yours, otherwise say so
+# explicitly. Only applies when the dir came from the built-in default; an operator
+# who set FM_FLEET_DIR or config/fleet-dir has already chosen.
+fm_fleet_assert_owned() { # dir
+  local dir=$1 me
+  [ "$(fm_fleet_dir_source)" = default ] || return 0
+  [ -z "${FM_FLEET_ACCEPT_DEFAULT:-}" ] || return 0
+  me=$(id -un)
+  grep -qE "^\| *${me} *\|" "$dir/operators.md" 2>/dev/null && return 0
+
+  {
+    printf 'fm-fleet: %s is an existing fleet, but you are not one of its operators\n' "$dir"
+    printf '  and you have not chosen this fleet — it is only the built-in default.\n\n'
+    printf '  On a shared host that path may belong to another team. Refusing to read it.\n\n'
+    printf 'If it IS yours:\n'
+    printf '  bin/fm-fleet-join.sh %s <scopes-csv>     # become an operator\n' "$me"
+    printf '  export FM_FLEET_ACCEPT_DEFAULT=1          # or just acknowledge the default\n\n'
+    printf 'If it is NOT yours, choose your own:\n'
+    printf '  FM_FLEET_DIR=~/.firstmate-fleet bin/fm-fleet.sh init\n\n'
+    printf 'See docs/fleet-quickstart.md.\n'
+  } >&2
+  return 1
 }
 
 # Refuse any fleet dir that resolves into ANOTHER operator's home. Own home (dev
@@ -255,9 +330,22 @@ fm_fleet_quota_now() {
 # one row per surface. A surface only contributes to routing when status is "fresh";
 # "auth_required"/"unavailable"/"error" surfaces are shown but flagged un-observable.
 fm_fleet_quota_report() {
-  command -v quota-axi >/dev/null 2>&1 || { echo "quota-axi not installed" >&2; return 1; }
+  command -v quota-axi >/dev/null 2>&1 || {
+    { echo "fm-fleet: quota-axi is not on PATH — per-surface headroom is unavailable."
+      echo "  quota-axi reports how much budget each provider has left; the fleet uses it to"
+      echo "  route work away from drained accounts. Install it, or skip quota-aware routing."
+      echo "  Everything else (queue/claim/route/handoff) works without it."
+    } >&2
+    return 1
+  }
   command -v jq >/dev/null 2>&1 || { echo "jq not installed" >&2; return 1; }
-  local j; j=$(quota-axi --json 2>/dev/null) || { echo "quota-axi failed" >&2; return 1; }
+  local j; j=$(quota-axi --json 2>/dev/null) || {
+    { echo "fm-fleet: quota-axi ran but returned no usable data."
+      echo "  Most often this means no provider is signed in yet in THIS shell's environment."
+      echo "  Check with:  quota-axi auth      (shows each provider's credential source/status)"
+    } >&2
+    return 1
+  }
   local base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
   # Collect custom-source rows once. A source is authoritative for its surface and
   # SUPERSEDES the quota-axi row of the same name (e.g. an authed `cursor` override
