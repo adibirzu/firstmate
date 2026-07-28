@@ -263,36 +263,53 @@ fm_backend_orca_read_text_paged() {  # <terminal-id> <limit>
 }
 
 FM_BACKEND_ORCA_COMPOSER_LINES=${FM_BACKEND_ORCA_COMPOSER_LINES:-200}
-FM_BACKEND_ORCA_IDLE_RE=${FM_BACKEND_ORCA_IDLE_RE:-'^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'}
+FM_BACKEND_ORCA_IDLE_RE=${FM_BACKEND_ORCA_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
+FM_BACKEND_ORCA_BARE_PROMPT_RE=${FM_BACKEND_ORCA_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
 
-# fm_backend_orca_composer_state: classify the composer's own bordered row as
+# fm_backend_orca_composer_state: classify the composer's own row as
 # empty|pending|unknown. Real text stays pending, including a slash-command
 # popup that closed by filling an argument-hint placeholder into the composer;
 # that first Enter selected the popup item, it did not submit the command.
+# Two shapes are recognized, keeping the LAST match (mirroring herdr): a
+# side-bordered row, and a bare row starting with a verified AGENT prompt glyph
+# (❯ claude, › codex, → cursor-agent; the shared
+# FM_COMPOSER_BARE_PROMPT_RE_DEFAULT) because cline and cursor-agent draw their
+# live composer without side borders. Shell-style glyphs > $ % # never promote
+# a bare row, so a dead shell stays 'unknown'.
 fm_backend_orca_composer_state() {  # <terminal-id> -> empty|pending|unknown
-  local terminal=$1 cap line trimmed stripped="" found=0
+  local terminal=$1 cap line trimmed stripped="" found=0 bordered=0
   cap=$(fm_backend_orca_read_text_paged "$terminal" "$FM_BACKEND_ORCA_COMPOSER_LINES") || { printf 'unknown'; return 0; }
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     [ -n "$trimmed" ] || continue
     case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|') : ;;
-      *) continue ;;
+      '│'*'│'|'┃'*'┃'|'|'*'|')
+        stripped=$trimmed
+        bordered=1
+        found=1
+        ;;
+      *)
+        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_ORCA_BARE_PROMPT_RE"; then
+          stripped=$trimmed
+          bordered=0
+          found=1
+        fi
+        ;;
     esac
-    stripped=$trimmed
-    found=1
   done < <(printf '%s\n' "$cap")
   [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  stripped=${stripped//│/}
-  stripped=${stripped//┃/}
-  stripped=${stripped//|/}
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
-  # A row was found only by the bordered shape above, so content came from a
-  # genuine composer box - delegate to the shared owner with bordered=1. A bare
-  # dead-shell prompt has no bordered row and already returned 'unknown' above.
-  fm_composer_classify_content 1 "$stripped" "$FM_BACKEND_ORCA_IDLE_RE"
+  if [ "$bordered" -eq 1 ]; then
+    stripped=${stripped//│/}
+    stripped=${stripped//┃/}
+    stripped=${stripped//|/}
+    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+    stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  fi
+  # A row was found only by the bordered shape or a bare AGENT-glyph row, so
+  # delegate to the shared owner with the matching bordered flag. A bare
+  # dead-shell prompt matches neither shape and already returned 'unknown'.
+  fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_ORCA_IDLE_RE"
 }
 
 fm_backend_orca_send_key() {  # <terminal-id> <key>
