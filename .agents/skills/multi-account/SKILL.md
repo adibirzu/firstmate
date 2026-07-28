@@ -18,7 +18,7 @@ spawn so quota is spread and credentials never bleed. Registry:
 
 ## Isolation is verified, never guessed
 Each account declares an `isolation` method that MUST match its harness per
-`adapters/config-dir-matrix.md`:
+the matrix in `docs/fleet-addon.md` (enforced by `bin/fm-accounts-lib.sh`):
 - `config-dir-env` — `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `PI_CODING_AGENT_DIR`
 - `config-dir-flag` — cline `--config <dir>`
 - `api-key-env` — grok `GROK_API_KEY` / cursor `CURSOR_API_KEY`
