@@ -43,17 +43,31 @@ jobs:
           # pre-signature body after the body was already signed, and because
           # body events and head changes sit in different concurrency groups
           # that stale verdict is never superseded - leaving a compliant PR red.
-          # Judge the live body; fall back to the snapshot only if it is
-          # unreadable, so an unreachable API can never pass an unsigned PR.
+          # Re-read the live body for a bounded window before failing; fall
+          # back to the snapshot only when the live body is unreadable, so an
+          # unreachable API can never pass an unsigned PR.
           body=${PR_BODY:-}
           origin='event payload'
           if [ -n "${GH_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] && command -v gh >/dev/null 2>&1; then
-            if live=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null); then
-              body=$live
+            live_attempts=6
+            live_delay_seconds=15
+            attempt=1
+            while [ "$attempt" -le "$live_attempts" ]; do
+              if ! live_body=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null); then
+                echo "::warning::could not read the live body for PR #${PR_NUMBER}; judging the event payload snapshot instead."
+                break
+              fi
+              body=$live_body
               origin='live PR body'
-            else
-              echo "::warning::could not read the live body for PR #${PR_NUMBER}; judging the event payload snapshot instead."
-            fi
+              if printf '%s' "$live_body" | grep -qF -- "$marker"; then
+                echo "Found no-mistakes signature in PR #${PR_NUMBER} live body (attempt ${attempt})."
+                exit 0
+              fi
+              if [ "$attempt" -lt "$live_attempts" ]; then
+                sleep "$live_delay_seconds"
+              fi
+              attempt=$((attempt + 1))
+            done
           fi
           if printf '%s' "$body" | grep -qF -- "$marker"; then
             echo "Found no-mistakes signature in PR #${PR_NUMBER} (${origin})."
