@@ -43,6 +43,13 @@ sed -i 's/\(FL-10.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.
 sed -i 's/@[0-9TZ:-]\{1,\}/@2000-01-01T00:00:00Z/' "$FM_FLEET_DIR/backlog.md"
 "$FLEET_CLI" reap 3600 >/dev/null
 grep -q '\[id:FL-10\].*status:in-flight' "$FM_FLEET_DIR/backlog.md" && ok "reap leaves in-flight alone" || bad "reap in-flight"
+# an unreadable stamp means "cannot age it", not "ancient": reap must leave the item
+# claimed rather than yank it back from its owner (the failure mode a non-GNU `date`
+# used to produce for EVERY claim).
+"$FLEET_CLI" queue FL-11 backend demo3 >/dev/null; "$FLEET_CLI" claim FL-11 royce >/dev/null
+sed -i 's/\(FL-11.*\)@[0-9TZ:-]\{1,\}/\1@not-a-timestamp/' "$FM_FLEET_DIR/backlog.md"
+"$FLEET_CLI" reap 3600 >/dev/null
+grep -q '\[id:FL-11\].*status:claimed' "$FM_FLEET_DIR/backlog.md" && ok "reap leaves an unreadable stamp claimed (fail-safe)" || bad "reap unreadable stamp"
 
 # ---- 4. scope routing ----
 D3=$(mktemp -d); export FM_FLEET_DIR="$D3/fleet"
@@ -68,6 +75,34 @@ D4=$(mktemp -d); export FM_FLEET_DIR="$D4/fleet"
 grep -q '\[id:FL-2\].*claimed-by:royce@' "$FM_FLEET_DIR/backlog.md" \
   && grep -q $'\thandoff\tFL-2' "$FM_FLEET_DIR/events.log" \
   && ok "handoff reassigns + logs event" || bad "handoff"
+# handoff of a STILL-QUEUED item is a full assignment, not just a stamp: it lands in
+# ## Claimed as status:claimed, so fm-fleet-wait.sh wakes the recipient and nobody
+# else can claim it on top of the stamp.
+"$FLEET_CLI" queue FL-3 web "queued handoff" >/dev/null
+"$FLEET_CLI" handoff FL-3 royce >/dev/null
+grep -q '\[id:FL-3\].*claimed-by:royce@[^ ]* status:claimed' "$FM_FLEET_DIR/backlog.md" \
+  && ok "handoff of a queued item -> claimed-by + status:claimed" || bad "handoff queued status"
+awk '/^## Claimed$/{c=1} /\[id:FL-3\]/{ print (c ? "in" : "out") }' "$FM_FLEET_DIR/backlog.md" | grep -qx in \
+  && ok "handoff of a queued item moves it into ## Claimed" || bad "handoff queued section"
+out=$(bin/fm-fleet-wait.sh royce --once --no-heartbeat 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'FL-3'; } \
+  && ok "handoff of a queued item wakes the recipient" || bad "handoff queued wake (rc=$rc out='$out')"
+"$FLEET_CLI" claim FL-3 adi >/dev/null 2>&1 && bad "handed-off item still claimable by a third party" \
+  || ok "handed-off item is no longer claimable"
+# in-flight work keeps its status through a reassignment
+"$FLEET_CLI" queue FL-4 web "inflight handoff" >/dev/null; "$FLEET_CLI" claim FL-4 adi >/dev/null
+sed -i 's/\(FL-4.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
+"$FLEET_CLI" handoff FL-4 royce >/dev/null
+grep -q '\[id:FL-4\].*claimed-by:royce@[^ ]* status:in-flight' "$FM_FLEET_DIR/backlog.md" \
+  && ok "handoff of an in-flight item keeps status:in-flight" || bad "handoff in-flight"
+
+# ---- 5b. the id is the KB's primary key: duplicates are refused, never silently
+# collapsed by the single-match claim/handoff awk rules ----
+"$FLEET_CLI" queue FL-5 backend "first" >/dev/null
+"$FLEET_CLI" queue FL-5 backend "second" >/dev/null 2>&1 && bad "queue accepted a duplicate id" || ok "queue refuses a duplicate id"
+n=$(grep -c 'id:FL-5' "$FM_FLEET_DIR/backlog.md")
+{ [ "$n" -eq 1 ] && grep -q 'first' "$FM_FLEET_DIR/backlog.md"; } \
+  && ok "the original item survives a rejected duplicate" || bad "duplicate rejection lost a line (n=$n)"
 
 # ---- 6. view + status ----
 vlines=$("$FLEET_CLI" view | grep -c 'FL-2' || true)

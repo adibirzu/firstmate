@@ -27,6 +27,31 @@ unset _FM_FLEET_LIB_DIR
 
 fm_fleet_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# ISO8601(Z) -> epoch seconds, as awk source shared by every awk program here that
+# has to age a timestamp (reap's staleness test, route's heartbeat freshness).
+#
+# BSD `date` has no `-d` for parsing — there it is the DST flag — so the GNU form
+# ALONE yields nothing on a non-GNU host and every stamp silently reads as epoch 0:
+# route would treat a crashed operator as fresh forever, and reap would requeue
+# every claim. Probe order matches bin/fm-fleet-snapshot.sh: BSD `-j -f` first,
+# GNU `-d` second.
+#
+# The shape check is also the injection guard: the stamp is interpolated into a
+# shell command, and operators.md/backlog.md are group-writable. Anything that is
+# not exactly <YYYY-MM-DDThh:mm:ssZ> returns -1 (unknown), and callers must treat
+# a non-positive result as "cannot age this" -> leave the row alone.
+_FM_FLEET_AWK_EPOCH='
+function epoch(iso,   cmd, out) {
+  if (iso !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) return -1
+  cmd = "date -u -j -f \"%Y-%m-%dT%H:%M:%SZ\" \"" iso "\" +%s 2>/dev/null || date -u -d \"" iso "\" +%s 2>/dev/null"
+  out = ""
+  cmd | getline out
+  close(cmd)
+  if (out == "") return -1
+  return out + 0
+}
+'
+
 # Built-in last-resort fleet dir. Only reached when neither FM_FLEET_DIR nor
 # $FM_HOME/config/fleet-dir is set. It is a *convention*, not a guarantee: on a
 # shared host it may already belong to another team, so fm_fleet_assert_initialized
@@ -123,7 +148,12 @@ fm_fleet_assert_usable() { # dir
 # test dir) and /opt/... shared dirs are allowed.
 fm_fleet_assert_shared() {
   local dir rp owner me; dir=$1
-  rp=$(realpath -m "$dir")
+  # `realpath -m` is GNU coreutils. Where it is missing or rejects -m the command
+  # substitution yields "", which matches no case below — the guard would fail
+  # OPEN and wave a foreign home through. Fall back to the absolutized path so the
+  # /home/<other> prefix is still caught.
+  rp=$(realpath -m "$dir" 2>/dev/null) || rp=""
+  [ -n "$rp" ] || case "$dir" in /*) rp=$dir ;; *) rp=$PWD/$dir ;; esac
   me=$(id -un)
   case "$rp" in
     /home/*)
@@ -173,9 +203,18 @@ fm_fleet_lock() { # dir
 }
 fm_fleet_unlock() { flock -u 9 2>/dev/null || true; }
 
+# Append an item to ## Queued. The id is the KB's primary key — claim/handoff/reap
+# all address items by it — so a duplicate is rejected under the lock we already
+# hold. Without this, two items share an id and the single-match awk rules below
+# silently drop one of them from backlog.md. Returns 1 if the id is already present.
 fm_fleet_queue() { # dir id scope desc
   local dir=$1 id=$2 scope=$3 desc=$4
   fm_fleet_lock "$dir" || return 1
+  if grep -q "\[id:$id\]" "$dir/backlog.md"; then
+    echo "fm-fleet: id already in the backlog, refusing to queue a duplicate: $id" >&2
+    fm_fleet_unlock
+    return 1
+  fi
   awk -v line="- [id:$id] scope:$scope | $desc | status:queued" '
     { print }
     /^## Queued$/ { print ""; print line }
@@ -193,7 +232,7 @@ fm_fleet_claim() { # dir id operator
   fm_fleet_lock "$dir" || return 1
   if grep -q "\[id:$id\].*status:queued" "$dir/backlog.md"; then
     awk -v id="$id" -v op="$op" -v ts="$ts" '
-      $0 ~ ("\\[id:" id "\\].*status:queued") {
+      held == "" && $0 ~ ("\\[id:" id "\\].*status:queued") {
         sub(/status:queued/, "claimed-by:" op "@" ts " status:claimed"); held=$0; next
       }
       /^## Claimed$/ { print; if (held != "") { print ""; print held; held="" } ; next }
@@ -207,8 +246,14 @@ fm_fleet_claim() { # dir id operator
   return $rc
 }
 
-# Reassign an item to another operator (handoff): stamp claimed-by:<to>, keep it
-# in Claimed. Returns 0 if the item exists.
+# Reassign an item to another operator (handoff): stamp claimed-by:<to>. An item
+# that is already claimed or in-flight keeps its status and its section. A still-
+# QUEUED item is moved into ## Claimed as status:claimed, exactly as fm_fleet_claim
+# does, because a handoff IS an assignment: stamping the new owner while leaving
+# status:queued reported success but stranded the work — fm-fleet-wait.sh wakes only
+# on `claimed-by:<op>@<ts> status:claimed`, so the recipient never saw it, and the
+# line stayed queued for anyone else to claim on top of the stamp.
+# Returns 0 if the item exists.
 fm_fleet_handoff() { # dir id to_operator
   local dir=$1 id=$2 to=$3 ts rc=1
   ts=$(fm_fleet_now)
@@ -216,10 +261,13 @@ fm_fleet_handoff() { # dir id to_operator
   if grep -q "\[id:$id\]" "$dir/backlog.md"; then
     awk -v id="$id" -v to="$to" -v ts="$ts" '
       $0 ~ ("\\[id:" id "\\]") {
-        if ($0 ~ /claimed-by:[^ ]+/) sub(/claimed-by:[^ ]+/, "claimed-by:" to "@" ts)
-        else sub(/status:/, "claimed-by:" to "@" ts " status:")
-        print; next
+        if ($0 ~ /claimed-by:[^ ]+/) { sub(/claimed-by:[^ ]+/, "claimed-by:" to "@" ts); print; next }
+        if (held == "" && $0 ~ /status:queued/) {
+          sub(/status:queued/, "claimed-by:" to "@" ts " status:claimed"); held=$0; next
+        }
+        sub(/status:/, "claimed-by:" to "@" ts " status:"); print; next
       }
+      /^## Claimed$/ { print; if (held != "") { print ""; print held; held="" } ; next }
       { print }
     ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
     fm_fleet_event "$dir" "$to" handoff "$id" "assigned"
@@ -239,12 +287,14 @@ fm_fleet_reap() { # dir ttl_seconds
   fm_fleet_lock "$dir" || return 1
   # Buffered two-pass: collect stale claimed lines (removing them in place),
   # then re-emit and insert the requeued copies under ## Queued.
-  awk -v ttl="$ttl" -v now="$now" '
-    function epoch(iso,   c,e) { c="date -u -d \"" iso "\" +%s 2>/dev/null"; c|getline e; close(c); return e }
+  awk -v ttl="$ttl" -v now="$now" "$_FM_FLEET_AWK_EPOCH"'
     { lines[NR]=$0
       if ($0 ~ /status:claimed/ && $0 ~ /claimed-by:[^@]+@[0-9TZ:-]+/) {
         match($0, /@[0-9TZ:-]+/); iso=substr($0, RSTART+1, RLENGTH-1)
-        if (now - epoch(iso) > ttl) {
+        # ep<=0 means the stamp is unreadable, NOT that it is ancient: requeue
+        # nothing rather than yanking every claim out from under its owner.
+        ep=epoch(iso)
+        if (ep > 0 && (now - ep) > ttl) {
           remove[NR]=1
           r=$0; gsub(/claimed-by:[^ ]+ /, "", r); sub(/status:claimed/, "status:queued", r)
           rn++; req[rn]=r
@@ -280,9 +330,8 @@ fm_fleet_reap() { # dir ttl_seconds
 fm_fleet_route() { # dir scope
   local dir=$1 scope=$2 now ttl floor
   now=$(date -u +%s); ttl=${FM_FLEET_HEARTBEAT_TTL:-90}; floor=${FM_FLEET_QUOTA_MIN:-5}
-  awk -F'|' -v s="$scope" -v now="$now" -v ttl="$ttl" -v floor="$floor" '
+  awk -F'|' -v s="$scope" -v now="$now" -v ttl="$ttl" -v floor="$floor" "$_FM_FLEET_AWK_EPOCH"'
     function trim(x){ gsub(/^ +| +$/,"",x); return x }
-    function epoch(iso,   c,e){ if(iso==""||iso=="-")return -1; c="date -u -d \"" iso "\" +%s 2>/dev/null"; c|getline e; close(c); return e+0 }
     function eligible(st,seen,q,   ep){
       if(st!="online") return 0
       ep=epoch(seen); if(ep>0 && (now-ep)>ttl) return 0

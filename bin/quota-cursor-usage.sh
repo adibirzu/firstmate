@@ -24,12 +24,14 @@ ver=$(cursor-agent about 2>/dev/null \
       | tr -cd '0-9A-Za-z.\-')
 : "${ver:=2026.07.23}"
 
+# The trap is armed BEFORE the token is written: an interrupt in between would
+# otherwise leave the bearer token behind in the temp file.
 hdr=$(mktemp); chmod 600 "$hdr"
+trap 'rm -f "$hdr"' EXIT
 { printf 'Authorization: Bearer %s\n' "$tok"
   printf 'Connect-Protocol-Version: 1\n'
   printf 'x-cursor-client-version: %s\n' "$ver"
   printf 'x-cursor-client-type: cli\n'; } > "$hdr"
-trap 'rm -f "$hdr"' EXIT
 
 resp=$(curl -sS -m 15 -X POST -H @"$hdr" -H 'Content-Type: application/json' --data '{}' \
   "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage" 2>/dev/null) || exit 0

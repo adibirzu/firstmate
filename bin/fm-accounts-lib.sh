@@ -41,7 +41,12 @@ fm_accounts_file() {
 fm_account_assert_safe_path() { # path
   local p rp owner me; p=${1:-}
   [ -n "$p" ] && [ "$p" != "-" ] || return 0
-  rp=$(realpath -m "$p"); me=$(id -un)
+  # `realpath -m` is GNU coreutils; where it is missing or rejects -m the result is
+  # "" and the case below matches nothing, i.e. the guard fails OPEN. Fall back to
+  # the absolutized path so a foreign-home prefix is still caught.
+  rp=$(realpath -m "$p" 2>/dev/null) || rp=""
+  [ -n "$rp" ] || case "$p" in /*) rp=$p ;; *) rp=$PWD/$p ;; esac
+  me=$(id -un)
   case "$rp" in
     /home/*) owner=${rp#/home/}; owner=${owner%%/*}
       if [ "$owner" != "$me" ]; then
@@ -133,7 +138,11 @@ _fm_account_headroom() { # iso env cdir kfile qbin prov
   local iso=$1 env=$2 cdir=$3 kfile=$4 qbin=$5 prov=$6 out key
   case "$iso" in
     config-dir-env)  out=$(env "$env=$cdir" "$qbin" --provider "$prov" --json 2>/dev/null) ;;
-    config-dir-flag) out=$("$qbin" --provider "$prov" --json 2>/dev/null) ;;
+    # The isolation is a flag on the HARNESS's own argv; quota-axi has no equivalent,
+    # so there is no way to point it at this account. Report nothing rather than the
+    # currently-authed account's headroom, which would make every flag-isolated
+    # account of a harness look identical and turn fm_account_pick into a coin flip.
+    config-dir-flag) return 0 ;;
     api-key-env)
       [ -r "$kfile" ] || return 0
       key=$(head -n1 "$kfile"); [ -n "$key" ] || return 0
