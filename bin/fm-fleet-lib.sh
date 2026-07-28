@@ -381,7 +381,7 @@ fm_fleet_quota_report() {
           (if .headroom==null then "—" else (.headroom|tostring)+"%" end),
           (.status // "?"), "custom", (.note // "") ] | @tsv'
     done
-  } | { command -v column >/dev/null 2>&1 && column -t -s "$(printf '\t')" || cat; }
+  } | if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi
 }
 
 # model family -> surfaces (quota pools) with each surface's live status + headroom.
@@ -419,7 +419,7 @@ fm_fleet_models_report() {
       done <<< "$surfaces"
       printf '%s\t%s\n' "$fam" "$out"
     done < <(jq -r 'keys_unsorted[] | select(startswith("_")|not)' "$map")
-  } | { command -v column >/dev/null 2>&1 && column -t -s "$(printf '\t')" || cat; }
+  } | if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi
 }
 
 # Failover selector: pick the best surface (quota pool) to serve a model family.
