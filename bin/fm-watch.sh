@@ -345,13 +345,19 @@ pause_state_class() {  # <window> <task>
     return
   fi
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
-    if [ "$(window_kind "$win")" != secondmate ]; then
-      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
-      if [ "$agent_alive" != dead ]; then
-        rm -f "$recheck_file"
-        printf 'none'
-        return
-      fi
+    # A LIVE agent under a DECLARED pause is the normal healthy case, not a
+    # wedge. AGENTS.md's contract is that a declared pause means a bounded
+    # external wait and firstmate leaves that idle pane alone, rechecking it on
+    # a long cadence. Requiring a dead agent here inverted that: every poll of a
+    # live parked crew returned 'none', routing to surface_nonterminal_stale and
+    # re-escalating a bare stale forever, which is precisely the shape of a crew
+    # parked on a captain merge decision. It also deleted the recheck marker on
+    # the way out, so the condition could never hold again either.
+    # A genuinely busy crew is still separated out by crew_absorb_class.
+    if [ "$(crew_absorb_class "$task")" = working ]; then
+      rm -f "$recheck_file"
+      printf 'working'
+      return
     fi
     printf 'paused'
     return
