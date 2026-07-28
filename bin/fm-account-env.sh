@@ -64,6 +64,7 @@ fm_account_apply_env() { # name  -> exports env; sets FM_ACCT_ARGV_SUFFIX
   fm_account_validate "$name" || return 1
   line=$(fm_account_resolve "$name")
   IFS=$'\t' read -r harness iso env flag cdir kfile <<<"$line"
+  # shellcheck disable=SC2034 # FM_ACCT_ARGV_SUFFIX is read by callers (fm-account-exec.sh) after sourcing.
   case "$iso" in
     config-dir-env)  export "$env=$cdir" ;;
     config-dir-flag) FM_ACCT_ARGV_SUFFIX="$flag $cdir" ;;
