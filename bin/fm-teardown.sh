@@ -1176,7 +1176,12 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
   else
-    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    # Proceeding without the close would let the worktree return below kill the
+    # still-live pane shell — the exact focus steal the ordering above prevents.
+    # Nothing destructive has happened yet, so abort and let teardown be retried.
+    echo "error: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    echo "error: teardown aborted before the worktree return for $ID; retry once the lock holder finishes" >&2
+    exit 1
   fi
 fi
 
