@@ -301,23 +301,18 @@ parse_orca_worktree_result() {
 }
 
 spawn_abort_cleanup() {
-  local status=$?
-  # A treehouse lease is durable: unlike the old interactive `treehouse get`, the
-  # pool slot is NOT freed when the pane dies. If this spawn fails before the task
-  # exists in state/, teardown will never run for it, so the lease has to come back
-  # here or the slot is held with nothing to release it.
-  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
-    TREEHOUSE_LEASE_ABORT_CLEANUP=0
-    if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
-      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 \
-        || echo "warning: could not return the leased worktree $WT; run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
-    fi
-  fi
+  local status=$? herdr_pane_close_refused=0
+  # The projection pane close must run BEFORE the lease return below: under the
+  # leased flow the pane's top-level shell has cwd in the worktree, so
+  # `treehouse return --force` kills that shell and Herdr's last-pane cleanup
+  # destroys the workspace and steals focus before the exact-pane close could
+  # restore it (same ordering fm-teardown.sh enforces on the normal path).
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
       echo "warning: herdr presentation focus lock unavailable; retaining the projection journal and refusing concurrent abort cleanup" >&2
       HERDR_PROJECTION_ABORT_CLEANUP=0
+      herdr_pane_close_refused=1
     fi
   fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ]; then
@@ -330,6 +325,23 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  # A treehouse lease is durable: unlike the old interactive `treehouse get`, the
+  # pool slot is NOT freed when the pane dies. If this spawn fails before the task
+  # exists in state/, teardown will never run for it, so the lease has to come back
+  # here or the slot is held with nothing to release it. The one exception is a
+  # refused pane close above: returning then would kill the still-live pane and
+  # steal focus, so the slot is left with the exact recovery command instead.
+  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
+    TREEHOUSE_LEASE_ABORT_CLEANUP=0
+    if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
+      if [ "$herdr_pane_close_refused" = 1 ]; then
+        echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      else
+        ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 \
+          || echo "warning: could not return the leased worktree $WT; run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      fi
+    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -1356,10 +1368,14 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # must return it; TREEHOUSE_LEASE_ABORT_CLEANUP arms spawn_abort_cleanup for that.
   # fm-teardown.sh already returns the worktree by absolute path on the normal path.
   POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
-  WT=$( cd "$PROJ_ABS" && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>/dev/null ) || {
+  LEASE_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-lease-err.XXXXXXXX")
+  WT=$( cd "$PROJ_ABS" && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>"$LEASE_ERR_FILE" ) || {
     echo "error: treehouse could not lease a worktree for $PROJ_ABS under pool root $POOL_HOME/.treehouse" >&2
+    [ ! -s "$LEASE_ERR_FILE" ] || sed 's/^/  treehouse: /' "$LEASE_ERR_FILE" >&2
+    rm -f "$LEASE_ERR_FILE"
     exit 1
   }
+  rm -f "$LEASE_ERR_FILE"
   if [ -z "$WT" ] || [ ! -d "$WT" ]; then
     echo "error: treehouse returned no usable worktree path for $PROJ_ABS (got '${WT:-}')" >&2
     exit 1
