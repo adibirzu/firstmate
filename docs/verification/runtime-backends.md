@@ -193,6 +193,32 @@ ok - real Herdr lab: missing, renamed, and duplicate tokens trigger zero destruc
 ok - real Herdr lab validation completed on Herdr 0.7.5 with the default-session tripwire intact
 ```
 
+Projected-teardown focus restoration under the leased worktree-acquisition
+flow (`bin/fm-spawn.sh`'s `treehouse get --lease` plus a plain `cd` into the
+pane's own shell, `fm/fm-pool-relocation`) was reverified on 2026-07-28
+against Herdr 0.7.4 and Treehouse v2.1.0 after moving `bin/fm-teardown.sh`'s
+presentation retire-candidate gate and exact-pane close to run before
+`teardown_treehouse_return` instead of after it:
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  tests/fm-backend-herdr-presentation-e2e.test.sh
+```
+
+Observed: 22/22 `ok -` lines, exit 0, across 3 consecutive runs (previously
+`not ok - projected teardown changed active workspace/tab from w3/w3:t1 to
+w8/w8:t2`, because `treehouse return --force` killed the leased pane's own
+top-level shell - now `cd`'d directly into the worktree - before the
+presentation code could see the pane was still alive).
+The seven other real-Herdr suites and the branch's own spawn contract test
+were reverified green in the same session: `tests/fm-backend-herdr.test.sh`
+(132/132), `tests/fm-backend-herdr-eventwait-smoke.test.sh` (3/3),
+`tests/fm-backend-herdr-prune-safety-e2e.test.sh` (6/6),
+`tests/fm-backend-herdr-respawn-idem-e2e.test.sh` (6/6),
+`tests/fm-backend-herdr-smoke.test.sh` (16/16),
+`tests/fm-backend-herdr-workspace-per-home-e2e.test.sh` (10/10), and
+`tests/fm-spawn-worktree-settle.test.sh` (11/11).
+
 The restored-shell session-start cleanup ran on 2026-07-24 against Herdr 0.7.5 protocol 17:
 
 ```sh
