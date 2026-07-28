@@ -29,29 +29,43 @@ No fleet, no root, no shared directory. This works in a plain clone.
 ```bash
 bin/fm-fleet.sh quota     # headroom per surface
 bin/fm-fleet.sh models    # which surfaces can serve each model family
-bin/fm-fleet.sh pick gpt  # -> the first surface with headroom
+bin/fm-fleet.sh pick gpt  # -> the best surface to serve that family right now
 ```
 
 ```
-SURFACE  HEADROOM  STATUS         SOURCE       NOTE
-claude   50%       fresh          oauth        observable
-codex    100%      fresh          cli-rpc      observable
-copilot  71%       logged_in      custom       live headroom via authed usage reader
-cursor   69%       logged_in      custom       live headroom via authed usage reader
-grok     —         auth_required  unavailable  Grok sign-in required
+SURFACE  HEADROOM  PACE    RESERVE  STATUS         SOURCE       NOTE
+claude   50%       ahead   -18      fresh          oauth        observable
+codex    100%      behind  +42      fresh          cli-rpc      observable
+copilot  71%       —       —        logged_in      custom       live headroom via authed usage reader
+cursor   69%       —       —        logged_in      custom       live headroom via authed usage reader
+grok     —         —       —        auth_required  unavailable  Grok sign-in required
 ```
+
+`HEADROOM` is how much of the pool is left; `PACE` and `RESERVE` are how fast you
+are spending it. `ahead` with a negative reserve means you have burned that many
+percentage points *more* than the window's elapsed share — 50% left but `ahead -18`
+is a pool you will run dry on before it refills. `—` means the surface reports no
+pace at all (an older `quota-axi`, or a custom reader that only returns a number);
+a literal `unknown` means the provider itself said so. Full column semantics:
+[fleet-addon.md](fleet-addon.md#per-surface-pace-quota-axi--0115-schemaversion-3).
 
 **Why this exists.** The same model often reaches you through several paid pools —
 Claude via an Anthropic subscription *and* via Copilot *and* via Cursor. When one
 pool is drained the work should move, not stop. The shipped map
 `docs/examples/model-surfaces.json` (override: copy it to the gitignored
 `config/model-surfaces.json` and edit) maps
-each model family to an ordered list of surfaces, and `pick` walks it left to right:
+each model family to an ordered list of surfaces:
 
 ```json
 { "claude": ["claude", "copilot", "cursor"],
   "gpt":    ["codex",  "copilot", "cursor"] }
 ```
+
+`pick` first drops every surface below `FM_FLEET_QUOTA_MIN` (default 5%), then
+prefers the sustainable ones: a surface with headroom to spare beats one already
+running ahead of its window, however much raw headroom the latter shows. Among
+surfaces of equal standing it walks the list left to right, so the order you write
+is still the preference you get.
 
 A surface whose usage cannot be observed is treated **fail-open** (a valid target),
 so an unreadable provider never blocks routing.
