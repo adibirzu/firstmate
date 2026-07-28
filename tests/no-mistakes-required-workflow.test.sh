@@ -17,10 +17,38 @@ extract_signature_script() {
   ' "$WORKFLOW"
 }
 
+# Blank GH_TOKEN/GH_REPO explicitly: this replay judges the payload snapshot
+# alone, and an ambient token in the caller's environment must not turn it into
+# a live API read against a synthetic PR number.
 signature_result() {
   local body=$1 script
   script=$(extract_signature_script)
-  PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" bash -c "$script" >/dev/null 2>&1
+  GH_TOKEN='' GH_REPO='' PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" \
+    bash -c "$script" >/dev/null 2>&1
+}
+
+# A stub `gh` standing in for the live-body read: it either prints the body the
+# PR carries now, or exits non-zero to simulate an unreachable API.
+make_gh_stub() {
+  local dir=$1 mode=$2 live=${3:-}
+  mkdir -p "$dir"
+  printf '%s' "$live" >"$dir/live-body.txt"
+  if [ "$mode" = unreachable ]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' >"$dir/gh"
+  else
+    printf '#!/usr/bin/env bash\ncat %s/live-body.txt\n' "$dir" >"$dir/gh"
+  fi
+  chmod +x "$dir/gh"
+}
+
+signature_result_live() {
+  local payload=$1 mode=$2 live=${3:-} dir script
+  dir=$(fm_test_tmproot fm-nm-signature)
+  make_gh_stub "$dir" "$mode" "$live"
+  script=$(extract_signature_script)
+  PATH="$dir:$PATH" GH_TOKEN=synthetic-token GH_REPO=kunchenguid/firstmate \
+    PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$payload" \
+    bash -c "$script" >/dev/null 2>&1
 }
 
 render_group() {
@@ -43,6 +71,37 @@ test_signature_sequence_at_fixed_head() {
   fi
   signature_result "Synthetic signed edit\n$MARKER" || fail "signed edited event must succeed"
   pass "fixed-head signed opened, unsigned edited, signed edited yields 0/1/0"
+}
+
+# Regression: no-mistakes pushes commits before it writes the '## Pipeline'
+# section, so a head-change run that starts late replays a body snapshot taken
+# before the signature existed. Head changes and body events sit in different
+# concurrency groups, so that stale verdict is never superseded and a PR whose
+# body is signed stays red. The verdict must follow the body the PR carries now.
+test_live_body_outranks_the_payload_snapshot() {
+  signature_result_live 'Unsigned snapshot from an earlier head change' signed "Signed later\n$MARKER" || \
+    fail "a signed live body must clear a stale unsigned payload snapshot"
+  if signature_result_live "Stale signed snapshot\n$MARKER" signed 'The signature is gone from the body'; then
+    fail "an unsigned live body must fail even when the payload snapshot was signed"
+  fi
+  pass "the body the PR carries now decides, not the event payload snapshot"
+}
+
+test_unreachable_api_falls_back_to_the_snapshot() {
+  signature_result_live "Signed snapshot\n$MARKER" unreachable || \
+    fail "an unreachable API must fall back to the payload snapshot"
+  if signature_result_live 'Unsigned snapshot' unreachable; then
+    fail "an unreachable API must not pass an unsigned PR"
+  fi
+  pass "an unreachable API falls back to the snapshot and still refuses unsigned bodies"
+}
+
+test_live_body_read_contract() {
+  assert_grep '  pull-requests: read' "$WORKFLOW" "workflow cannot read the live PR body"
+  assert_grep 'GH_TOKEN: ${{ github.token }}' "$WORKFLOW" "live body read must use the job's own token"
+  assert_grep 'repos/${GH_REPO}/pulls/${PR_NUMBER}' "$WORKFLOW" \
+    "live body must be read from the PR the event names"
+  pass "live body is read read-only from the event's own PR with the job token"
 }
 
 test_event_identity_contract() {
@@ -91,6 +150,9 @@ test_security_and_signature_contract_is_preserved() {
 }
 
 test_signature_sequence_at_fixed_head
+test_live_body_outranks_the_payload_snapshot
+test_unreachable_api_falls_back_to_the_snapshot
+test_live_body_read_contract
 test_event_identity_contract
 test_run_names_are_ordered_and_unique
 test_security_and_signature_contract_is_preserved
