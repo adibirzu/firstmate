@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # GitHub concurrency groups retain at most one pending run, replacing older
 # pending runs even when cancel-in-progress is false. Give body-bearing events
@@ -31,12 +32,37 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
           if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
             echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
             exit 0
+          fi
+          # The event payload snapshots the body at trigger time, and no-mistakes
+          # pushes the branch (synchronize) moments before it writes the signed
+          # body (edited). Because body-bearing events keep immutable concurrency
+          # groups, a verdict from that stale snapshot would stick to the head
+          # SHA forever. Re-read the live body for a bounded window before
+          # failing so this run's verdict (and any re-run) reflects the current
+          # PR body instead of the snapshot. Tests pin GH_TOKEN empty to keep
+          # local replay offline and immediate.
+          if [ -n "${GH_TOKEN:-}" ]; then
+            live_attempts=6
+            live_delay_seconds=15
+            attempt=1
+            while [ "$attempt" -le "$live_attempts" ]; do
+              live_body=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.body // ""') || live_body=''
+              if printf '%s' "$live_body" | grep -qF -- "$marker"; then
+                echo "Found no-mistakes signature in PR #${PR_NUMBER} live body (attempt ${attempt})."
+                exit 0
+              fi
+              if [ "$attempt" -lt "$live_attempts" ]; then
+                sleep "$live_delay_seconds"
+              fi
+              attempt=$((attempt + 1))
+            done
           fi
           {
             echo "::error::This PR was not raised through no-mistakes."
