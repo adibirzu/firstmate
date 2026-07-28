@@ -83,7 +83,8 @@ exercises every code path.
 - Quota-secondary routing is implemented: each operator self-publishes its
   `quota-axi` min headroom into its `operators.md` `quota` column on heartbeat, and
   `route` skips any operator below `FM_FLEET_QUOTA_MIN` (no cross-user auth needed).
-  `fm-fleet.sh budget` / `fm_fleet_budget_ok` gates a claim on local headroom.
+  `fm-fleet.sh budget` / `fm_fleet_budget_ok` gates a claim on local headroom and,
+  where pace is reported, on conservation pressure too (see the `budget` bullet below).
   Missing `quota-axi` is fail-open (`quota:-`), so routing falls back to scope alone.
 
 ## Per-surface token visibility & model→surface failover
@@ -119,12 +120,11 @@ Three read-only, 0-token verbs expose and route on this:
   `FM_FLEET_RESERVE_MIN` (default `-25` points; `-100` disables the pace floor)
   reports "below pace floor", always naming the headroom/pace/reserve facts.
 
-These fleet verbs are **operator-facing diagnostics**. They never select a
-harness, model, or effort for dispatch. The pace-aware profile-array selection
-procedure is owned solely by the `quota-array-dispatch` skill, which the agent
-loads at intake; `quota-axi` stays data-only. Do not wire `fm-fleet.sh pick`
-into `fm-spawn` or any dispatch path — that would be the routing wrapper /
-producer-side route recommendation that skill forbids.
+These fleet verbs are **operator-facing diagnostics**: they never select a
+harness, model, or effort for dispatch, and `fm-fleet.sh pick` must never be
+wired into `fm-spawn` or any other dispatch path. Pace-aware dispatch selection
+stays with `quota-array-dispatch` under `AGENTS.md` section 4 (rationale:
+`docs/fleet-addon.md` "Per-surface pace").
 
 Authed readers (server-side usage): some surfaces don't report through quota-axi. The
 mechanism is an **operator-supplied escape hatch**: `config/quota-overrides.json` maps

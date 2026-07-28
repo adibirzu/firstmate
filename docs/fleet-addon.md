@@ -88,11 +88,12 @@ pace floor, `pick` ignores pace ordering. Nothing crashes, nothing fabricates a
 pace class.
 
 These fleet verbs are **operator-facing diagnostics**. They never select a
-harness, model, or effort for dispatch. The pace-aware profile-array selection
-procedure is owned solely by the `quota-array-dispatch` skill, which the agent
-loads at intake; `quota-axi` stays data-only. Do not wire `fm-fleet.sh pick`
-into `fm-spawn` or any dispatch path — that would be the routing wrapper /
-producer-side route recommendation that skill forbids.
+harness, model, or effort for dispatch, and `fm-fleet.sh pick` must never be
+wired into `fm-spawn` or any other dispatch path — that is exactly the routing
+wrapper / producer-side route recommendation the dispatch owner forbids.
+Dispatch selection from these same signals is owned by
+[`AGENTS.md`](../AGENTS.md) section 4 and the `quota-array-dispatch` skill it
+names; this add-on only reads and renders what `quota-axi` reports.
 
 ### Cross-uid safety (non-negotiable)
 Every mutating fleet function calls `fm_fleet_assert_shared`, which refuses any
@@ -236,7 +237,7 @@ Zero files are deleted by this work item.
 bash tests/federation/test_fleet.sh          # federation: claim race, reap, route, handoff, view, safety
 bash tests/federation/test_fleet_ops.sh      # operator lifecycle: register/heartbeat/leave, TTL, quota routing
 bash tests/federation/test_fleet_guards.sh   # init/ownership guards on every fleet-consuming entry point
-bash tests/federation/test_quota_surfaces.sh # per-surface quota report, models table, failover pick
+bash tests/federation/test_quota_surfaces.sh # per-surface quota report, models table, failover pick, pace columns, budget pace floor, schemaVersion 2 degradation
 bash tests/federation/test_accounts.sh       # registry resolve/validate (+ cross-uid path guard)
 bash tests/federation/test_spawn_account.sh  # --account compose + wrapper + api-key refusal + apply_env
 bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; tie/absent/no-provider)
