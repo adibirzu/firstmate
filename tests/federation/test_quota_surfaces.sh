@@ -425,10 +425,10 @@ rm -rf "$STUB4"
 [ "$(Q2 pick bve)" = B ] && ok "pick: known-sustainable (B) preferred over explicit unknown (E)" || no "pick bve -> $(Q2 pick bve) (expected B)"
 [ "$(Q2 pick gvb)" = B ] && ok "pick: surface below FM_FLEET_QUOTA_MIN (G, 3%) excluded before any pace ordering" || no "pick gvb -> $(Q2 pick gvb) (expected B)"
 [ "$(Q2 pick hvb)" = B ] && ok "pick: R1 — stale surface's pace (H) not trusted as 1a-sustainable, fresh B wins" || no "pick hvb -> $(Q2 pick hvb) (expected B)"
-grep -B30 '^fm_fleet_pick_surface()' "$REAL/bin/fm-fleet-lib.sh" | grep -qi 'OPERATOR-FACING DIAGNOSTIC' \
+grep -B30 '^fm_fleet_pick_surface()' "$REAL/bin/fm-fleet-quota-lib.sh" | grep -qi 'OPERATOR-FACING DIAGNOSTIC' \
   && ok "pick: code comment states operator-facing diagnostic, never called from dispatch" \
   || no "pick: missing operator-facing-diagnostic code comment"
-grep -B30 '^fm_fleet_pick_surface()' "$REAL/bin/fm-fleet-lib.sh" | grep -qi 'documented OPERATOR preference' \
+grep -B30 '^fm_fleet_pick_surface()' "$REAL/bin/fm-fleet-quota-lib.sh" | grep -qi 'documented OPERATOR preference' \
   && ok "pick: code comment states map order is a documented operator preference" \
   || no "pick: missing map-order-is-operator-preference code comment"
 
