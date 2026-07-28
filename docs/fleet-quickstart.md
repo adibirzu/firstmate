@@ -27,7 +27,7 @@ No fleet, no root, no shared directory. This works in a plain clone.
 `jq`, `curl`, `python3`. Whichever agent CLIs you use should already be signed in.
 
 ```bash
-bin/fm-fleet.sh quota     # headroom per surface
+bin/fm-fleet.sh quota     # headroom + spend pace per surface
 bin/fm-fleet.sh models    # which surfaces can serve each model family
 bin/fm-fleet.sh pick gpt  # -> the best surface to serve that family right now
 ```
