@@ -6,7 +6,7 @@
 # flock advisory locks on the backlog for atomic, no-overlap claims.
 #
 # KB layout ($dir):
-#   operators.md  md table: | operator | scope | home | accounts | status |
+#   operators.md  md table: | operator | scope | home | accounts | status | seen | quota |
 #   projects.md   md table: | project | owner | path |
 #   backlog.md    sections ## Queued / ## Claimed / ## In-flight / ## Done
 #                 item line: - [id:<ID>] scope:<S> | <DESC> | [claimed-by:<op>@<ISO>] status:<st>

@@ -11,8 +11,9 @@ Two general, reusable capabilities FirstMate does not ship today, built as a
    a chosen account with isolated auth, plus quota-aware account selection.
 
 Everything lives in new `bin/fm-fleet*.sh`, `bin/fm-account*.sh`,
-`bin/fm-accounts*.sh`, `.agents/skills/{federation,multi-account}/`, and
-`tests/federation/*.sh`. No existing FirstMate file is modified — the `--account`
+`bin/fm-accounts*.sh`, `bin/quota-*`, `scripts/fleet-root-prereq.sh`,
+`.agents/skills/{federation,multi-account}/`, and `tests/federation/*.sh`.
+No existing FirstMate script is modified — the `--account`
 axis rides on `fm-spawn`'s existing raw-launch escape hatch. That is what makes
 this shippable as an additive PR (or a standalone overlay).
 
@@ -27,19 +28,21 @@ The add-on uses a **shared-dir + read/claim** model instead: operators share onl
 a group-writable, git-backed KB and **never write each other's private homes**.
 
 ### Shared KB (`$FM_FLEET_DIR`, default `/opt/agents/fleet`)
-- `operators.md` — `| operator | scope | home | accounts | status |`
+- `operators.md` — `| operator | scope | home | accounts | status | seen | quota |`
 - `projects.md`  — `| project | owner | path |`
 - `backlog.md`   — `## Queued / ## Claimed / ## In-flight / ## Done`; item line:
   `- [id:<ID>] scope:<S> | <desc> | [claimed-by:<op>@<ISO8601>] status:<st>`
 - `events.log`   — append-only TSV `<ISO8601>\t<op>\t<event>\t<id>\t<detail>`
 - `locks/backlog.lock` — the `flock` target for atomic claims
 
-Fleet dir resolves from: `--fleet <dir>` → `FM_FLEET_DIR` → `config/fleet-dir` →
+Fleet dir resolves from: `FM_FLEET_DIR` → `$FM_HOME/config/fleet-dir` →
 `/opt/agents/fleet`. During development it points at a local dir so every code
 path is exercised single-uid; `flock` semantics are identical across uids.
 
 ### CLI (`bin/fm-fleet.sh`, lib `bin/fm-fleet-lib.sh`)
-`init | queue | claim | handoff | reap | route | status | view`
+`init | register | heartbeat | leave | queue | claim | handoff | reap | route |
+budget | quota | models | pick | status | view`, plus `bin/fm-fleet-join.sh`
+(operator onboarding) and `bin/fm-fleet-wait.sh` (token-free wait-for-work).
 
 - **Atomic claim** — under `flock`, verify item is `queued`, stamp
   `claimed-by:<op>@<ts> status:claimed`, move to `## Claimed`, log, commit. Two
@@ -58,18 +61,19 @@ path resolving into a foreign `/home/<other>`. Credentials stay `0700`, read onl
 by their owner's own processes. See `.agents/skills/federation/SKILL.md`.
 
 ### One privileged step (root, once)
-Create the shared group + dir (see `docs/ROOT-PREREQ.md` in the setup repo):
-`groupadd agents`; add operators; `mkdir -p /opt/agents/fleet/locks`;
-`chgrp -R agents`; `chmod -R 2775`; each operator sets `umask 002`. Nothing else
-needs root.
+Run the reviewable, idempotent `scripts/fleet-root-prereq.sh` (walkthrough:
+[fleet-quickstart.md](fleet-quickstart.md), Tier C). It creates the shared
+group, enrols the operators, and creates the setgid fleet dir; each operator
+then sets `umask 002`. Nothing else needs root.
 
 ---
 
 ## Part B — Per-spawn multi-account
 
 ### Three isolation methods (verified per CLI — never guessed)
-`adapters/config-dir-matrix.md` (setup repo) records how each CLI isolates auth,
-probed from its own `--help` (claude confirmed empirically):
+The matrix below records how each CLI isolates auth, probed from its own
+`--help` (claude confirmed empirically); `bin/fm-accounts-lib.sh` validates
+every registered account against it:
 
 | harness | method | env / flag |
 |---|---|---|
@@ -134,8 +138,10 @@ first on a box that is missing, e.g., cursor.
 
 ## Install (drop-in overlay onto a FirstMate clone)
 1. Copy `bin/fm-fleet*.sh`, `bin/fm-account*.sh`, `bin/fm-accounts*.sh`,
-   `tests/federation/`, `.agents/skills/{federation,multi-account}/`,
-   `config/accounts.json.example`, `docs/fleet-addon.md`.
+   `bin/fm-spawn-acct.sh`, `bin/quota-*.sh`, `bin/quota-sources/`,
+   `scripts/fleet-root-prereq.sh`, `tests/federation/`,
+   `.agents/skills/{federation,multi-account}/`, `config/model-surfaces.json`,
+   `config/*.example`, and `docs/fleet-*.md`.
 2. `bin/fm-accounts-prereq.sh` — install any missing CLIs; then log in per account.
 3. `cp config/accounts.json.example config/accounts.json` and edit; gitignore it.
 4. Federation only: run the root prereq, then `bin/fm-fleet.sh init`.
@@ -143,6 +149,9 @@ first on a box that is missing, e.g., cursor.
 ## Tests
 ```
 bash tests/federation/test_fleet.sh          # federation: claim race, reap, route, handoff, view, safety
+bash tests/federation/test_fleet_ops.sh      # operator lifecycle: register/heartbeat/leave, TTL, quota routing
+bash tests/federation/test_fleet_guards.sh   # init/ownership guards on every fleet-consuming entry point
+bash tests/federation/test_quota_surfaces.sh # per-surface quota report, models table, failover pick
 bash tests/federation/test_accounts.sh       # registry resolve/validate (+ cross-uid path guard)
 bash tests/federation/test_spawn_account.sh  # --account compose + wrapper + api-key refusal + apply_env
 bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; tie/absent/no-provider)

@@ -15,6 +15,8 @@
 #     --timeout S      give up after S seconds and exit 2 (default 0 = wait forever)
 #     --once           check exactly once: exit 0 if a fresh claim exists, else 1
 #     --no-heartbeat   do not refresh liveness while waiting
+#   Exits 3 on a usage error or when the resolved fleet dir is not an
+#   initialized, chosen fleet (fm_fleet_assert_usable).
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
