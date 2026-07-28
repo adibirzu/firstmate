@@ -88,5 +88,23 @@ printf '%s' "$out" | grep -q 'no initialized fleet' \
   && no "models was blocked by the fleet guard" \
   || ok "models is not blocked by a missing fleet"
 
+out=$(env FM_HOME="$REAL" FM_FLEET_DIR="$TMP/nope" "$REAL/bin/fm-fleet.sh" budget 2>&1)
+printf '%s' "$out" | grep -q 'no initialized fleet' \
+  && no "budget was blocked by the fleet guard" \
+  || ok "budget is not blocked by a missing fleet"
+
+# --- 6. fm-fleet-wait.sh honours the same guards ------------------------------------
+out=$(env FM_HOME="$TMP/fmhome" FM_FLEET_DIR="$TMP/nope" "$REAL/bin/fm-fleet-wait.sh" "$ME" --once 2>&1); rc=$?
+[ "$rc" -eq 3 ] && printf '%s' "$out" | grep -q 'no initialized fleet' \
+  && ok "wait refuses an uninitialized fleet loudly" \
+  || no "wait on uninitialized fleet: rc=$rc: $out"
+
+out=$(fleet "$REAL/bin/fm-fleet-wait.sh" "$ME" --once); rc=$?
+[ "$rc" -eq 3 ] && ok "default -> foreign fleet: wait refuses" \
+                || no "wait on foreign default fleet: rc=$rc: $out"
+printf '%s' "$out" | grep -q 'alice' \
+  && no "wait leaked the other team's data" \
+  || ok "default -> foreign fleet: wait leaks nothing"
+
 echo "-----"
 [ "$fail" -eq 0 ] && echo "ALL PASS ($pass)" || { echo "$fail FAILED"; exit 1; }

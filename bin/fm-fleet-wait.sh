@@ -35,6 +35,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+fm_fleet_assert_usable "$DIR" || exit 3
+
 # A fresh claim for this operator: claimed-by:<op>@<ts> with status:claimed
 # (NOT status:in-flight — once the firstmate starts an item it is no longer a wake).
 fresh_claims() {
