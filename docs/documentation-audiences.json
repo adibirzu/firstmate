@@ -330,6 +330,11 @@
     },
     {
       "path": "docs/verification/public-followup.md",
+      "path": "docs/verification/cline-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cursor-agent-adapter.md",
       "audience": "maintainer-verification"
     },
     {
