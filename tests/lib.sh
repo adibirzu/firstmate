@@ -85,6 +85,12 @@ fm_test_tmproot() {
 fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
+  # Every fakebin gets the treehouse stub by default. fm-spawn.sh now EXECUTES
+  # treehouse to lease the worktree instead of sending `treehouse get` to a fake
+  # pane, so a fakebin without this stub falls through to the real binary and
+  # leases real pool slots against a test's throwaway repo. Suites that want to
+  # record the invocation call fm_fake_treehouse again with their own arguments.
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -98,6 +104,31 @@ exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# fm_fake_treehouse <fakebin> [worktree]: stub treehouse for a spawn fixture.
+# fm-spawn.sh leases the worktree itself and reads the path off treehouse's
+# stdout, so an exit-0-with-no-output stub is not enough - it reads as treehouse
+# failing to produce a worktree at all. The path is <worktree> when given (for
+# fixtures that bake the path into their fake tmux), otherwise
+# FM_FAKE_TREEHOUSE_WT, otherwise FM_FAKE_PANE_PATH - which in these fixtures is
+# the same worktree the pane is made to report.
+fm_fake_treehouse() {
+  local fakebin=$1 baked=${2:-}
+  cat > "$fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+case "\${1:-}" in
+  get)
+    printf '%s\n' "\$*" >> "\${FM_FAKE_TREEHOUSE_ARGSFILE:-/dev/null}"
+    printf '%s\n' "\${HOME:-}" > "\${FM_FAKE_TREEHOUSE_HOMEFILE:-/dev/null}"
+    printf '%s\n' "\${FM_FAKE_TREEHOUSE_WT:-\${FM_FAKE_PANE_PATH:-$baked}}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
 }
 
 # --- deterministic git identity and fixtures --------------------------------

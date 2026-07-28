@@ -30,7 +30,53 @@ zsh
 A persistent parent shell waiting for a child remained reported as the parent process, while a shell that directly execed a simple command changed identity with the process itself.
 Claude, Codex, OpenCode, and Grok were observed under their own process names.
 Kimi Code CLI 0.29.1 was observed under `kimi` on 2026-07-25.
-Pi remained a generic `node` process and is intentionally inconclusive.
+Pi and pi-signed 0.82.0 were reverified on 2026-07-27 through real isolated `fm-spawn.sh` launches.
+
+Installed-wrapper checks:
+
+```sh
+basename "$(command -v pi-signed)"
+pi-signed --version
+pi --version
+```
+
+Observed bounded output:
+
+```text
+pi-signed
+0.82.0
+0.82.0
+```
+
+The isolated process and endpoint checks used:
+
+```sh
+tmux display-message -p -t "$target" '#{pane_current_command}'
+ps -o comm= -p "$wrapper_pid"
+ps -o comm= -p "$engine_pid"
+FM_HOME="$fixture_home" bin/fm-crew-state.sh "$task_id"
+```
+
+Observed bounded shapes:
+
+```text
+pi-launcher
+.../pi-signed
+.../Pi Launcher.app/Contents/Resources/pi/pi
+state: done ...
+```
+
+Both launches executed a submitted tool instruction and touched the generated `turn_end` marker.
+The pi-signed launch retained `harness=pi-signed`, while the plain comparison retained `harness=pi`.
+The exact wrapper ancestry was `pi-signed` parent to Pi engine child, and the plain Pi Launcher path also traversed the signed wrapper on this installation.
+That shared plain-Pi path is retained as disconfirming evidence against using ancestry as runtime-selection authority.
+Firstmate therefore sets the exact `FM_PI_HARNESS` selection marker on both worker launch paths, while an unmarked Pi-family process remains `pi`.
+Both recorded runtime identities now classify the exact `pi-launcher` foreground command as `alive`.
+
+Backend applicability was reviewed across every spawn adapter.
+Tmux needs the exact `pi-launcher`, `pi-signed`, `pi`, and `Pi` process identities for recovery-grade liveness.
+Herdr uses native registered-agent state and needs no process-name branch.
+Zellij has no verified recovery-grade agent process probe, while Orca and cmux do not support secondmate spawns, so those three retain their existing generic ordinary-launch semantics without a new liveness matcher.
 
 The structural multi-row composer reader, Kimi pointer-delivery path, and OpenCode 1.18.4 busy-queue behavior are pinned by:
 
@@ -146,6 +192,32 @@ ok - real Herdr lab: concurrent cross-home recoveries replace exact husks under 
 ok - real Herdr lab: missing, renamed, and duplicate tokens trigger zero destructive or adoptive calls, and live duplicate risk refuses launch
 ok - real Herdr lab validation completed on Herdr 0.7.5 with the default-session tripwire intact
 ```
+
+Projected-teardown focus restoration under the leased worktree-acquisition
+flow (`bin/fm-spawn.sh`'s `treehouse get --lease` plus a plain `cd` into the
+pane's own shell, `fm/fm-pool-relocation`) was reverified on 2026-07-28
+against Herdr 0.7.4 and Treehouse v2.1.0 after moving `bin/fm-teardown.sh`'s
+presentation retire-candidate gate and exact-pane close to run before
+`teardown_treehouse_return` instead of after it:
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  tests/fm-backend-herdr-presentation-e2e.test.sh
+```
+
+Observed: 22/22 `ok -` lines, exit 0, across 3 consecutive runs (previously
+`not ok - projected teardown changed active workspace/tab from w3/w3:t1 to
+w8/w8:t2`, because `treehouse return --force` killed the leased pane's own
+top-level shell - now `cd`'d directly into the worktree - before the
+presentation code could see the pane was still alive).
+The seven other real-Herdr suites and the branch's own spawn contract test
+were reverified green in the same session: `tests/fm-backend-herdr.test.sh`
+(132/132), `tests/fm-backend-herdr-eventwait-smoke.test.sh` (3/3),
+`tests/fm-backend-herdr-prune-safety-e2e.test.sh` (6/6),
+`tests/fm-backend-herdr-respawn-idem-e2e.test.sh` (6/6),
+`tests/fm-backend-herdr-smoke.test.sh` (16/16),
+`tests/fm-backend-herdr-workspace-per-home-e2e.test.sh` (10/10), and
+`tests/fm-spawn-worktree-settle.test.sh` (11/11).
 
 The restored-shell session-start cleanup ran on 2026-07-24 against Herdr 0.7.5 protocol 17:
 
