@@ -31,7 +31,10 @@ a group-writable, git-backed KB and **never write each other's private homes**.
 - `operators.md` — `| operator | scope | home | accounts | status | seen | quota |`
 - `projects.md`  — `| project | owner | path |`
 - `backlog.md`   — `## Queued / ## Claimed / ## In-flight / ## Done`; item line:
-  `- [id:<ID>] scope:<S> | <desc> | [claimed-by:<op>@<ISO8601>] status:<st>`
+  `- [id:<ID>] scope:<S> | <desc> | [claimed-by:<op>@<ISO8601>] status:<st>`.
+  `<ID>` is the KB's primary key — `claim`, `handoff` and `reap` each address one
+  item by it — so `queue` refuses (non-zero) an id already in the backlog instead
+  of writing a second line under the same key
 - `events.log`   — append-only TSV `<ISO8601>\t<op>\t<event>\t<id>\t<detail>`
 - `locks/backlog.lock` — the `flock` target for atomic claims
 
