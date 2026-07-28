@@ -22,6 +22,17 @@ FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 DIR=$(fm_fleet_dir)
 
 cmd=${1:-}; shift || true
+
+# Every verb that touches an existing fleet must find one first. `init` creates it;
+# quota/models/pick are surface-local and need no fleet at all.
+case "$cmd" in
+  init|quota|models|pick|'') : ;;
+  # register/heartbeat/leave are how you BECOME an operator, and they already need
+  # write access to the shared dir (POSIX group), so they skip the ownership check.
+  register|heartbeat|leave) fm_fleet_assert_initialized "$DIR" || exit 1 ;;
+  *) fm_fleet_assert_initialized "$DIR" && fm_fleet_assert_owned "$DIR" || exit 1 ;;
+esac
+
 case "$cmd" in
   init)    fm_fleet_init "$DIR"; echo "fleet initialized at $DIR" ;;
   queue)   id=$1; scope=$2; shift 2; fm_fleet_queue "$DIR" "$id" "$scope" "$*" ;;
