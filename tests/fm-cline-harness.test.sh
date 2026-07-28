@@ -120,17 +120,21 @@ test_cline_real_input_reads_pending() {
   pass "fm_composer_classify_content: real cline input still reads pending"
 }
 
-# --- backend idle-RE default covers cline -----------------------------------
+# --- shared idle default covers cline (tmux + every backend) ----------------
 
-test_backend_idle_re_defaults_cover_cline() {
-  local b bad=0 up
+test_shared_idle_default_covers_cline() {
+  local p b bad=0 up
+  for p in 'What can I do for you?' 'Ask anything...'; do
+    printf '%s' "$p" | grep -qE "$FM_COMPOSER_IDLE_RE_DEFAULT" \
+      || fail "shared FM_COMPOSER_IDLE_RE_DEFAULT does not match cline placeholder '$p'"
+  done
   for b in herdr cmux orca; do
     up=$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')
-    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*(What can I do for you|Ask anything)" \
-      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE missing cline placeholders"; bad=1; }
+    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*FM_COMPOSER_IDLE_RE_DEFAULT" \
+      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE does not use the shared default"; bad=1; }
   done
-  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not cover cline placeholders"
-  pass "backends: herdr/cmux/orca IDLE_RE defaults cover cline idle placeholders"
+  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not use the shared idle default"
+  pass "shared idle default covers cline placeholders and backs herdr/cmux/orca"
 }
 
 # --- run --------------------------------------------------------------------
@@ -145,5 +149,5 @@ test_cline_idle_line_not_busy
 test_cline_does_not_borrow_signatures
 test_cline_idle_placeholders_read_empty
 test_cline_real_input_reads_pending
-test_backend_idle_re_defaults_cover_cline
+test_shared_idle_default_covers_cline
 echo "ALL PASS: fm-cline-harness"
