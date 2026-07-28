@@ -45,6 +45,12 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# This gate, lock, and exact-pane close all run BEFORE the worktree is
+# returned to its treehouse pool below. Under the leased worktree-acquisition
+# flow the task pane's own top-level shell has cwd set to the worktree, so a
+# post-hoc worktree return would kill that shell first and let Herdr's own
+# last-pane cleanup steal focus with no firstmate code left in the loop to
+# restore it.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
