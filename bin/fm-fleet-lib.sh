@@ -373,11 +373,11 @@ fm_fleet_quota_report() {
   # "masks native pace" advisory below even though it never itself prints.
   declare -A PACE_OF RESERVE_OF
   local psurf ppace preserve
-  while IFS=$'\t' read -r psurf _ _ ppace preserve; do
+  while IFS=$'\037' read -r psurf _ ppace preserve; do
     [ -n "$psurf" ] || continue
     PACE_OF[$psurf]=$ppace
     RESERVE_OF[$psurf]=$preserve
-  done < <(fm_fleet_pace_rows "$j")
+  done < <(fm_fleet_pace_fields "$j")
   {
     printf 'SURFACE\tHEADROOM\tPACE\tRESERVE\tSTATUS\tSOURCE\tNOTE\n'
     printf '%s\n' "$j" | jq -r --argjson ex "$ex_json" '
@@ -506,10 +506,10 @@ fm_fleet_pick_surface() { # model-family
          //(.windows//[]|map(.percentRemaining)|min)) as $r
       | [.provider,(.state.status//"?"),(if $r==null then "" else ($r|tostring) end)] | @tsv')
   local psurf pstate ppace preserve
-  while IFS=$'\t' read -r psurf pstate ppace preserve; do
+  while IFS=$'\037' read -r psurf pstate ppace preserve; do
     [ -n "$psurf" ] && [ "$pstate" = fresh ] || continue
     PACE_OF[$psurf]=$ppace; RESERVE_OF[$psurf]=$preserve
-  done < <(fm_fleet_pace_rows "$j" | awk -F'\t' -v OFS='\t' '{print $1,$3,$4,$5}')
+  done < <(fm_fleet_pace_fields "$j")
   local f s surf
   for f in "$base"/bin/quota-sources/*.sh; do
     [ -f "$f" ] || continue; s=$(bash "$f" 2>/dev/null) || continue
@@ -526,11 +526,15 @@ fm_fleet_pick_surface() { # model-family
       [ -n "$first_1b" ] || first_1b=$sfx
     elif fm_fleet_pressured "$(printf '%s' "$j" | jq -c --arg s "$sfx" '.providers[] | select(.provider==$s)')"; then
       reserve=${RESERVE_OF[$sfx]:-}
+      # Strictly-better reserve displaces; a numeric TIE keeps the incumbent, i.e.
+      # map order (so -5 never displaces an equal -5.0 — quota-axi emits floats).
+      # An incumbent with no reserve at all ranks WORST: a pressured surface whose
+      # reserve is unmeasurable must not permanently outrank a later, measurably
+      # more sustainable one.
       if [ -z "$best_1c" ]; then
         best_1c=$sfx; best_1c_reserve=$reserve
-      elif [ -n "$reserve" ] && [ -n "$best_1c_reserve" ] \
-           && fm_fleet_reserve_cmp "$reserve" "$best_1c_reserve" \
-           && [ "$reserve" != "$best_1c_reserve" ]; then
+      elif [ -n "$reserve" ] \
+           && { [ -z "$best_1c_reserve" ] || ! fm_fleet_reserve_cmp "$best_1c_reserve" "$reserve"; }; then
         best_1c=$sfx; best_1c_reserve=$reserve
       fi
     else
@@ -604,11 +608,23 @@ fm_fleet_pace_rows() { # quota-axi-json-snapshot
     | ( if $eff.pace.worstReservePercentPoints != null then $eff.pace.worstReservePercentPoints
         else
           ([$windows[]?.pace.reservePercentPoints] | map(select(.!=null))) as $wr
-          | if ($wr|length)==0 then null else (min) end
+          | if ($wr|length)==0 then null else ($wr|min) end
         end
       ) as $reserve
     | [ $p.provider, ($headroom // ""), ($p.state.status // ""), ($pace // ""), ($reserve // "") ] | @tsv
-  ' 2>/dev/null
+  '
+}
+
+# fm_fleet_pace_rows projected to the four fields every shell consumer needs —
+# <surface><US><state><US><pace><US><reserve> — ready for `read`. The delimiter is
+# US (\037), NOT the row format's tab: bash treats tab as IFS *whitespace*, so a run
+# of tabs collapses into one and an absent MIDDLE field (no headroom, no
+# state.status) shifts every later field left — printing a reserve under PACE and
+# "—" under RESERVE. awk -F'\t' does not collapse, and \037 is not IFS whitespace,
+# so an absent field stays absent. Values can contain neither character (@tsv
+# escapes both).
+fm_fleet_pace_fields() { # quota-axi-json-snapshot
+  fm_fleet_pace_rows "$1" | awk -F'\t' -v OFS=$'\037' '{print $1,$3,$4,$5}'
 }
 
 # Render a signed reserve: explicit "+"/"-", "—" when absent. Separate from
@@ -695,7 +711,7 @@ fm_fleet_budget_ok() {
       # its aheadWindowIds even when its own reserve number isn't the worst one.
       local psurf pstate ppace preserve
       local pace_seen=0 pressured=0 have_worst=0 worst_reserve="" worst_pace=""
-      while IFS=$'\t' read -r psurf pstate ppace preserve; do
+      while IFS=$'\037' read -r psurf pstate ppace preserve; do
         [ -n "$psurf" ] || continue
         [ -n "$ppace" ] && pace_seen=1
         [ "$pstate" = fresh ] || continue
@@ -708,7 +724,7 @@ fm_fleet_budget_ok() {
         elif [ "$have_worst" -eq 0 ]; then
           worst_pace=$ppace
         fi
-      done < <(fm_fleet_pace_rows "$j" | awk -F'\t' -v OFS='\t' '{print $1,$3,$4,$5}')
+      done < <(fm_fleet_pace_fields "$j")
 
       if [ "$pace_seen" -eq 0 ]; then
         # True v2/degraded: no provider anywhere carries a pace field. Reproduce
