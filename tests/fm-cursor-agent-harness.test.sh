@@ -45,14 +45,16 @@ test_existing_launch_templates_untouched() {
 }
 
 test_cursor_is_a_known_bare_adapter_name() {
-  grep -Fq "|cline|cursor-agent)" "$SPAWN" \
+  # Robust to later adapters appended after cursor-agent (e.g. |cursor-agent|copilot).
+  grep -Fq "|cline|cursor-agent" "$SPAWN" \
     || fail "fm-spawn: cursor-agent not added to a known-harness allowlist"
   pass "fm-spawn: cursor-agent is recognized as a known bare adapter name"
 }
 
 test_cursor_model_flag() {
   # cursor-agent takes --model; effort is a model bracket param, so NO effort flag.
-  grep -Fq "|kimi|cline|cursor-agent)" "$SPAWN" \
+  # Robust to later adapters appended after cursor-agent in the --model allowlist.
+  grep -Fq "|kimi|cline|cursor-agent" "$SPAWN" \
     || fail "fm-spawn: cursor-agent not in the --model allowlist"
   pass "fm-spawn: cursor-agent gets --model (effort is a model bracket param, no flag)"
 }

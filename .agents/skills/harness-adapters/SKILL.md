@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cline, and cursor-agent.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cline, cursor-agent, and copilot.
 user-invocable: false
 metadata:
   internal: true
@@ -437,3 +437,37 @@ cursor-agent runs as a persistent interactive TUI crewmate. A positional prompt 
 The trust gate is the one integration a cursor CREWMATE needs beyond the registry facts above, and `fm-spawn` wires it: the spawn pre-seeds `.workspace-trusted` before launch and its post-launch readiness gate answers a residual dialog with `a` (once), failing the spawn instead of hanging when the pane never reaches a ready/working signal. A full live crewmate dispatch through the herdr backend is the remaining acceptance step (needs a full firstmate home). cursor is not wired for secondmate launches, so no `backends/tmux.sh` liveness entry is required yet.
 
 Full empirical capture evidence: [`docs/verification/cursor-agent-adapter.md`](../../../docs/verification/cursor-agent-adapter.md).
+
+## copilot (VERIFIED 2026-07-28, GitHub Copilot CLI 1.0.75)
+
+GitHub Copilot CLI runs as a persistent interactive TUI crewmate. A positional
+prompt (via `-i`) seeds AND auto-runs the first turn once the folder-trust
+dialog is cleared, so the brief rides the launch command like claude/codex/
+cline/cursor-agent.
+
+| Fact | Value |
+|---|---|
+| Binary | `copilot` from `PATH` (`~/.local/bin/copilot`), a standalone stripped ELF executable, NOT a node/python script. `/proc/<pid>/comm` reports the runtime-internal thread name `MainThread` (consistent with a Bun-compiled single-file binary), never `copilot`/`node`/`python`; detection matches `copilot` in the process argv via a dedicated `MainThread` ancestry case. |
+| Launch | `copilot --allow-all --no-ask-user [--model <id>] [--reasoning-effort <tier>] -i "<brief>"`. `-i, --interactive <prompt>` seeds and auto-runs once the trust dialog clears (verified via tmux capture). |
+| Models | Enumerated live via `/model` or `copilot help config`: `claude-sonnet-5`, `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-haiku-4.5`, `claude-fable-5`, `claude-opus-5`, `claude-opus-4.8[-fast]`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-opus-4.5`, `gpt-5.6-sol`, `gpt-5.6-terra` (default), `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5-mini`, `gemini-3.1-pro-preview`, `gemini-3.6-flash`, `gemini-3.5-flash`, `kimi-k2.7-code`, plus `auto`. `--model` is validated before any API call (verified: a bogus id errors cleanly with exit 1). |
+| Busy-pane signature | Rotating circle/quarter-phase spinner + literal `Working esc interrupt` (optionally with a ` · <size>` tool-output-size infix between the two words). Bare `esc interrupt` alone collides with opencode's own anchor, so the busy regex is the compound `Working.*esc interrupt` (`FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT`). |
+| Exit command | `/exit` (verified rc 0). Double `Ctrl-C` from idle also exits (footer shows `ctrl+c again to exit`, reverting on its own if not repeated). |
+| Interrupt | Single `Ctrl-C` mid-turn (`● Operation cancelled by user`; session survives). `Esc` is a no-op both mid-turn and idle — unlike cline (interrupt) or cursor-agent (dialog-quit) — it only does something inside a modal (trust dialog "No", `/model` picker cancel). |
+| Autonomy | `--allow-all` (alias `--yolo`; identical, `--allow-all-tools --allow-all-paths --allow-all-urls`) is the targeted equivalent of claude's `--dangerously-skip-permissions`. `--no-ask-user` additionally disables the `ask_user` tool; a live underspecified-brief test did not stall without it, but it is shipped anyway as a zero-downside defensive addition (no attended human to answer it in a supervised pane). |
+| **Trust dialog (blocking)** | Interactive mode on an untrusted directory shows a blocking `Confirm folder trust` dialog (`1. Yes` / `2. Yes, and remember` / `3. No (Esc)`). **`--allow-all` does NOT bypass it** (verified with the flag already in argv). Selecting option 2 persists to `~/.copilot/config.json`'s `trustedFolders` array — a real bypass mechanism in principle, but riskier than cursor-agent's isolated per-project marker: it edits a single shared global file that also holds the live OAuth token. **`fm-spawn` does NOT yet wire a readiness gate for this** (unlike cursor-agent's, which was itself a later follow-up pass, not part of cursor-agent's original adapter commit) — a genuinely fresh worktree will hang on this dialog. See `docs/verification/copilot-adapter.md` for the full risk tradeoff and the recommended follow-up shape. |
+| Submission | A seeded `-i` prompt auto-submits once trust clears; typing then Enter can require a second Enter in practice (observed intermittently when injecting text into an already-running session — not yet root-caused, possibly bracketed-paste/debounce related). |
+| Environment marker | `COPILOT_CLI=1`, set for copilot-spawned child processes (verified) — the harness-detection Layer-1 marker, alongside `CLAUDECODE`/`PI_CODING_AGENT`/`GROK_AGENT`. |
+| Composer | Bare agent glyph `❯` (U+276F) — the exact same codepoint already verified for claude in the shared classifier; no new glyph needed. **No idle placeholder text of any kind was observed** (first-ready and post-turn composer rows are byte-identical: just the glyph, nothing else) — unlike cline/cursor-agent, so no `FM_COMPOSER_IDLE_RE_DEFAULT` addition and no backend `IDLE_RE` override were needed. |
+| Effort | Maps to `--reasoning-effort <none\|minimal\|low\|medium\|high\|xhigh\|max>` — the fullest vocabulary of any adapter (verified via `--help` AND a zero-quota pre-flight validation probe). firstmate's shared `low\|medium\|high\|xhigh\|max` axis is a full subset; no tier is omitted. |
+| TTY | Interactive mode needs a pty; supervise only through a pane. |
+
+Turn-end is observed from the pane, not a hook: the `Working.*esc interrupt`
+spinner/footer clears and the composer returns to its bare `❯` idle glyph.
+copilot is not wired for secondmate launches, so no `backends/tmux.sh`
+agent-process liveness entry is required yet, matching cline/cursor-agent
+precedent. The trust-gate readiness-gate gap above is the one integration a
+copilot CREWMATE still needs beyond the registry facts here before a live
+end-to-end dispatch into a fresh worktree is viable; it is explicitly flagged
+as a follow-up, not solved by this adapter's initial commit.
+
+Full empirical capture evidence: [`docs/verification/copilot-adapter.md`](../../../docs/verification/copilot-adapter.md).
