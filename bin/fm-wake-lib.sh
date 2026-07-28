@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
 
-FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
+# pwd -P resolves symlinks so lock identity is canonical.
+# bin/fm-continuity-pretool-check.sh derives FM_ROOT with pwd -P and lock identity is
+# compared as a string, so a logical pwd here permanently deadlocks every fleet command
+# whenever this home is reachable through a symlink.
+FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd -P)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"

@@ -55,7 +55,11 @@
 # (secondmate homes run the same script) and would kill siblings.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# pwd -P resolves symlinks so the recorded lock identity is canonical.
+# bin/fm-continuity-pretool-check.sh derives its watcher path with pwd -P, and lock
+# identity is compared as a string, so a logical pwd here permanently deadlocks every
+# fleet command whenever this home is reachable through a symlink.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
