@@ -33,7 +33,7 @@ under the operator's own home (a foreign `/home/<other>` is refused).
 1. **Prereq (once, on-demand):** `bin/fm-accounts-prereq.sh` to check the CLIs are
    installed (user-scoped; `install` to add missing ones). Then the operator logs
    in each account into its own config dir / key_file (auth is user-only).
-2. **Register:** copy `config/accounts.json.example` → `config/accounts.json`;
+2. **Register:** copy `docs/examples/accounts.json` → `config/accounts.json`;
    one entry per account. Validate: `fm_account_validate <name>`.
 3. **Pick by quota (optional):** `fm_account_pick <harness>` returns the account
    with the most `quota-axi` headroom (runs quota-axi under each account's

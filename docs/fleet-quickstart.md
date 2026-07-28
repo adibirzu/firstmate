@@ -43,7 +43,9 @@ grok     —         auth_required  unavailable  Grok sign-in required
 
 **Why this exists.** The same model often reaches you through several paid pools —
 Claude via an Anthropic subscription *and* via Copilot *and* via Cursor. When one
-pool is drained the work should move, not stop. `config/model-surfaces.json` maps
+pool is drained the work should move, not stop. The shipped map
+`docs/examples/model-surfaces.json` (override: copy it to the gitignored
+`config/model-surfaces.json` and edit) maps
 each model family to an ordered list of surfaces, and `pick` walks it left to right:
 
 ```json
@@ -60,7 +62,7 @@ Some vendors keep usage behind a browser session. For those, supply your own
 reader — a command printing a single integer `0-100` (percent headroom):
 
 ```bash
-cp config/quota-overrides.json.example config/quota-overrides.json   # gitignored
+cp docs/examples/quota-overrides.json config/quota-overrides.json   # gitignored
 ```
 
 ```json
@@ -89,7 +91,7 @@ Same machine, same user, more than one subscription. Isolation is **per CLI** an
 there are three different mechanisms, so the registry records which one applies:
 
 ```bash
-cp config/accounts.json.example config/accounts.json   # gitignored
+cp docs/examples/accounts.json config/accounts.json   # gitignored
 $EDITOR config/accounts.json                           # replace /home/YOUR-USER
 bin/fm-spawn-acct.sh --account claude-work  <normal fm-spawn args...>
 ```

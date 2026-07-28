@@ -392,13 +392,22 @@ fm_fleet_quota_report() {
   } | if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi
 }
 
+# Resolve the model->surfaces map: the operator's gitignored config/model-surfaces.json
+# when one exists, else the tracked default shipped at docs/examples/model-surfaces.json
+# (config/ must hold no tracked files — repo invariant), so a bare clone still routes.
+fm_fleet_model_map() { # base
+  local m="$1/config/model-surfaces.json"
+  [ -f "$m" ] || m="$1/docs/examples/model-surfaces.json"
+  printf '%s\n' "$m"
+}
+
 # model family -> surfaces (quota pools) with each surface's live status + headroom.
 # Answers "for model X, which pools can serve it and which have tokens?" — the basis
-# for grok/kimi failover across surfaces. Reads config/model-surfaces.json. 0 LLM tokens.
+# for grok/kimi failover across surfaces. Reads fm_fleet_model_map. 0 LLM tokens.
 fm_fleet_models_report() {
   command -v jq >/dev/null 2>&1 || { echo "jq not installed" >&2; return 1; }
   local base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-  local map="$base/config/model-surfaces.json"
+  local map; map=$(fm_fleet_model_map "$base")
   [ -f "$map" ] || { echo "no model map at $map" >&2; return 1; }
   local j; j=$(quota-axi --json 2>/dev/null || echo '{"providers":[]}')
   declare -A ST HR
@@ -440,7 +449,7 @@ fm_fleet_pick_surface() { # model-family
   command -v jq >/dev/null 2>&1 || return 2
   local fam=$1 base map floor=${FM_FLEET_QUOTA_MIN:-5}
   base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-  map="$base/config/model-surfaces.json"
+  map=$(fm_fleet_model_map "$base")
   [ -f "$map" ] || return 2
   local surfaces; surfaces=$(jq -r --arg k "$fam" '.[$k][]?' "$map")
   [ -n "$surfaces" ] || { echo "unknown model family: $fam" >&2; return 1; }

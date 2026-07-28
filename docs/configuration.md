@@ -249,7 +249,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Fleet add-on (config/fleet-dir / config/accounts.json / FM_FLEET_*)
 
 The optional fleet add-on keeps its own operator configuration surfaces rather than duplicating them here.
-[`docs/fleet-quickstart.md`](fleet-quickstart.md) owns setup for the gitignored `config/fleet-dir`, `config/accounts.json`, and `config/quota-overrides.json` files plus the tracked `config/model-surfaces.json` failover map, and [`docs/fleet-token-economy.md`](fleet-token-economy.md) owns the `FM_FLEET_*` knobs and their defaults.
+[`docs/fleet-quickstart.md`](fleet-quickstart.md) owns setup for the gitignored `config/fleet-dir`, `config/accounts.json`, `config/quota-overrides.json`, and `config/model-surfaces.json` files plus the tracked [`docs/examples/model-surfaces.json`](examples/model-surfaces.json) failover map default, and [`docs/fleet-token-economy.md`](fleet-token-economy.md) owns the `FM_FLEET_*` knobs and their defaults.
 
 ## Toolchain
 

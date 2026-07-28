@@ -97,7 +97,7 @@ every registered account against it:
 `bin/fm-accounts-lib.sh` resolves + **validates** each account against the matrix
 (harness known, isolation matches the harness's method + env/flag, required
 fields present, and — reusing the federation guard — paths never in a foreign
-home). Copy `config/accounts.json.example` to start.
+home). Copy `docs/examples/accounts.json` to start.
 
 **Secrets never live in the registry.** api-key accounts store a `key_file` path
 (a `0600` file in the operator's own home); the key is read at launch into the
@@ -140,10 +140,11 @@ first on a box that is missing, e.g., cursor.
 1. Copy `bin/fm-fleet*.sh`, `bin/fm-account*.sh`, `bin/fm-accounts*.sh`,
    `bin/fm-spawn-acct.sh`, `bin/quota-*.sh`, `bin/quota-sources/`,
    `scripts/fleet-root-prereq.sh`, `tests/federation/`,
-   `.agents/skills/{federation,multi-account}/`, `config/model-surfaces.json`,
-   `config/*.example`, and `docs/fleet-*.md`.
+   `.agents/skills/{federation,multi-account}/`,
+   `docs/examples/{model-surfaces,accounts,quota-overrides}.json`, and
+   `docs/fleet-*.md`.
 2. `bin/fm-accounts-prereq.sh` — install any missing CLIs; then log in per account.
-3. `cp config/accounts.json.example config/accounts.json` and edit; gitignore it.
+3. `cp docs/examples/accounts.json config/accounts.json` and edit; gitignore it.
 4. Federation only: run the root prereq, then `bin/fm-fleet.sh init`.
 
 ## Tests
