@@ -79,7 +79,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -471,7 +471,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -555,6 +555,29 @@ launch_template() {
     # readiness gate answers a residual dialog with `a` (covering the undocumented
     # long-path slug variant), failing the spawn loudly instead of hanging on the dialog.
     cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # copilot (GitHub Copilot CLI 1.0.75): `-i <prompt>` ("Start interactive mode
+    # and automatically execute this prompt") seeds AND auto-runs the first turn
+    # once the folder-trust dialog is cleared (verified via tmux capture; see
+    # docs/verification/copilot-adapter.md) - the same argv-seed pattern as
+    # claude/codex/cline/cursor-agent, not kimi's bare-launch+inject. `--allow-all`
+    # (== --yolo; the non-jargon spelling is used for diff legibility) is the
+    # targeted equivalent of claude's --dangerously-skip-permissions. `--no-ask-user`
+    # additionally disables the ask_user tool: a live test with a deliberately
+    # underspecified brief did NOT stall without it, but it is included anyway as a
+    # zero-downside defensive flag - there is no attended human to answer ask_user
+    # in a supervised crewmate pane. Turn-end is observed by the pane classifier (the
+    # `Working.*esc interrupt` busy footer clears and the composer returns to its
+    # bare `❯` idle glyph), so no launch-side turn-end placeholder is needed. Effort
+    # maps to --reasoning-effort (see the effort helper below), accepting the full
+    # shared low|medium|high|xhigh|max vocabulary with no tier omitted.
+    # KNOWN GAP (not solved by this launch line): a genuinely fresh worktree is never
+    # in ~/.copilot/config.json's trustedFolders, so the folder-trust dialog above
+    # will block indefinitely until a readiness-gate/pre-seed mechanism analogous to
+    # cursor-agent's is wired in a follow-up (see docs/verification/copilot-adapter.md
+    # "Trust / permission gate" for the risk tradeoff: copilot's only known
+    # non-interactive bypass edits a single shared global file that also holds the
+    # live OAuth token, unlike cursor's isolated per-project marker).
+    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -692,7 +715,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -738,6 +761,20 @@ effort_flag_for_harness() {
       # tier, so omit max rather than passing an unsupported value.
       case "$effort" in
         low|medium|high|xhigh) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    copilot)
+      # copilot 1.0.75 accepts --effort, --reasoning-effort <level> with the
+      # FULLEST vocabulary of any adapter: none|minimal|low|medium|high|xhigh|max
+      # (verified via --help AND a zero-quota pre-flight validation probe:
+      # `--reasoning-effort bogus-tier` was rejected with exit 1 before any API
+      # call, listing exactly those seven choices). firstmate's shared axis
+      # (low|medium|high|xhigh|max) is a full subset, so all five tiers pass
+      # through - no tier needs omitting, unlike cline (no max) or codex/grok
+      # (lower ceilings). --reasoning-effort (long form) is used over the
+      # --effort alias for greppability, matching codex's spelling convention.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
