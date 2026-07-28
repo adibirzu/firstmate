@@ -236,7 +236,19 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/examples/accounts.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/crew-dispatch.json",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/model-surfaces.json",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/quota-overrides.json",
       "audience": "operator-example"
     },
     {

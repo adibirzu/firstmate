@@ -96,7 +96,9 @@ Three read-only, 0-token verbs expose and route on this:
   from `quota-axi` (claude/codex/cursor/copilot/grok/kimi); pluggable scripts in
   `bin/quota-sources/<surface>.sh` add surfaces quota-axi can't see or attach an authed
   reader (e.g. `cursor`), each emitting a normalized `{surface,status,headroom,unit,models,note}` object.
-- `fm-fleet.sh models` — for each model family in `config/model-surfaces.json`, the
+- `fm-fleet.sh models` — for each model family in the model map (gitignored
+  `config/model-surfaces.json` if present, else the shipped default
+  `docs/examples/model-surfaces.json`), the
   ordered surfaces that can serve it, each with live status + headroom.
 - `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): first
   surface with observable headroom ≥ floor → else a configured-but-unobservable surface
@@ -108,7 +110,7 @@ mechanism is an **operator-supplied escape hatch**: `config/quota-overrides.json
 `bin/quota-sources/*.sh` scripts run it and emit that as the surface's headroom, which
 **supersedes** the quota-axi / blind row. The command owns all secret handling (read the
 token from a 0600 file, never argv). Empty/missing = blind fail-open (default). Template:
-`config/quota-overrides.json.example` (real file gitignored).
+`docs/examples/quota-overrides.json` (real file gitignored).
 
 - **cursor** — SOLVED with a shipped reader `bin/quota-cursor-usage.sh`: Cursor's native
   Connect RPC `POST api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`
