@@ -30,9 +30,15 @@ printf '| alice | web | /home/alice/firstmate | claude-default | online | 2026-0
 
 # Run fm-fleet.sh with a controlled environment. FM_HOME points at a config-less dir so
 # `config/fleet-dir` can never be picked up from the real repo.
+#
+# `env -u FM_FLEET_DIR` is load-bearing, not tidiness: these cases must resolve the dir
+# through the built-in DEFAULT so the ownership guard applies. An operator who exports
+# FM_FLEET_DIR (every real fleet operator does) would otherwise flip the resolution
+# source to `env`, which correctly skips the ownership check — and the suite would report
+# failures that say nothing about the code. Scrub it so the run is identical everywhere.
 mkdir -p "$TMP/fmhome/config"
 fleet() { # var-assignments... -- verb args
-  env FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$THEIRS" "$@" 2>&1
+  env -u FM_FLEET_DIR FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$THEIRS" "$@" 2>&1
 }
 
 # --- 1. not a fleet at all ----------------------------------------------------------
@@ -66,7 +72,7 @@ out=$(env FM_HOME="$TMP/fmhome" FM_FLEET_DIR="$THEIRS" "$REAL/bin/fm-fleet.sh" s
   && ok "explicit FM_FLEET_DIR is honoured (no ownership check)" \
   || no "explicit FM_FLEET_DIR blocked (rc=$rc): $out"
 
-out=$(env FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$THEIRS" FM_FLEET_ACCEPT_DEFAULT=1 \
+out=$(env -u FM_FLEET_DIR FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$THEIRS" FM_FLEET_ACCEPT_DEFAULT=1 \
       "$REAL/bin/fm-fleet.sh" status 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "FM_FLEET_ACCEPT_DEFAULT=1 acknowledges the default" \
                 || no "acknowledged default still blocked (rc=$rc)"
@@ -76,7 +82,7 @@ MINE="$TMP/mine"; mkdir -p "$MINE"
 FM_FLEET_DIR="$MINE" "$REAL/bin/fm-fleet.sh" init >/dev/null 2>&1
 printf '| %s | backend | %s | - | online | 2026-07-28T06:00:00Z | 90 |\n' "$ME" "$TMP/fmhome" \
   >> "$MINE/operators.md"
-out=$(env FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$MINE" "$REAL/bin/fm-fleet.sh" status 2>&1); rc=$?
+out=$(env -u FM_FLEET_DIR FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$MINE" "$REAL/bin/fm-fleet.sh" status 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "default is allowed when you ARE an operator in it" \
                 || no "own fleet via default was blocked (rc=$rc): $out"
 
