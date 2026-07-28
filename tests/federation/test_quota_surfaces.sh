@@ -12,7 +12,7 @@ no(){ echo "FAIL: $1"; fail=$((fail+1)); }
 
 HOMEDIR=$(mktemp -d)
 mkdir -p "$HOMEDIR/config" "$HOMEDIR/bin/quota-sources"
-cp "$REAL/config/model-surfaces.json" "$HOMEDIR/config/"
+cp "$REAL/docs/examples/model-surfaces.json" "$HOMEDIR/config/model-surfaces.json"
 # stub cursor source: headroom comes from the override command (mirrors the real reader)
 cat > "$HOMEDIR/bin/quota-sources/cursor.sh" <<'EOF'
 #!/usr/bin/env bash
