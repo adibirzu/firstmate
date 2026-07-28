@@ -81,7 +81,8 @@ out=$(env FM_HOME="$TMP/fmhome" FM_FLEET_DEFAULT_DIR="$MINE" "$REAL/bin/fm-fleet
                 || no "own fleet via default was blocked (rc=$rc): $out"
 
 # --- 5. surface-local verbs need no fleet at all ------------------------------------
-# FM_HOME must be the real repo here: `models` reads config/model-surfaces.json from it.
+# FM_HOME must be the real repo here: `models` reads the shipped model map
+# (docs/examples/model-surfaces.json, or a local config/model-surfaces.json) from it.
 # The point under test is only that a bogus FM_FLEET_DIR does not block it.
 out=$(env FM_HOME="$REAL" FM_FLEET_DIR="$TMP/nope" "$REAL/bin/fm-fleet.sh" models 2>&1)
 printf '%s' "$out" | grep -q 'no initialized fleet' \
