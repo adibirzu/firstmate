@@ -70,6 +70,7 @@ It never raw-deletes an Orca worktree.
 - Escape is unsupported.
 - Orca exposes no stable CLI version or protocol marker, so readiness is the compatibility gate rather than a version floor.
 - Only the verified terminal-handle and worktree result fields are accepted; speculative response shapes are rejected.
+- Orca chooses worktree placement itself, so a worktree on a different filesystem than the repository's object store is reported with a loud spawn warning rather than refused; the no-mistakes validation pipeline hangs in such a split worktree (`bin/fm-treehouse-lib.sh` owns the invariant).
 
 ## Regression entry points
 
