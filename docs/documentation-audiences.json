@@ -304,6 +304,14 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/verification/cline-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cursor-agent-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/runtime-backends.md",
       "audience": "maintainer-verification"
     },
