@@ -450,7 +450,11 @@ pause_state_class() {  # <window> <task>
     printf 'working'
     return
   fi
-  if [ "$(window_kind "$win")" != secondmate ]; then
+  # FIRST SIGHT of a declared pause must still surface once, so a live crew
+  # parked at an active external-decision gate is not hidden behind the pause
+  # cadence. `.paused-<key>` is precisely the record that the one-time surface
+  # already happened, so its ABSENCE is what identifies first sight.
+  if [ ! -e "$STATE/.paused-$key" ] && [ "$(window_kind "$win")" != secondmate ]; then
     agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
       rm -f "$recheck_file"
@@ -458,12 +462,20 @@ pause_state_class() {  # <window> <task>
       return
     fi
   fi
-  [ "$class" = none ] && [ "${agent_alive:-unknown}" = dead ] && class=paused
-  case "$class" in
-    paused) date +%s > "$recheck_file" ;;
-    *) rm -f "$recheck_file" ;;
-  esac
-  printf '%s' "$class"
+  # Already surfaced once, the status line still DECLARES a pause, and the crew
+  # is not provably working: honour the declaration whether the agent is alive or
+  # dead. Requiring a dead agent here was the same inversion as the branch above,
+  # and it is what kept the escalation alive after that branch was fixed - this
+  # path also deleted the recheck marker on its way out, so once the marker aged
+  # past STALE_ESCALATE_SECS a live parked crew fell through here, surfaced a
+  # bare stale, and had its marker rewritten, re-entering the same path every
+  # STALE_ESCALATE_SECS for as long as its PR stayed unmerged.
+  #
+  # A pause that has stopped being true still cannot rot invisibly:
+  # handle_paused_stale re-surfaces it on its own bounded PAUSE_RESURFACE_SECS
+  # cadence, which is the designed recheck.
+  date +%s > "$recheck_file"
+  printf 'paused'
 }
 
 surface_nonterminal_stale() {  # <window> <hash>
