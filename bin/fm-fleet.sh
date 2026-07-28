@@ -13,10 +13,13 @@
 #   fm-fleet.sh handoff <id> <to-operator>
 #   fm-fleet.sh reap    [ttl-seconds]        (default 86400)
 #   fm-fleet.sh route   <scope>              (echoes owning operator)
-#   fm-fleet.sh budget                       (exit 0 iff local headroom >= FM_FLEET_QUOTA_MIN)
-#   fm-fleet.sh quota                        (per-surface headroom report)
+#   fm-fleet.sh budget                       (exit 0 iff local headroom >= FM_FLEET_QUOTA_MIN
+#                                             and, under conservation pressure, the worst
+#                                             fresh reserve >= FM_FLEET_RESERVE_MIN)
+#   fm-fleet.sh quota                        (per-surface headroom + pace report)
 #   fm-fleet.sh models                       (model family -> surfaces table)
-#   fm-fleet.sh pick    <model-family>       (first surface with headroom)
+#   fm-fleet.sh pick    <model-family>       (best surface with headroom: sustainable
+#                                             pace first, then map order)
 #   fm-fleet.sh status
 #   fm-fleet.sh view    [--follow]
 #

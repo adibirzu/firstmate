@@ -45,6 +45,16 @@ primary can gate on `fm-fleet.sh budget` (`fm_fleet_budget_ok`). This keeps a
 near-limit account from being handed work it would fail partway through (wasted
 tokens), routing it to a peer with headroom instead.
 
+`budget` is not a raw-headroom gate alone. With a `quota-axi` new enough to report
+quota-window pace, an operator whose headroom clears `FM_FLEET_QUOTA_MIN` is still
+held back when a **fresh** surface is burning its window faster than the clock and
+its worst reserve has fallen below `FM_FLEET_RESERVE_MIN` — that account is on
+track to hit the wall mid-task, which wastes exactly the tokens the headroom floor
+exists to protect. The raw floor stays dominant, the verdict always names the
+headroom/pace/reserve facts behind it, and against an older payload carrying no
+pace data the pace floor is skipped entirely. See
+[fleet-addon.md](fleet-addon.md#per-surface-pace-quota-axi--0115-schemaversion-3).
+
 ## Cheapest capable model per task
 
 `config/crew-dispatch.json` already tiers crewmate dispatch (haiku for rote, sonnet
@@ -58,6 +68,7 @@ tier that fits, so even when work IS running the spend matches the task.
 | `FM_FLEET_WAIT_INTERVAL` | 15s | wake-watcher poll cadence |
 | `FM_FLEET_HEARTBEAT_TTL` | 90s | after this with no heartbeat, routing treats an operator offline |
 | `FM_FLEET_QUOTA_MIN` | 5 (%) | headroom floor below which routing/claim skips an operator |
+| `FM_FLEET_RESERVE_MIN` | -25 (points) | worst tolerated pace reserve before conservation pressure alone holds `budget` back; `-100` disables the pace floor |
 
 ## Net effect
 
