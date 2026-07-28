@@ -10,15 +10,17 @@ metadata:
 
 # federation
 
-Multiple operators (e.g. adi/royce/barf-ai), each running their **own** first mate
-as themselves, coordinate through one **shared, group-writable, git-backed KB** so
+Multiple operators (e.g. `alice`/`bob`/`carol` — any OS users on the host), each
+running their **own** first mate as themselves, whose firstmate homes may be named
+and located differently, coordinate through one **shared, group-writable,
+git-backed KB** so
 work is routed by domain, never overlaps, and is visible in realtime. This skill
 owns that procedure. The CLI is `bin/fm-fleet.sh` (lib: `bin/fm-fleet-lib.sh`).
 
 ## Cross-uid safety (non-negotiable)
 
 Operators share **only** the fleet dir. **Never** read or write another operator's
-private home (`~/.claude`, credentials, their `kun-agent-workspace`). Every
+private home (`~/.claude`, credentials, their own firstmate home). Every
 mutating fleet function calls `fm_fleet_assert_shared`, which refuses any path
 resolving into a foreign `/home/<other>`. Credentials stay `0700`, read only by
 their owner's own processes. This replaces FirstMate's single-uid filesystem-copy

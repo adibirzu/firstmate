@@ -1,12 +1,12 @@
 {
-  "_comment": "Copy to config/accounts.json (gitignored). One entry per account. 'isolation' MUST match the harness per adapters/config-dir-matrix.md. NEVER put a secret here: api-key accounts point at a key_file (a 0600 file in YOUR OWN home); fm-spawn reads it at launch. config_dir/key_file must live under your own home (foreign /home/<other> is refused).",
+  "_comment": "TEMPLATE — copy to config/accounts.json (gitignored) and replace every /home/YOUR-USER path with your own. Paths are used LITERALLY: ~ and $HOME are NOT expanded, so write absolute paths. Delete the accounts you do not use; an entry whose config_dir/key_file does not exist is only an error when that account is actually selected. One entry per account. 'isolation' MUST match the harness per adapters/config-dir-matrix.md. NEVER put a secret here: api-key accounts point at a key_file (a 0600 file in YOUR OWN home); fm-spawn reads it at launch. config_dir/key_file must live under your own home (foreign /home/<other> is refused).",
 
   "claude-personal": {
     "provider": "anthropic",
     "harness": "claude",
     "isolation": "config-dir-env",
     "env": "CLAUDE_CONFIG_DIR",
-    "config_dir": "/home/adi/.claude",
+    "config_dir": "/home/YOUR-USER/.claude",
     "scopes": ["backend", "infra", "deploy"]
   },
   "claude-work": {
@@ -14,7 +14,7 @@
     "harness": "claude",
     "isolation": "config-dir-env",
     "env": "CLAUDE_CONFIG_DIR",
-    "config_dir": "/home/adi/.claude-accounts/work",
+    "config_dir": "/home/YOUR-USER/.claude-accounts/work",
     "scopes": ["backend"]
   },
   "codex-personal": {
@@ -22,7 +22,7 @@
     "harness": "codex",
     "isolation": "config-dir-env",
     "env": "CODEX_HOME",
-    "config_dir": "/home/adi/.codex",
+    "config_dir": "/home/YOUR-USER/.codex",
     "scopes": ["backend"]
   },
   "pi-personal": {
@@ -30,7 +30,7 @@
     "harness": "pi",
     "isolation": "config-dir-env",
     "env": "PI_CODING_AGENT_DIR",
-    "config_dir": "/home/adi/.pi/agent",
+    "config_dir": "/home/YOUR-USER/.pi/agent",
     "scopes": ["long-autonomous"]
   },
   "cline-personal": {
@@ -38,7 +38,7 @@
     "harness": "cline",
     "isolation": "config-dir-flag",
     "flag": "--config",
-    "config_dir": "/home/adi/.cline",
+    "config_dir": "/home/YOUR-USER/.cline",
     "scopes": ["web"]
   },
   "grok-personal": {
@@ -46,7 +46,7 @@
     "harness": "grok",
     "isolation": "api-key-env",
     "env": "GROK_API_KEY",
-    "key_file": "/home/adi/.secrets/grok-personal.key",
+    "key_file": "/home/YOUR-USER/.secrets/grok-personal.key",
     "scopes": ["research"]
   },
   "cursor-personal": {
@@ -54,7 +54,7 @@
     "harness": "cursor-agent",
     "isolation": "api-key-env",
     "env": "CURSOR_API_KEY",
-    "key_file": "/home/adi/.secrets/cursor-personal.key",
+    "key_file": "/home/YOUR-USER/.secrets/cursor-personal.key",
     "scopes": ["web"]
   }
 }
