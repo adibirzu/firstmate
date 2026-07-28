@@ -208,6 +208,14 @@ set -u
   printf '\n'
 } >> "$TREEHOUSE_CALL_LOG"
 if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ "${1:-}" = get ]; then
+  # Post-create abort: yield a path that exists but is NOT an isolated worktree —
+  # the invoking project checkout itself. Under the leased-acquisition flow the
+  # spawn then proceeds past acquisition with WT=<primary checkout> and must be
+  # stopped by the armed isolation validation, which is the invariant this
+  # fixture exists to pin. (A bare `exit 0` with no output now dies earlier on
+  # the leased flow's empty-path check, a different error, so the armed
+  # validation would never be reached.)
+  pwd
   exit 0
 fi
 exec "$REAL_TREEHOUSE" "$@"
