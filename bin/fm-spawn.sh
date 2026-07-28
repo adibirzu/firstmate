@@ -1305,13 +1305,15 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # treehouse, so that HOME would be inherited by the agent and by everything it
   # runs - wrong ~/.claude, wrong git config, wrong gh credentials. Leasing here
   # keeps the override inside this process: the pane only ever receives a plain cd.
+  # The lease's own `git fetch` still needs the real git and gh config, which that
+  # same substitution hides, so fm_treehouse_preserve_user_config pins them first.
   #
   # The lease is durable, so every exit path between here and metadata publication
   # must return it; TREEHOUSE_LEASE_ABORT_CLEANUP arms spawn_abort_cleanup for that.
   # fm-teardown.sh already returns the worktree by absolute path on the normal path.
   POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
   LEASE_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-lease-err.XXXXXXXX")
-  WT=$( cd "$PROJ_ABS" && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>"$LEASE_ERR_FILE" ) || {
+  WT=$( cd "$PROJ_ABS" && fm_treehouse_preserve_user_config && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>"$LEASE_ERR_FILE" ) || {
     echo "error: treehouse could not lease a worktree for $PROJ_ABS under pool root $POOL_HOME/.treehouse" >&2
     [ ! -s "$LEASE_ERR_FILE" ] || sed 's/^/  treehouse: /' "$LEASE_ERR_FILE" >&2
     rm -f "$LEASE_ERR_FILE"

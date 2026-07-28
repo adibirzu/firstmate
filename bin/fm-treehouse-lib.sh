@@ -116,6 +116,39 @@ fm_treehouse_pool_home() {  # <repo-dir>
   printf '%s/.fm-pools/%s\n' "$base" "$(fm_treehouse_project_slug "$store")"
 }
 
+# Preserve git and gh configuration discovery across the pool HOME substitution.
+# `treehouse get` runs `git fetch origin` for the repo, and over HTTPS that fetch
+# is authenticated through git's global config (the credential helper) and, when
+# that helper is `gh auth git-credential`, through gh's own stored credentials.
+# Both are found only through HOME, so running treehouse under the pool HOME
+# hides them and the fetch dies with "could not read Username for
+# 'https://github.com'" even though the same fetch succeeds in an ordinary shell.
+# Pinning the two locations from the REAL HOME restores exactly that discovery
+# and nothing else, so the pool HOME still keeps the crew away from ~/.claude.
+#
+# Call this in the same subshell BEFORE HOME is substituted, so $HOME is still
+# the real one. The exports then survive into the treehouse child.
+#
+# An operator's own values win, and only paths that exist are pinned, so a user
+# whose git config lives at the XDG location is never pointed at a missing
+# ~/.gitconfig.
+fm_treehouse_preserve_user_config() {
+  local xdg=${XDG_CONFIG_HOME:-${HOME:-}/.config}
+  if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
+    if [ -f "${HOME:-}/.gitconfig" ]; then
+      GIT_CONFIG_GLOBAL="${HOME}/.gitconfig"
+      export GIT_CONFIG_GLOBAL
+    elif [ -f "$xdg/git/config" ]; then
+      GIT_CONFIG_GLOBAL="$xdg/git/config"
+      export GIT_CONFIG_GLOBAL
+    fi
+  fi
+  if [ -z "${GH_CONFIG_DIR:-}" ] && [ -d "$xdg/gh" ]; then
+    GH_CONFIG_DIR="$xdg/gh"
+    export GH_CONFIG_DIR
+  fi
+}
+
 # Check the invariant on a worktree that already exists, whoever created it.
 # Exit 0 colocated, 1 split, 2 undeterminable (never treat 2 as a violation).
 # On 0 or 1 the three FM_TREEHOUSE_* variables carry the evidence for the caller's
