@@ -77,20 +77,117 @@ the full autonomy flag already in argv:
   non-interactive trust-bypass flag (`trustedFolders` is documented as
   config-only: "list of folders where permission to read or execute files has
   been granted").
-- **Consequence for dispatch (flagged prominently, not buried):** every crew
-  dispatch spawns into a fresh worktree path, which is by definition never in
-  `trustedFolders`. Without a pre-seed/readiness-gate mechanism analogous to
-  cursor-agent's (which — per the base-branch note above — was NOT part of
-  cursor-agent's own original adapter commit either, but a later, separate
-  pipeline-review pass), `fm-spawn.sh --harness copilot` launching into a fresh
-  worktree **will block on this dialog indefinitely**; the seeded `-i` argv has
-  no way to answer an interactive TUI dialog. This is real and unresolved by the
-  owner-file edits in this task (§T4 below is scoped to the same 4
-  `fm-spawn.sh` edits cline/cursor-agent's original commits made — launch
-  template, allowlists, model/effort flags — not a new readiness-gate
-  subsystem). Recommended follow-up: a dedicated "wire copilot trust gate" pass,
-  mirroring `3f2334d`'s cursor-agent work, that weighs the global-file risk above
-  before choosing pre-seed vs. poll-and-answer vs. both.
+- **Consequence for dispatch:** every crew dispatch spawns into a fresh
+  worktree path, which is by definition never in `trustedFolders`. Without a
+  readiness mechanism, `fm-spawn.sh --harness copilot` launching into a fresh
+  worktree **would block on this dialog indefinitely**; the seeded `-i` argv
+  has no way to answer an interactive TUI dialog. **This is now resolved — see
+  below.**
+
+### T0 — `--add-dir` probe (WI-4, 2026-07-28)
+
+`--add-dir <directory>` ("Add a directory to the allowed list for file
+access") was the one flag E2 did not test. Zero-quota, zero-network probe:
+launched under tmux from a fresh `mktemp -d` scratch directory outside
+`$HOME` (not previously in `trustedFolders`, verified read-only beforehand)
+with `--add-dir "$PWD"` added to the verified template. Verbatim capture,
+dialog still present:
+
+```
+ [Session]  Issues   Pull requests   Gists
+
+  ╭─╮╭─╮
+  ╰─╯╰─╯  Copilot v1.0.75 uses AI.
+  █ ▘▝ █  Check for mistakes.
+   ▔▔▔▔
+
+ ● Tip: /init
+
+╭──────────────────────────────────────────────────────────────────────────╮
+│ Confirm folder trust                                                      │
+│ ╭────────────────────────────────────────────────────────────────────╮   │
+│ │ /tmp/fm-copilot-probe.6nhp                                            │  │
+│ ╰────────────────────────────────────────────────────────────────────╯   │
+│                                                                            │
+│ Copilot can read files in this folder and, with your permission, edit    │
+│ them or run code and shell commands. It will remember your permissions   │
+│ for the rest of this session.                                            │
+│                                                                            │
+│ Do you trust the files in this folder?                                   │
+│                                                                            │
+│ ❯ 1. Yes                                                                  │
+│   2. Yes, and remember this folder for future sessions                   │
+│   3. No (Esc)                                                             │
+│                                                                            │
+│ ↑/↓ to navigate · enter to select · esc to cancel                        │
+╰──────────────────────────────────────────────────────────────────────────╯
+```
+
+**Result: the dialog is PRESENT. `--add-dir` does NOT bypass the folder-trust
+gate** — it is a file-access allowlist, a distinct concept from the trust
+prompt (consistent with `--allow-all-paths` also failing). This confirms the
+PRD's expectation and **does not change the recommendation**: proceed with
+Option B (keystroke-clear).
+
+### Shipped mechanism: Option B — keystroke-clear (session-scoped)
+
+`fm-spawn.sh` wires a post-launch readiness gate, invoked immediately after
+the launch `Enter` (mirroring cursor-agent's architecture in `3f2334d`: a
+bounded poll, a one-shot answer keystroke, a loud `*_spawn_fail` on budget
+exhaustion):
+
+- `copilot_capture()` — pane snapshot via `fm_backend_capture`.
+- `copilot_trust_dialog_present()` — `grep -Fq 'Confirm folder trust'`.
+- `copilot_pane_is_past_trust()` — `grep -Eq 'Working.*esc interrupt|/
+  commands · \? help'` (busy footer OR idle status bar). **Deliberately NOT**
+  the bare `❯` glyph: the dialog's own option cursor renders as `❯ 1. Yes`
+  (E9, above) — byte-identical to copilot's idle composer glyph — so a
+  bare-glyph anchor would match the dialog itself and report "past trust"
+  while it is still up. `tests/fm-copilot-harness.test.sh` has a dedicated
+  regression fence (`test_copilot_past_trust_does_not_match_the_dialog`) that
+  feeds this exact captured dialog to the predicate and asserts it does
+  **not** match. The `\?` is mandatory — unescaped it is an ERE quantifier
+  and silently stops matching the literal `?` in the idle status bar.
+- `copilot_wait_for_trust_clear()` — while the dialog is present, send a
+  single default-focus `Enter` (option 1, "Yes", session-scoped trust — E3)
+  at most once (`answered` flag, S7); poll up to `FM_COPILOT_TRUST_POLLS`
+  (default 60) at `FM_COPILOT_POLL_INTERVAL` (default 0.5s) until a
+  past-trust signal is seen; return non-zero on exhaustion.
+- `copilot_spawn_fail()` — on exhaustion, `bin/fm-spawn.sh` appends
+  `failed: ...` to `$STATE/$ID.status`, prints `error: ...; inspect window
+  $T` to stderr, and exits 1 (S6/G2) — copied verbatim from
+  `cursor_spawn_fail`.
+
+**Deliberately NO pre-seed**, unlike cursor-agent's per-project
+`.workspace-trusted` marker. This is the central judgment call of WI-4:
+copilot's only pre-seed target is `~/.copilot/config.json` itself — a single
+shared, global, JSONC file that also holds the live OAuth token
+(`.copilotTokens`, E5), with no delegated writer (E6) and no config-dir
+override to isolate a test copy (E7). Any pre-seed write path would have to
+satisfy S1–S3 and S5 (never touch the token, preserve the `//` header
+byte-for-byte, write atomically, lock against concurrent dispatches) forever,
+on every dispatch — for a benefit ("maybe skip a dialog the poll already
+handles") that does not justify the risk to a credential. Option B provides
+the identical guarantee — G1 (dispatchable from any path) and G2 (loud
+failure, never a hang) — with **zero writes to the operator's home**, so S1–S3
+and S5 are satisfied vacuously: there is no file to corrupt, no token to
+expose, no shared resource to race on.
+
+**Options rejected (full analysis in the WI-4 PRD, `docs/prds/
+2026-07-28-copilot-trust-gate-readiness-prd.md` §2):**
+
+| Option | Why rejected |
+|---|---|
+| A — pre-seed `trustedFolders` | Puts FirstMate's write path through the token-bearing shared config; unbounded growth of stale worktree paths; needs a lock for concurrent dispatches. Achievable, but buys nothing Option B doesn't already provide, at materially higher risk. |
+| C — select option 2 (`Down`, `Enter`) so copilot persists trust itself | Sidesteps the write-path risk (copilot owns the format), but makes an invisible persistent global trust grant a side effect of a dispatch, doubles the keystroke surface, and reintroduces unbounded growth. Recorded as the escalation path if session-scoped trust ever proves insufficient. |
+| D — `--add-dir` flag | Probed in T0 above. Disproved live: the dialog is a distinct concept from the file-access allowlist the flag controls. |
+| E — refuse the spawn on an untrusted path | Converts the hang into an error but does not satisfy G1 (copilot stays undispatchable), and requires reading the token-bearing config for a read-only benefit already captured by S6/Option B's timeout branch. |
+
+**S4 reversal procedure:** nothing to revert. Trust granted via option 1 is
+session-scoped and evaporates when the pane exits; `fm-spawn.sh` never opens,
+reads, or writes `~/.copilot/config.json` in this mechanism, so there is no
+persisted state anywhere to undo. This must be stated explicitly (S4) rather
+than left implicit.
 
 ## Ready / idle composer
 
@@ -327,29 +424,28 @@ copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ e
 
 | # | Owner file | Change |
 |---|---|---|
-| 1 | `bin/fm-spawn.sh` | `launch_template()` copilot case; known-bare-adapter allowlists (2 sites); `model_flag_for_harness()`; `effort_flag_for_harness()` |
+| 1 | `bin/fm-spawn.sh` | `launch_template()` copilot case; known-bare-adapter allowlists (2 sites); `model_flag_for_harness()`; `effort_flag_for_harness()`; **(WI-4)** the folder-trust readiness gate (`copilot_capture`/`copilot_trust_dialog_present`/`copilot_pane_is_past_trust`/`copilot_wait_for_trust_clear`/`copilot_spawn_fail`) and its call site right after the launch `Enter` |
 | 2 | `bin/fm-harness.sh` | `detect_own()`: direct `*copilot*)` comm case (future-proofing) + a new `MainThread)` case with an args-substring fallback (the shape actually observed) + a new Layer-1 `COPILOT_CLI=1` env-marker check; usage-line harness list |
 | 3 | `bin/fm-tmux-lib.sh` | `FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT='Working.*esc interrupt'` + its `case` arm |
 | 4 | `bin/backends/{herdr,cmux,orca}.sh` | **untouched** — no placeholder text exists for copilot to add; the shared `FM_COMPOSER_IDLE_RE_DEFAULT`/`FM_COMPOSER_BARE_PROMPT_RE_DEFAULT` architecture already correctly classifies copilot's bare-`❯`, no-placeholder composer with zero changes |
-| 5 | `.agents/skills/harness-adapters/SKILL.md` | `## copilot (VERIFIED …)` fact table + frontmatter `description` adapter list |
+| 5 | `.agents/skills/harness-adapters/SKILL.md` | `## copilot (VERIFIED …)` fact table + frontmatter `description` adapter list; **(WI-4)** trust-dialog row + closing paragraph updated to the shipped mechanism |
 
 Plus the two new files: `tests/fm-copilot-harness.test.sh` and this document.
 `bin/fm-composer-lib.sh` is untouched (N1; also moot here — see row 4).
-`bin/fm-spawn.sh` gains no trust-gate readiness-gate code in this pass (see
-"Trust / permission gate" above) — flagged as the primary follow-up.
 
 ## Remaining acceptance (live end-to-end)
 
 The facts above are verified in isolation via live tmux captures (58 raw
 captures under `/tmp/fm-copilot-scratch/captures/`) and are covered by
-`tests/fm-copilot-harness.test.sh`. Matching the cline/cursor-agent precedent,
-a full live crewmate dispatch through the herdr backend — ready-gate →
-brief-inject → busy → turn-end, plus supervised interrupt (`Ctrl-C`) / exit
-(`/exit`) — is **not** run here; it needs a full firstmate home and a real
-project. For copilot specifically, that acceptance is additionally blocked on
-the trust-gate follow-up above: a genuinely fresh worktree will hang on the
-folder-trust dialog until a readiness-gate mechanism (or an accepted, reviewed
-pre-seed of `~/.copilot/config.json`'s `trustedFolders`) exists.
+`tests/fm-copilot-harness.test.sh` (18 checks, including 6 WI-4 trust-gate
+cases). Matching the cline/cursor-agent precedent, a full live crewmate
+dispatch through the herdr backend — ready-gate → brief-inject → busy →
+turn-end, plus supervised interrupt (`Ctrl-C`) / exit (`/exit`) — is **not**
+run here; it needs a full firstmate home and a real project (N1). **It is no
+longer blocked on the trust gate**: WI-4 wires a readiness gate
+(`copilot_wait_for_trust_clear`, Option B — keystroke-clear) that reaches a
+ready/working pane from any path without human interaction, or fails the
+spawn loudly within its poll budget instead of hanging.
 
 ## Future option: `--acp` (out of scope here, N4)
 
