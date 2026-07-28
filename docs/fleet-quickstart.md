@@ -253,11 +253,16 @@ session. `export XDG_RUNTIME_DIR=/run/user/$(id -u)`.
 
 | | Tier A | Tier B | Tier C |
 |---|---|---|---|
-| `bash`, `git`, `awk`, `flock` | ✓ | ✓ | ✓ |
+| `bash`, `git`, `awk`, `flock`, `realpath` | ✓ | ✓ | ✓ |
 | `jq`, `curl`, `python3` | ✓ | ✓ | ✓ |
 | `quota-axi` | ✓ | optional | optional |
 | root, once per host | — | — | ✓ |
 | shared POSIX group | — | — | ✓ |
 
-Portable across any POSIX host with a shared filesystem. No daemon, no database, no
-network service — coordination is `flock` plus a git-backed directory.
+No daemon, no database, no network service — coordination is `flock` plus a
+git-backed directory on a shared filesystem.
+
+Linux is the tested platform. `flock(1)` and GNU `realpath -m` must be present (the
+cross-uid path guard needs `-m` to normalize a directory that does not exist yet),
+and the Tier C root prereq uses `groupadd`/`usermod`. Timestamp handling itself is
+portable: staleness aging accepts BSD and GNU `date`.

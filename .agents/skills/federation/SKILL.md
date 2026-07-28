@@ -63,8 +63,10 @@ exercises every code path.
 3. **Take work meant for you:** `fm-fleet.sh claim <id> <you>` — atomic under
    `flock`; returns non-zero if already claimed, so two operators can never grab
    the same item.
-4. **Give work to its owner:** `fm-fleet.sh handoff <id> <owner>` — reassigns; the
-   owner's first mate then `claim`s it.
+4. **Give work to its owner:** `fm-fleet.sh handoff <id> <owner>` — reassigns and
+   leaves the item `status:claimed` under the new owner (a queued item is moved to
+   `## Claimed` exactly as `claim` would), so the owner's `fm-fleet-wait.sh` wakes
+   on it directly; no second `claim` is needed.
 5. **Dispatch:** run the crewmate (fm-spawn) in your own Treehouse worktree under
    your own account; mark the item in-flight (integration point) and `done` on land.
 6. **Visibility:** `fm-fleet.sh status` (per-operator counts) and

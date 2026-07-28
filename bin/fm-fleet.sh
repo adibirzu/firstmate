@@ -55,7 +55,7 @@ case "$cmd" in
   register)  op=$1; scopes=$2; home=$3; shift 3; fm_fleet_register "$DIR" "$op" "$scopes" "$home" "${1:-}" ;;
   heartbeat) fm_fleet_heartbeat "$DIR" "$1" ;;
   leave)     fm_fleet_leave "$DIR" "$1" ;;
-  budget)    if fm_fleet_budget_ok; then echo "$fm_fleet_budget_reason"; else echo "$fm_fleet_budget_reason"; exit 1; fi ;;
+  budget)    rc=0; fm_fleet_budget_ok || rc=1; echo "$fm_fleet_budget_reason"; exit "$rc" ;;
   quota)     fm_fleet_quota_report ;;
   models)    fm_fleet_models_report ;;
   pick)      fm_fleet_pick_surface "${1:?usage: fm-fleet.sh pick <model-family>}" ;;
