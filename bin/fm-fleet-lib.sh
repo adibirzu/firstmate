@@ -102,6 +102,14 @@ fm_fleet_assert_owned() { # dir
   return 1
 }
 
+# The one guard every entry point that CONSUMES an existing fleet must pass:
+# initialized AND chosen/owned. fm-fleet.sh, fm-fleet-wait.sh, and any future
+# reader call this right after resolving the dir, so no entry point can reach a
+# fleet the operator never set up or never opted into.
+fm_fleet_assert_usable() { # dir
+  fm_fleet_assert_initialized "$1" && fm_fleet_assert_owned "$1"
+}
+
 # Refuse any fleet dir that resolves into ANOTHER operator's home. Own home (dev
 # test dir) and /opt/... shared dirs are allowed.
 fm_fleet_assert_shared() {
@@ -454,12 +462,18 @@ fm_fleet_pick_surface() { # model-family
   local sfx h
   while IFS= read -r sfx; do [ -n "$sfx" ] || continue
     h=${HR[$sfx]:-}
-    if [ -n "$h" ] && [ "$h" -ge "$floor" ] 2>/dev/null; then echo "$sfx"; return 0; fi
+    if [ -n "$h" ] && fm_fleet_num_ge "$h" "$floor"; then echo "$sfx"; return 0; fi
   done <<< "$surfaces"
   while IFS= read -r sfx; do [ -n "$sfx" ] || continue
     case "${ST[$sfx]:-}" in fresh|configured|online|logged_in) echo "$sfx"; return 0;; esac
   done <<< "$surfaces"
   printf '%s\n' "$surfaces" | head -1
+}
+
+# Float-safe >= (headroom percentages can be fractional, e.g. 90.5, which the
+# integer-only [ -ge ] test cannot parse).
+fm_fleet_num_ge() { # a b
+  awk -v a="$1" -v b="$2" 'BEGIN{exit !((a+0)>=(b+0))}'
 }
 
 # 0 if this operator has enough headroom to take work (min% >= FM_FLEET_QUOTA_MIN,
@@ -469,7 +483,7 @@ fm_fleet_budget_ok() {
   local floor=${FM_FLEET_QUOTA_MIN:-5} q
   q=$(fm_fleet_quota_now)
   [ "$q" = '-' ] && return 0
-  [ "$q" -ge "$floor" ] 2>/dev/null
+  fm_fleet_num_ge "$q" "$floor"
 }
 
 # Refuse a recorded home outside the caller's own $HOME (cross-uid safety).

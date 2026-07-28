@@ -161,7 +161,7 @@ fm_account_pick() { # harness
     IFS=$'\t' read -r _h iso env flag cdir kfile <<<"$line"
     hr=$(_fm_account_headroom "$iso" "$env" "$cdir" "$kfile" "$qbin" "$prov")
     [ -n "$hr" ] || hr=-1
-    if [ "$hr" -gt "$best_hr" ]; then best_hr=$hr; best=$acct; fi
+    if awk -v a="$hr" -v b="$best_hr" 'BEGIN{exit !((a+0)>(b+0))}'; then best_hr=$hr; best=$acct; fi
   done
   [ -n "$best" ] && printf '%s\n' "$best" || printf '%s\n' "${accts[0]}"
 }

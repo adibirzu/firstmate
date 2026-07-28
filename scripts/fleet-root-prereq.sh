@@ -43,7 +43,8 @@ done
 
 mkdir -p "$DIR/locks"
 chgrp -R "$GROUP" "$DIR"
-chmod -R 2775 "$DIR"        # setgid: files created here inherit the group
+find "$DIR" -type d -exec chmod 2775 {} +   # setgid dirs: files created here inherit the group
+find "$DIR" -type f -exec chmod g+rw {} +
 
 echo "--- verify ---"
 stat -c '%A %U:%G %n' "$DIR"
