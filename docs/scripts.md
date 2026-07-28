@@ -94,7 +94,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-x-link.sh`           | Link a spawned task to its originating X-mode mention in task meta                   |
 | `fm-x-followup.sh`       | Detect, post, and cap completion follow-ups for an X-mode-linked task                |
 | `fm-fleet.sh`            | Federated multi-operator coordination CLI over the shared fleet KB, plus per-surface quota, models, and failover pick verbs (docs/fleet-quickstart.md) |
-| `fm-fleet-lib.sh`        | Shared federation KB helpers: atomic claim/lock, routing, usability guards, and quota surfaces |
+| `fm-fleet-lib.sh`        | Shared federation KB helpers: atomic claim/lock, routing, usability guards, operator lifecycle |
+| `fm-fleet-quota-lib.sh`  | Per-surface quota/pace reporting, model->surfaces map, failover pick, and budget/conservation-pressure gate (leaf library sourced by fm-fleet-lib.sh) |
 | `fm-fleet-join.sh`       | One-command operator onboarding into a shared fleet                                  |
 | `fm-fleet-wait.sh`       | Token-free bash block-until-claimed wait that heartbeats while idle (docs/fleet-token-economy.md) |
 | `fm-accounts-lib.sh`     | Multi-account registry resolution, validation, and quota-aware account pick          |

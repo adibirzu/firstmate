@@ -39,10 +39,13 @@ Fleet dir resolves from: `FM_FLEET_DIR` → `$FM_HOME/config/fleet-dir` →
 `/opt/agents/fleet`. During development it points at a local dir so every code
 path is exercised single-uid; `flock` semantics are identical across uids.
 
-### CLI (`bin/fm-fleet.sh`, lib `bin/fm-fleet-lib.sh`)
+### CLI (`bin/fm-fleet.sh`, libs `bin/fm-fleet-lib.sh` + `bin/fm-fleet-quota-lib.sh`)
 `init | register | heartbeat | leave | queue | claim | handoff | reap | route |
 budget | quota | models | pick | status | view`, plus `bin/fm-fleet-join.sh`
 (operator onboarding) and `bin/fm-fleet-wait.sh` (token-free wait-for-work).
+`bin/fm-fleet-quota-lib.sh` is a leaf library sourced by `bin/fm-fleet-lib.sh`
+that owns `budget | quota | models | pick`; every consumer keeps sourcing only
+`bin/fm-fleet-lib.sh`.
 
 - **Atomic claim** — under `flock`, verify item is `queued`, stamp
   `claimed-by:<op>@<ts> status:claimed`, move to `## Claimed`, log, commit. Two
@@ -224,7 +227,8 @@ while keeping the mechanism documented.
 
 **Phase B — what must survive, explicitly:** the override hatch itself —
 `config/quota-overrides.json` plus the `bin/quota-sources/*.sh` loader loop in
-`fm_fleet_quota_report`, `fm_fleet_models_report`, and `fm_fleet_pick_surface`.
+`fm_fleet_quota_report`, `fm_fleet_models_report`, and `fm_fleet_pick_surface`
+(all three now defined in `bin/fm-fleet-quota-lib.sh`).
 It exists for genuinely unreadable vendors (`cline` today; any future surface
 quota-axi doesn't cover). Retiring two *users* of the hatch must not retire the
 hatch — the loader must keep tolerating an empty `bin/quota-sources/` directory
