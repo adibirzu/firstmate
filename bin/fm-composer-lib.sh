@@ -168,7 +168,9 @@ fm_composer_strip_ghost() {
 # the anchored alternates carry it). Bare agent prompt glyphs: ❯ (claude),
 # › (codex), → (cursor-agent) — never the shell glyphs > $ % #, which stay
 # dead-shell-unsafe on a bare row.
+# shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
 FM_COMPOSER_IDLE_RE_DEFAULT='^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'
+# shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
 FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→]'
 
 # fm_composer_classify_content: the single shared composer-content verdict.
