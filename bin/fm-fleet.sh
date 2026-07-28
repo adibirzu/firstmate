@@ -26,11 +26,11 @@ cmd=${1:-}; shift || true
 # Every verb that touches an existing fleet must find one first. `init` creates it;
 # quota/models/pick are surface-local and need no fleet at all.
 case "$cmd" in
-  init|quota|models|pick|'') : ;;
+  init|budget|quota|models|pick|'') : ;;
   # register/heartbeat/leave are how you BECOME an operator, and they already need
   # write access to the shared dir (POSIX group), so they skip the ownership check.
   register|heartbeat|leave) fm_fleet_assert_initialized "$DIR" || exit 1 ;;
-  *) fm_fleet_assert_initialized "$DIR" && fm_fleet_assert_owned "$DIR" || exit 1 ;;
+  *) fm_fleet_assert_usable "$DIR" || exit 1 ;;
 esac
 
 case "$cmd" in
