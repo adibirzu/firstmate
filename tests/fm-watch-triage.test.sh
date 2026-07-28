@@ -957,8 +957,27 @@ test_live_agent_declared_pause_is_absorbed() {
   [ -e "$state/.paused-rechecked-$key" ] || { reap "$pid"; fail "the recheck marker was deleted, so the pause could never hold again"; }
   assert_not_contains "$(cat "$out")" "stale: $window" "a bare stale surfaced for a declared pause on a live agent"
   reap "$pid"
+
+  # Second path, and the one that kept the escalation alive after the first was
+  # fixed: the recheck marker AGES OUT past STALE_ESCALATE_SECS, so the branch
+  # above is skipped and classification falls through. That fall-through carried
+  # the identical dead-agent requirement and deleted the marker on its way out,
+  # so a live parked crew re-entered it every STALE_ESCALATE_SECS forever.
+  # `.paused-<key>` is retained here, which is what distinguishes an already
+  # surfaced pause from first sight - first sight must still surface once, and
+  # test_exited_pause_and_captain_held_use_bounded_cadence pins that.
+  printf '%s\n' $(( $(date +%s) - 5000 )) > "$state/.paused-rechecked-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "an aged recheck marker re-escalated a declared pause as a bare stale: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "the declared pause was dropped on the aged-marker path"; }
+  reap "$pid"
   unset FM_FAKE_CREW_STATE
-  pass "a live agent's declared pause is absorbed, not re-escalated as a bare stale"
+  pass "a live agent's declared pause is absorbed, on both the fresh and the aged-recheck path"
 }
 
 test_paused_authoritative_working_preserves_wedge_timer() {
