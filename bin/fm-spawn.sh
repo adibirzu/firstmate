@@ -59,10 +59,11 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
-#   new adapters.
+#   new adapters. pi-signed launches that exact executable name from PATH and
+#   refuses before endpoint creation when it is unavailable; it never falls back to pi.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -388,7 +389,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok|kimi)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -434,11 +435,11 @@ launch_template() {
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    pi)
+    pi|pi-signed)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -449,6 +450,26 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # cline (Cline CLI 3.0.46): `-i --tui` opens the persistent interactive TUI and
+    # a positional prompt seeds AND auto-runs the first turn (verified via tmux
+    # capture; see docs/verification/cline-adapter.md). --auto-approve true keeps the
+    # unattended crewmate autonomous (the targeted equivalent of claude's
+    # --dangerously-skip-permissions; it is on by default but passed explicitly for
+    # version robustness). Turn-end is observed by the pane classifier (the braille
+    # "esc to cancel" spinner clears and the composer returns to its idle
+    # placeholder), so no launch-side turn-end placeholder is needed. Effort maps to
+    # --thinking (see the effort helper below), never --effort.
+    cline) printf '%s' 'cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # cursor-agent (Cursor CLI 2026.07): the default `agent` is a persistent interactive
+    # TUI; a positional prompt seeds AND auto-runs the first turn (verified via tmux
+    # capture) once the workspace is trusted. --force ("Run Everything") makes the
+    # crewmate autonomous (equivalent of claude's --dangerously-skip-permissions). Effort
+    # is a MODEL bracket param (e.g. 'claude-opus-4-8[effort=high]'), not a flag, so no
+    # __EFFORTFLAG__. WORKSPACE TRUST: interactive mode shows a blocking "Workspace Trust
+    # Required" dialog that --trust does NOT bypass (headless-only); answer it by
+    # pre-seeding ~/.cursor/projects/<slug>/.workspace-trusted or by sending `a` after the
+    # readiness gate (harness-adapters skill + docs/verification/cursor-agent-adapter.md).
+    cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -493,6 +514,18 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+case "$HARNESS" in
+  pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
+esac
+
+# pi-signed is an explicitly selected executable identity, not an alias that may
+# silently fall back to pi. Resolve it from PATH before creating an endpoint and
+# retain the literal name in the launch command and task metadata.
+if [ "$HARNESS" = pi-signed ] && ! command -v pi-signed >/dev/null 2>&1; then
+  echo "error: pi-signed executable not found on PATH; install the signed Pi wrapper or select a different verified harness" >&2
+  exit 1
+fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
@@ -565,7 +598,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok|kimi)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -597,11 +630,20 @@ effort_flag_for_harness() {
         low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
-    pi)
+    pi|pi-signed)
       # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
       # its --thinking flag.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    cline)
+      # cline 3.0.46 maps the reasoning-effort axis to --thinking, which accepts
+      # none|low|medium|high|xhigh (verified in `cline --help`; a live launch with
+      # `--thinking high` showed "(high)" in the model status bar). It has no `max`
+      # tier, so omit max rather than passing an unsupported value.
+      case "$effort" in
+        low|medium|high|xhigh) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1317,7 +1359,7 @@ export const FmTurnEnd = async ({ \$ }) => ({
 EOF
       exclude_path '.opencode/plugins/fm-turn-end.js'
       ;;
-    pi*)
+    pi|pi-signed)
       # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
       # loaded from inside the project (verified live), but an explicit -e path
       # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
