@@ -55,6 +55,45 @@ budget | quota | models | pick | status | view`, plus `bin/fm-fleet-join.sh`
 - **Visibility** — `status` (per-operator counts) + `view [--follow]` (the live
   cross-operator event stream).
 
+### Per-surface pace (quota-axi >= 0.1.15, `schemaVersion` 3)
+`fm-fleet.sh quota` shows two extra columns, `PACE` and `RESERVE`, alongside the
+existing `HEADROOM`: `SURFACE HEADROOM PACE RESERVE STATUS SOURCE NOTE`. Pace
+answers the question raw headroom hides — "how much of the window's clock is
+left" — via `reservePercentPoints = percentRemaining − timeRemainingPercent`.
+`RESERVE` is always **signed** (`-15`, `+20`); negative means usage is running
+**ahead** of reset pace (conservation pressure), positive means **behind**
+(sustainable).
+
+Three states stay distinguishable everywhere pace is reported — never conflate
+them, and never render `unknown` as `on_pace`:
+
+| Rendered | Meaning |
+|---|---|
+| `behind` / `on_pace` / `ahead` / `mixed` | Producer stated a pace class |
+| `unknown` | Producer **explicitly** stated uncertainty |
+| `—` | Pace is **unavailable** (older quota-axi, or a bare-int custom source) |
+
+`fm-fleet.sh budget` additionally refuses on conservation pressure, not just raw
+headroom: when the operator's headroom clears `FM_FLEET_QUOTA_MIN` but a fresh
+surface is pressured with a worst reserve below `FM_FLEET_RESERVE_MIN` (default
+`-25`, points; set to `-100` to disable the pace floor), it reports "below pace
+floor" instead of "ok" — always naming the headroom/pace/reserve facts that
+drove the answer, never a bare verdict. Only **fresh** surfaces feed this floor;
+a stale/cached window's pace is visible in `quota` but never drives a refusal.
+
+**Degradation guarantee**: against an older `schemaVersion` 2 payload, or any
+provider record missing pace, `quota`/`models`/`pick`/`budget` behave exactly as
+they did before pace existed — `PACE`/`RESERVE` render `—`, `budget` skips the
+pace floor, `pick` ignores pace ordering. Nothing crashes, nothing fabricates a
+pace class.
+
+These fleet verbs are **operator-facing diagnostics**. They never select a
+harness, model, or effort for dispatch. The pace-aware profile-array selection
+procedure is owned solely by the `quota-array-dispatch` skill, which the agent
+loads at intake; `quota-axi` stays data-only. Do not wire `fm-fleet.sh pick`
+into `fm-spawn` or any dispatch path — that would be the routing wrapper /
+producer-side route recommendation that skill forbids.
+
 ### Cross-uid safety (non-negotiable)
 Every mutating fleet function calls `fm_fleet_assert_shared`, which refuses any
 path resolving into a foreign `/home/<other>`. Credentials stay `0700`, read only
@@ -146,6 +185,51 @@ first on a box that is missing, e.g., cursor.
 2. `bin/fm-accounts-prereq.sh` — install any missing CLIs; then log in per account.
 3. `cp docs/examples/accounts.json config/accounts.json` and edit; gitignore it.
 4. Federation only: run the root prereq, then `bin/fm-fleet.sh init`.
+
+## Custom-source retirement path (documented, NOT executed)
+`bin/quota-sources/{copilot,cursor}.sh` exist because quota-axi's NATIVE `copilot`
+provider only probes the old IDE-plugin credential path
+(`~/.config/github-copilot/apps.json`) and its native `cursor` provider only
+probes the editor's SQLite store (`~/.config/Cursor/User/globalStorage/state.vscdb`) —
+a CLI-only login (`copilot`, `cursor-agent`) is invisible to both, so those native
+rows sit at `auth_required` forever without the custom sources. Once upstream
+quota-axi PR #50 (`feat(providers): read Copilot and Cursor credentials from
+their CLI config files`) merges and ships, quota-axi covers both surfaces
+natively — **with pace** — and the bare-int custom sources become a regression:
+superseding a richer native row with a bare integer destroys `pace`, `boundedBy`,
+and `worstReservePercentPoints` information (R7). `fm-fleet.sh quota` already
+flags this today with a `custom int masks native pace` advisory NOTE (Phase A);
+precedence itself is unchanged in this work item.
+
+**Phase A — now (pre-#50).** Keep everything. Custom sources still supersede
+their same-named quota-axi row; the only change is the advisory NOTE.
+
+**Phase B — gates. All four must hold before deleting anything:**
+
+| Gate | Check |
+|---|---|
+| G1 | quota-axi PR #50 is merged and installed: `quota-axi update && quota-axi --version` |
+| G2 | Native rows are `fresh` for both CLI-only logins: `quota-axi --json \| jq -r '.providers[] \| select(.provider=="copilot" or .provider=="cursor") \| [.provider,.state.status,.source] \| @tsv'` |
+| G3 | Those native rows are richer than the bare int: non-null `quotaSemantics.effectiveAvailability` and/or window `pace` for both |
+| G4 | Two fresh reads **at least one hour apart** agree (G2 is not a single cached hit) |
+
+**Phase B — deletion list (only after all four gates pass):**
+`bin/quota-sources/copilot.sh`, `bin/quota-sources/cursor.sh`,
+`bin/quota-copilot-usage.sh`, `bin/quota-cursor-usage.sh`. Plus: the operator
+removes the `.copilot`/`.cursor` keys from their gitignored
+`config/quota-overrides.json` (an operator action, not a repo change), and
+`docs/examples/quota-overrides.json` drops copilot/cursor as worked examples
+while keeping the mechanism documented.
+
+**Phase B — what must survive, explicitly:** the override hatch itself —
+`config/quota-overrides.json` plus the `bin/quota-sources/*.sh` loader loop in
+`fm_fleet_quota_report`, `fm_fleet_models_report`, and `fm_fleet_pick_surface`.
+It exists for genuinely unreadable vendors (`cline` today; any future surface
+quota-axi doesn't cover). Retiring two *users* of the hatch must not retire the
+hatch — the loader must keep tolerating an empty `bin/quota-sources/` directory
+(regression-tested, `tests/federation/test_quota_surfaces.sh`).
+
+Zero files are deleted by this work item.
 
 ## Tests
 ```

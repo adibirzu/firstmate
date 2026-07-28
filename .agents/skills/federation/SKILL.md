@@ -92,17 +92,39 @@ Each CLI/app subscription is its OWN token pool, and one model can be reachable 
 several pools (grok via the `grok` CLI AND via Cursor; kimi3/open models via `cline`).
 Three read-only, 0-token verbs expose and route on this:
 
-- `fm-fleet.sh quota` — every surface's headroom + observability status. Base rows come
-  from `quota-axi` (claude/codex/cursor/copilot/grok/kimi); pluggable scripts in
+- `fm-fleet.sh quota` — every surface's headroom + observability status, plus (quota-axi
+  ≥ 0.1.15, `schemaVersion` 3) a `PACE` and signed `RESERVE` column. Reserve is
+  `percentRemaining − timeRemainingPercent`: negative = ahead of reset pace
+  (conservation pressure), positive = behind (sustainable). Three states stay
+  distinct: a pace class (`behind`/`on_pace`/`ahead`/`mixed`), explicit `unknown`
+  (producer-stated uncertainty), and `—` (unavailable — older schema, or a
+  bare-int custom source, which never carries pace). Base rows come from
+  `quota-axi` (claude/codex/cursor/copilot/grok/kimi); pluggable scripts in
   `bin/quota-sources/<surface>.sh` add surfaces quota-axi can't see or attach an authed
-  reader (e.g. `cursor`), each emitting a normalized `{surface,status,headroom,unit,models,note}` object.
+  reader (e.g. `cursor`), each emitting a normalized `{surface,status,headroom,unit,models,note}` object —
+  these never carry pace, so a custom row masking a paced native row gets an advisory NOTE.
 - `fm-fleet.sh models` — for each model family in the model map (gitignored
   `config/model-surfaces.json` if present, else the shipped default
   `docs/examples/model-surfaces.json`), the
   ordered surfaces that can serve it, each with live status + headroom.
-- `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): first
-  surface with observable headroom ≥ floor → else a configured-but-unobservable surface
-  (fail-open) → else the first listed. This is "grok from whichever pool has tokens".
+- `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): among
+  surfaces with observable headroom ≥ floor, prefers known-sustainable pace, then
+  unknown/absent pace, then the least-pressured (least-negative reserve) surface, each
+  tier taking the first in the map's operator-ordered surface list; else a
+  configured-but-unobservable surface (fail-open) → else the first listed. Only fresh
+  surfaces' pace is trusted (a stale surface's pace falls to the unknown/absent tier).
+  This is "grok from whichever pool has tokens".
+- `fm-fleet.sh budget` — also refuses on conservation pressure now, not just raw
+  headroom: a fresh, pressured surface with worst reserve below
+  `FM_FLEET_RESERVE_MIN` (default `-25` points; `-100` disables the pace floor)
+  reports "below pace floor", always naming the headroom/pace/reserve facts.
+
+These fleet verbs are **operator-facing diagnostics**. They never select a
+harness, model, or effort for dispatch. The pace-aware profile-array selection
+procedure is owned solely by the `quota-array-dispatch` skill, which the agent
+loads at intake; `quota-axi` stays data-only. Do not wire `fm-fleet.sh pick`
+into `fm-spawn` or any dispatch path — that would be the routing wrapper /
+producer-side route recommendation that skill forbids.
 
 Authed readers (server-side usage): some surfaces don't report through quota-axi. The
 mechanism is an **operator-supplied escape hatch**: `config/quota-overrides.json` maps
@@ -121,5 +143,15 @@ token from a 0600 file, never argv). Empty/missing = blind fail-open (default). 
   WS Hub (`ws://127.0.0.1:25463/hub`) using a server-derived credential, not the stored
   WorkOS token (every REST/header variant returns 401). cline stays a usable crewmate
   harness but is out of quota routing; we let it hit its wall and route open work elsewhere.
+
+**Retirement trigger for `bin/quota-sources/{copilot,cursor}.sh`** (full detail:
+`docs/fleet-addon.md` "Custom-source retirement path"): once quota-axi PR #50 merges
+and ships, and `quota-axi --json` shows BOTH `copilot` and `cursor` as `fresh` with
+`pace`/`quotaSemantics` on two reads an hour apart, those two custom sources (plus
+`bin/quota-{copilot,cursor}-usage.sh`) become deletable — a bare-int custom source
+would otherwise mask a richer native pace row (R7). The `config/quota-overrides.json`
+override hatch itself must survive any such deletion; it stays the mechanism for
+genuinely unreadable vendors (`cline`, future surfaces). Not executed by this work
+item — zero files deleted.
 
 Tests: `tests/federation/test_quota_surfaces.sh`.
