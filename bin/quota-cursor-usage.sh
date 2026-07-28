@@ -15,7 +15,14 @@ command -v curl >/dev/null 2>&1 || exit 0
 [ -f "$auth" ] || exit 0
 tok=$(jq -r '.accessToken // empty' "$auth" 2>/dev/null)
 [ -n "$tok" ] || exit 0
-ver=$(cursor-agent about 2>/dev/null | awk -F'  +' '/CLI Version/{print $2}'); : "${ver:=2026.07.23}"
+# NOTE: `cursor-agent about` emits ANSI SGR codes (e.g. ESC[22m) around the version. An
+# unstripped code in the header value makes the RPC return 400 Bad Request, so strip CSI
+# sequences and keep only version-safe characters before using it.
+ver=$(cursor-agent about 2>/dev/null \
+      | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' \
+      | awk -F'  +' '/CLI Version/{print $2}' \
+      | tr -cd '0-9A-Za-z.\-')
+: "${ver:=2026.07.23}"
 
 hdr=$(mktemp); chmod 600 "$hdr"
 { printf 'Authorization: Bearer %s\n' "$tok"
