@@ -46,8 +46,12 @@
 # tmux adapter does not paper over a herdr-specific shape.
 #
 # Overrides: FM_COMPOSER_IDLE_RE matches an empty composer after ghost and
-# structural border stripping. FM_BUSY_REGEX overrides the rendered busy-footer
-# matching used here.
+# structural border stripping; unset, it falls back to the shared fleet-wide
+# FM_COMPOSER_IDLE_RE_DEFAULT (bin/fm-composer-lib.sh), which covers the
+# verified placeholders that survive the ghost stripper (cline's muted-grey
+# bold placeholder, cursor-agent's U+2192-prefixed placeholders) so an idle pane is
+# not misread as pending on the default tmux backend. FM_BUSY_REGEX overrides
+# the rendered busy-footer matching used here.
 #
 # NOT a task-state source: task busy state is owned by bin/fm-busy-lib.sh's
 # semantic contract. The matching below serves only delivery guards: the submit
@@ -83,7 +87,7 @@
 # busy signals on their own.
 # The full moon-phase set remains locale- and emoji-font-sensitive because Kimi
 # exposes no stable ASCII busy token.
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|esc to cancel|ctrl\+c to stop'
 FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 FM_TMUX_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
@@ -162,7 +166,7 @@ fm_tmux_composer_row_state() {  # <raw-row> [bordered] [allow-busy] -> empty|pen
      && printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
     printf 'empty'; return 0
   fi
-  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-}" insensitive "$plain"
+  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive "$plain"
 }
 
 fm_tmux_row_has_composer_edge() {  # <plain-row>
@@ -187,6 +191,7 @@ fm_tmux_composer_geometry_spaces() {  # <content-inner> -> spaces
     '>'*) content=${content/>/ } ;;
     '❯'*) content=${content/❯/ } ;;
     '›'*) content=${content/›/ } ;;
+    '→'*) content=${content/→/ } ;;
   esac
   content=$(printf '%s' "$content" | LC_ALL=C sed 's/[!-~]/ /g')
   case "$content" in

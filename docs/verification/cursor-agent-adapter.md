@@ -47,8 +47,12 @@ Interactive mode shows a BLOCKING trust dialog on an untrusted directory:
 
 - Bare agent glyph `→` (U+2192) + idle placeholder `Plan, search, build anything`
   (first ready) / `Add a follow-up` (after a turn).
-- Matched as empty via the backend `IDLE_RE` (the glyph-prefixed placeholder form),
-  so the shared glyph classifier in `fm-composer-lib.sh` is NOT touched.
+- `→` is a verified AGENT prompt glyph in the shared classifier and bare-row
+  promotion set (`bin/fm-composer-lib.sh`: `FM_COMPOSER_BARE_PROMPT_RE_DEFAULT`),
+  so the unbordered composer row is structurally recognized on every backend; the
+  idle placeholders read empty via the shared `FM_COMPOSER_IDLE_RE_DEFAULT` (the
+  glyph-prefixed alternates). Shell glyphs (`>` `$` `%` `#`) still never promote a
+  bare row, so the dead-shell safety rule is unchanged.
 - Status bar shows `Run Everything` (= `--force` autonomy).
 
 ## Busy signature
@@ -85,20 +89,21 @@ cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__
 
 | Owner | Change |
 |---|---|
-| `bin/fm-spawn.sh` | `launch_template` cursor-agent case; `--model` allowlist; known-adapter allowlists |
+| `bin/fm-spawn.sh` | `launch_template` cursor-agent case; `--model` allowlist; known-adapter allowlists; workspace-trust readiness (pre-seed `.workspace-trusted` + `a`-answering poll gate that fails loudly) |
 | `bin/fm-harness.sh` | `detect_own` ancestry match `*cursor*` → `cursor-agent` (comm + args) |
 | `bin/fm-tmux-lib.sh` | `FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'` + case arm |
-| `bin/backends/{herdr,cmux,orca}.sh` | `IDLE_RE` default extended with cursor placeholders |
+| `bin/fm-composer-lib.sh` + `bin/backends/{herdr,cmux,orca}.sh` | `→` added to the shared agent-glyph classifier and bare-row promotion; shared `FM_COMPOSER_IDLE_RE_DEFAULT` covers the cursor placeholders (tmux + all backends) |
 | `.agents/skills/harness-adapters/SKILL.md` | cursor-agent knowledge section |
 | `tests/fm-cursor-agent-harness.test.sh` | 12 behavior checks (all green) |
 
 ## Remaining acceptance (live end-to-end)
 
-Registry facts above are verified in isolation and unit-covered. The closing
-acceptance is a full live crewmate dispatch through the herdr backend where
-`fm-spawn`'s readiness step FIRST clears the trust gate (pre-seed `.workspace-trusted`
-or send `a`) and then delivers the brief, observing busy → turn-end and
-interrupt(`Ctrl-C`)/exit(`/quit`) under supervision. That trust-clearing readiness
-step is the one piece of harness-specific spawn code cursor needs beyond these
-registry facts; it needs a full firstmate home + a real project to verify and is not
-run in this environment.
+Registry facts above are verified in isolation and unit-covered. The
+trust-clearing readiness step is implemented in `fm-spawn`: it pre-seeds
+`.workspace-trusted` before launch and its post-launch gate answers a residual
+dialog with `a` (once — covering cursor's undocumented length-capped slug
+variant for long paths), failing the spawn loudly when the pane never reaches a
+ready/working signal. The closing acceptance is a full live crewmate dispatch
+through the herdr backend observing trust-clear → brief auto-run → busy →
+turn-end and interrupt(`Ctrl-C`)/exit(`/quit`) under supervision; it needs a
+full firstmate home + a real project and is not run in this environment.

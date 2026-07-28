@@ -536,9 +536,12 @@ launch_template() {
     # crewmate autonomous (equivalent of claude's --dangerously-skip-permissions). Effort
     # is a MODEL bracket param (e.g. 'claude-opus-4-8[effort=high]'), not a flag, so no
     # __EFFORTFLAG__. WORKSPACE TRUST: interactive mode shows a blocking "Workspace Trust
-    # Required" dialog that --trust does NOT bypass (headless-only); answer it by
-    # pre-seeding ~/.cursor/projects/<slug>/.workspace-trusted or by sending `a` after the
-    # readiness gate (harness-adapters skill + docs/verification/cursor-agent-adapter.md).
+    # Required" dialog that --trust does NOT bypass (headless-only). fm-spawn clears it
+    # with both verified bypasses (harness-adapters skill +
+    # docs/verification/cursor-agent-adapter.md): the per-harness setup below pre-seeds
+    # ~/.cursor/projects/<slug>/.workspace-trusted before launch, and the post-launch
+    # readiness gate answers a residual dialog with `a` (covering the undocumented
+    # long-path slug variant), failing the spawn loudly instead of hanging on the dialog.
     cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
@@ -1384,6 +1387,51 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+cursor_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+cursor_trust_dialog_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Workspace Trust Required'
+}
+
+# Past the trust gate: the idle composer placeholder (→-prefixed, verified) or
+# the mid-turn busy anchor (the seeded positional brief auto-runs the moment
+# trust clears, so the pane may go straight to Working / "ctrl+c to stop").
+cursor_pane_is_past_trust() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Eq '→ (Plan, search, build anything|Add a follow-up)|ctrl\+c to stop'
+}
+
+# Clear cursor-agent's blocking workspace-trust dialog. The pre-seeded
+# .workspace-trusted marker normally skips it entirely; when the dialog still
+# appears (e.g. cursor's length-capped slug variant for very long worktree
+# paths), answer it ONCE with the verified `a` keypress and keep polling.
+# `a` is sent at most once: after trust clears, a repeat keypress would land
+# in the composer as stray text. A pane that never reaches a ready/working
+# signal within the poll budget is a failed spawn, not a silent hang.
+cursor_wait_for_trust_clear() {
+  local pane i=0 max=${FM_CURSOR_TRUST_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} answered=0
+  while [ "$i" -lt "$max" ]; do
+    pane=$(cursor_capture)
+    if cursor_trust_dialog_present "$pane"; then
+      if [ "$answered" -eq 0 ]; then
+        spawn_send_literal "$T" a
+        answered=1
+      fi
+    elif cursor_pane_is_past_trust "$pane"; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+cursor_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # Firstmate acquires the worktree itself rather than sending `treehouse get` to
   # the pane, because the pool has to land on the repo's own filesystem and the
@@ -1685,6 +1733,23 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
       ;;
+    cursor-agent)
+      # Workspace-trust pre-seed (verified bypass, docs/verification/
+      # cursor-agent-adapter.md): a pre-existing .workspace-trusted marker makes
+      # cursor-agent skip the blocking interactive trust dialog entirely. The
+      # slug is the worktree abspath with the leading / dropped and every /
+      # replaced by -; the length-capped+hash variant cursor uses for very long
+      # paths is not reproduced here, so the post-launch readiness gate below
+      # still answers a residual dialog with `a`. An existing marker is kept
+      # (its recorded trustedAt stays authoritative).
+      CURSOR_PROJECT_DIR="${CURSOR_HOME:-$HOME/.cursor}/projects/$(printf '%s' "${WT#/}" | tr '/' '-')"
+      if [ ! -f "$CURSOR_PROJECT_DIR/.workspace-trusted" ]; then
+        mkdir -p "$CURSOR_PROJECT_DIR"
+        printf '{"trustedAt":"%s","workspacePath":"%s"}\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$(json_escape "$WT")" \
+          > "$CURSOR_PROJECT_DIR/.workspace-trusted"
+      fi
+      ;;
   esac
 fi
 
@@ -1796,6 +1861,12 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = cursor-agent ]; then
+  if ! cursor_wait_for_trust_clear; then
+    cursor_spawn_fail "cursor-agent did not clear the workspace-trust gate to a ready or working pane"
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

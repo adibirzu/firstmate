@@ -5,7 +5,8 @@
 # driven through tmux (see docs/verification/cursor-agent-adapter.md):
 #   - busy footer:      "⠠⠛ Working ... ctrl+c to stop"   (interrupt = Ctrl-C mid-turn)
 #   - idle composer:    "→ Plan, search, build anything" (first) / "→ Add a follow-up"
-#   - glyph:            → (U+2192); matched via backend IDLE_RE, NOT the glyph classifier
+#   - glyph:            → (U+2192); a verified AGENT glyph in the shared classifier
+#                       and bare-row promotion set (fm-composer-lib.sh)
 #   - exit:             /quit ;  autonomy: --force (status bar "Run Everything")
 #   - launch:           cursor-agent --force [--model M] "<brief>"  (seeds+auto-runs after trust)
 set -u
@@ -22,7 +23,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 classify() { fm_composer_classify_content "$@"; }
 
 # cursor's idle placeholders carry the → glyph in-line, so the idle-RE matches the
-# full glyph-prefixed content (no change to the safety-critical glyph classifier).
+# full glyph-prefixed content; → is additionally a verified agent glyph so a bare
+# → row (placeholder ghost-stripped away) still reads empty, never dead-shell.
 CURSOR_IDLE_RE='^→ (Plan, search, build anything|Add a follow-up)$'
 
 # --- launch template (mechanics half) ---------------------------------------
@@ -112,17 +114,40 @@ test_cursor_real_input_reads_pending() {
   pass "fm_composer_classify_content: real cursor input does not read empty"
 }
 
-# --- backend idle-RE default covers cursor ----------------------------------
+# --- shared idle default + glyph promotion cover cursor ---------------------
 
-test_backend_idle_re_defaults_cover_cursor() {
-  local b bad=0 up
+test_shared_idle_default_covers_cursor() {
+  local p b bad=0 up
+  for p in '→ Plan, search, build anything' '→ Add a follow-up'; do
+    printf '%s' "$p" | grep -qE "$FM_COMPOSER_IDLE_RE_DEFAULT" \
+      || fail "shared FM_COMPOSER_IDLE_RE_DEFAULT does not match cursor placeholder '$p'"
+  done
   for b in herdr cmux orca; do
     up=$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')
-    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*(Plan, search, build anything|Add a follow-up)" \
-      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE missing cursor placeholders"; bad=1; }
+    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*FM_COMPOSER_IDLE_RE_DEFAULT" \
+      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE does not use the shared default"; bad=1; }
   done
-  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not cover cursor placeholders"
-  pass "backends: herdr/cmux/orca IDLE_RE defaults cover cursor idle placeholders"
+  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not use the shared idle default"
+  pass "shared idle default covers cursor placeholders and backs herdr/cmux/orca"
+}
+
+test_cursor_glyph_is_promoted_and_safe() {
+  local out
+  printf '%s' '→ Plan, search, build anything' | grep -qE "$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT" \
+    || fail "bare-row promotion default does not match a → composer row"
+  out=$(classify 0 '→')
+  [ "$out" = empty ] || fail "a bare → agent glyph must read empty, got '$out'"
+  out=$(classify 0 '>')
+  [ "$out" = unknown ] || fail "a bare > shell glyph must stay unknown (dead shell), got '$out'"
+  pass "→ is a promoted agent glyph; dead-shell glyphs still never read empty"
+}
+
+test_cursor_trust_gate_wired() {
+  grep -Fq '.workspace-trusted' "$SPAWN" \
+    || fail "fm-spawn: workspace-trust marker pre-seed missing"
+  grep -Fq 'Workspace Trust Required' "$SPAWN" \
+    || fail "fm-spawn: trust-dialog readiness gate missing"
+  pass "fm-spawn: cursor workspace-trust pre-seed + readiness gate are wired"
 }
 
 # --- run --------------------------------------------------------------------
@@ -137,5 +162,7 @@ test_cursor_idle_line_not_busy
 test_cursor_does_not_borrow_signatures
 test_cursor_idle_placeholders_read_empty
 test_cursor_real_input_reads_pending
-test_backend_idle_re_defaults_cover_cursor
+test_shared_idle_default_covers_cursor
+test_cursor_glyph_is_promoted_and_safe
+test_cursor_trust_gate_wired
 echo "ALL PASS: fm-cursor-agent-harness"

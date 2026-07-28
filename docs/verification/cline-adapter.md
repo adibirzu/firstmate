@@ -26,8 +26,11 @@ requires before an adapter is wired. Every value below is a capture, not a guess
 - **Ghost-stripper gap:** in `capture-pane -e` the placeholder is truecolor
   `\e[38;2;131;137;140m` (grey, luma ≈ 136 > the 128 dark-fg cutoff) AND has a
   bold `\e[1m` copy. Neither is dim/faint (SGR 2), so the shared ghost stripper
-  keeps it → it would misread as pending. Fix: the backend `IDLE_RE` default lists
-  both placeholders (`bin/backends/{herdr,cmux,orca}.sh`).
+  keeps it → it would misread as pending. Fix: the shared idle-placeholder
+  default `FM_COMPOSER_IDLE_RE_DEFAULT` (`bin/fm-composer-lib.sh`) lists both
+  placeholders and is consumed by the tmux classifier and the herdr/cmux/orca
+  backends alike. The composer row has no side borders, so cmux/orca reach it
+  via the shared bare agent-glyph promotion (`❯`).
 
 ## Busy signature
 
@@ -75,7 +78,7 @@ cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ enc
 | `bin/fm-spawn.sh` | `launch_template` cline case; `--model`/`--thinking` mapping; known-adapter allowlists |
 | `bin/fm-harness.sh` | `detect_own` ancestry match `*cline*` (comm + args) |
 | `bin/fm-tmux-lib.sh` | `FM_TMUX_CLINE_BUSY_REGEX_DEFAULT` + `case` arm |
-| `bin/backends/{herdr,cmux,orca}.sh` | `IDLE_RE` default extended with cline placeholders |
+| `bin/fm-composer-lib.sh` + `bin/backends/{herdr,cmux,orca}.sh` | shared `FM_COMPOSER_IDLE_RE_DEFAULT` covers cline placeholders (tmux + all backends); cmux/orca bare agent-glyph promotion reaches the borderless `❯` row |
 | `.agents/skills/harness-adapters/SKILL.md` | cline knowledge section |
 | `tests/fm-cline-harness.test.sh` | 12 behavior checks (all green) |
 
