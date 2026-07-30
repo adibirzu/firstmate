@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --provider records the subscription provider selected for a dispatch profile.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -88,7 +89,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend applies to every pair.
+#   source of truth; shared --scout/--harness/--provider/--model/--effort/--backend applies to every pair.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
@@ -169,10 +170,12 @@ fm_refuse_if_gate_agent
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 HARNESS_ARG=
+PROVIDER=
 MODEL=
 EFFORT=
 BACKEND_ARG=
 HARNESS_SET=0
+PROVIDER_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
@@ -185,6 +188,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
+      provider) PROVIDER=$a; PROVIDER_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
@@ -198,6 +202,8 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
+    --provider) want_value=provider ;;
+    --provider=*) PROVIDER=${a#--provider=}; PROVIDER_SET=1 ;;
     --model) want_value=model ;;
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
@@ -209,12 +215,17 @@ for a in "$@"; do
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
+[ "$PROVIDER_SET" -eq 0 ] || [ -n "$PROVIDER" ] || { echo "error: --provider requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
+esac
+case "$PROVIDER" in
+  ''|claude|codex|grok) ;;
+  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
 esac
 
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
@@ -375,6 +386,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   rc=0
   shared_args=()
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
+  [ -z "$PROVIDER" ] || shared_args+=(--provider "$PROVIDER")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
@@ -517,6 +529,15 @@ esac
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
+esac
+
+case "$HARNESS" in
+  kimi)
+    [ -z "$PROVIDER" ] || { echo "error: Kimi cannot carry a subscription routing provider" >&2; exit 1; }
+    ;;
+  claude|codex|grok)
+    [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || { echo "error: native harness $HARNESS requires provider $HARNESS" >&2; exit 1; }
+    ;;
 esac
 
 # pi-signed is an explicitly selected executable identity, not an alias that may
@@ -1459,6 +1480,7 @@ META_WINDOW=$T
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
+  [ -z "$PROVIDER" ] || echo "provider=$PROVIDER"
   echo "kind=$KIND"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
