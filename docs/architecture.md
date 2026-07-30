@@ -163,14 +163,14 @@ The intake and authority contract in `AGENTS.md` owns when separate scout resear
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
-The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, filters profile arrays for comparable task fit and reasoning class under the `AGENTS.md` section 4 intake boundary, resolves them through the `quota-array-dispatch` selector contract, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
+The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, filters profile arrays for comparable task fit and reasoning class under the `AGENTS.md` section 4 intake boundary, resolves them through the `quota-array-dispatch` selector contract, and passes only concrete `--harness`, `--provider`, `--model`, and `--effort` axes to `fm-spawn.sh`.
 The shell scripts validate the JSON shape and verified harness/effort combinations, but they do not parse task intent, match natural-language rules, or own array selection.
 The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 After Firstmate filters a matched array for task fit and reasoning class, `fm-dispatch-select.mjs` uses fresh metered evidence, excludes provider cooldowns, and rotates eligible subscriptions through private home-local state.
-That keeps spawn launch compatible across claude, codex, grok, pi, opencode, and kimi while preserving the requested profile for later audit.
+Static and explicit dispatch keep spawn launch compatible across claude, codex, grok, pi, opencode, and kimi, while automatic subscription arrays exclude Kimi and preserve the selected profile for later audit.
 
 ## Optional secondmates
 
