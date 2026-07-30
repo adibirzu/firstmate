@@ -227,7 +227,7 @@ For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected exec
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
-Scripts do not match those rules; firstmate chooses the best matching rule with judgment, filters an array to comparable task-fit and reasoning-class candidates, resolves that set through `bin/fm-dispatch-select.mjs` under the `quota-array-dispatch` contract, and passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+Scripts do not match those rules; firstmate chooses the best matching rule with judgment, filters an array to comparable task-fit and reasoning-class candidates, resolves that set through `bin/fm-dispatch-select.mjs` under the `quota-array-dispatch` contract, and passes the selected concrete `--harness`, `--provider`, `--model`, and `--effort` flags to `fm-spawn.sh`.
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
@@ -261,7 +261,7 @@ Both `use` and the optional top-level `default` accept either one profile object
 The single-object form stays fully backward-compatible, and every profile needs `harness`.
 Profile `provider`, `model`, and `effort` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
-Native `claude`, `codex`, and `grok` profiles establish the same-named provider without a redundant field.
+Native `claude`, `codex`, and `grok` profiles establish the same-named provider without a redundant field; when present, their provider must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
@@ -282,7 +282,7 @@ Unknown fields fail bootstrap validation instead of being ignored.
 
 Providers exposed by quota-axi, including Claude, Codex, and Grok, require fresh telemetry with a usable percentage above the reserve.
 The selector persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
-Verified rate-limit or quota-exhaustion evidence from a native task can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
+Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
 
 ## Fleet add-on (config/fleet-dir / config/accounts.json / FM_FLEET_*)
 

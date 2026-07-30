@@ -93,6 +93,17 @@ test_stale_unavailable_and_reserve_thresholds_fail_closed() {
   write_quota "$quota" auth_required 99 fresh 75
   out=$(run_select "$home" "$fakebin" "$quota" unavailable.json "$profiles" 2>/dev/null)
   [ "$(printf '%s\n' "$out" | jq -r .harness)" = codex ] || fail "fresh provider did not fail over around unavailable telemetry: $out"
+
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"claude","state":{"status":"fresh","stale":false},"quotaSemantics":{"effectiveAvailability":[{"status":"known","effectivePercentRemaining":90}]}},
+  {"provider":"codex","state":{"status":"fresh","stale":false},"windows":[{"percentRemaining":80}]}
+]}
+JSON
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" windowless.json '[{"harness":"claude"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "windowless telemetry must stop metered dispatch despite aggregate availability"
+  assert_contains "$out" "no usable live window percentage" "windowless telemetry refusal was unclear"
   pass "dispatch excludes stale, unavailable, and reserve-tight metered providers"
 }
 
@@ -120,6 +131,12 @@ test_verified_failure_creates_cooldown_and_failover() {
     "$SELECTOR" record-failure --provider codex --task no-evidence --now 1000 2>&1) || rc=$?
   expect_code 2 "$rc" "cooldown without evidence must be rejected"
   assert_contains "$out" "contains no rate-limit or quota-exhaustion evidence" "evidence refusal was unclear"
+
+  printf 'harness=pi\nprovider=claude\n' > "$home/state/pi-rate-task.meta"
+  printf 'failed: provider quota exhausted\n' > "$home/state/pi-rate-task.status"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    PATH="$fakebin:$BASE_PATH" "$SELECTOR" record-failure --provider claude --task pi-rate-task --now 1000 \
+    >/dev/null 2>&1 || fail "recorded non-native routing provider did not create cooldown"
   pass "verified provider failure creates cooldown and deterministic failover"
 }
 
@@ -134,7 +151,19 @@ test_invalid_profiles_and_settings_are_actionable() {
   out=$(run_select "$home" "$fakebin" "$quota" mismatch.json \
     '[{"harness":"kimi","model":"kimi-code/k3"}]' 2>&1) || rc=$?
   expect_code 2 "$rc" "Kimi must remain outside subscription dispatch"
-  assert_contains "$out" "provider identity is unresolved or unsupported for harness kimi" "Kimi exclusion was unclear"
+  assert_contains "$out" "Kimi is unsupported for subscription dispatch" "Kimi exclusion was unclear"
+
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" native-mismatch.json \
+    '[{"harness":"codex","provider":"claude"}]' 2>&1) || rc=$?
+  expect_code 2 "$rc" "native harness/provider mismatch must be rejected"
+  assert_contains "$out" "native harness codex requires provider codex" "native provider mismatch was unclear"
+
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" kimi-provider.json \
+    '[{"harness":"kimi","provider":"claude"}]' 2>&1) || rc=$?
+  expect_code 2 "$rc" "Kimi must remain unavailable even with another provider"
+  assert_contains "$out" "Kimi is unsupported for subscription dispatch" "Kimi provider override was unclear"
 
   printf '%s\n' '{"subscriptionRouting":{"reservePercent":100}}' > "$home/config/crew-dispatch.json"
   rc=0

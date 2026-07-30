@@ -59,9 +59,9 @@ Never use subscription state to silently replace that reasoning class.
 1. Reduce the matched rule or default to comparable candidates after model/provider discovery.
 2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
 3. Read its sanitized per-provider diagnostics and selected JSON profile.
-4. Pass only the selected `harness`, `model`, and `effort` axes to `fm-spawn.sh`; `provider` is routing evidence, not a spawn flag.
+4. Pass the selected `harness`, `provider`, `model`, and `effort` axes to `fm-spawn.sh`; it records `provider` as routing evidence without forwarding it to the harness CLI.
 5. If it exits 3, stop and report that no candidate has current dispatch-capacity evidence rather than choosing manually around the reserve, cooldown, or telemetry refusal.
-6. If a running native Claude, Codex, or Grok task records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
+6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
 7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.
 
 The selector accounts for every provider in sanitized diagnostics, rejects duplicate profiles, distributes eligible subscriptions by persisted least-recent use, and breaks an initial never-used tie with a home-stable hash independent of candidate array order.
