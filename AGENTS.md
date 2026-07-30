@@ -165,13 +165,14 @@ If static `config/crew-harness` or `config/secondmate-harness` names an unverifi
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
-Firstmate alone resolves a matched profile array: run `quota-axi --json` at that intake, evaluate every configured candidate against that current output, and choose with inspectable real headroom including quota-window pace.
-Account for every candidate; if any harness/model/provider relationship, applicable quota data, or interpretation cannot be established, stop and report that candidate instead of omitting it, guessing, falling back, or calling the result quota-informed.
+Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to the subscription-aware selector owned by `quota-array-dispatch` and `bin/fm-dispatch-select.mjs`.
+Account for every candidate; unresolved identity is a configuration error, while stale or unavailable capacity evidence makes only that provider ineligible and permits inspectable failover to another eligible candidate.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
 When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report the tight choice if that class cannot proceed.
-Break genuine headroom ties without array-order or harness bias.
-`quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
-Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the pace-aware selection procedure.
+Never bypass the configured reserve or evidence-backed cooldown; if no comparable candidate remains eligible, stop the dispatch.
+Kimi 0.29.1 remains outside automatic subscription dispatch because its guarded Herdr lifecycle exit was not deterministic after interrupt.
+`quota-axi` remains data-only, and no stale telemetry is dispatch capacity.
+Load `quota-array-dispatch` before choosing among a matched profile array; that skill owns the subscription-aware selection judgment boundary.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 

@@ -357,6 +357,7 @@ Grok's primary watcher protocol remains background-notify around `bin/fm-watch-a
 ## kimi (VERIFIED 2026-07-25, kimi 0.29.1)
 
 Kimi Code CLI launches from the absolute path resolved from `PATH`, falling back to the executable `$HOME/.kimi-code/bin/kimi`.
+Kimi 0.29.1 is excluded from automatic subscription dispatch because a guarded Herdr lifecycle run could not deterministically exit after interrupt; explicit Kimi work must not be selected by `fm-dispatch-select.mjs`.
 
 | Fact | Value |
 |---|---|
