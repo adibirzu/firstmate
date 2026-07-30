@@ -165,6 +165,12 @@ test_invalid_profiles_and_settings_are_actionable() {
   expect_code 2 "$rc" "Kimi must remain unavailable even with another provider"
   assert_contains "$out" "Kimi is unsupported for subscription dispatch" "Kimi provider override was unclear"
 
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" raw-kimi.json \
+    '[{"harness":"env X=1 kimi --auto","provider":"claude"}]' 2>&1) || rc=$?
+  expect_code 2 "$rc" "raw commands must remain outside subscription dispatch"
+  assert_contains "$out" "subscription dispatch requires a verified harness" "raw command exclusion was unclear"
+
   printf '%s\n' '{"subscriptionRouting":{"reservePercent":100}}' > "$home/config/crew-dispatch.json"
   rc=0
   out=$(run_select "$home" "$fakebin" "$quota" settings.json '[{"harness":"codex"}]' 2>&1) || rc=$?
