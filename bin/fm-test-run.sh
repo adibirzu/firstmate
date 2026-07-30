@@ -184,6 +184,10 @@ family_for_basename() {
     fm-backend-orca.test.sh)
       printf '%s\n' orca
       ;;
+    test_account_quota.sh|test_accounts.sh|test_fleet.sh|test_fleet_guards.sh|\
+    test_fleet_ops.sh|test_quota_surfaces.sh|test_spawn_account.sh)
+      printf '%s\n' federation
+      ;;
     *)
       printf '%s\n' unclassified
       ;;
@@ -215,6 +219,7 @@ snapshot-bearings
 cmux
 zellij
 orca
+federation
 unclassified
 EOF
 }
@@ -433,7 +438,7 @@ run_coverage_guard() {
   missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
   extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
-    log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
+    log "coverage guard: union of portable shards + portable serial + Herdr must equal the canonical test inventory"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
     [ -z "$extra" ] || { log "extra beyond inventory:"; printf '%s\n' "$extra" >&2; }
     rm -rf "$tmp"
@@ -521,11 +526,18 @@ PY
 all_repo_tests() {
   # Deterministic lexical order (same as bash glob expansion under LC_ALL=C).
   local f
-  # shellcheck disable=SC2035
-  for f in tests/*.test.sh; do
-    [ -f "$f" ] || continue
-    printf '%s\n' "$f"
-  done | LC_ALL=C sort
+  {
+    # shellcheck disable=SC2035
+    for f in tests/*.test.sh; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done
+    # shellcheck disable=SC2035
+    for f in tests/federation/test_*.sh; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done
+  } | LC_ALL=C sort
 }
 
 normalize_script_path() {
@@ -607,6 +619,12 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
+    tests/federation/test_*.sh)
+      printf '%s\n' federation
+      ;;
+    tests/federation/golden/*)
+      printf '%s\n' federation
+      ;;
     tests/*.test.sh)
       # A single test file change selects only that script via basename family
       # resolution in the caller; emit a marker family of __script__
@@ -663,6 +681,12 @@ families_for_changed_path() {
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
+      ;;
+    bin/fm-account-*|bin/fm-accounts-*|bin/fm-fleet.sh|bin/fm-fleet-join.sh|\
+    bin/fm-fleet-lib.sh|bin/fm-fleet-quota-lib.sh|bin/fm-fleet-wait.sh|\
+    bin/fm-spawn-acct.sh|bin/quota-copilot-usage.sh|bin/quota-cursor-usage.sh|\
+    bin/quota-sources/*|scripts/fleet-root-prereq.sh)
+      printf '%s\n' federation
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
