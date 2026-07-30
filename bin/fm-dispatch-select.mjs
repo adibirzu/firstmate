@@ -58,6 +58,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const PROVIDERS = new Set(['claude', 'codex', 'grok']);
+const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi']);
 const NATIVE_PROVIDER = new Map([
   ['claude', 'claude'],
   ['codex', 'codex'],
@@ -258,6 +259,9 @@ function parseProfiles(input) {
       if (Object.hasOwn(raw, field) && (typeof raw[field] !== 'string' || !raw[field])) {
         die(`dispatch profile ${field} must be a non-empty string when present`);
       }
+    }
+    if (!VERIFIED_HARNESSES.has(raw.harness)) {
+      die(`subscription dispatch requires a verified harness, not ${raw.harness}`);
     }
     if (raw.harness === 'kimi') die('Kimi is unsupported for subscription dispatch');
     const nativeProvider = NATIVE_PROVIDER.get(raw.harness);
