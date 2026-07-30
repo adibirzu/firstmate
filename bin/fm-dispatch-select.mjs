@@ -28,7 +28,7 @@
 //   lab. Explicit Kimi work remains outside automatic subscription dispatch.
 // - Rate-limit or quota-exhaustion evidence creates a provider cooldown.
 //   `record-failure` verifies the evidence in the named task's status file and
-//   verifies that task's recorded native harness before changing state.
+//   verifies that task's recorded routing provider before changing state.
 // - Eligible providers rotate by least-recent selection. Hash ordering breaks a
 //   never-used tie independently of candidate array order, then persisted
 //   last-use state gives exact round-robin behavior while the eligible set is
@@ -231,10 +231,10 @@ function profileProvider(profile) {
   return profile.provider || NATIVE_PROVIDER.get(profile.harness) || null;
 }
 
-function cleanProfile(profile) {
+function cleanProfile(profile, provider) {
   return {
     harness: profile.harness,
-    ...(profile.provider ? { provider: profile.provider } : {}),
+    provider,
     ...(profile.model ? { model: profile.model } : {}),
     ...(profile.effort ? { effort: profile.effort } : {}),
   };
@@ -259,11 +259,16 @@ function parseProfiles(input) {
         die(`dispatch profile ${field} must be a non-empty string when present`);
       }
     }
+    if (raw.harness === 'kimi') die('Kimi is unsupported for subscription dispatch');
+    const nativeProvider = NATIVE_PROVIDER.get(raw.harness);
+    if (nativeProvider && raw.provider && raw.provider !== nativeProvider) {
+      die(`native harness ${raw.harness} requires provider ${nativeProvider}`);
+    }
     const provider = profileProvider(raw);
     if (!provider || !PROVIDERS.has(provider)) {
       die(`provider identity is unresolved or unsupported for harness ${raw.harness}`);
     }
-    const profile = cleanProfile(raw);
+    const profile = cleanProfile(raw, provider);
     const identity = JSON.stringify({ ...profile, provider });
     if (seen.has(identity)) die('dispatch profile array contains a duplicate concrete profile');
     seen.add(identity);
@@ -322,12 +327,14 @@ function quotaCandidate(providerName, quota, now, settings) {
     const evidence = `${provider.state?.status || ''} ${provider.state?.error || ''}`;
     return { eligible: false, reason: RATE_LIMIT_RE.test(evidence) ? 'provider quota/rate-limit evidence' : 'provider telemetry not fresh', cooldownEvidence: RATE_LIMIT_RE.test(evidence) };
   }
-  const values = [];
+  const livePercentages = [];
   for (const window of provider.windows || []) {
     if (typeof window?.percentRemaining === 'number' && window.percentRemaining >= 0 && window.percentRemaining <= 100) {
-      values.push(window.percentRemaining);
+      livePercentages.push(window.percentRemaining);
     }
   }
+  if (!livePercentages.length) return { eligible: false, reason: 'provider telemetry has no usable live window percentage' };
+  const values = [...livePercentages];
   for (const availability of provider.quotaSemantics?.effectiveAvailability || []) {
     if (availability?.status === 'known' && typeof availability.effectivePercentRemaining === 'number' && availability.effectivePercentRemaining >= 0 && availability.effectivePercentRemaining <= 100) {
       values.push(availability.effectivePercentRemaining);
@@ -417,9 +424,16 @@ function taskMetaProvider(paths, task) {
   } catch {
     die('record-failure requires readable task meta and status evidence');
   }
-  const harness = meta.split('\n').find((line) => line.startsWith('harness='))?.slice('harness='.length);
-  const provider = NATIVE_PROVIDER.get(harness);
-  if (!provider) die('record-failure can verify only a native claude, codex, or grok task');
+  const entries = new Map(meta.split('\n').map((line) => {
+    const index = line.indexOf('=');
+    return index < 0 ? [line, ''] : [line.slice(0, index), line.slice(index + 1)];
+  }));
+  const harness = entries.get('harness');
+  const provider = entries.get('provider') || NATIVE_PROVIDER.get(harness);
+  if (!provider || !PROVIDERS.has(provider)) die('record-failure requires a recorded claude, codex, or grok routing provider');
+  const nativeProvider = NATIVE_PROVIDER.get(harness);
+  if (nativeProvider && provider !== nativeProvider) die(`task ${task} has mismatched native harness and provider metadata`);
+  if (harness === 'kimi') die('record-failure does not support Kimi tasks');
   if (!RATE_LIMIT_RE.test(status)) die('task status contains no rate-limit or quota-exhaustion evidence');
   return provider;
 }

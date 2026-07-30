@@ -332,6 +332,28 @@ test_active_dispatch_profile_allows_explicit_harness() {
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
 
+test_selected_provider_is_persisted_and_native_identity_is_enforced() {
+  local rec id out status
+  id=profile-provider-z13a
+  rec=$(make_spawn_case profile-provider pi "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness pi --provider claude --model anthropic/example)
+  status=$?
+  expect_code 0 "$status" "explicit selected provider should be persisted for a non-native route"
+  assert_grep "provider=claude" "$HOME_DIR/state/$id.meta" "meta missing selected routing provider"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    profile-provider-mismatch-z13a "$PROJ_DIR" --harness codex --provider claude)
+  status=$?
+  expect_code 1 "$status" "native provider mismatch must refuse before spawn"
+  assert_contains "$out" "native harness codex requires provider codex" "native provider mismatch was unclear"
+  assert_absent "$HOME_DIR/state/profile-provider-mismatch-z13a.meta" "mismatched native provider wrote metadata"
+  pass "selected routing providers persist and native identities stay aligned"
+}
+
 test_active_dispatch_profile_allows_positional_harness() {
   local rec id out status
   id=profile-positional-z14
@@ -681,6 +703,7 @@ test_unresolvable_relative_overrides_fail_loudly
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
+test_selected_provider_is_persisted_and_native_identity_is_enforced
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
