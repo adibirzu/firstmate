@@ -1441,13 +1441,21 @@ cursor_wait_for_trust_clear() {
   local pane i=0 max=${FM_CURSOR_TRUST_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} answered=0
   while [ "$i" -lt "$max" ]; do
     pane=$(cursor_capture)
-    if cursor_trust_dialog_present "$pane"; then
+    # Test the POSITIVE past-trust anchor FIRST: cursor's TUI never clears the
+    # 'Workspace Trust Required' frame from the terminal scrollback, so the
+    # dialog literal stays in every capture FOREVER with the live conversation
+    # rendering below it. Checking dialog_present first would make this elif
+    # success branch unreachable, exhaust the poll budget, and report a false
+    # failure while a trusted, working agent runs unsupervised. Only when the
+    # pane is NOT yet past the gate does the dialog-present branch fire and send
+    # the one-shot `a` keypress.
+    if cursor_pane_is_past_trust "$pane"; then
+      return 0
+    elif cursor_trust_dialog_present "$pane"; then
       if [ "$answered" -eq 0 ]; then
         spawn_send_literal "$T" a
         answered=1
       fi
-    elif cursor_pane_is_past_trust "$pane"; then
-      return 0
     fi
     i=$((i + 1))
     [ "$i" -ge "$max" ] || sleep "$interval"

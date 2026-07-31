@@ -152,6 +152,70 @@ test_cursor_trust_gate_wired() {
   pass "fm-spawn: cursor workspace-trust pre-seed + readiness gate are wired"
 }
 
+# Behavior cases use the repo's function-extraction + eval idiom
+# (tests/fm-backend-herdr.test.sh:1226, tests/fm-copilot-harness.test.sh:176):
+# the gate helpers are sed-extracted from fm-spawn.sh and eval'd in a disposable
+# `bash -c` subshell with cursor_capture()/spawn_send_literal() overridden by a
+# scripted fixture.
+CURSOR_GATE_SOURCE=$(sed -n '/^cursor_capture()/,/^cursor_spawn_fail()/p' "$SPAWN" | sed '$d')
+
+test_cursor_trust_gate_clears_with_leftover_dialog_in_scrollback() {
+  # Regression (BUG 1): cursor's TUI never clears the 'Workspace Trust Required'
+  # frame from the terminal scrollback, so the dialog literal stays in EVERY
+  # capture forever, with the live conversation rendering below it. The gate
+  # must test the POSITIVE past-trust anchor FIRST: a pane that shows BOTH the
+  # leftover dialog text AND past-trust evidence (idle composer / busy footer)
+  # is a SUCCESS, not a false failure.
+  local out sends send_log tmpd
+  tmpd=$(fm_test_tmproot cursor-trust-leftover)
+  mkdir -p "$tmpd"
+  send_log="$tmpd/sends"; : > "$send_log"
+  out=$(GATE_SOURCE="$CURSOR_GATE_SOURCE" SEND_LOG="$send_log" bash -c '
+    eval "$GATE_SOURCE"
+    T=fake:0
+    cursor_capture() {
+      # The dialog frame is retained in scrollback; below it the agent is past
+      # the gate (idle composer "→ Add a follow-up" and busy footer "ctrl+c to stop").
+      printf "%s\n" "Workspace Trust Required" "→ Add a follow-up" "ctrl+c to stop"
+    }
+    spawn_send_literal() { printf "%s %s\n" "$1" "$2" >> "$SEND_LOG"; }
+    FM_CURSOR_TRUST_POLLS=3
+    FM_CURSOR_POLL_INTERVAL=0
+    cursor_wait_for_trust_clear && printf cleared || printf timeout
+  ')
+  [ "$out" = cleared ] \
+    || fail "cursor_wait_for_trust_clear must succeed when past-trust evidence is present even with leftover dialog text in scrollback, got '$out'"
+  sends=$(wc -l < "$send_log")
+  [ "$sends" -eq 0 ] \
+    || fail "no keypress should be sent when the pane is already past trust, sent $sends: $(cat "$send_log")"
+  pass "cursor_wait_for_trust_clear: past-trust evidence with leftover dialog text succeeds with zero keypresses"
+}
+
+test_cursor_trust_gate_times_out_when_dialog_never_clears() {
+  # A pane that shows ONLY the dialog and never any past-trust evidence is a
+  # genuine failure: the gate sends the one-shot keypress then exhausts its
+  # poll budget and fails loudly (never hangs, never silently succeeds).
+  local out sends send_log tmpd
+  tmpd=$(fm_test_tmproot cursor-trust-timeout)
+  mkdir -p "$tmpd"
+  send_log="$tmpd/sends"; : > "$send_log"
+  out=$(GATE_SOURCE="$CURSOR_GATE_SOURCE" SEND_LOG="$send_log" bash -c '
+    eval "$GATE_SOURCE"
+    T=fake:0
+    cursor_capture() { printf "%s\n" "Workspace Trust Required"; }
+    spawn_send_literal() { printf "%s %s\n" "$1" "$2" >> "$SEND_LOG"; }
+    FM_CURSOR_TRUST_POLLS=3
+    FM_CURSOR_POLL_INTERVAL=0
+    cursor_wait_for_trust_clear && printf cleared || printf timeout
+  ')
+  [ "$out" = timeout ] \
+    || fail "cursor_wait_for_trust_clear must fail when the dialog never clears and no past-trust evidence appears, got '$out'"
+  sends=$(wc -l < "$send_log")
+  [ "$sends" -eq 1 ] \
+    || fail "the one-shot keypress must be sent exactly once while the dialog is up, sent $sends: $(cat "$send_log")"
+  pass "cursor_wait_for_trust_clear: dialog-only pane with no past-trust evidence sends one keypress then times out loudly"
+}
+
 # --- run --------------------------------------------------------------------
 test_cursor_launch_template_is_pinned
 test_existing_launch_templates_untouched
@@ -167,4 +231,6 @@ test_cursor_real_input_reads_pending
 test_shared_idle_default_covers_cursor
 test_cursor_glyph_is_promoted_and_safe
 test_cursor_trust_gate_wired
+test_cursor_trust_gate_clears_with_leftover_dialog_in_scrollback
+test_cursor_trust_gate_times_out_when_dialog_never_clears
 echo "ALL PASS: fm-cursor-agent-harness"
