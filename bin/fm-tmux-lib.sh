@@ -102,6 +102,18 @@ FM_TMUX_CLINE_BUSY_REGEX_DEFAULT='esc to cancel'
 # idle. Bare "Working" is deliberately NOT used because pi already owns "Working...".
 # Interrupt is Ctrl-C mid-turn; the session exit command is /quit.
 FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
+# copilot (GitHub Copilot CLI 1.0.75): the active-turn footer is a rotating
+# circle/quarter-phase spinner plus the literal text "Working esc interrupt",
+# optionally with a " · <size>" tool-output-size infix inserted between "Working"
+# and "esc interrupt" once a running tool call has produced output (verified via
+# tmux capture; docs/verification/copilot-adapter.md). The bare substring
+# "esc interrupt" alone is an EXACT collision with opencode's own busy anchor, so
+# a compound anchor is required: both "Working" and "esc interrupt" present, in
+# that order, on the same line, tolerating the optional infix in between. Neither
+# half alone matches any of the other eight harnesses' signatures. Interrupt is a
+# single Ctrl-C mid-turn (Esc is a no-op, unlike cline/cursor-agent); exit is
+# /exit.
+FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT='Working.*esc interrupt'
 
 fm_busy_lines_match() {  # [harness]
   local harness=${1:-} lines regex
@@ -118,6 +130,7 @@ fm_busy_lines_match() {  # [harness]
       kimi) regex=$FM_TMUX_KIMI_BUSY_REGEX_DEFAULT ;;
       cline) regex=$FM_TMUX_CLINE_BUSY_REGEX_DEFAULT ;;
       cursor-agent) regex=$FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT ;;
+      copilot) regex=$FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_TMUX_BUSY_REGEX_DEFAULT ;;
       *)
         # A supplied harness must never borrow another harness's signature.

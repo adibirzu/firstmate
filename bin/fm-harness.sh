@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -44,6 +44,11 @@ detect_own() {
   # It does NOT set CLAUDECODE despite being Claude-Code-compatible, so this marker
   # is unambiguous when firstmate runs natively on grok.
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
+  # copilot sets COPILOT_CLI=1 for its child/tool processes (verified, GitHub
+  # Copilot CLI 1.0.75; docs/verification/copilot-adapter.md). Obtained via a
+  # copilot-driven child shell write, never via the model pasting raw env
+  # output (it refuses that as a safety policy). Boolean, unambiguous.
+  [ "${COPILOT_CLI:-}" = "1" ] && { echo copilot; return; }
   # Layer 2: walk the parent chain and match the command name.
   local pid=$$ comm args
   for _ in 1 2 3 4 5 6 7 8; do
@@ -55,6 +60,7 @@ detect_own() {
       *grok*) echo grok; return ;;
       *cline*) echo cline; return ;;
       *cursor*) echo cursor-agent; return ;;
+      *copilot*) echo copilot; return ;;
       kimi) echo kimi; return ;;
       pi-signed) echo pi; return ;;
       pi) echo pi; return ;;
@@ -68,7 +74,19 @@ detect_own() {
           *grok*) echo grok; return ;;
           *cline*) echo cline; return ;;
           *cursor*) echo cursor-agent; return ;;
+          *copilot*) echo copilot; return ;;
           *" pi "*|*/pi) echo pi; return ;;
+        esac ;;
+      MainThread)
+        # GitHub Copilot CLI 1.0.75 is a standalone compiled (Bun) executable,
+        # not an interpreter script; /proc/<pid>/comm reports the runtime's
+        # internal main-thread name "MainThread", never "copilot" or "node"/
+        # "python" (verified live; docs/verification/copilot-adapter.md
+        # "Detection"). Same argv-substring fallback shape as the node/python
+        # case above, keyed on this observed comm value instead.
+        args=$(ps -o args= -p "$pid" 2>/dev/null)
+        case "$args" in
+          *copilot*) echo copilot; return ;;
         esac ;;
     esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')

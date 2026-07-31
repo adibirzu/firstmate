@@ -68,7 +68,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -455,7 +455,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -539,6 +539,37 @@ launch_template() {
     # readiness gate answers a residual dialog with `a` (covering the undocumented
     # long-path slug variant), failing the spawn loudly instead of hanging on the dialog.
     cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # copilot (GitHub Copilot CLI 1.0.75): `-i <prompt>` ("Start interactive mode
+    # and automatically execute this prompt") seeds AND auto-runs the first turn
+    # once the folder-trust dialog is cleared (verified via tmux capture; see
+    # docs/verification/copilot-adapter.md) - the same argv-seed pattern as
+    # claude/codex/cline/cursor-agent, not kimi's bare-launch+inject. `--allow-all`
+    # (== --yolo; the non-jargon spelling is used for diff legibility) is the
+    # targeted equivalent of claude's --dangerously-skip-permissions. `--no-ask-user`
+    # additionally disables the ask_user tool: a live test with a deliberately
+    # underspecified brief did NOT stall without it, but it is included anyway as a
+    # zero-downside defensive flag - there is no attended human to answer ask_user
+    # in a supervised crewmate pane. Turn-end is observed by the pane classifier (the
+    # `Working.*esc interrupt` busy footer clears and the composer returns to its
+    # bare `❯` idle glyph), so no launch-side turn-end placeholder is needed. Effort
+    # maps to --reasoning-effort (see the effort helper below), accepting the full
+    # shared low|medium|high|xhigh|max vocabulary with no tier omitted.
+    # FOLDER TRUST: a genuinely fresh worktree is never on copilot's persistent
+    # allow-list, so the blocking "Confirm folder trust" dialog above appears on
+    # every launch into it, and no CLI flag bypasses it (--allow-all/--allow-all-*
+    # and the untested --add-dir were all probed and disproved - see
+    # docs/verification/copilot-adapter.md "Trust / permission gate"). fm-spawn
+    # clears it with a post-launch readiness gate ONLY: while the dialog is present,
+    # send a single default-focus Enter (session-scoped trust, "Yes"); once the pane
+    # reaches the busy footer or idle status bar, proceed; on budget exhaustion, fail
+    # the spawn loudly (copilot_spawn_fail). Deliberately NO pre-seed of that
+    # allow-list, unlike cursor-agent's per-project marker: copilot's only pre-seed
+    # target is a single shared, global, credential-bearing JSONC config file, with
+    # no delegated writer and no config-dir override to isolate it - the
+    # keystroke-only mechanism gets the same guarantee with zero writes to the
+    # operator's home (see copilot_wait_for_trust_clear below for the full
+    # reasoning).
+    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -676,7 +707,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -722,6 +753,20 @@ effort_flag_for_harness() {
       # tier, so omit max rather than passing an unsupported value.
       case "$effort" in
         low|medium|high|xhigh) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    copilot)
+      # copilot 1.0.75 accepts --effort, --reasoning-effort <level> with the
+      # FULLEST vocabulary of any adapter: none|minimal|low|medium|high|xhigh|max
+      # (verified via --help AND a zero-quota pre-flight validation probe:
+      # `--reasoning-effort bogus-tier` was rejected with exit 1 before any API
+      # call, listing exactly those seven choices). firstmate's shared axis
+      # (low|medium|high|xhigh|max) is a full subset, so all five tiers pass
+      # through - no tier needs omitting, unlike cline (no max) or codex/grok
+      # (lower ceilings). --reasoning-effort (long form) is used over the
+      # --effort alias for greppability, matching codex's spelling convention.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1415,6 +1460,71 @@ cursor_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+copilot_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+copilot_trust_dialog_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Confirm folder trust'
+}
+
+# Past the trust gate: EITHER the busy footer (the seeded `-i` prompt
+# auto-runs the instant trust clears, per docs/verification/copilot-adapter.md
+# "Launch", so the pane normally goes straight to busy) OR the idle status
+# bar. Deliberately NOT the bare idle-composer glyph (U+276F): the trust
+# dialog's own option cursor renders with that exact same codepoint
+# (docs/verification/copilot-adapter.md "Trust / permission gate"), so a
+# bare-glyph anchor would match the dialog itself and report "past trust"
+# while it is still up (T3 has a dedicated regression fence for this). The
+# busy literal is necessarily duplicated from FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT
+# (bin/fm-tmux-lib.sh) because fm-spawn.sh does not source fm-tmux-lib.sh; a
+# drift fence (T3.4) pins the two together. The `\?` in the idle alternate is
+# mandatory - unescaped it is an ERE quantifier and silently stops matching a
+# literal `?`.
+copilot_pane_is_past_trust() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Eq 'Working.*esc interrupt|/ commands · \? help'
+}
+
+# Clear copilot's blocking folder-trust dialog. There is deliberately NO
+# pre-seed of copilot's persistent trust allow-list here (unlike cursor's
+# per-harness setup below): that allow-list lives in a single shared, global
+# JSONC config file that also holds the operator's live OAuth credential, has
+# no delegated writer (`copilot config` is a help topic, not a mutating
+# subcommand) and no config-directory override to isolate a test copy - so
+# any pre-seed write path would have to satisfy atomicity, byte-for-byte
+# header preservation, and concurrency-safety forever, on every dispatch, for
+# a benefit ("maybe skip a dialog this poll already handles") that does not
+# justify the risk to a credential. See docs/verification/copilot-adapter.md
+# "Trust / permission gate" (options analysis) for the full reasoning. This
+# keystroke-only mechanism therefore never opens, reads, or writes that
+# file at all: zero blast radius on the operator's home, by construction.
+#
+# Default focus on the dialog is option 1 ("Yes", session-scoped trust,
+# verified) so a single Enter clears it; answered at most once (S7) - a
+# repeat Enter after trust clears would land in the composer as stray text.
+copilot_wait_for_trust_clear() {
+  local pane i=0 max=${FM_COPILOT_TRUST_POLLS:-60} interval=${FM_COPILOT_POLL_INTERVAL:-0.5} answered=0
+  while [ "$i" -lt "$max" ]; do
+    pane=$(copilot_capture)
+    if copilot_trust_dialog_present "$pane"; then
+      if [ "$answered" -eq 0 ]; then
+        spawn_send_key "$T" Enter
+        answered=1
+      fi
+    elif copilot_pane_is_past_trust "$pane"; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+copilot_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # Firstmate acquires the worktree itself rather than sending `treehouse get` to
   # the pane, because the pool has to land on the repo's own filesystem and the
@@ -1730,6 +1840,12 @@ spawn_send_key "$T" Enter
 if [ "$HARNESS" = cursor-agent ]; then
   if ! cursor_wait_for_trust_clear; then
     cursor_spawn_fail "cursor-agent did not clear the workspace-trust gate to a ready or working pane"
+    exit 1
+  fi
+fi
+if [ "$HARNESS" = copilot ]; then
+  if ! copilot_wait_for_trust_clear; then
+    copilot_spawn_fail "copilot did not clear the folder-trust gate to a ready or working pane"
     exit 1
   fi
 fi
