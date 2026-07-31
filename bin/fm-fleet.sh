@@ -11,6 +11,7 @@
 #   fm-fleet.sh queue   <id> <scope> <desc...>
 #   fm-fleet.sh claim   <id> <operator>
 #   fm-fleet.sh handoff <id> <to-operator>
+#   fm-fleet.sh drain   <id>                 (migrate a drained operator's item to one with headroom; cap + "fleet out of tokens" state)
 #   fm-fleet.sh reap    [ttl-seconds]        (default 86400)
 #   fm-fleet.sh route   <scope>              (echoes owning operator)
 #   fm-fleet.sh budget                       (exit 0 iff local headroom >= FM_FLEET_QUOTA_MIN
@@ -48,6 +49,7 @@ case "$cmd" in
   queue)   id=$1; scope=$2; shift 2; fm_fleet_queue "$DIR" "$id" "$scope" "$*" ;;
   claim)   fm_fleet_claim "$DIR" "$1" "$2" ;;
   handoff) fm_fleet_handoff "$DIR" "$1" "$2" ;;
+  drain)   fm_fleet_drain_handoff "$DIR" "$1" ;;
   reap)    fm_fleet_reap "$DIR" "${1:-86400}" ;;
   route)   fm_fleet_route "$DIR" "$1" ;;
   status)  fm_fleet_status "$DIR" ;;
@@ -59,5 +61,5 @@ case "$cmd" in
   quota)     fm_fleet_quota_report ;;
   models)    fm_fleet_models_report ;;
   pick)      fm_fleet_pick_surface "${1:?usage: fm-fleet.sh pick <model-family>}" ;;
-  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|reap|route|budget|quota|models|pick|status|view" >&2; exit 1 ;;
+  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|drain|reap|route|budget|quota|models|pick|status|view" >&2; exit 1 ;;
 esac

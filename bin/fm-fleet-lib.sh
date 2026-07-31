@@ -278,6 +278,68 @@ fm_fleet_handoff() { # dir id to_operator
   return $rc
 }
 
+# Cross-operator overflow on token drain (Task 18). When the operator holding
+# <id> is drained (published quota below FM_FLEET_QUOTA_MIN, so route no longer
+# considers them eligible), hand the item to an operator whose published quota
+# shows headroom, reusing fm_fleet_route's priority (scope-owner >
+# overflow-designated > any-with-headroom). A per-item handoff counter
+# (handoffs:N, tracked in the item line) is capped at FM_FLEET_HANDOFF_CAP
+# (default 3) so a fully-drained fleet cannot ping-pong an item forever; on
+# exhaustion (cap reached or no operator has headroom) the item is left with an
+# explicit status:drained ("fleet out of tokens") state rather than silently
+# dropping it. Reuses the route/handoff stamping, not a new mechanism.
+# Prints the chosen operator on a handoff, "drained" on exhaustion, "unchanged"
+# if the holder still has headroom. Returns 0 on a decision, 1 if the item absent.
+fm_fleet_drain_handoff() { # dir id
+  local dir=$1 id=$2 holder scope to ts hc rc=1 handoffs
+  hc=${FM_FLEET_HANDOFF_CAP:-3}
+  fm_fleet_lock "$dir" || return 1
+  if grep -q "\[id:$id\]" "$dir/backlog.md"; then
+    rc=0
+    scope=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/scope:[^ |]+/)){print substr($0,RSTART+6,RLENGTH-6);exit} print ""; exit }' "$dir/backlog.md")
+    holder=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/claimed-by:[^ @]+/)){print substr($0,RSTART+11,RLENGTH-11);exit} print ""; exit }' "$dir/backlog.md")
+    handoffs=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/handoffs:[0-9]+/)){print substr($0,RSTART+9,RLENGTH-9);exit} print "0"; exit }' "$dir/backlog.md")
+    handoffs=${handoffs:-0}
+    to=$(fm_fleet_route "$dir" "$scope")
+    ts=$(fm_fleet_now)
+    if [ -n "$holder" ] && [ "$to" = "$holder" ]; then
+      # The holder still has headroom (route returned them): no migration needed.
+      echo "unchanged"
+    elif [ -n "$to" ] && [ "$handoffs" -lt "$hc" ]; then
+      # Hand off to an operator with headroom; stamp claimed-by + bump handoffs.
+      awk -v id="$id" -v to="$to" -v ts="$ts" -v h="$((handoffs + 1))" '
+        $0 ~ ("\\[id:" id "\\]") {
+          if ($0 ~ /claimed-by:[^ ]+/) sub(/claimed-by:[^ ]+/, "claimed-by:" to "@" ts)
+          else sub(/status:[a-z-]+/, "claimed-by:" to "@" ts " status:claimed")
+          if ($0 ~ /handoffs:[0-9]+/) sub(/handoffs:[0-9]+/, "handoffs:" h)
+          else $0=$0" handoffs:"h
+          print; next
+        }
+        { print }
+      ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+      fm_fleet_event "$dir" "$to" handoff "$id" "drain-overflow"
+      fm_fleet_commit "$dir" "fleet: drain-overflow handoff $id to $to (handoffs:$((handoffs + 1)))"
+      echo "$to"
+    else
+      # No operator with headroom or the per-item cap is reached: explicit
+      # "fleet out of tokens" (status:drained) instead of a silent drop.
+      awk -v id="$id" '
+        $0 ~ ("\\[id:" id "\\]") {
+          sub(/claimed-by:[^ ]+ /, "", $0)
+          if ($0 !~ /status:drained/) sub(/status:[a-z-]+/, "status:drained")
+          print; next
+        }
+        { print }
+      ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+      fm_fleet_event "$dir" "-" drain "$id" "fleet out of tokens"
+      fm_fleet_commit "$dir" "fleet: $id marked drained (fleet out of tokens)"
+      echo "drained"
+    fi
+  fi
+  fm_fleet_unlock
+  return $rc
+}
+
 # Requeue stale claims: items still status:claimed whose claimed-by:@<ts> is older
 # than ttl seconds go back to Queued (never-started work from an offline operator).
 # status:in-flight items are left alone.
@@ -318,7 +380,11 @@ fm_fleet_reap() { # dir ttl_seconds
 
 # Echo the operator who should own a task of the given scope.
 # scope-primary: the online operator whose scope column contains the scope.
-# overflow: if none online, the operator whose scope contains "overflow".
+# overflow: if the scope-owner is unavailable, the operator whose scope contains "overflow".
+# any-headroom: if neither scope-owner nor the overflow-designated operator is
+#   eligible, the first eligible operator with published headroom (Task 18:
+#   cross-operator overflow on token drain - a drained scope-owner's work
+#   migrates to ANY operator with headroom, not only the designated fallback).
 # Echo the operator who should own a task of the given scope.
 # An operator is ELIGIBLE only when all three hold:
 #   status:online AND heartbeat fresh (seen within FM_FLEET_HEARTBEAT_TTL, default 90s)
@@ -326,7 +392,9 @@ fm_fleet_reap() { # dir ttl_seconds
 # Freshness + quota are self-healing: a crashed firstmate stops heartbeating and a
 # low-headroom operator publishes it, so routing skips both without cross-user auth.
 # 5-column legacy rows (no seen/quota) skip the freshness/quota checks (back-compat).
-# scope-primary first; else the overflow operator. One awk pass over operators.md.
+# Priority: scope-owner first; else the overflow-designated operator; else any
+# eligible operator with headroom; else empty (caller may mark "fleet out of tokens").
+# One awk pass over operators.md.
 fm_fleet_route() { # dir scope
   local dir=$1 scope=$2 now ttl floor
   now=$(date -u +%s); ttl=${FM_FLEET_HEARTBEAT_TTL:-90}; floor=${FM_FLEET_QUOTA_MIN:-5}
@@ -342,10 +410,11 @@ fm_fleet_route() { # dir scope
       op=trim($2); sc=$3; gsub(/ /,"",sc); st=trim($6); seen=trim($7); q=trim($8)
       if(op=="operator") next
       if(!eligible(st,seen,q)) next
+      if(any=="") any=op
       if(owner=="" && (","sc",") ~ (","s",")) owner=op
       if(ov=="" && (","sc",") ~ /,overflow,/) ov=op
     }
-    END{ print (owner!=""?owner:ov) }
+    END{ print (owner!=""?owner:(ov!=""?ov:any)) }
   ' "$dir/operators.md"
 }
 
