@@ -93,3 +93,17 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-x-dismiss.sh`        | Dismiss a skipped X-mode mention at the relay without replying                       |
 | `fm-x-link.sh`           | Link a spawned task to its originating X-mode mention in task meta                   |
 | `fm-x-followup.sh`       | Detect, post, and cap completion follow-ups for an X-mode-linked task                |
+| `fm-fleet.sh`            | Federated multi-operator coordination CLI over the shared fleet KB, plus per-surface quota, models, and failover pick verbs (docs/fleet-quickstart.md) |
+| `fm-fleet-lib.sh`        | Shared federation KB helpers: atomic claim/lock, routing, usability guards, operator lifecycle |
+| `fm-fleet-quota-lib.sh`  | Per-surface quota/pace reporting, model->surfaces map, failover pick, and budget/conservation-pressure gate (leaf library sourced by fm-fleet-lib.sh) |
+| `fm-fleet-join.sh`       | One-command operator onboarding into a shared fleet                                  |
+| `fm-fleet-wait.sh`       | Token-free bash block-until-claimed wait that heartbeats while idle (docs/fleet-token-economy.md) |
+| `fm-accounts-lib.sh`     | Multi-account registry resolution, validation, and quota-aware account pick          |
+| `fm-account-env.sh`      | Apply a registered account's auth isolation as a launch command or process environment |
+| `fm-account-exec.sh`     | Direct account-isolated launch: read the key_file into the child's environment, then exec |
+| `fm-spawn-acct.sh`       | Per-spawn `--account` axis for `fm-spawn.sh` via its raw-launch escape hatch         |
+| `fm-accounts-prereq.sh`  | User-scoped detect-or-install of the LLM CLIs the account registry needs             |
+| `quota-copilot-usage.sh` | Authed Copilot headroom reader: minimum percent remaining across metered quota buckets |
+| `quota-cursor-usage.sh`  | Authed Cursor headroom reader via the CLI's own stored access token                  |
+| `quota-sources/copilot.sh` | Copilot surface row for `fm-fleet.sh quota`, superseding the stale native probe    |
+| `quota-sources/cursor.sh`  | Cursor surface row for `fm-fleet.sh quota` from an operator-supplied authed reader |

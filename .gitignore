@@ -18,3 +18,7 @@ config/x-mode.env
 config/cmux-socket-password
 config/wedge-alarm
 config/herdr-presentation-spaces
+config/fleet-dir
+config/accounts.json
+config/quota-overrides.json
+config/model-surfaces.json
