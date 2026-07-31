@@ -273,6 +273,72 @@ test_workspace_label_different_secondmates_get_different_labels() {
   pass "fm_backend_herdr_workspace_label: two different secondmate homes get two different, non-colliding labels"
 }
 
+# --- workspace_label: per-BERTH resolution (concurrent per-project sessions) --
+# A berthed primary home must land in its OWN space, otherwise every concurrent
+# project session shows up as another identically-named "firstmate" workspace
+# and the spaces sidebar cannot tell them apart.
+
+label_for() {  # <home> [berth] -> the resolved workspace label
+  FM_HOME="$1" FM_BERTH="${2-}" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_label' "$ROOT"
+}
+
+test_workspace_label_berthed_primary_appends_berth() {
+  local home
+  home="$TMP_ROOT/berth-primary"; mkdir -p "$home"
+  out=$(label_for "$home" acme-web)
+  [ "$out" = "firstmate@acme-web" ] || fail "a berthed primary home should resolve to 'firstmate@<berth>', got '$out'"
+  pass "fm_backend_herdr_workspace_label: a berthed primary home appends its berth"
+}
+
+# "firstmate-<id>" is the LEGACY secondmate workspace format, never migrated
+# automatically, and herdr enforces no label uniqueness - so a berth must not be
+# able to impersonate one of those leftovers.
+test_workspace_label_berth_cannot_collide_with_legacy_secondmate() {
+  local home
+  home="$TMP_ROOT/berth-legacy"; mkdir -p "$home"
+  out=$(label_for "$home" sshhip-h7)
+  [ "$out" != "firstmate-sshhip-h7" ] || fail "a berth label must not match the legacy 'firstmate-<id>' secondmate format"
+  pass "fm_backend_herdr_workspace_label: a berth cannot collide with the legacy secondmate label format"
+}
+
+test_workspace_label_unberthed_primary_is_unchanged() {
+  local home
+  home="$TMP_ROOT/berth-primary-none"; mkdir -p "$home"
+  [ "$(label_for "$home" "")" = "firstmate" ] || fail "an empty FM_BERTH must not change the label"
+  [ "$(label_for "$home")" = "firstmate" ] || fail "an unset FM_BERTH must not change the label"
+  pass "fm_backend_herdr_workspace_label: an unberthed primary home is byte-identical to pre-berth behavior"
+}
+
+test_workspace_label_two_berths_do_not_collide() {
+  local home out1 out2
+  home="$TMP_ROOT/berth-two"; mkdir -p "$home"
+  out1=$(label_for "$home" alpha)
+  out2=$(label_for "$home" beta)
+  [ "$out1" != "$out2" ] || fail "two berths in one home must not share a workspace label ($out1)"
+  pass "fm_backend_herdr_workspace_label: two berths in one home get two non-colliding labels"
+}
+
+test_workspace_label_secondmate_ignores_berth() {
+  local home
+  home="$TMP_ROOT/berth-secondmate"; mkdir -p "$home"
+  printf 'sshhip-h7\n' > "$home/.fm-secondmate-home"
+  out=$(label_for "$home" acme-web)
+  [ "$out" = "2ndmate-sshhip-h7" ] || fail "a secondmate label must not carry the primary's berth, got '$out'"
+  pass "fm_backend_herdr_workspace_label: a secondmate home ignores FM_BERTH"
+}
+
+test_workspace_label_malformed_berth_falls_back() {
+  local home bad
+  home="$TMP_ROOT/berth-malformed"; mkdir -p "$home"
+  for bad in "../escape" "a/b" ".hidden" 'semi;colon' '$(id)' "$(printf 'a%.0s' $(seq 1 65))"; do
+    out=$(label_for "$home" "$bad" 2>/dev/null)
+    [ "$out" = "firstmate" ] || fail "a malformed FM_BERTH ('$bad') must fall back to 'firstmate', got '$out'"
+  done
+  out=$(label_for "$home" "a/b" 2>&1 >/dev/null)
+  assert_contains "$out" "not a valid berth name" "a malformed berth warns rather than failing silently"
+  pass "fm_backend_herdr_workspace_label: a malformed FM_BERTH warns and falls back to the plain label"
+}
+
 # --- fm_backend_herdr_cli: session targeting (2026-07-02 incident fix) -------
 
 test_cli_helper_sets_env_and_appends_trailing_session_flag() {
@@ -3864,6 +3930,12 @@ test_workspace_label_secondmate_home_uses_marker_id
 test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
+test_workspace_label_berthed_primary_appends_berth
+test_workspace_label_berth_cannot_collide_with_legacy_secondmate
+test_workspace_label_unberthed_primary_is_unchanged
+test_workspace_label_two_berths_do_not_collide
+test_workspace_label_secondmate_ignores_berth
+test_workspace_label_malformed_berth_falls_back
 test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_launcher_identity_absent_without_a_herdr_pane
 test_launcher_identity_absent_when_herdr_env_alone_is_set

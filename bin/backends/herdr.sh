@@ -118,19 +118,52 @@ FM_BACKEND_HERDR_SECONDMATE_MARKER=".fm-secondmate-home"
 # No send, capture, Treehouse, or general task-ownership path reads it.
 FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX=".herdr-presentation"
 
+# fm_backend_herdr_berth_suffix: the "-<berth>" tail a primary home's workspace
+# label carries while this session is berthed, or empty. FM_BERTH is exported by
+# bin/fm-berth.sh (which owns berth mechanics and validates the name); this
+# re-validates because FM_BERTH is an ordinary env var a hand-run session could
+# set to anything, and the value becomes part of a workspace label used for
+# lookup. A malformed value warns and yields no suffix rather than refusing: the
+# callers below capture stdout and never check exit status, and falling back to
+# the plain home label is exactly the pre-berth behavior - never worse, just less
+# distinguishable. Task identity never depends on this; a task is always found by
+# its own "fm-<id>" TAB label.
+fm_backend_herdr_berth_suffix() {
+  local berth=${FM_BERTH:-} bad=
+  [ -n "$berth" ] || return 0
+  case "$berth" in
+    .*|*[!A-Za-z0-9._-]*) bad=1 ;;
+  esac
+  [ "${#berth}" -le 64 ] || bad=1
+  if [ -n "$bad" ]; then
+    printf 'warning: FM_BERTH=%s is not a valid berth name; using this home'\''s plain workspace label\n' "$berth" >&2
+    return 0
+  fi
+  printf '@%s' "$berth"
+}
+
 # fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
-# label (docs/herdr-backend.md "Default task container shape"). The PRIMARY home (no
-# secondmate marker) resolves to the constant "firstmate", byte-identical to
-# every pre-existing task's recorded label - no forced migration. A SECONDMATE
-# home resolves to "2ndmate-<secondmate-id>", so its tasks land in their own
-# workspace, obviously distinguishable from the primary's (and from every
-# other secondmate's) in herdr's spaces sidebar. Read fresh from FM_HOME on
-# every call rather than cached at source time: FM_HOME is the home's own
-# durable identity, not env plumbing threaded through a call chain, so the
-# label is automatically stable across every respawn/recovery for the life of
-# that home. fm-spawn.sh briefly shadows FM_HOME to a secondmate's own home
-# when the PRIMARY spawns that secondmate (its own process's FM_HOME still
-# names the primary at that point) - see fm-spawn.sh's herdr case arm.
+# label (docs/herdr-backend.md "Default task container shape"). An UNBERTHED
+# PRIMARY home (no secondmate marker) resolves to the constant "firstmate",
+# byte-identical to every pre-existing task's recorded label - no forced
+# migration. A BERTHED primary home appends its berth, "firstmate@<berth>", so
+# concurrent per-project sessions in one home occupy visibly separate spaces
+# instead of several identically-named "firstmate" workspaces nobody can tell
+# apart. The "@" separator is deliberate: "firstmate-<id>" is the LEGACY
+# secondmate workspace format (docs/herdr-backend.md "Watching and task
+# containers"), which is never migrated automatically, and herdr enforces no
+# label uniqueness - a dash would make a berth indistinguishable from one of
+# those leftovers. A SECONDMATE home resolves to "2ndmate-<secondmate-id>", so its tasks
+# land in their own workspace, obviously distinguishable from the primary's (and
+# from every other secondmate's) in herdr's spaces sidebar. The berth is
+# deliberately NOT applied to that arm: a berth is a slice of the PRIMARY's own
+# session, and fm-spawn.sh briefly shadows FM_HOME to a secondmate's own home
+# when the primary spawns that secondmate (its own process's FM_HOME still names
+# the primary at that point, and would still carry the primary's FM_BERTH) - see
+# fm-spawn.sh's herdr case arm. Read fresh from FM_HOME on every call rather than
+# cached at source time: FM_HOME is the home's own durable identity, not env
+# plumbing threaded through a call chain, so the label is automatically stable
+# across every respawn/recovery for the life of that home.
 fm_backend_herdr_workspace_label() {
   local marker="$FM_HOME/$FM_BACKEND_HERDR_SECONDMATE_MARKER" id
   if [ -f "$marker" ]; then
@@ -140,7 +173,7 @@ fm_backend_herdr_workspace_label() {
       return 0
     fi
   fi
-  printf 'firstmate'
+  printf 'firstmate%s' "$(fm_backend_herdr_berth_suffix)"
 }
 
 # fm_backend_herdr_cli: run `herdr <args...>` scoped to <session>, setting

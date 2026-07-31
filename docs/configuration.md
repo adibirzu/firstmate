@@ -23,6 +23,16 @@ Wake, watcher, away-mode, and X-specific state mechanics remain with their named
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
 
+## Session berths (config/berths)
+
+A berth is one project's private slice of `state/` inside a single home, so one home can run several concurrent sessions - one per project - without them contending for the same session lock, wake queue, or task records.
+Berths are opt-in and inert by default: without the gitignored `config/berths` flag file every `bin/fm-berth.sh` subcommand refuses and the home behaves exactly as a single-session home always has.
+`bin/fm-berth.sh` and its `--help` own the exact subcommands, the berth-name rules, and the emitted environment.
+
+A berth redirects only `state/`, through the pre-existing `FM_STATE_OVERRIDE`; `data/`, `config/`, and `projects/` stay shared home-wide because the backlog, captain preferences, and learnings belong to the home rather than to any one project.
+Isolation is therefore enforced by the same session lock as always, simply resolved per berth instead of per home, so a single berth still admits exactly one live session.
+`FM_BERTH` names the active berth for the rest of that session and is what the herdr adapter appends to a primary home's workspace label, so concurrent project sessions occupy visibly separate spaces instead of several identically-named `firstmate` workspaces.
+
 ## Pi Calm preference (config/calm)
 
 The Pi Calm extension stores the captain's home-local presentation choice in gitignored `config/calm` under the effective Firstmate home, resolved from `FM_HOME`, then `FM_ROOT_OVERRIDE`, then the tracked code root derived from the extension path, or under `FM_CONFIG_OVERRIDE` when that test and specialized-setup override is present.
@@ -185,7 +195,7 @@ When `FM_HOME` is unset, it also behaves as the old whole-root override.
 `FM_STATE_OVERRIDE`, `FM_DATA_OVERRIDE`, `FM_PROJECTS_OVERRIDE`, and `FM_CONFIG_OVERRIDE` override individual operational directories for tests and specialized harness setup.
 Before `fm-brief.sh`, `fm-spawn.sh`, or `fm-afk-launch.sh` persists a path or passes it to another process, it resolves each applicable relative `FM_HOME`, `FM_STATE_OVERRIDE`, or `FM_DATA_OVERRIDE` directory against the caller's working directory, preserves absolute spellings unchanged, and rejects an unresolvable relative directory with the offending variable named.
 Bootstrap applies the same relative `FM_HOME` resolution only when embedding that home in the generated X-mode poll shim; other transient consumers retain their existing shell-relative behavior.
-For the herdr backend, `FM_HOME` also determines the workspace label used by the adapter.
+For the herdr backend, `FM_HOME` also determines the workspace label used by the adapter, and a berthed primary home appends its berth to that label.
 For the zellij backend, `FM_HOME` does not split containers, but it determines the readable home prefix embedded in visible tab titles; use `FM_ZELLIJ_SESSION` when a separate zellij session is needed.
 The full zellij home label also includes a short hash of the resolved `FM_ROOT` path.
 For the cmux backend, `FM_CONFIG_OVERRIDE` overrides where `config/cmux-socket-password` is read from, while `FM_HOME` determines the default config path and readable home prefix embedded in workspace titles.
@@ -437,6 +447,7 @@ FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
+FM_BERTH=                # active session berth; set by `eval "$(bin/fm-berth.sh env <project>)"`, appended to the herdr workspace label
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for the Linux process-identity read in fm-wake-lib.sh, mainly for tests
 FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux support ship/scout spawns, codex-app is not accepted
 HERDR_SESSION=default  # herdr-only: named session for normal backend ops; not enough for destructive cleanup (docs/herdr-backend.md)
