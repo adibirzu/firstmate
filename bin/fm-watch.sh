@@ -181,19 +181,73 @@ hash_pane() {
 # verdict returns 0: idle, unknown, and dead all return 1, so a converted
 # adapter whose semantic state is missing, malformed, stale, or unverified is
 # treated as not-provably-working and surfaces rather than being absorbed.
-# <tail40> is the same bounded capture already read for hashing and is
-# consumed only by the Grok-scoped fallback inside the contract.
+# <tail40> is the same bounded capture already read for hashing and is consumed
+# by the contract's scoped rendered fallback paths.
 window_is_busy() {  # <window> <tail40>
-  local w=$1 tail40=$2 task meta verdict
-  task=$(window_to_task "$w" "$STATE")
-  meta="$STATE/$task.meta"
-  if [ -n "$task" ] && [ -f "$meta" ]; then
-    verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE" "$tail40")
+  local w=$1 tail40=$2 backend harness task meta verdict state source lines
+  local bs key now native_max since
+  backend=$(window_backend "$w")
+  harness=$(window_harness "$w")
+  if command -v window_to_task >/dev/null 2>&1; then
+    task=$(window_to_task "$w" "$STATE")
   else
-    verdict=$(fm_busy_classify "$(window_backend "$w")" "$w" "$(window_harness "$w")" \
-      "${task:-unknown}" "$STATE" "$tail40")
+    task=
   fi
-  [ "${verdict%% *}" = busy ]
+  meta="$STATE/$task.meta"
+  key=${w//:/_}; key=${key//\//_}; key=${key//./_}
+
+  if command -v fm_busy_classify >/dev/null 2>&1; then
+    if [ -n "$task" ] && [ -f "$meta" ]; then
+      verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE" "$tail40")
+    else
+      verdict=$(fm_busy_classify "$backend" "$w" "$harness" "${task:-unknown}" "$STATE" "$tail40")
+    fi
+    state=${verdict%% *}
+    source=${verdict#* }
+    [ "$source" != "$verdict" ] || source=
+    if [ "$state" = busy ] && [ "$source" != herdr-native ]; then
+      rm -f "$STATE/.busy-since-$key"
+      return 0
+    fi
+    if [ "$state" != busy ]; then
+      rm -f "$STATE/.busy-since-$key"
+      return 1
+    fi
+    bs=busy
+  else
+    bs=$(fm_backend_busy_state "$backend" "$w" 2>/dev/null)
+  fi
+
+  case "$bs" in
+    busy)
+      native_max=${FM_BUSY_NATIVE_MAX_SECONDS:-120}
+      case "$native_max" in ''|*[!0-9]*) native_max=120 ;; esac
+      now=${EPOCHSECONDS:-$(date +%s)}
+      since=$(cat "$STATE/.busy-since-$key" 2>/dev/null || true)
+      case "$since" in
+        ''|*[!0-9]*)
+          since=$now
+          printf '%s\n' "$since" > "$STATE/.busy-since-$key"
+          ;;
+      esac
+      if [ $((now - since)) -lt "$native_max" ]; then
+        return 0
+      fi
+      ;;
+    idle)
+      rm -f "$STATE/.busy-since-$key"
+      return 1
+      ;;
+    *)
+      rm -f "$STATE/.busy-since-$key"
+      ;;
+  esac
+  lines=$(printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12)
+  if command -v fm_busy_lines_match >/dev/null 2>&1; then
+    printf '%s' "$lines" | fm_busy_lines_match "$harness"
+  else
+    return 1
+  fi
 }
 
 window_kind() {
