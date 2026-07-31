@@ -187,21 +187,48 @@ hash_pane() {
 # the same bounded capture already read for hashing, so this adds no extra
 # backend calls on the regex-fallback path.
 window_is_busy() {  # <window> <tail40>
-  local w=$1 tail40=$2 bs harness lines
+  local w=$1 tail40=$2 bs harness lines key now native_max since
+  key=${w//:/_}; key=${key//\//_}; key=${key//./_}
   bs=$(fm_backend_busy_state "$(window_backend "$w")" "$w" 2>/dev/null)
   case "$bs" in
-    busy) return 0 ;;
-    idle) return 1 ;;
-    *)
-      lines=$(printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12)
-      harness=$(window_harness "$w")
-      if [ -n "${FM_BUSY_REGEX:-}" ]; then
-        printf '%s' "$lines" | grep -qiE "$BUSY_REGEX"
-      else
-        printf '%s' "$lines" | fm_busy_lines_match "$harness"
+    busy)
+      # Bounded staleness fallback: a backend's native "busy" that never flips
+      # (herdr has no cline integration, so its agent_status for a cline pane is
+      # a guess stuck at "working" forever) would make supervision wait forever
+      # and never reap a finished task. Past FM_BUSY_NATIVE_MAX_SECONDS (default
+      # 120) of continuous busy for the same window, stop trusting the native
+      # signal and fall through to the recorded harness's pane-tail signature
+      # below. Cheap: one integer compare + a tiny state file, no extra backend
+      # calls. Under the threshold behaviour is unchanged for claude/codex/pi/
+      # copilot, whose native signals are correct.
+      native_max=${FM_BUSY_NATIVE_MAX_SECONDS:-120}
+      now=${EPOCHSECONDS:-$(date +%s)}
+      since=$(cat "$STATE/.busy-since-$key" 2>/dev/null || true)
+      if [ -z "$since" ]; then
+        since=$now
+        echo "$since" > "$STATE/.busy-since-$key"
       fi
+      if [ $((now - since)) -lt "$native_max" ]; then
+        return 0
+      fi
+      # Stale native busy beyond the threshold: fall through to the pane-regex
+      # classifier below instead of trusting a never-flipping native signal.
+      ;;
+    idle)
+      rm -f "$STATE/.busy-since-$key"
+      return 1
+      ;;
+    *)
+      rm -f "$STATE/.busy-since-$key"
       ;;
   esac
+  lines=$(printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12)
+  harness=$(window_harness "$w")
+  if [ -n "${FM_BUSY_REGEX:-}" ]; then
+    printf '%s' "$lines" | grep -qiE "$BUSY_REGEX"
+  else
+    printf '%s' "$lines" | fm_busy_lines_match "$harness"
+  fi
 }
 
 window_kind() {
