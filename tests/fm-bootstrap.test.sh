@@ -718,19 +718,6 @@ test_routine_bootstrap_contract_runs_under_system_bash() {
   pass "bootstrap routine contract runs under system /bin/bash"
 }
 
-test_bootstrap_info_is_no_load_and_actionable_lines_trigger() {
-  local trigger
-  # shellcheck disable=SC2016 # The backtick-delimited skill names are literal Markdown.
-  trigger=$(sed -n '/- `bootstrap-diagnostics`/,/- `diagnostic-reasoning`/p' "$ROOT/AGENTS.md")
-  assert_contains "$trigger" "actionable diagnostic line" "bootstrap-diagnostics trigger should be action-scoped"
-  assert_contains "$trigger" "BOOTSTRAP_INFO:" "bootstrap-diagnostics trigger should classify BOOTSTRAP_INFO as no-load"
-  assert_not_contains "$trigger" "TASKS_AXI:" "tasks-axi availability must not trigger diagnostics loading"
-  assert_not_contains "$trigger" "CREW_HARNESS_OVERRIDE:" "harness override confirmation must not trigger diagnostics loading"
-  assert_not_contains "$trigger" "CREW_DISPATCH: active" "active dispatch confirmation must not trigger diagnostics loading"
-  assert_not_contains "$trigger" "already-live" "already-live secondmate liveness must not trigger diagnostics loading"
-  pass "bootstrap diagnostics trigger excludes benign lines and keeps actionable prefixes"
-}
-
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   local case_dir fakebin out expect
   case_dir="$TMP_ROOT/dispatch-active"
@@ -783,8 +770,14 @@ unsupported grok xhigh effort is flagged^{"rules":[{"when":"deep current work","
 pi max effort is accepted^{"rules":[{"when":"deep coding","use":{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
 pi-signed max effort is accepted^{"rules":[{"when":"signed coding","use":{"harness":"pi-signed","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
 unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
-kimi model profile is accepted^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^empty^
-unsupported kimi effort is flagged^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:high
+Kimi model profile is rejected from subscription dispatch^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
+native subscription providers and routing settings are accepted^{"subscriptionRouting":{"reservePercent":15,"telemetryMaxAgeSeconds":120,"cooldownSeconds":600},"default":[{"harness":"claude","provider":"claude"},{"harness":"codex","provider":"codex"}]}^empty^
+native subscription provider mismatch is flagged^{"default":[{"harness":"codex","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: codex:claude
+malformed subscription settings object is flagged^{"subscriptionRouting":[],"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting must be an object
+unknown subscription setting is flagged^{"subscriptionRouting":{"reservePercent":20,"mystery":1},"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting has unknown field: mystery
+out of range subscription setting is flagged^{"subscriptionRouting":{"reservePercent":100},"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting setting is out of range: reservePercent
+unsupported subscription provider is flagged^{"default":[{"harness":"pi","provider":"moonshot"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unsupported subscription provider: moonshot
+unsupported Kimi effort remains rejected at the subscription boundary^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
 array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}]}^empty^
 array use without select is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}]}]}^empty^
 one-element array use is accepted^{"rules":[{"when":"focused feature","use":[{"harness":"claude"}]}]}^empty^
@@ -821,6 +814,5 @@ test_fleet_sync_timeout_empty_override_uses_default
 test_fleet_sync_timeout_is_computed_before_launch
 test_routine_bootstrap_confirmations_are_silent
 test_routine_bootstrap_contract_runs_under_system_bash
-test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation

@@ -11,8 +11,8 @@ metadata:
 Use this reference before any harness-specific firstmate operation: spawn, recovery, trust-dialog handling, skill invocation, interrupt, exit, resume, or adapter verification.
 
 Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
-Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
-When a matched rule or default is a profile array, load `quota-array-dispatch` for the pace-aware candidate choice after this skill establishes harness and model/provider facts.
+Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, provider, model, and effort axes at intake.
+When a matched rule or default is a profile array, load `quota-array-dispatch` for the subscription-aware candidate choice after this skill establishes harness and model/provider facts.
 The captain may override that file at session start or later; a per-task instruction such as "run this one on codex" overrides it for that dispatch only.
 `default` means mirror firstmate's own harness.
 
@@ -357,6 +357,7 @@ Grok's primary watcher protocol remains background-notify around `bin/fm-watch-a
 ## kimi (VERIFIED 2026-07-25, kimi 0.29.1)
 
 Kimi Code CLI launches from the absolute path resolved from `PATH`, falling back to the executable `$HOME/.kimi-code/bin/kimi`.
+Kimi 0.29.1 is excluded from automatic subscription dispatch because a guarded Herdr lifecycle run could not deterministically exit after interrupt; explicit Kimi work must not be selected by `fm-dispatch-select.mjs`.
 
 | Fact | Value |
 |---|---|

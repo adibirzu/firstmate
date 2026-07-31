@@ -620,7 +620,7 @@ x_mode_remove_artifact() {
 # applying a cadence transition to a running watcher is the caller's job via
 # the emitted harness-aware supervision repair instruction.
 x_mode_setup() {
-  local env_file token shim cadence shim_body cadence_body tool missing
+  local env_file token shim cadence shim_body cadence_body tool missing shim_home
   env_file="$FM_HOME/.env"
   shim="$STATE/x-watch.check.sh"
   cadence="$CONFIG/x-mode.env"
@@ -683,9 +683,16 @@ x_mode_setup() {
 
   mkdir -p "$STATE" "$CONFIG" 2>/dev/null || { fmx_arm_failed; return 0; }
 
-  shim_body=$(fmx_poll_shim_content "$FM_HOME" "$FM_ROOT")
+  case "$FM_HOME" in
+    /*) shim_home=$FM_HOME ;;
+    *)
+      shim_home=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) \
+        || { fmx_arm_failed; return 0; }
+      ;;
+  esac
+  shim_body=$(fmx_poll_shim_content "$shim_home" "$FM_ROOT")
   x_mode_write_if_changed "$shim" "$shim_body" 700 || { fmx_arm_failed; return 0; }
-  fmx_poll_shim_valid "$shim" "$FM_HOME" "$FM_ROOT" \
+  fmx_poll_shim_valid "$shim" "$shim_home" "$FM_ROOT" \
     || { fmx_arm_failed; return 0; }
 
   cadence_body=$(cat <<'EOF'
@@ -736,6 +743,15 @@ crew_dispatch_validate() {
     def malformed_optional_fields($items):
       ($items | any(has("model") and (((.model | type) != "string") or (.model | length) == 0)))
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)));
+    def malformed_provider($items):
+      ($items | any(has("provider") and (((.provider | type) != "string") or (.provider | length) == 0)));
+    def routing_setting_ok($key; $value):
+      if ($value | type) != "number" or ($value | floor) != $value then false
+      elif $key == "reservePercent" then $value >= 0 and $value <= 99
+      elif $key == "telemetryMaxAgeSeconds" then $value >= 1 and $value <= 3600
+      elif $key == "cooldownSeconds" then $value >= 60 and $value <= 86400
+      else false
+      end;
     def bad_efforts:
       configured_profiles
       | map({h: .harness, e: .effort})
@@ -745,6 +761,11 @@ crew_dispatch_validate() {
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"
+    elif has("subscriptionRouting") and (.subscriptionRouting | type) != "object" then "subscriptionRouting must be an object"
+    elif has("subscriptionRouting") and ([.subscriptionRouting | keys[] | . as $key | select((["reservePercent","telemetryMaxAgeSeconds","cooldownSeconds"] | index($key)) == null)] | length) > 0 then
+      "subscriptionRouting has unknown field: " + ([.subscriptionRouting | keys[] | . as $key | select((["reservePercent","telemetryMaxAgeSeconds","cooldownSeconds"] | index($key)) == null)] | sort | join(", "))
+    elif has("subscriptionRouting") and ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not)] | length) > 0 then
+      "subscriptionRouting setting is out of range: " + ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not) | .key] | sort | join(", "))
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
@@ -752,6 +773,7 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
+    elif malformed_provider([(.rules // [])[]? | profiles(.use?)[]?]) then "use profile provider must be a non-empty string when present"
     elif malformed_optional_fields([(.rules // [])[]? | profiles(.use?)[]?]) then "use profile model and effort must be non-empty strings when present"
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
@@ -760,6 +782,7 @@ crew_dispatch_validate() {
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"
     elif has("default") and ([profiles(.default)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length) > 0 then "each default profile needs harness"
+    elif has("default") and malformed_provider([profiles(.default)[]?]) then "default profile provider must be a non-empty string when present"
     elif has("default") and malformed_optional_fields([profiles(.default)[]?]) then "default profile model and effort must be non-empty strings when present"
     else
       (configured_profiles
@@ -767,7 +790,13 @@ crew_dispatch_validate() {
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
+      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok"] | index($provider)) == null)) | unique) as $bad_providers
+      | (configured_profiles | map(select(.harness == "kimi" or .provider == "kimi")) | length) as $bad_kimi_routes
+      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
+        elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
+        elif ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))
+        elif ($bad_providers | length) > 0 then "unsupported subscription provider: " + ($bad_providers | join(", "))
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
         else empty
         end
