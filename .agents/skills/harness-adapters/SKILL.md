@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cline, and cursor-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -394,3 +394,49 @@ The spinner match covers the full moon-phase glyph set rather than one frame, bu
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal supplements the pane busy signature, whose locale- and emoji-font-sensitive limits still apply while a turn is running.
+
+## cline (VERIFIED 2026-07-27, Cline CLI 3.0.46)
+
+Cline runs as an interactive TUI crewmate. Unlike Kimi, a positional prompt seeds AND auto-runs the first turn, so the brief rides the launch command like claude/codex/grok.
+
+| Fact | Value |
+|---|---|
+| Binary | `cline` from `PATH` (`~/.local/bin/cline`, a Node script). Detection matches `cline` in the process argv like opencode (ancestry command name may be `node`). |
+| Launch | `cline -i --tui --auto-approve true [--model <id>] [--thinking <effort>] "<brief>"`. `-i --tui` opens the persistent interactive TUI; the positional brief seeds and auto-runs the first turn (verified via tmux capture). |
+| Models | Provider/model shown in the status bar (e.g. `ClinePass: Kimi K3`); `--model`/`-m` selects within the active provider. Default provider is `cline` (ClinePass). |
+| Busy-pane signature | A braille spinner plus `Thinking... (esc to cancel)`; `esc to cancel` is the stable token and clears the instant the turn ends. Deliberately distinct from claude/codex `esc to interrupt`. |
+| Exit command | Single `Ctrl+C` exits the TUI cleanly (rc 0). There is no `/exit` slash exit. |
+| Interrupt | `Esc` cancels the current turn (the footer shows `esc to cancel`). Ctrl+C would EXIT, not interrupt — do not use it to interrupt. |
+| Autonomy | `--auto-approve true` (on by default; passed explicitly for version robustness); the status bar reads `Auto-approve all enabled`. |
+| Trust dialog | None on a clean launch with a pre-authed provider (ClinePass). |
+| Submission | Typing then Enter submits; a seeded positional prompt auto-submits on launch. |
+| Environment marker | None verified; detection relies on process ancestry (`cline` in argv). |
+| Composer | Bordered box with a bare `❯` (U+276F) agent glyph — already a verified empty-composer glyph. The idle placeholder (`What can I do for you?` on first ready, `Ask anything...` thereafter) is muted grey (truecolor `38;2;131;137;140`, luma ~136) and also drawn bold, so it survives the dim/faint ghost stripper and would misread as pending; the shared idle-placeholder default (`FM_COMPOSER_IDLE_RE_DEFAULT` in `fm-composer-lib.sh`, consumed by the tmux classifier and the herdr/cmux/orca backends) lists both placeholders so an empty cline composer reads empty on every backend. The composer row has no side borders, so cmux/orca reach it through the bare agent-glyph promotion (`❯`). |
+| Effort | Maps to `--thinking none|low|medium|high|xhigh` (no `max`; omit rather than pass an unsupported value). A live `--thinking high` launch showed `(high)` in the status bar. |
+| TTY | Even `cline config` refuses without a TTY; supervise only through a pty/pane, never a bare pipe. |
+
+Turn-end is observed from the pane, not a hook: the `esc to cancel` spinner clears and the composer returns to its idle placeholder. cline exposes `--hooks-dir` and a `hook` subcommand, which is the path for a future primary-session turn-end guard (only needed when firstmate ITSELF runs on cline); a cline CREWMATE needs no launch-side turn-end placeholder. cline is not wired for secondmate launches, so no `backends/tmux.sh` agent-process liveness entry is required yet.
+
+Full empirical capture evidence: [`docs/verification/cline-adapter.md`](../../../docs/verification/cline-adapter.md).
+
+## cursor-agent (VERIFIED 2026-07-27, Cursor CLI 2026.07.16 / 2026.07.23)
+
+cursor-agent runs as a persistent interactive TUI crewmate. A positional prompt seeds AND auto-runs the first turn (after the workspace-trust gate is cleared), so the brief rides the launch command like claude/codex/cline.
+
+| Fact | Value |
+|---|---|
+| Binary | `cursor-agent` from `PATH` (`~/.local/bin/cursor-agent`, a Node app). Detection matches `cursor` in the process argv. |
+| Launch | `cursor-agent --force [--model <id>] "<brief>"`. `--force` (= status-bar "Run Everything") makes the crewmate autonomous. The default `agent` subcommand is the persistent TUI; a positional prompt seeds and auto-runs once trust is cleared. |
+| Models | `--model gpt-5 \| sonnet-4-thinking \| 'claude-opus-4-8[context=1m,effort=high,fast=false]'`. Effort is a MODEL bracket parameter, NOT a standalone flag — so fm-spawn passes `--model` only, no effort flag. |
+| Busy-pane signature | Braille spinner + `Working` + composer hint `ctrl+c to stop` (present only mid-turn). `ctrl+c to stop` is the anchor (`FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT`); bare `Working` is NOT used because pi owns `Working...`. |
+| Exit command | `/quit` (slash popup + Enter) — verified to exit cleanly. Ctrl-C and Esc do NOT exit an idle session (Esc only quits the pre-session trust dialog). |
+| Interrupt | `Ctrl-C` mid-turn (the busy footer shows `ctrl+c to stop`). |
+| Autonomy | `--force` (alias `--yolo`); status bar reads `Run Everything`. `--auto-review` is the softer classifier mode (not used for unattended crew). |
+| **Workspace trust (blocking)** | Interactive mode shows a blocking `⚠ Workspace Trust Required` dialog (`[a] Trust / [q] Quit`). **`--trust` does NOT bypass it — it only works with `--print`/headless.** Two verified bypasses: (1) pre-seed `~/.cursor/projects/<path-slug>/.workspace-trusted` = JSON `{"trustedAt":"<iso8601>","workspacePath":"<abs path>"}` before launch (path-slug = abspath, drop leading `/`, `/`→`-`, with a length-cap+hash variant for long paths); (2) send `a` after the readiness gate detects the dialog. A pre-seeded marker was verified to skip the dialog entirely. `fm-spawn` wires both: it pre-seeds the marker before launch and its readiness gate answers a residual dialog with `a`, failing the spawn loudly instead of hanging. |
+| Composer | Bare agent glyph `→` (U+2192) with idle placeholder `Plan, search, build anything` (first ready) / `Add a follow-up` (post-turn). `→` is a verified AGENT glyph in the shared classifier and bare-row promotion set (`fm-composer-lib.sh`: `FM_COMPOSER_BARE_PROMPT_RE_DEFAULT`), so the unbordered composer row is structurally recognized on every backend, and the idle placeholders read empty via the shared `FM_COMPOSER_IDLE_RE_DEFAULT` (the glyph-prefixed alternates). A dead shell (`>` `$` `%` `#`) still never promotes. |
+| TTY | Interactive mode needs a pty; supervise only through a pane. |
+| Auth | `cursor-agent login` (browser/device; set `NO_OPEN_BROWSER=1` on a headless box) or `--api-key`/`CURSOR_API_KEY` (the `api-key-env` account method). Verified logged-in as a Cursor account. |
+
+The trust gate is the one integration a cursor CREWMATE needs beyond the registry facts above, and `fm-spawn` wires it: the spawn pre-seeds `.workspace-trusted` before launch and its post-launch readiness gate answers a residual dialog with `a` (once), failing the spawn instead of hanging when the pane never reaches a ready/working signal. A full live crewmate dispatch through the herdr backend is the remaining acceptance step (needs a full firstmate home). cursor is not wired for secondmate launches, so no `backends/tmux.sh` liveness entry is required yet.
+
+Full empirical capture evidence: [`docs/verification/cursor-agent-adapter.md`](../../../docs/verification/cursor-agent-adapter.md).

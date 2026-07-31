@@ -539,34 +539,50 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
 # composer row as the only captured line whose TRIMMED content both STARTS and
 # ENDS with the same border glyph (│, ┃, or a plain ASCII |), scanning forward
 # and keeping the LAST match so an earlier border-shaped line (scrollback, a
-# popup) never outranks the real bottom-anchored composer row.
+# popup) never outranks the real bottom-anchored composer row. A bare
+# (unbordered) row starting with a verified AGENT prompt glyph (❯ claude,
+# › codex, → cursor-agent; the shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT) is
+# the second recognized shape, mirroring herdr's bare branch, because cline
+# and cursor-agent draw their live composer without side borders. Shell-style
+# glyphs > $ % # never promote a bare row, so a dead shell stays 'unknown'.
 FM_BACKEND_CMUX_COMPOSER_LINES=${FM_BACKEND_CMUX_COMPOSER_LINES:-20}
-FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-'^Type a message\.\.\.$'}
+FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
+FM_BACKEND_CMUX_BARE_PROMPT_RE=${FM_BACKEND_CMUX_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
 
 fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending|unknown
-  local target=$1 expected_label=${2:-} cap line trimmed stripped="" found=0
+  local target=$1 expected_label=${2:-} cap line trimmed stripped="" found=0 bordered=0
   cap=$(fm_backend_cmux_capture "$target" "$FM_BACKEND_CMUX_COMPOSER_LINES" "$expected_label") || { printf 'unknown'; return 0; }
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     [ -n "$trimmed" ] || continue
     case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|') : ;;
-      *) continue ;;
+      '│'*'│'|'┃'*'┃'|'|'*'|')
+        stripped=$trimmed
+        bordered=1
+        found=1
+        ;;
+      *)
+        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_CMUX_BARE_PROMPT_RE"; then
+          stripped=$trimmed
+          bordered=0
+          found=1
+        fi
+        ;;
     esac
-    stripped=$trimmed
-    found=1
   done < <(printf '%s\n' "$cap")
   [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  stripped=${stripped//│/}
-  stripped=${stripped//┃/}
-  stripped=${stripped//|/}
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
-  # A row was found only by the bordered shape above, so content came from a
-  # genuine composer box - delegate to the shared owner with bordered=1. A bare
-  # dead-shell prompt has no bordered row and already returned 'unknown' above.
-  fm_composer_classify_content 1 "$stripped" "$FM_BACKEND_CMUX_IDLE_RE"
+  if [ "$bordered" -eq 1 ]; then
+    stripped=${stripped//│/}
+    stripped=${stripped//┃/}
+    stripped=${stripped//|/}
+    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+    stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  fi
+  # A row was found only by the bordered shape or a bare AGENT-glyph row, so
+  # delegate to the shared owner with the matching bordered flag. A bare
+  # dead-shell prompt matches neither shape and already returned 'unknown'.
+  fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_CMUX_IDLE_RE"
 }
 
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,

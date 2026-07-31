@@ -92,7 +92,7 @@ Spawn sends the surface a plain `cd` into the worktree firstmate leased itself, 
 
 Literal send and Enter are separate calls.
 Enter, Escape, and Ctrl-C are supported.
-The composer verifier locates the last bordered composer row and delegates the content decision to `bin/fm-composer-lib.sh`.
+The composer verifier locates the last bordered composer row or bare agent-glyph row (`❯` `›` `→`, the shared fleet-wide set) and delegates the content decision to `bin/fm-composer-lib.sh`.
 A bare shell prompt is `unknown`, and a slash-popup placeholder remains `pending`, so only Enter is retried and text is never retyped.
 cmux exposes no native generic agent busy signal, so supervision uses the shared capture/hash and busy-regex path.
 

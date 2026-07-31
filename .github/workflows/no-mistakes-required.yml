@@ -33,31 +33,36 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           set -eu
           marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
-          # The payload body is a point-in-time snapshot, and no-mistakes pushes
-          # commits (synchronize) BEFORE it writes the '## Pipeline' section
-          # (edited). A head-change run that starts late therefore replays a
-          # pre-signature body after the body was already signed, and because
-          # body events and head changes sit in different concurrency groups
-          # that stale verdict is never superseded - leaving a compliant PR red.
-          # Judge the live body; fall back to the snapshot only if it is
-          # unreadable, so an unreachable API can never pass an unsigned PR.
-          body=${PR_BODY:-}
-          origin='event payload'
-          if [ -n "${GH_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] && command -v gh >/dev/null 2>&1; then
-            if live=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null); then
-              body=$live
-              origin='live PR body'
-            else
-              echo "::warning::could not read the live body for PR #${PR_NUMBER}; judging the event payload snapshot instead."
-            fi
-          fi
-          if printf '%s' "$body" | grep -qF -- "$marker"; then
-            echo "Found no-mistakes signature in PR #${PR_NUMBER} (${origin})."
+          if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
+            echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
             exit 0
+          fi
+          # The event payload snapshots the body at trigger time, and no-mistakes
+          # pushes the branch (synchronize) moments before it writes the signed
+          # body (edited). Because body-bearing events keep immutable concurrency
+          # groups, a verdict from that stale snapshot would stick to the head
+          # SHA forever. Re-read the live body for a bounded window before
+          # failing so this run's verdict (and any re-run) reflects the current
+          # PR body instead of the snapshot. Tests pin GH_TOKEN empty to keep
+          # local replay offline and immediate.
+          if [ -n "${GH_TOKEN:-}" ]; then
+            live_attempts=6
+            live_delay_seconds=15
+            attempt=1
+            while [ "$attempt" -le "$live_attempts" ]; do
+              live_body=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.body // ""') || live_body=''
+              if printf '%s' "$live_body" | grep -qF -- "$marker"; then
+                echo "Found no-mistakes signature in PR #${PR_NUMBER} live body (attempt ${attempt})."
+                exit 0
+              fi
+              if [ "$attempt" -lt "$live_attempts" ]; then
+                sleep "$live_delay_seconds"
+              fi
+              attempt=$((attempt + 1))
+            done
           fi
           {
             echo "::error::This PR was not raised through no-mistakes."

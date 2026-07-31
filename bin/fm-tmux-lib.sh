@@ -46,8 +46,13 @@
 # tmux adapter does not paper over a herdr-specific shape.
 #
 # Overrides: FM_COMPOSER_IDLE_RE matches an empty composer after ghost and
-# structural border stripping. FM_BUSY_REGEX globally overrides harness-scoped
-# busy-footer matching (mirrors fm-watch.sh / the daemon).
+# structural border stripping; unset, it falls back to the shared fleet-wide
+# FM_COMPOSER_IDLE_RE_DEFAULT (bin/fm-composer-lib.sh), which covers the
+# verified placeholders that survive the ghost stripper (cline's muted-grey
+# bold placeholder, cursor-agent's →-prefixed placeholders) so an idle pane is
+# not misread as pending on the default tmux backend. FM_BUSY_REGEX globally
+# overrides harness-scoped busy-footer matching (mirrors fm-watch.sh / the
+# daemon).
 #
 # All functions are `set -u` and `set -e` safe (guarded tmux calls, explicit
 # returns) so they can be sourced into either context.
@@ -61,7 +66,8 @@
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-lib.sh"
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel".
+# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel";
+# cline: "esc to cancel"; cursor-agent: "ctrl+c to stop".
 # Claude's current spinner has a rotating glyph and word, but every active-turn
 # line has an ellipsis followed by a parenthesized elapsed duration. Keep this
 # signature separate from the shared default because that shape is not generic
@@ -76,13 +82,26 @@
 # busy signals on their own.
 # The full moon-phase set remains locale- and emoji-font-sensitive because Kimi
 # exposes no stable ASCII busy token.
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|esc to cancel|ctrl\+c to stop'
 FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 FM_TMUX_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_TMUX_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
 FM_TMUX_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 FM_TMUX_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
+# cline (Cline CLI 3.0.46): the active-turn footer is a braille spinner plus
+# "Thinking... (esc to cancel)" (verified via tmux capture). Its interrupt key is
+# esc (NOT ctrl-c, which exits cline outright), and "esc to cancel" is the stable
+# token that disappears the instant the turn ends, so it is the busy anchor. It is
+# deliberately distinct from claude/codex "esc to interrupt": a supplied harness
+# must never borrow another's signature.
+FM_TMUX_CLINE_BUSY_REGEX_DEFAULT='esc to cancel'
+# cursor-agent (Cursor CLI 2026.07): the active-turn footer is a braille spinner plus
+# "Working" and the composer hint "ctrl+c to stop" (verified via tmux capture). The
+# "ctrl+c to stop" token is the stable busy anchor - present only mid-turn, gone when
+# idle. Bare "Working" is deliberately NOT used because pi already owns "Working...".
+# Interrupt is Ctrl-C mid-turn; the session exit command is /quit.
+FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
 
 fm_busy_lines_match() {  # [harness]
   local harness=${1:-} lines regex
@@ -97,6 +116,8 @@ fm_busy_lines_match() {  # [harness]
       pi|pi-signed) regex=$FM_TMUX_PI_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_TMUX_GROK_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_TMUX_KIMI_BUSY_REGEX_DEFAULT ;;
+      cline) regex=$FM_TMUX_CLINE_BUSY_REGEX_DEFAULT ;;
+      cursor-agent) regex=$FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_TMUX_BUSY_REGEX_DEFAULT ;;
       *)
         # A supplied harness must never borrow another harness's signature.
@@ -140,7 +161,7 @@ fm_tmux_composer_row_state() {  # <raw-row> [bordered] [allow-busy] -> empty|pen
      && printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
     printf 'empty'; return 0
   fi
-  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-}" insensitive "$plain"
+  fm_composer_classify_content "$bordered" "$stripped" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive "$plain"
 }
 
 fm_tmux_row_has_composer_edge() {  # <plain-row>
@@ -165,6 +186,7 @@ fm_tmux_composer_geometry_spaces() {  # <content-inner> -> spaces
     '>'*) content=${content/>/ } ;;
     '❯'*) content=${content/❯/ } ;;
     '›'*) content=${content/›/ } ;;
+    '→'*) content=${content/→/ } ;;
   esac
   content=$(printf '%s' "$content" | LC_ALL=C sed 's/[!-~]/ /g')
   case "$content" in

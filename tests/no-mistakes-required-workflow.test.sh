@@ -17,37 +17,12 @@ extract_signature_script() {
   ' "$WORKFLOW"
 }
 
-# Blank GH_TOKEN/GH_REPO explicitly: this replay judges the payload snapshot
-# alone, and an ambient token in the caller's environment must not turn it into
-# a live API read against a synthetic PR number.
 signature_result() {
   local body=$1 script
   script=$(extract_signature_script)
-  GH_TOKEN='' GH_REPO='' PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" \
-    bash -c "$script" >/dev/null 2>&1
-}
-
-# A stub `gh` standing in for the live-body read: it either prints the body the
-# PR carries now, or exits non-zero to simulate an unreachable API.
-make_gh_stub() {
-  local dir=$1 mode=$2 live=${3:-}
-  mkdir -p "$dir"
-  printf '%s' "$live" >"$dir/live-body.txt"
-  if [ "$mode" = unreachable ]; then
-    printf '#!/usr/bin/env bash\nexit 1\n' >"$dir/gh"
-  else
-    printf '#!/usr/bin/env bash\ncat %s/live-body.txt\n' "$dir" >"$dir/gh"
-  fi
-  chmod +x "$dir/gh"
-}
-
-signature_result_live() {
-  local payload=$1 mode=$2 live=${3:-} dir script
-  dir=$(fm_test_tmproot fm-nm-signature)
-  make_gh_stub "$dir" "$mode" "$live"
-  script=$(extract_signature_script)
-  PATH="$dir:$PATH" GH_TOKEN=synthetic-token GH_REPO=kunchenguid/firstmate \
-    PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$payload" \
+  # GH_TOKEN is pinned empty so the live-body fallback stays offline and the
+  # unsigned verdict is immediate and deterministic in local replay.
+  PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" GH_TOKEN='' \
     bash -c "$script" >/dev/null 2>&1
 }
 
@@ -73,35 +48,50 @@ test_signature_sequence_at_fixed_head() {
   pass "fixed-head signed opened, unsigned edited, signed edited yields 0/1/0"
 }
 
-# Regression: no-mistakes pushes commits before it writes the '## Pipeline'
-# section, so a head-change run that starts late replays a body snapshot taken
-# before the signature existed. Head changes and body events sit in different
-# concurrency groups, so that stale verdict is never superseded and a PR whose
-# body is signed stays red. The verdict must follow the body the PR carries now.
-test_live_body_outranks_the_payload_snapshot() {
-  signature_result_live 'Unsigned snapshot from an earlier head change' signed "Signed later\n$MARKER" || \
-    fail "a signed live body must clear a stale unsigned payload snapshot"
-  if signature_result_live "Stale signed snapshot\n$MARKER" signed 'The signature is gone from the body'; then
-    fail "an unsigned live body must fail even when the payload snapshot was signed"
-  fi
-  pass "the body the PR carries now decides, not the event payload snapshot"
-}
+# The no-mistakes pipeline pushes the branch (synchronize) moments before it
+# writes the signed body (edited), so a synchronize payload can snapshot the
+# pre-signature body. The check must re-read the live body before failing so
+# that stale snapshot cannot permanently redden a head whose PR body is signed.
+test_stale_snapshot_rechecks_live_body() {
+  local tmp fakebin script count_file signed_body
+  tmp=$(fm_test_tmproot nm-required)
+  fakebin=$(fm_fakebin "$tmp")
+  count_file="$tmp/gh-calls"
+  signed_body="Synthetic live body"$'\n'"$MARKER"
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+count=$(cat "$STUB_GH_COUNT_FILE" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$STUB_GH_COUNT_FILE"
+if [ "$count" -ge "$STUB_GH_SIGNED_AT" ]; then
+  printf '%s' "$STUB_GH_SIGNED_BODY"
+else
+  printf '%s' 'still unsigned live body'
+fi
+SH
+  cat > "$fakebin/sleep" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fakebin/gh" "$fakebin/sleep"
+  script=$(extract_signature_script)
 
-test_unreachable_api_falls_back_to_the_snapshot() {
-  signature_result_live "Signed snapshot\n$MARKER" unreachable || \
-    fail "an unreachable API must fall back to the payload snapshot"
-  if signature_result_live 'Unsigned snapshot' unreachable; then
-    fail "an unreachable API must not pass an unsigned PR"
-  fi
-  pass "an unreachable API falls back to the snapshot and still refuses unsigned bodies"
-}
+  rm -f "$count_file"
+  PATH="$fakebin:$PATH" GH_TOKEN=synthetic-token GITHUB_REPOSITORY=synthetic/firstmate \
+    STUB_GH_COUNT_FILE="$count_file" STUB_GH_SIGNED_AT=3 STUB_GH_SIGNED_BODY="$signed_body" \
+    PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY='stale unsigned snapshot' \
+    bash -c "$script" >/dev/null 2>&1 || fail "stale snapshot must pass once the live body is signed"
+  [ "$(cat "$count_file")" = 3 ] || fail "check must poll the live body until the signature lands"
 
-test_live_body_read_contract() {
-  assert_grep '  pull-requests: read' "$WORKFLOW" "workflow cannot read the live PR body"
-  assert_grep 'GH_TOKEN: ${{ github.token }}' "$WORKFLOW" "live body read must use the job's own token"
-  assert_grep 'repos/${GH_REPO}/pulls/${PR_NUMBER}' "$WORKFLOW" \
-    "live body must be read from the PR the event names"
-  pass "live body is read read-only from the event's own PR with the job token"
+  rm -f "$count_file"
+  if PATH="$fakebin:$PATH" GH_TOKEN=synthetic-token GITHUB_REPOSITORY=synthetic/firstmate \
+    STUB_GH_COUNT_FILE="$count_file" STUB_GH_SIGNED_AT=99 STUB_GH_SIGNED_BODY="$signed_body" \
+    PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY='stale unsigned snapshot' \
+    bash -c "$script" >/dev/null 2>&1; then
+    fail "unsigned live body must still fail"
+  fi
+  [ "$(cat "$count_file")" = 6 ] || fail "unsigned live body must exhaust the bounded poll window"
+  pass "stale payload snapshots re-read the live PR body within a bounded window"
 }
 
 test_event_identity_contract() {
@@ -139,6 +129,9 @@ test_security_and_signature_contract_is_preserved() {
   assert_no_grep 'pull_request_target' "$WORKFLOW" "workflow must not use pull_request_target"
   assert_grep '  contents: read' "$WORKFLOW" "contents permission must remain read-only"
   assert_no_grep 'contents: write' "$WORKFLOW" "workflow must not gain contents write permission"
+  assert_grep '  pull-requests: read' "$WORKFLOW" "live body re-check needs pull-requests read"
+  assert_no_grep 'pull-requests: write' "$WORKFLOW" "workflow must not gain pull-requests write permission"
+  assert_grep 'GH_TOKEN: ${{ github.token }}' "$WORKFLOW" "live body re-check must use the workflow token, not a secret"
   assert_no_grep 'secrets.' "$WORKFLOW" "workflow must not read secrets"
   assert_no_grep 'actions/checkout' "$WORKFLOW" "workflow must not check out fork code"
   assert_grep 'name: PR must be raised via no-mistakes' "$WORKFLOW" "stable required check name changed"
@@ -150,9 +143,7 @@ test_security_and_signature_contract_is_preserved() {
 }
 
 test_signature_sequence_at_fixed_head
-test_live_body_outranks_the_payload_snapshot
-test_unreachable_api_falls_back_to_the_snapshot
-test_live_body_read_contract
+test_stale_snapshot_rechecks_live_body
 test_event_identity_contract
 test_run_names_are_ordered_and_unique
 test_security_and_signature_contract_is_preserved
