@@ -1,144 +1,167 @@
 #!/usr/bin/env bash
-# Behavior tests for window_is_busy() native-busy staleness fallback
-# (bin/fm-watch.sh).
+# Behavior tests for the native-busy staleness guard
+# (fm_busy_native_stale / fm_busy_native_clear, consulted by the herdr-native
+# arm of fm_busy_classify in bin/fm-busy-lib.sh).
 #
-# A backend's native "busy" signal that never flips (herdr has no cline
-# integration, so its agent_status for a cline pane is a guess stuck at
-# "working" forever) would make supervision wait forever and never reap a
-# finished task. Past FM_BUSY_NATIVE_MAX_SECONDS (default 120) of continuous
-# busy for the same window, window_is_busy stops trusting the native signal and
-# falls through to the recorded harness's pane-tail signature. Under the
-# threshold, behaviour is unchanged for claude/codex/pi/copilot, whose native
-# signals are correct.
+# Herdr reports agent_status per pane, but only for the harnesses it
+# integrates with. It has NO cline integration, so its agent_status for a cline
+# pane is a guess that sticks at "working" forever; trusting it unbounded would
+# leave supervision waiting on an already-finished task indefinitely. Past
+# FM_BUSY_NATIVE_MAX_SECONDS (default 120) of continuous native busy for the
+# same task, the classifier stops trusting the native signal and reports
+# "unknown native-stale". For claude/codex/pi/copilot, whose native signals are
+# correct, trust is unbounded and the hot path is unchanged.
 #
-# Uses the repo's function-extraction + eval idiom (tests/fm-backend-herdr.test.sh:1226,
-# tests/fm-copilot-harness.test.sh:176): window_is_busy is sed-extracted from
-# fm-watch.sh and eval'd in a disposable `bash -c` subshell with its backend
-# dependencies overridden by scripted stubs, against a temp STATE dir.
+# These tests call the real classifier directly with only fm_backend_busy_state
+# stubbed, so they exercise the shipped guard rather than a copy of it.
+#
+# NOTE ON SCOPE: this suite previously sed-extracted window_is_busy() from
+# bin/fm-watch.sh. That function now delegates entirely to this shared
+# classifier, so the extraction tested nothing (it failed on undefined
+# symbols). The guard's contract lives here now, and so does its cover.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-WATCH="$ROOT/bin/fm-watch.sh"
-WINDOW_BUSY_SOURCE=$(sed -n '/^window_is_busy()/,/^window_kind()/p' "$WATCH" | sed '$d')
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-busy-lib.sh"
 
-test_busy_under_threshold_trusts_native() {
-  # Under FM_BUSY_NATIVE_MAX_SECONDS, a native "busy" must return 0 (busy)
-  # exactly as before - the staleness fallback must not change hot-path
-  # behaviour for backends whose native signals are correct.
+# classify <native-state> <harness> <state-dir> -> "<verdict> <source>"
+# Runs the real fm_busy_classify in a subshell with the backend's native busy
+# probe stubbed, against a task id of t1 and no recorded busy event (so the
+# herdr-native arm is the one under test).
+# The stub's value is held in a deliberately unique name: bash's dynamic scoping
+# means a stub reading a common name like $native would resolve to
+# fm_busy_classify's own `local native` (empty at call time), not to ours.
+classify() {
+  local _fm_stub_native=$1 harness=$2 state=$3
+  (
+    fm_backend_busy_state() { printf '%s' "$_fm_stub_native"; }
+    FM_BUSY_NATIVE_MAX_SECONDS=120
+    fm_busy_classify herdr win:0 "$harness" t1 "$state" "idle pane tail"
+  )
+}
+
+# age_marker <state-dir> <seconds-ago> - backdate the continuous-busy marker.
+age_marker() {
+  local state=$1 ago=$2 now
+  now=${EPOCHSECONDS:-$(date +%s)}
+  echo $((now - ago)) > "$state/.busy-since-t1"
+}
+
+test_under_threshold_trusts_native_for_integrated_harness() {
+  # Unchanged hot path: claude's native busy is correct, so it is trusted.
   local tmpd out
   tmpd=$(fm_test_tmproot busy-under-threshold); mkdir -p "$tmpd"
-  out=$(STATE="$tmpd" SRC="$WINDOW_BUSY_SOURCE" bash -c '
-    eval "$SRC"
-    fm_backend_busy_state() { printf busy; }
-    window_backend() { printf herdr; }
-    window_harness() { printf claude; }
-    fm_busy_lines_match() { return 1; }
-    FM_BUSY_NATIVE_MAX_SECONDS=120
-    if window_is_busy win:0 "some idle tail"; then printf busy; else printf notbusy; fi
-  ')
-  [ "$out" = busy ] \
+  out=$(classify busy claude "$tmpd")
+  [ "$out" = "busy herdr-native" ] \
     || fail "under-threshold native busy must return busy (unchanged hot path), got '$out'"
-  pass "window_is_busy: under-threshold native busy trusts the native signal"
+  pass "fm_busy_classify: under-threshold native busy trusts the native signal"
 }
 
-test_stale_native_busy_falls_through_to_pane_regex() {
-  # Past the threshold, a never-flipping native "busy" must stop being trusted
-  # and fall through to the pane-regex classifier. This is the cline-on-herdr
-  # escape hatch: the pane shows idle, so the regex says not-busy, and the
-  # finished task is reaped instead of waiting forever.
-  local tmpd out now
+test_under_threshold_trusts_native_for_cline() {
+  # The guard must not fire early: a cline task inside the trust window is busy.
+  local tmpd out
+  tmpd=$(fm_test_tmproot busy-cline-fresh); mkdir -p "$tmpd"
+  age_marker "$tmpd" 5
+  out=$(classify busy cline "$tmpd")
+  [ "$out" = "busy herdr-native" ] \
+    || fail "cline native busy inside the trust window must return busy, got '$out'"
+  pass "fm_busy_classify: cline native busy inside the trust window is still busy"
+}
+
+test_first_native_busy_arms_the_window_without_reporting_stale() {
+  # With no marker yet, the first native busy must arm the window and report
+  # busy - never stale on first sight.
+  local tmpd out
+  tmpd=$(fm_test_tmproot busy-first-sight); mkdir -p "$tmpd"
+  [ -e "$tmpd/.busy-since-t1" ] && fail "precondition: marker must not exist yet"
+  out=$(classify busy cline "$tmpd")
+  [ "$out" = "busy herdr-native" ] \
+    || fail "first native busy must report busy, got '$out'"
+  [ -f "$tmpd/.busy-since-t1" ] \
+    || fail "first native busy must arm the continuous-busy marker"
+  pass "fm_busy_classify: first native busy arms the staleness window and reports busy"
+}
+
+test_stale_native_busy_stops_being_trusted_for_cline() {
+  # The guard itself: past the threshold a never-flipping cline native busy
+  # must stop being trusted, so supervision can reap the finished task.
+  local tmpd out
   tmpd=$(fm_test_tmproot busy-stale); mkdir -p "$tmpd"
-  now=${EPOCHSECONDS:-$(date +%s)}
-  echo $((now - 200)) > "$tmpd/.busy-since-win_0"
-  out=$(STATE="$tmpd" SRC="$WINDOW_BUSY_SOURCE" bash -c '
-    eval "$SRC"
-    fm_backend_busy_state() { printf busy; }
-    window_backend() { printf herdr; }
-    window_harness() { printf cline; }
-    fm_busy_lines_match() { return 1; }
-    FM_BUSY_NATIVE_MAX_SECONDS=120
-    if window_is_busy win:0 "idle pane tail"; then printf busy; else printf notbusy; fi
-  ')
-  [ "$out" = notbusy ] \
-    || fail "stale native busy must fall through to the pane-regex classifier (cline turn-end), got '$out'"
-  pass "window_is_busy: stale native busy beyond the threshold falls through to the pane-regex classifier"
+  age_marker "$tmpd" 200
+  out=$(classify busy cline "$tmpd")
+  [ "$out" = "unknown native-stale" ] \
+    || fail "stale cline native busy must report 'unknown native-stale', got '$out'"
+  pass "fm_busy_classify: stale cline native busy is no longer trusted as busy"
 }
 
-test_stale_native_busy_confirms_busy_when_pane_still_working() {
-  # Past the threshold, if the pane-regex classifier ALSO says busy, the window
-  # is genuinely still working - the fallback must confirm busy, not invent idle.
-  local tmpd out now
-  tmpd=$(fm_test_tmproot busy-stale-working); mkdir -p "$tmpd"
-  now=${EPOCHSECONDS:-$(date +%s)}
-  echo $((now - 200)) > "$tmpd/.busy-since-win_0"
-  out=$(STATE="$tmpd" SRC="$WINDOW_BUSY_SOURCE" bash -c '
-    eval "$SRC"
-    fm_backend_busy_state() { printf busy; }
-    window_backend() { printf herdr; }
-    window_harness() { printf cline; }
-    fm_busy_lines_match() { return 0; }
-    FM_BUSY_NATIVE_MAX_SECONDS=120
-    if window_is_busy win:0 "Working... ctrl+c to stop"; then printf busy; else printf notbusy; fi
-  ')
-  [ "$out" = busy ] \
-    || fail "stale native busy with a busy pane must confirm busy, got '$out'"
-  pass "window_is_busy: stale native busy with a genuinely-busy pane confirms busy"
+test_stale_trust_is_bounded_only_for_unintegrated_harnesses() {
+  # A legitimately long claude turn must keep reading busy no matter how long
+  # it runs - the time bound applies to cline only.
+  local tmpd out
+  tmpd=$(fm_test_tmproot busy-stale-claude); mkdir -p "$tmpd"
+  age_marker "$tmpd" 100000
+  out=$(classify busy claude "$tmpd")
+  [ "$out" = "busy herdr-native" ] \
+    || fail "an integrated harness must never be time-bounded, got '$out'"
+  pass "fm_busy_classify: the staleness bound applies to cline only, never to claude"
 }
 
 test_idle_resets_the_staleness_window() {
-  # When the backend reports idle, the per-window busy-since state is cleared so
-  # a later busy starts a fresh threshold window (no stale carryover).
-  local tmpd out now
+  # Native idle clears the per-task marker so a later busy starts a fresh
+  # window with no stale carryover.
+  local tmpd out
   tmpd=$(fm_test_tmproot busy-idle-reset); mkdir -p "$tmpd"
-  now=${EPOCHSECONDS:-$(date +%s)}
-  echo $((now - 200)) > "$tmpd/.busy-since-win_0"
-  out=$(STATE="$tmpd" SRC="$WINDOW_BUSY_SOURCE" bash -c '
-    eval "$SRC"
-    fm_backend_busy_state() { printf idle; }
-    window_backend() { printf herdr; }
-    window_harness() { printf cline; }
-    FM_BUSY_NATIVE_MAX_SECONDS=120
-    if window_is_busy win:0 "idle"; then printf busy; else printf notbusy; fi
-    [ -e "$STATE/.busy-since-win_0" ] && printf "state-leftover" || printf "state-cleared"
-  ')
-  case "$out" in
-    notbusystate-cleared) ;;
-    *) fail "idle must clear the busy-since state and report not-busy, got '$out'" ;;
-  esac
-  pass "window_is_busy: idle reports not-busy and clears the per-window staleness state"
+  age_marker "$tmpd" 200
+  out=$(classify idle cline "$tmpd")
+  [ "${out%% *}" != busy ] \
+    || fail "native idle must not classify as busy, got '$out'"
+  if [ -e "$tmpd/.busy-since-t1" ]; then
+    fail "native idle must clear the continuous-busy marker"
+  fi
+  pass "fm_busy_classify: native idle clears the per-task staleness marker"
 }
 
-test_unknown_backend_state_falls_through_and_clears() {
-  # A non-busy/non-idle native value (unknown/error) falls through to the
-  # pane-regex classifier (unchanged original behaviour) and clears any leftover
-  # busy-since state so it cannot masquerade as stale later.
-  local tmpd out now
+test_unknown_native_state_clears_the_window() {
+  # A non-busy/non-idle native value must also clear the marker so it cannot
+  # masquerade as stale later.
+  local tmpd out
   tmpd=$(fm_test_tmproot busy-unknown); mkdir -p "$tmpd"
-  now=${EPOCHSECONDS:-$(date +%s)}
-  echo $((now - 200)) > "$tmpd/.busy-since-win_0"
-  out=$(STATE="$tmpd" SRC="$WINDOW_BUSY_SOURCE" bash -c '
-    eval "$SRC"
-    fm_backend_busy_state() { printf unknown; }
-    window_backend() { printf herdr; }
-    window_harness() { printf cline; }
-    fm_busy_lines_match() { return 1; }
+  age_marker "$tmpd" 200
+  out=$(classify unknown cline "$tmpd")
+  [ "${out%% *}" != busy ] \
+    || fail "unknown native state must not classify as busy, got '$out'"
+  if [ -e "$tmpd/.busy-since-t1" ]; then
+    fail "unknown native state must clear the continuous-busy marker"
+  fi
+  pass "fm_busy_classify: unknown native state clears the per-task staleness marker"
+}
+
+test_boolean_view_rejects_a_stale_native_busy() {
+  # End-to-end guarantee the guard exists for: the boolean view that
+  # supervision gates on must report not-busy once trust has expired.
+  local tmpd
+  tmpd=$(fm_test_tmproot busy-bool); mkdir -p "$tmpd"
+  age_marker "$tmpd" 200
+  if (
+    fm_backend_busy_state() { printf busy; }
     FM_BUSY_NATIVE_MAX_SECONDS=120
-    if window_is_busy win:0 "idle pane"; then printf busy; else printf notbusy; fi
-    [ -e "$STATE/.busy-since-win_0" ] && printf "state-leftover" || printf "state-cleared"
-  ')
-  case "$out" in
-    notbusystate-cleared) ;;
-    *) fail "unknown native state must fall through to pane-regex and clear busy-since, got '$out'" ;;
-  esac
-  pass "window_is_busy: unknown native state falls through to pane-regex and clears the staleness state"
+    fm_busy_is_busy herdr win:0 cline t1 "$tmpd" "idle pane tail"
+  ); then
+    fail "fm_busy_is_busy must be false once native trust has expired"
+  fi
+  pass "fm_busy_is_busy: a stale cline native busy no longer blocks supervision"
 }
 
 # --- run --------------------------------------------------------------------
-test_busy_under_threshold_trusts_native
-test_stale_native_busy_falls_through_to_pane_regex
-test_stale_native_busy_confirms_busy_when_pane_still_working
+test_under_threshold_trusts_native_for_integrated_harness
+test_under_threshold_trusts_native_for_cline
+test_first_native_busy_arms_the_window_without_reporting_stale
+test_stale_native_busy_stops_being_trusted_for_cline
+test_stale_trust_is_bounded_only_for_unintegrated_harnesses
 test_idle_resets_the_staleness_window
-test_unknown_backend_state_falls_through_and_clears
+test_unknown_native_state_clears_the_window
+test_boolean_view_rejects_a_stale_native_busy
 echo "ALL PASS: fm-watch-busy-staleness"
