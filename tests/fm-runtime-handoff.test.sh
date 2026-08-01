@@ -13,8 +13,9 @@
 #   - the verified-exit path really runs: the recorded harness's exit command is
 #     delivered, the husk is killed once dead, and a harness that ignores it refuses
 #   - batch dispatch refuses --reuse-worktree instead of dropping it
-#   - statusline quota parse: unparseable => unknown, never exhausted, and a
-#     context-window reading never decides low/exhausted
+#   - statusline quota parse: unparseable => unknown, never exhausted, a
+#     context-window reading never decides low/exhausted, and only the
+#     statusline region of a capture votes - never the transcript above it
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -260,6 +261,55 @@ setup_case() {
   assert_contains "$line" "context_pct=40" "context stays a reported field"
   assert_contains "$line" "status=low" "weekly alone drives the status"
   pass "context_pct is reported but informational"
+}
+
+# A pane capture is mostly transcript. Only the statusline region may vote, or a
+# crewmate that merely printed these shapes reads as exhausted.
+{
+  capture=$(printf '%s\n' \
+    '+  fail "zero weekly should be exhausted, got weekly 0% left"' \
+    '+  pass "claude zero 5hr => exhausted"    # 5HR 0% WK 40%' \
+    '' \
+    '> ' \
+    'Context 90% left · weekly 80% left')
+  v=$(fm_statusline_quota_verdict "$capture")
+  [ "$v" = ok ] || fail "transcript above the statusline must not vote, got $v"
+  line=$(fm_statusline_quota_parse "$capture")
+  assert_contains "$line" "weekly_pct=80" "statusline row owns the weekly value"
+  pass "transcript scrollback never decides the verdict"
+}
+
+{
+  capture=$(printf '%s\n' \
+    'healthy earlier: 5HR 90% WK 90%' \
+    'still fine: 5HR 60% WK 70%' \
+    '5HR 0% WK 40%')
+  v=$(fm_statusline_quota_verdict "$capture")
+  [ "$v" = exhausted ] || fail "bottom-most statusline row must win, got $v"
+  pass "bottom-most row of the region wins over older rows"
+}
+
+{
+  capture=$(printf '%s\n' 'Context 50% left · weekly 70% left' '' '' '' '' '' '' '' '')
+  v=$(fm_statusline_quota_verdict "$capture")
+  [ "$v" = ok ] || fail "blank rows under the statusline must not hide it, got $v"
+  pass "region skips the blank rows a pane draws under the statusline"
+}
+
+{
+  capture=$(printf '%s\n' 'weekly 0% left' one two three four five six 'Context 50% left · weekly 70% left')
+  v=$(fm_statusline_quota_verdict "$capture")
+  [ "$v" = ok ] || fail "a row beyond the region must not vote, got $v"
+  pass "rows above the statusline region are out of scope"
+}
+
+{
+  region=$(fm_statusline_quota_tail "$(printf 'a\n\nb\nc\nd\ne\nf\ng\nh\n')")
+  [ "$(printf '%s\n' "$region" | wc -l | tr -d ' ')" = 6 ] || fail "region should keep six lines: $region"
+  case "$region" in
+    a*|*b*) fail "region must drop the oldest lines: $region" ;;
+  esac
+  pass "statusline region defaults to the last six non-empty lines"
 }
 
 # --- refusal: unverified harness -------------------------------------------
