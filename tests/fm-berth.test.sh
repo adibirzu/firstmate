@@ -147,7 +147,7 @@ test_status_and_list_report_holders() {
 test_slug_validation_refuses_unsafe_names() {
   local home code
   home=$(new_home); : > "$home/config/berths"
-  for bad in "../escape" "a/b" ".hidden" 'semi;colon' '$(id)' "" ; do
+  for bad in "../escape" "a/b" ".hidden" 'semi;colon' "\$(id)" "" ; do
     FM_HOME="$home" "$BERTH" env "$bad" >/dev/null 2>&1; code=$?
     [ "$code" -ne 0 ] || fail "unsafe project name accepted: '$bad'"
   done

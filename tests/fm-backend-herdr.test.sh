@@ -330,7 +330,7 @@ test_workspace_label_secondmate_ignores_berth() {
 test_workspace_label_malformed_berth_falls_back() {
   local home bad
   home="$TMP_ROOT/berth-malformed"; mkdir -p "$home"
-  for bad in "../escape" "a/b" ".hidden" 'semi;colon' '$(id)' "$(printf 'a%.0s' $(seq 1 65))"; do
+  for bad in "../escape" "a/b" ".hidden" 'semi;colon' "\$(id)" "$(printf 'a%.0s' $(seq 1 65))"; do
     out=$(label_for "$home" "$bad" 2>/dev/null)
     [ "$out" = "firstmate" ] || fail "a malformed FM_BERTH ('$bad') must fall back to 'firstmate', got '$out'"
   done
