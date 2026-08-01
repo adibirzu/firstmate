@@ -491,6 +491,70 @@ setup_case() {
   pass "refuses --reuse-worktree in batch dispatch instead of leasing a second worktree"
 }
 
+# --- refusal: secondmate identity ------------------------------------------
+
+{
+  setup_case refuse-secondmate task-m1
+  fm_write_meta "$CASE_HOME/state/task-m1.meta" \
+    "window=firstmate:fm-task-m1" \
+    "endpoint_task_id=task-m1" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=no-mistakes" \
+    "yolo=off"
+  : > "$FM_FAKE_TREEHOUSE_LOG"
+  set +e
+  out=$("$HANDOFF" task-m1 --harness claude --skip-exit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "secondmate handoff should refuse"
+  assert_contains "$out" "is a secondmate" "secondmate refusal message"
+  if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
+    fail "secondmate refusal must not touch treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
+  fi
+  pass "refuses a secondmate task instead of handing its identity to another runtime"
+}
+
+# --- refusal: orca backend owns its own worktree lifecycle ------------------
+
+{
+  setup_case refuse-orca task-o1
+  # The orca backend validates that its CLI exists before the reuse guard runs;
+  # stub it so the refusal under test is the reuse guard, not a missing binary.
+  cat > "$CASE_DIR/fakebin/orca" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = status ]; then
+  printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
+fi
+exit 0
+SH
+  chmod +x "$CASE_DIR/fakebin/orca"
+  fm_write_meta "$CASE_HOME/state/task-o1.meta" \
+    "window=firstmate:fm-task-o1" \
+    "endpoint_task_id=task-o1" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=codex" \
+    "kind=ship" \
+    "backend=orca" \
+    "mode=no-mistakes" \
+    "yolo=off"
+  : > "$FM_FAKE_TREEHOUSE_LOG"
+  set +e
+  out=$("$SPAWN" task-o1 --reuse-worktree --harness claude 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "orca-backed reuse should refuse"
+  assert_contains "$out" "does not support backend=orca" "orca refusal message"
+  if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
+    fail "orca refusal must not lease a worktree; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
+  fi
+  pass "refuses reuse on an orca-backed task rather than re-creating its worktree"
+}
+
 # --- refusal: missing original brief ---------------------------------------
 
 {

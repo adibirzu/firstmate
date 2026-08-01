@@ -25,6 +25,16 @@
 #   - live or ambiguous endpoint ownership after exit attempt
 #   - unverified target harness (no launch template)
 #   - primary-checkout or non-isolated worktree path
+#   - backend=orca, refused by the relaunch half, because Orca owns its own
+#     worktree lifecycle and there is no lease to preserve in place
+#
+# Tunables:
+#   FM_HANDOFF_EXIT_POLLS (default 30) and FM_HANDOFF_EXIT_SLEEP (default 0.5)
+#   bound the wait for the old agent to stop being alive after the exit command;
+#   exhausting that budget refuses the handoff rather than splitting ownership.
+#
+# Writes one launch-only prompt file, state/<id>.handoff-prompt, holding the
+# progress note plus the unchanged brief; fm-teardown.sh removes it.
 #
 # Does NOT: abort or restart a live no-mistakes run; start automatic quota
 # monitoring; change delivery mode or yolo; return a treehouse lease.
