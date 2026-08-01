@@ -21,8 +21,12 @@
 #   worktree without running treehouse get (or Orca worktree acquisition). It is
 #   the launch half of bin/fm-runtime-handoff.sh: same task id, same worktree,
 #   same branch, different or same harness. It refuses when meta, worktree, or
-#   endpoint ownership cannot be reconciled. --handoff-brief substitutes a
-#   launch-only prompt file while leaving data/<id>/brief.md untouched.
+#   endpoint ownership cannot be reconciled, refuses kind=secondmate and
+#   backend=orca (Orca owns its own worktree lifecycle). --handoff-brief
+#   substitutes a launch-only prompt file while leaving data/<id>/brief.md
+#   untouched. Both flags relaunch exactly one task, so an id=repo batch
+#   dispatch refuses them rather than spawning a second worktree for a task
+#   that already owns one.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile

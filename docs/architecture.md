@@ -140,7 +140,7 @@ When a live ship or scout must change worker runtime mid-task (for example a har
 A handoff refuses rather than guessing when the worktree, endpoint ownership, or target harness cannot be reconciled, and it never aborts or restarts a live no-mistakes run; the replacement agent is told to re-attach with `no-mistakes axi status`.
 Firstmate decides when to invoke handoff; there is no automatic migration daemon.
 Pane statusline quota fragments are a best-effort capacity signal via `bin/fm-statusline-quota-lib.sh` (unparseable means unknown, never exhausted); `quota-axi` remains best-effort and is not the sole input.
-Choosing Claude as a handoff target can share the same Claude budget as the supervising firstmate session - surface that tradeoff; do not encode a policy for it.
+No target-selection policy is encoded either: the scripts refuse an unverified or unreconcilable target instead of ranking harnesses, and the operating rules for choosing one - including that a Claude target can draw on the supervising firstmate session's own Claude budget - belong to the `stuck-crewmate-recovery` skill.
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.
