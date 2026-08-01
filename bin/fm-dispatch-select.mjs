@@ -153,6 +153,9 @@ function settingsFromConfig(configDir) {
   const file = path.join(configDir, 'crew-dispatch.json');
   if (!fs.existsSync(file)) return { ...DEFAULTS };
   const root = readJson(file, 'config/crew-dispatch.json');
+  if (!root || Array.isArray(root) || typeof root !== 'object') {
+    die('config/crew-dispatch.json must be an object');
+  }
   const configured = root.subscriptionRouting ?? {};
   if (!configured || Array.isArray(configured) || typeof configured !== 'object') {
     die('config/crew-dispatch.json subscriptionRouting must be an object');

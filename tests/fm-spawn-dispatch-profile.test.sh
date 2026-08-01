@@ -385,6 +385,14 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
   launch=$(cat "$LAUNCH_LOG")
   [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    profile-raw-provider-z15 "$PROJ_DIR" "custom-agent --flag" --provider claude)
+  status=$?
+  expect_code 1 "$status" "raw launch commands must reject subscription routing providers"
+  assert_contains "$out" "raw launch commands cannot carry a subscription routing provider" \
+    "raw provider refusal was unclear"
+  assert_absent "$HOME_DIR/state/profile-raw-provider-z15.meta" "raw provider refusal wrote metadata"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
 }
 
