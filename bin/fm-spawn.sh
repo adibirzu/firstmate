@@ -70,8 +70,9 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
-#   overrides it for this spawn (either kind). A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   overrides it for this spawn (either kind); agy is crewmate-only and a
+#   --secondmate spawn refuses it. A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
 #   refuses before endpoint creation when it is unavailable; it never falls back to pi.
@@ -423,9 +424,23 @@ PROJ=
 ARG3=
 FIRSTMATE_HOME=
 
+# agy is verified for CREWMATE launches only. backends/tmux.sh carries no agy
+# agent-process liveness signature, so a live agy secondmate classifies
+# `ambiguous` on every session start and its liveness can never be confirmed.
+# Refusing the combination loudly - here for the bare name, and again after
+# HARNESS resolution for --harness and the config/secondmate-harness chain -
+# keeps the supervisor from owning an endpoint it cannot read.
+secondmate_harness_unsupported() {  # <harness>
+  echo "error: $1 is verified for crewmate launches only and is not wired as a secondmate harness (no backends/tmux.sh agent-process liveness signature); choose a secondmate-verified harness" >&2
+  exit 1
+}
+
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
+    agy)
+      secondmate_harness_unsupported agy
+      ;;
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -495,8 +510,9 @@ launch_template() {
     # MODEL/EFFORT: base model ids require `--effort`; effort-baked model ids
     # (`…-low|medium|high`) work alone; matching baked+effort works; conflict
     # fails closed. Preferred form is base model + `--effort`. Ceiling is
-    # `high`; omit xhigh/max. Turn-end is observed from the pane (`esc to
-    # cancel` clears; idle footer is `? for shortcuts`).
+    # `high`, so firstmate's shared xhigh/max clamp down to it. Turn-end is
+    # observed from the pane (`esc to cancel` clears; idle footer is
+    # `? for shortcuts`). CREWMATE ONLY - see the secondmate refusal above.
     # PROJECT TRUST: fresh worktrees show "Do you trust the contents of this
     # project?". fm-spawn clears it with a post-launch keystroke gate only
     # (one Enter; past-trust first). No pre-seed of the operator-global
@@ -546,6 +562,17 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+# Crewmate-only harnesses reach HARNESS through three paths: the bare name
+# (rejected above), --harness=, and the config/secondmate-harness fallback
+# chain. This is the single point all three pass through. The raw launch
+# command stays exempt - it is the explicit unverified-adapter escape hatch.
+if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then
+  case "$ARG3" in
+    *' '*) ;;
+    *) secondmate_harness_unsupported agy ;;
+  esac
+fi
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
@@ -661,12 +688,16 @@ effort_flag_for_harness() {
     agy)
       # agy 1.1.9 accepts --effort low|medium|high (verified via --help and live
       # conflict probes; docs/verification/agy-adapter.md "Model and effort").
-      # xhigh and max are not accepted, so omit them rather than passing a
-      # known-bad value. When the model id already ends in -low/-medium/-high,
-      # a matching --effort is accepted and a conflicting --effort fails closed
-      # at launch with a clear agy error - firstmate does not rewrite model ids.
+      # xhigh and max are not accepted, so firstmate's shared tiers CAP at agy's
+      # ceiling instead of dropping the flag: a BASE model id (no -low/-medium/
+      # -high suffix) REQUIRES --effort, so omitting it makes agy exit with
+      # "requires --effort" and the spawn only surfaces that as a trust-gate
+      # timeout. When the model id already ends in -low/-medium/-high, a matching
+      # --effort is accepted and a conflicting --effort fails closed at launch
+      # with a clear agy error - firstmate does not rewrite model ids.
       case "$effort" in
         low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+        xhigh|max) printf -- '--effort high ' ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model

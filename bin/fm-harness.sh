@@ -72,7 +72,10 @@ detect_own() {
           *codex*) echo codex; return ;;
           *opencode*) echo opencode; return ;;
           *grok*) echo grok; return ;;
-          *agy*) echo agy; return ;;
+          # Anchored like the pi arm below: a bare `agy` substring also occurs
+          # inside ordinary words ("legacy"), so only a whole argv token or a
+          # trailing path segment counts.
+          *" agy "*|*"/agy "*|*/agy) echo agy; return ;;
           *" pi "*|*/pi) echo pi; return ;;
         esac ;;
     esac

@@ -69,11 +69,49 @@ test_agy_model_and_effort_flags() {
     || fail "fm-spawn: effort_flag_for_harness has no agy case arm"
   printf '%s\n' "$effort_agy_arm" | grep -Fq "low|medium|high) printf -- '--effort %s '" \
     || fail "fm-spawn: agy effort->--effort (low|medium|high) mapping missing"
-  # agy rejects xhigh/max, so the arm's own case pattern must not widen to them.
-  if printf '%s\n' "$effort_agy_arm" | grep -Eq "^ *[a-z|]*(xhigh|max)[a-z|]*\) printf -- '--effort"; then
-    fail "fm-spawn: agy effort arm must omit xhigh/max"
+  # agy REJECTS the literal values xhigh/max, so they must never be emitted.
+  if printf '%s\n' "$effort_agy_arm" | grep -Eq -- "--effort (xhigh|max)"; then
+    fail "fm-spawn: agy effort arm must never emit --effort xhigh/max"
   fi
-  pass "fm-spawn: agy gets --model and effort->--effort (low|medium|high)"
+  # ...but dropping the flag entirely is equally broken: a BASE model id refuses
+  # to launch without --effort, and the spawn would only surface that as a
+  # trust-gate timeout. firstmate's shared xhigh/max clamp to agy's ceiling.
+  printf '%s\n' "$effort_agy_arm" | grep -Fq "xhigh|max) printf -- '--effort high '" \
+    || fail "fm-spawn: agy must clamp xhigh/max to --effort high, not drop the flag"
+  pass "fm-spawn: agy gets --model, effort->--effort (low|medium|high), xhigh/max clamped to high"
+}
+
+# --- crewmate-only posture --------------------------------------------------
+
+test_agy_is_refused_as_a_secondmate_harness() {
+  # backends/tmux.sh carries no agy agent-process liveness pattern, so a live
+  # agy secondmate classifies `ambiguous` forever. Every non-raw path that can
+  # resolve HARNESS=agy for a secondmate must refuse before endpoint creation.
+  grep -Fq 'secondmate_harness_unsupported' "$SPAWN" \
+    || fail "fm-spawn: no secondmate crewmate-only refusal helper"
+  # shellcheck disable=SC2016  # single quotes are deliberate: a literal needle string, not an expansion
+  grep -Fq 'if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then' "$SPAWN" \
+    || fail "fm-spawn: post-resolution agy secondmate guard missing (covers --harness and config/secondmate-harness)"
+  # The bare-name parse arm must not silently accept agy either.
+  local sm_case
+  sm_case=$(sed -n '/^if \[ "\$KIND" = secondmate \]; then/,/^fi$/p' "$SPAWN" | head -20)
+  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|codex\|opencode\|pi\|pi-signed\|grok\|kimi\)" \
+    || fail "fm-spawn: secondmate bare-adapter allowlist changed or still carries agy"
+  printf '%s\n' "$sm_case" | grep -Fq 'secondmate_harness_unsupported agy' \
+    || fail "fm-spawn: bare 'agy' secondmate name is not explicitly refused"
+  pass "fm-spawn: agy is refused as a secondmate harness on every non-raw path"
+}
+
+test_agy_not_recovery_graded_in_secondmate_sweep() {
+  local sweep
+  sweep=$(sed -n '/^secondmate_liveness_sweep()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
+  [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_sweep not found"
+  if printf '%s\n' "$sweep" | grep -Eq '^ *claude\|.*\|agy\) *;;'; then
+    fail "fm-bootstrap: agy must not be in the secondmate recovery-grade harness allowlist"
+  fi
+  printf '%s\n' "$sweep" | grep -Fq 'claude|codex|opencode|pi|pi-signed|grok|kimi) ;;' \
+    || fail "fm-bootstrap: secondmate recovery-grade allowlist changed unexpectedly"
+  pass "fm-bootstrap: agy dead/missing readings are not trusted as secondmate recovery-grade"
 }
 
 # --- detection --------------------------------------------------------------
@@ -97,6 +135,23 @@ test_agy_detection_wired() {
   grep -Fq 'agy) echo agy; return ;;' "$HARNESS" \
     || fail "fm-harness: agy direct ancestry case missing"
   pass "fm-harness: agy is detected by env marker (before CLAUDECODE) and process ancestry"
+}
+
+test_agy_argv_match_is_anchored() {
+  # A bare *agy* pattern in the node/python argv fallback also matches the
+  # ordinary word "legacy" (`node /repo/packages/legacy-cli/index.js`), which
+  # would resolve detect_own to agy and dispatch crewmates onto the wrong
+  # adapter. Only a whole argv token or a trailing path segment may match,
+  # the same anchoring the pi arm already uses.
+  local argv_arm
+  argv_arm=$(sed -n '/node\*|python\*)/,/esac ;;/p' "$HARNESS")
+  [ -n "$argv_arm" ] || fail "fm-harness: node/python argv fallback arm not found"
+  if printf '%s\n' "$argv_arm" | grep -Eq '^ *\*agy\*\)'; then
+    fail "fm-harness: agy argv match must be anchored, not a bare *agy* substring"
+  fi
+  printf '%s\n' "$argv_arm" | grep -Fq '*" agy "*' \
+    || fail "fm-harness: anchored agy argv token match missing"
+  pass "fm-harness: agy argv fallback is anchored so 'legacy' cannot false-positive"
 }
 
 test_agy_env_marker_takes_precedence() {
@@ -327,7 +382,10 @@ test_agy_launch_template_is_pinned
 test_existing_launch_templates_untouched
 test_agy_is_a_known_bare_adapter_name
 test_agy_model_and_effort_flags
+test_agy_is_refused_as_a_secondmate_harness
+test_agy_not_recovery_graded_in_secondmate_sweep
 test_agy_detection_wired
+test_agy_argv_match_is_anchored
 test_agy_env_marker_takes_precedence
 test_agy_busy_default_defined
 test_agy_busy_line_matches

@@ -43,7 +43,7 @@ A baked suffix alone is enough.
 Matching baked + `--effort` is accepted.
 Conflicting baked + `--effort` fails closed with a clear error.
 
-**firstmate policy:** pass `--model` and `--effort` when set; preferred captain form is base model + effort (e.g. `gemini-3.6-flash` + `low`); full baked ids also work when effort is omitted or matches; ceiling is `high` (omit `xhigh`/`max`). firstmate does not rewrite model ids when both axes are supplied.
+**firstmate policy:** pass `--model` and `--effort` when set; preferred captain form is base model + effort (e.g. `gemini-3.6-flash` + `low`); full baked ids also work when effort is omitted or matches; ceiling is `high`, and firstmate's shared `xhigh`/`max` tiers CLAMP down to `--effort high` rather than dropping the flag, because a base model id without `--effort` refuses to launch. firstmate does not rewrite model ids when both axes are supplied.
 
 ## Trust / permission gate
 
