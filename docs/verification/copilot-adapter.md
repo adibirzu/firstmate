@@ -60,8 +60,8 @@ the full autonomy flag already in argv:
   composer (see Interrupt vs exit below); it is meaningful only inside this
   dialog and the `/model` picker (`esc to cancel`, its own footer hint).
 - **Selecting option 2 ("Yes, and remember") persists to `~/.copilot/config.json`
-  `trustedFolders`** (verified: the array grew from `["/home/adi"]` to
-  `["/home/adi","/tmp/fm-copilot-scratch"]`; immediately reverted after the
+  `trustedFolders`** (verified: the array grew from `["/home/alice"]` to
+  `["/home/alice","/tmp/fm-copilot-scratch"]`; immediately reverted after the
   observation — this task's hard rules treat that file as read-only). This is a
   real, working non-interactive-launch bypass mechanism in principle (pre-seed
   the array before spawn), but it is **materially riskier than cursor-agent's

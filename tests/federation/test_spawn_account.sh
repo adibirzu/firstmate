@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# --account axis test (Phase 4, Task 11). Run from ~/kun-agent-workspace:
+# --account axis test (Phase 4, Task 11). Run from ~/firstmate:
 #   bash tests/federation/test_spawn_account.sh
 # Exercises: launch-command composition for each config-dir isolation method,
 # model/effort folding, api-key refusal (no secret on argv), unknown-account

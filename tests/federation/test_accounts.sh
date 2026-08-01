@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Account registry + resolution/validation test (Phase 4, Task 10).
-# Run from ~/kun-agent-workspace:  bash tests/federation/test_accounts.sh
+# Run from ~/firstmate:  bash tests/federation/test_accounts.sh
 # Exercises: resolve returns per-account config_dir; unknown fails; api-key
 # exposes key_file; validate accepts a good account and rejects unknown harness,
 # wrong env-for-harness, and a foreign-home path (cross-uid safety).

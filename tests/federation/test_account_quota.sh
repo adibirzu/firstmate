@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Quota-aware account selection test (Phase 4, Task 12). Run from ~/kun-agent-workspace:
+# Quota-aware account selection test (Phase 4, Task 12). Run from ~/firstmate:
 #   bash tests/federation/test_account_quota.sh
 # A stub quota-axi returns headroom that DEPENDS on the isolation env it runs
 # under (CLAUDE_CONFIG_DIR), so this exercises the full isolate-then-query chain:
