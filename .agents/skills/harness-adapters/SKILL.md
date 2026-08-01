@@ -50,6 +50,7 @@ When verifying a new adapter, record its env marker and command name in `bin/fm-
 
 For stuck recovery, the target window's harness is recorded as `harness=` in `state/<id>.meta`.
 Use that value for interrupt, exit, resume, and skill-invocation facts.
+When firstmate must move a live ship/scout to another verified harness without losing work, use `bin/fm-runtime-handoff.sh` rather than guessing exit keys or hand-editing meta; that script reads these exit-command facts and rewrites `harness=` after a successful in-place relaunch.
 
 ## Primary turn-end guard
 
