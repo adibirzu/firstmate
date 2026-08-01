@@ -26,8 +26,17 @@ start_fake_harness() { # dir -> echoes pid
   local dir=$1 shim="$1/claude" real
   mkdir -p "$dir"
   real=$(command -v sleep) || fail "cannot locate 'sleep' to build the harness shim"
-  cp "$real" "$shim" || fail "cannot create the harness shim at $shim"
-  chmod +x "$shim"
+  # SYMLINK, not a copy. fm_harness_pid_alive identifies a holder by the
+  # basename of `ps -o comm=`, so the shim must EXEC under the name "claude" -
+  # but copying the system `sleep` breaks its Apple code signature, and macOS
+  # SIGKILLs the copy the instant it starts ("Killed: 9"). The fake holder was
+  # therefore already dead by the time the berth looked, the berth correctly
+  # reported a free lock, and the suite blamed the berth for "not refusing a
+  # second session". Re-signing with `codesign -s -` does not help; a shell
+  # wrapper would not either, since `comm` would then be the interpreter.
+  # A symlink execs the real binary while `comm` still resolves to the link
+  # name, on both BSD (full path) and Linux (bare name).
+  ln -s "$real" "$shim" || fail "cannot create the harness shim at $shim"
   "$shim" 300 >/dev/null 2>&1 &
   echo $!
 }
