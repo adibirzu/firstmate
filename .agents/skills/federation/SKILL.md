@@ -89,11 +89,11 @@ exercises every code path.
   where pace is reported, on conservation pressure too (see the `budget` bullet below).
   Missing `quota-axi` is fail-open (`quota:-`), so routing falls back to scope alone.
 
-## Per-surface token visibility & model→surface failover
+## Per-surface token visibility & model→surface picker
 
 Each CLI/app subscription is its OWN token pool, and one model can be reachable from
 several pools (grok via the `grok` CLI AND via Cursor; kimi3/open models via `cline`).
-Three read-only, 0-token verbs expose and route on this:
+Four read-only, 0-token verbs expose this:
 
 - `fm-fleet.sh quota` — every surface's headroom + observability status, plus (quota-axi
   ≥ 0.1.15, `schemaVersion` 3) a `PACE` and signed `RESERVE` column. Reserve is
@@ -110,13 +110,13 @@ Three read-only, 0-token verbs expose and route on this:
   `config/model-surfaces.json` if present, else the shipped default
   `docs/examples/model-surfaces.json`), the
   ordered surfaces that can serve it, each with live status + headroom.
-- `fm-fleet.sh pick <family>` — the failover selector (`fm_fleet_pick_surface`): among
+- `fm-fleet.sh pick <family>` — the picker (`fm_fleet_pick_surface`): among
   surfaces with observable headroom ≥ floor, prefers known-sustainable pace, then
   unknown/absent pace, then the least-pressured (least-negative reserve) surface, each
   tier taking the first in the map's operator-ordered surface list; else a
   configured-but-unobservable surface (fail-open) → else the first listed. Only fresh
   surfaces' pace is trusted (a stale surface's pace falls to the unknown/absent tier).
-  This is "grok from whichever pool has tokens".
+  This answers which quota pool currently has tokens for a family such as `grok`.
 - `fm-fleet.sh budget` — also refuses on conservation pressure now, not just raw
   headroom: a fresh, pressured surface with worst reserve below
   `FM_FLEET_RESERVE_MIN` (default `-25` points; `-100` disables the pace floor)
@@ -144,7 +144,7 @@ token from a 0600 file, never argv). Empty/missing = blind fail-open (default). 
 - **cline** — intentionally NOT monitored. Its balance is served via an internal local
   WS Hub (`ws://127.0.0.1:25463/hub`) using a server-derived credential, not the stored
   WorkOS token (every REST/header variant returns 401). cline stays a usable crewmate
-  harness but is out of quota routing; we let it hit its wall and route open work elsewhere.
+  harness but is out of quota picking; let it hit its wall and choose another LLM for open work.
 
 **Retirement trigger for `bin/quota-sources/{copilot,cursor}.sh`** (full detail:
 `docs/fleet-addon.md` "Custom-source retirement path"): once quota-axi PR #50 merges

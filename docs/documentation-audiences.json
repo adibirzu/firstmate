@@ -340,6 +340,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/copilot-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/cursor-agent-adapter.md",
       "audience": "maintainer-verification"
     },

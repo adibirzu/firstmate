@@ -1,11 +1,11 @@
 # Fleet quickstart — pick your use case
 
 The fleet add-on does two separable things. **You do not need both**, and the first
-one needs no setup at all:
+one needs no fleet setup:
 
 1. **Per-surface token visibility** — one table showing how much budget is left in
    every AI subscription you own (Claude, Codex, Copilot, Cursor, Grok, Kimi), plus
-   automatic failover to whichever pool still has headroom.
+   a deterministic picker for the pool that still has headroom.
 2. **Federation** — several people, each running their own first mate on one host,
    coordinating through a shared work queue so they never collide.
 
@@ -23,13 +23,13 @@ Tier C is the only tier that ever needs root, and it stays **opt-in**: a home wi
 
 | | Use case | Root needed? | Setup |
 |---|---|---|---|
-| **A** | *"Which of my subscriptions still has budget, and can work route itself there?"* | no | ~2 min |
+| **A** | *"Which of my subscriptions still has budget, and which pool should I use?"* | no | ~2 min |
 | **B** | *"I have two Claude accounts / a work and a personal one."* | no | ~5 min |
 | **C** | *"Three of us share this box and keep stepping on each other."* | once | ~15 min |
 
 ---
 
-## Tier A — token visibility and model→surface failover
+## Tier A — token visibility and model→surface picker
 
 No fleet, no root, no shared directory. This works in a plain clone.
 
@@ -61,7 +61,8 @@ a literal `unknown` means the provider itself said so. Full column semantics:
 
 **Why this exists.** The same model often reaches you through several paid pools —
 Claude via an Anthropic subscription *and* via Copilot *and* via Cursor. When one
-pool is drained the work should move, not stop. The shipped map
+pool is drained the picker should point at another usable pool instead of leaving
+you to guess. The shipped map
 `docs/examples/model-surfaces.json` (override: copy it to the gitignored
 `config/model-surfaces.json` and edit) maps
 each model family to an ordered list of surfaces:
@@ -78,7 +79,7 @@ surfaces of equal standing it walks the list left to right, so the order you wri
 is still the preference you get.
 
 A surface whose usage cannot be observed is treated **fail-open** (a valid target),
-so an unreadable provider never blocks routing.
+so an unreadable provider never blocks the picker.
 
 ### Surfaces whose usage is not locally readable
 
@@ -90,7 +91,8 @@ cp docs/examples/quota-overrides.json config/quota-overrides.json   # gitignored
 ```
 
 ```json
-{ "cursor": "/abs/path/to/firstmate/bin/quota-cursor-usage.sh" }
+{ "copilot": "/abs/path/to/firstmate/bin/quota-copilot-usage.sh",
+  "cursor": "/abs/path/to/firstmate/bin/quota-cursor-usage.sh" }
 ```
 
 Two readers ship working, both using the CLI's *own* stored token — no browser

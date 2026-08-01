@@ -1,5 +1,5 @@
 {
-  "_comment": "TEMPLATE — copy to config/accounts.json (gitignored) and replace every /home/YOUR-USER path with your own. Paths are used LITERALLY: ~ and $HOME are NOT expanded, so write absolute paths. Delete the accounts you do not use; an entry whose config_dir/key_file does not exist is only an error when that account is actually selected. One entry per account. 'isolation' MUST match the harness per adapters/config-dir-matrix.md. NEVER put a secret here: api-key accounts point at a key_file (a 0600 file in YOUR OWN home); fm-spawn reads it at launch. config_dir/key_file must live under your own home (foreign /home/<other> is refused).",
+  "_comment": "TEMPLATE — copy to config/accounts.json (gitignored) and replace every /home/YOUR-USER path with your own. Paths are used LITERALLY: ~ and $HOME are NOT expanded, so write absolute paths. Delete the accounts you do not use; an entry whose config_dir/key_file does not exist is only an error when that account is actually selected. One entry per account. 'isolation' MUST match the harness matrix in docs/fleet-addon.md. NEVER put a secret here: api-key accounts point at a key_file (a 0600 file in YOUR OWN home); fm-account-exec.sh reads it for direct launches. config_dir/key_file must live under your own home (foreign /home/<other> is refused).",
 
   "claude-personal": {
     "provider": "anthropic",

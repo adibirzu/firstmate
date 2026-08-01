@@ -4,8 +4,9 @@
 # Points this deployment's config at the shared KB, verifies cross-uid-safe access,
 # and registers you as an operator. Idempotent. It only ever writes YOUR OWN
 # $FM_HOME/config and the group-writable shared KB — never another operator's home.
-# The one-time root prereq (group `agents` + a group-writable shared dir, see
-# docs/federation.md / ROOT-PREREQ) must already be done and the fleet `init`'d.
+# The one-time root prereq (group `agents` + a group-writable shared dir) is
+# documented in docs/fleet-quickstart.md and scripts/fleet-root-prereq.sh.
+# It must already be done and the fleet `init`'d.
 #
 # Usage: fm-fleet-join.sh <operator> <scopes-csv> [accounts-csv]
 #   e.g. fm-fleet-join.sh adi backend,infra,deploy claude-default,codex-default

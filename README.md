@@ -197,7 +197,7 @@ Firstmate's skills live in two separate places with different audiences:
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
-- [docs/fleet-quickstart.md](docs/fleet-quickstart.md) - **start here for the fleet add-on**: see remaining budget across every AI subscription you own and fail work over to whichever pool still has headroom (no setup), run several accounts for one person, or federate several people on one host.
+- [docs/fleet-quickstart.md](docs/fleet-quickstart.md) - **start here for the fleet add-on**: see remaining budget across every AI subscription you own and pick a pool with headroom (no fleet setup), run several accounts for one person, or federate several people on one host.
 - [docs/fleet-addon.md](docs/fleet-addon.md) - reference for the fleet add-on: shared KB layout, claim protocol, routing rules, and the one-time root prerequisite.
 - [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional X mode, the files you set, and harness support.
 - [docs/calm.md](docs/calm.md) - current Pi `/calm` behavior and supported presentation limits.

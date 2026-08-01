@@ -2,7 +2,7 @@
 # fm-fleet-quota-lib.sh — FirstMate quota/pace SURFACE layer (leaf library).
 #
 # Owns per-surface quota/pace reporting, the model->surfaces map, the
-# operator-facing failover picker, and fm_fleet_budget_ok's conservation-pressure
+# operator-facing model-surface picker, and fm_fleet_budget_ok's conservation-pressure
 # gate: fm_fleet_quota_now, fm_fleet_quota_report, fm_fleet_model_map,
 # fm_fleet_models_report, fm_fleet_pick_surface, fm_fleet_num_ge,
 # fm_fleet_reserve_cmp, fm_fleet_pace_rows, fm_fleet_pace_fields,
@@ -133,7 +133,7 @@ fm_fleet_model_map() { # base
 
 # model family -> surfaces (quota pools) with each surface's live status + headroom.
 # Answers "for model X, which pools can serve it and which have tokens?" — the basis
-# for grok/kimi failover across surfaces. Reads fm_fleet_model_map. 0 LLM tokens.
+# for grok/kimi picker decisions across surfaces. Reads fm_fleet_model_map. 0 LLM tokens.
 fm_fleet_models_report() {
   command -v jq >/dev/null 2>&1 || { echo "jq not installed" >&2; return 1; }
   local base="${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -169,7 +169,7 @@ fm_fleet_models_report() {
   } | if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi
 }
 
-# Failover selector: pick the best surface (quota pool) to serve a model family.
+# Model-surface picker: pick the best surface (quota pool) to serve a model family.
 # OPERATOR-FACING DIAGNOSTIC ONLY — answers "which pool has tokens for grok right
 # now" for a human running `fm-fleet.sh pick`. NEVER called from `fm-spawn`, crew
 # dispatch, or any automated path (anti-goal §4.1) — dispatch's pace-aware
@@ -188,8 +188,8 @@ fm_fleet_models_report() {
 #        window itself ahead) -> least-negative worst reserve; ties -> map order
 #   pass 2: else first surface configured/online but unobservable (fail-open)
 #   pass 3: else the first listed surface (last resort)
-# Map order is a documented OPERATOR preference (map's own _comment: "routing/
-# failover walks the list left-to-right"), distinct from the array-order bias
+# Map order is a documented OPERATOR preference (map's own _comment says the
+# picker walks the list left-to-right), distinct from the array-order bias
 # quota-array-dispatch forbids for dispatch ties (that rule targets an
 # unordered config array; this map is explicitly ordered).
 # R1: only FRESH surfaces' pace is trusted for 1a/1b/1c; a stale surface's pace

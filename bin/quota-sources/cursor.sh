@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# quota source: cursor surface. Usage is server-side (cursor.com dashboard, browser-
-# session-cookie auth) and NOT readable from the CLI's api2.cursor.sh bearer, so headroom
-# is blind by default. Supply an authed reader via config/quota-overrides.json (.cursor =
-# a command printing one int 0-100) to get a real number. Read-only; no secret to stdout.
+# quota source: cursor surface. Usage is server-side and headroom is blind by default.
+# Supply an authed reader via config/quota-overrides.json (.cursor = a command printing
+# one int 0-100) to get a real number. The shipped bin/quota-cursor-usage.sh reader uses
+# Cursor's own CLI token against its usage RPC. Read-only; no secret to stdout.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; root="$(cd "$here/../.." && pwd)"
 ov="$root/config/quota-overrides.json"; hr=null

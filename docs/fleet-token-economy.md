@@ -55,11 +55,10 @@ headroom/pace/reserve facts behind it, and against an older payload carrying no
 pace data the pace floor is skipped entirely. See
 [fleet-addon.md](fleet-addon.md#per-surface-pace-quota-axi--0115-schemaversion-3).
 
-## Cheapest capable model per task
+## Fit-based model cost
 
-`config/crew-dispatch.json` already tiers crewmate dispatch (haiku for rote, sonnet
-for web/product, opus/codex-high for hard backend). The coordinator picks the cheapest
-tier that fits, so even when work IS running the spend matches the task.
+`config/crew-dispatch.json` can tier crewmate dispatch (haiku for rote, sonnet for web/product, opus/codex-high for hard backend).
+Firstmate's intake judgment and dispatch-profile rules own that model choice; the fleet queue only keeps idle coordination in bash.
 
 ## Knobs (env, all bash-side)
 

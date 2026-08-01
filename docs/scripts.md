@@ -17,6 +17,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs` |
 | `fm-update.sh`           | Fast-forward-only self-update of firstmate and secondmate homes from origin          |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
+| `fm-handoff-doc.sh`      | Publish, discover, show, and fetch session handoff documents and optional ref bundles |
 | `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-dispatch-select.mjs` | Fail-closed subscription readiness, reserve, cooldown, and deterministic crew-profile rotation |
@@ -40,6 +41,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
+| `fm-berth.sh`            | Print opt-in per-project session-berth environments and lock status                  |
+| `fm-name.sh`             | Derive a stable readable crew name from a task id                                    |
 | `fm-treehouse-lib.sh`    | Shared per-project worktree-pool placement and the worktree/object-store same-filesystem invariant |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
@@ -102,9 +105,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-public-followup-lib.sh` | Shared relay-activation gate, O(1) presence checks, and private transport paths for promised public replies |
 | `fm-public-followup.sh`  | Reconcile typed terminal work results into a public commitment and deliver its final reply once |
 | `fm-public-followup-emit.sh` | Report one typed terminal work result into the home that owes the public reply    |
-| `fm-fleet.sh`            | Federated multi-operator coordination CLI over the shared fleet KB, plus per-surface quota, models, and failover pick verbs (docs/fleet-quickstart.md) |
+| `fm-fleet.sh`            | Federated multi-operator coordination CLI over the shared fleet KB, plus per-surface quota, models, and picker verbs (docs/fleet-quickstart.md) |
 | `fm-fleet-lib.sh`        | Shared federation KB helpers: atomic claim/lock, routing, usability guards, operator lifecycle |
-| `fm-fleet-quota-lib.sh`  | Per-surface quota/pace reporting, model->surfaces map, failover pick, and budget/conservation-pressure gate (leaf library sourced by fm-fleet-lib.sh) |
+| `fm-fleet-quota-lib.sh`  | Per-surface quota/pace reporting, model->surfaces map, picker, and budget/conservation-pressure gate (leaf library sourced by fm-fleet-lib.sh) |
+| `fm-fleet-preflight.sh`  | Read-only readiness report for the independent fleet add-on tiers                    |
 | `fm-fleet-join.sh`       | One-command operator onboarding into a shared fleet                                  |
 | `fm-fleet-wait.sh`       | Token-free bash block-until-claimed wait that heartbeats while idle (docs/fleet-token-economy.md) |
 | `fm-accounts-lib.sh`     | Multi-account registry resolution, validation, and quota-aware account pick          |

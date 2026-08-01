@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# fm-spawn-acct.sh — multi-account wrapper around fm-spawn.sh (Phase 4 add-on).
+# fm-spawn-acct.sh — multi-account wrapper around fm-spawn.sh.
 #
-# Adds a per-spawn --account axis WITHOUT modifying fm-spawn.sh: it composes an
-# account-isolated launch command (fm_account_compose_launch) and hands it to
-# fm-spawn's raw-launch escape hatch. Isolation rides in the command string, so
-# it survives the Herdr/tmux pane boundary; no secret is placed on argv.
+# Adds a per-spawn --account axis by composing an account-isolated launch command
+# (fm_account_compose_launch) and handing it to fm-spawn's raw-launch escape hatch.
+# Isolation rides in the command string, so it survives the Herdr/tmux pane boundary;
+# no secret is placed on argv.
 #
 # Scope: config-dir accounts (claude/codex/pi/cline). api-key accounts
 # (grok/cursor) are refused here (a key would land on argv) — use

@@ -4,9 +4,9 @@
 # standalone GitHub Copilot CLI login is invisible to it and the row sits at
 # auth_required. This source supersedes that row using the CLI's own token store.
 #
-# Unlike cursor/cline, copilot usage IS locally obtainable, so the default is a REAL
-# number via bin/quota-copilot-usage.sh (wire it in config/quota-overrides.json .copilot).
-# Without the override we still report accurate login state, headroom blind / fail-open.
+# Copilot usage is locally obtainable through bin/quota-copilot-usage.sh, but only
+# when the operator explicitly wires that reader in config/quota-overrides.json .copilot.
+# Without the override we still report accurate login state, with headroom blind/fail-open.
 # Read-only; no secret to stdout.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; root="$(cd "$here/../.." && pwd)"

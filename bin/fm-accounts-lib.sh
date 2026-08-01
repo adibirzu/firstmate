@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# fm-accounts-lib.sh — per-operator multi-account registry (Phase 4).
+# fm-accounts-lib.sh — per-operator multi-account registry.
 #
 # Reads config/accounts.json; resolves + validates accounts against the verified
-# per-CLI config-dir / auth-isolation matrix (adapters/config-dir-matrix.md).
+# per-CLI config-dir / auth-isolation matrix in docs/fleet-addon.md.
 #
 # Three isolation methods (verified 2026-07-26):
 #   config-dir-env   set <env>=<config_dir> for the child only (claude/codex/pi)
@@ -10,8 +10,8 @@
 #   api-key-env      set <env>=<key> for the child only         (grok/cursor-agent)
 #
 # Secrets never live here. api-key accounts store a key_file path (0600, in the
-# operator's OWN home); fm-spawn reads the key at launch — it is never printed,
-# never committed, never placed on argv.
+# operator's OWN home); fm-account-exec.sh reads the key for direct launches — it
+# is never printed, never committed, never placed on argv.
 #
 # accounts.json schema (one entry per account name):
 #   { "<name>": { "provider":"...", "harness":"...", "isolation":"...",

@@ -5,7 +5,7 @@
 # capability at all.
 #
 # The tiers are independent and additive (docs/fleet-quickstart.md):
-#   A  token visibility + model->surface failover   no root, no shared dir
+#   A  token visibility + model->surface picker     no root, no shared dir
 #   B  several accounts for one person              no root, no shared dir
 #   C  several operators on one host (Admiral)      root once per host, opt-in
 #

@@ -1,7 +1,6 @@
 # FirstMate Fleet add-on — federated multi-operator + multi-account
 
-Two general, reusable capabilities FirstMate does not ship today, built as a
-**drop-in add-on that requires ZERO edits to FirstMate core**:
+Two general, reusable optional capabilities in FirstMate:
 
 1. **Federated / multi-operator mode** — several OS operators (each their own
    first mate, own accounts), coordinating through a shared, cross-uid-safe,
@@ -10,12 +9,10 @@ Two general, reusable capabilities FirstMate does not ship today, built as a
 2. **Per-spawn multi-account** — a `--account` axis that launches a crewmate under
    a chosen account with isolated auth, plus quota-aware account selection.
 
-Everything lives in new `bin/fm-fleet*.sh`, `bin/fm-account*.sh`,
+The main owner surfaces are `bin/fm-fleet*.sh`, `bin/fm-account*.sh`,
 `bin/fm-accounts*.sh`, `bin/quota-*`, `scripts/fleet-root-prereq.sh`,
 `.agents/skills/{federation,multi-account}/`, and `tests/federation/*.sh`.
-No existing FirstMate script is modified — the `--account`
-axis rides on `fm-spawn`'s existing raw-launch escape hatch. That is what makes
-this shippable as an additive PR (or a standalone overlay).
+Existing spawn, backend, bootstrap, and configuration paths carry the narrow integration points that make the feature usable from the normal FirstMate flow.
 
 ---
 
@@ -43,9 +40,10 @@ Fleet dir resolves from: `FM_FLEET_DIR` → `$FM_HOME/config/fleet-dir` →
 path is exercised single-uid; `flock` semantics are identical across uids.
 
 ### CLI (`bin/fm-fleet.sh`, libs `bin/fm-fleet-lib.sh` + `bin/fm-fleet-quota-lib.sh`)
-`init | register | heartbeat | leave | queue | claim | handoff | reap | route |
-budget | quota | models | pick | status | view`, plus `bin/fm-fleet-join.sh`
-(operator onboarding) and `bin/fm-fleet-wait.sh` (token-free wait-for-work).
+`preflight | admiral | init | register | heartbeat | leave | queue | claim |
+handoff | drain | reap | route | budget | quota | models | pick | status |
+view`, plus `bin/fm-fleet-join.sh` (operator onboarding) and
+`bin/fm-fleet-wait.sh` (token-free wait-for-work).
 `bin/fm-fleet-quota-lib.sh` is a leaf library sourced by `bin/fm-fleet-lib.sh`
 that owns `budget | quota | models | pick`; every consumer keeps sourcing only
 `bin/fm-fleet-lib.sh`.
@@ -54,10 +52,13 @@ that owns `budget | quota | models | pick`; every consumer keeps sourcing only
   `claimed-by:<op>@<ts> status:claimed`, move to `## Claimed`, log, commit. Two
   operators can never grab the same item (proven by a concurrent race test).
 - **Routing** — `route <scope>`: scope-primary (the online operator whose scope
-  contains it), overflow fallback (the `overflow`-scoped operator) if the owner
-  is offline; a human `--operator` override always wins.
+  contains it), then the `overflow`-scoped operator, then any eligible operator
+  with headroom when neither of those can take the task.
 - **Reap** — requeue stale `status:claimed` items older than a TTL (offline
   operators' never-started work); `status:in-flight` is left alone.
+- **Drain** — reassign a claimed item away from a drained holder when another
+  eligible operator has headroom, capped by `FM_FLEET_HANDOFF_CAP`, otherwise
+  mark the item `status:drained` with a "fleet out of tokens" event.
 - **Visibility** — `status` (per-operator counts) + `view [--follow]` (the live
   cross-operator event stream).
 
@@ -150,9 +151,9 @@ home). Copy `docs/examples/accounts.json` to start.
 child's environment — never onto argv, never into a log.
 
 ### The `--account` axis (`bin/fm-spawn-acct.sh`)
-Adds `--account <name>` **without editing `fm-spawn.sh`**. It composes an
-account-isolated launch command and hands it to `fm-spawn`'s raw-launch escape
-hatch (which skips leading `ENV=val` tokens when detecting the harness):
+Adds `--account <name>` through a wrapper that composes an account-isolated
+launch command and hands it to `fm-spawn`'s raw-launch escape hatch (which skips
+leading `ENV=val` tokens when detecting the harness):
 
 - `config-dir-env`  → `CLAUDE_CONFIG_DIR=/path claude [--model … --effort …]`
 - `config-dir-flag` → `cline --config /path [--model …]`
@@ -182,16 +183,14 @@ first on a box that is missing, e.g., cursor.
 
 ---
 
-## Install (drop-in overlay onto a FirstMate clone)
-1. Copy `bin/fm-fleet*.sh`, `bin/fm-account*.sh`, `bin/fm-accounts*.sh`,
-   `bin/fm-spawn-acct.sh`, `bin/quota-*.sh`, `bin/quota-sources/`,
-   `scripts/fleet-root-prereq.sh`, `tests/federation/`,
-   `.agents/skills/{federation,multi-account}/`,
-   `docs/examples/{model-surfaces,accounts,quota-overrides}.json`, and
-   `docs/fleet-*.md`.
-2. `bin/fm-accounts-prereq.sh` — install any missing CLIs; then log in per account.
-3. `cp docs/examples/accounts.json config/accounts.json` and edit; gitignore it.
-4. Federation only: run the root prereq, then `bin/fm-fleet.sh init`.
+## Integrated use and overlay packaging
+
+In this repository, no overlay install step is needed.
+For a standalone overlay onto an older FirstMate clone, carry the owner surfaces named at the top of this document plus the integration edits to spawn, backend, bootstrap, and configuration paths; copying only the new-file set is not enough.
+
+1. `bin/fm-accounts-prereq.sh` — install any missing CLIs; then log in per account.
+2. `cp docs/examples/accounts.json config/accounts.json` and edit; gitignore it.
+3. Federation only: run the root prereq, then `bin/fm-fleet.sh init`.
 
 ## Custom-source retirement path (documented, NOT executed)
 `bin/quota-sources/{copilot,cursor}.sh` exist because quota-axi's NATIVE `copilot`
@@ -244,7 +243,7 @@ Zero files are deleted by this work item.
 bash tests/federation/test_fleet.sh          # federation: claim race, reap, route, handoff, view, safety
 bash tests/federation/test_fleet_ops.sh      # operator lifecycle: register/heartbeat/leave, TTL, quota routing
 bash tests/federation/test_fleet_guards.sh   # init/ownership guards on every fleet-consuming entry point
-bash tests/federation/test_quota_surfaces.sh # per-surface quota report, models table, failover pick, pace columns, budget pace floor, schemaVersion 2 degradation
+bash tests/federation/test_quota_surfaces.sh # per-surface quota report, models table, picker, pace columns, budget pace floor, schemaVersion 2 degradation
 bash tests/federation/test_accounts.sh       # registry resolve/validate (+ cross-uid path guard)
 bash tests/federation/test_spawn_account.sh  # --account compose + wrapper + api-key refusal + apply_env
 bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; tie/absent/no-provider)
@@ -265,9 +264,10 @@ bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; t
   wrapper folds `--model` and (for claude/codex/pi) `--effort` into the command.
 
 ## Packaging options
-1. **Upstream PR to `kunchenguid/firstmate` (recommended).** All additive files,
-   no core edits → small, reviewable diff. Consent-gated (outward-facing).
-2. **Standalone add-on repo** overlaid onto a FirstMate clone (same files).
+1. **Integrated FirstMate feature.** Keep the owner surfaces above together so the
+   normal spawn, backend, bootstrap, and documentation contracts stay aligned.
+2. **Standalone add-on repo** overlaid onto a FirstMate clone (same files and
+   integration points).
 3. **axi-style tool** — possible but *not* simpler: the bash scripts would need
    npm-bin repackaging + a SessionStart hook, and federation needs a shared
    git-backed dir that doesn't fit the per-user axi model. Recommend #1/#2.

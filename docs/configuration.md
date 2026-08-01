@@ -203,7 +203,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, and kimi are empirically verified for crewmate and secondmate launches; cline and cursor-agent are verified for crewmate launches only and are not yet wired for secondmate use.
+claude, codex, opencode, pi, pi-signed, grok, and kimi are empirically verified for crewmate and secondmate launches; cline, cursor-agent, and copilot are verified for crewmate launches only and are not yet wired for secondmate use.
 [README requirements](../README.md#requirements) own the set supported for the primary session.
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter knowledge - each harness's busy-state source, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
@@ -294,10 +294,11 @@ Providers exposed by quota-axi, including Claude, Codex, and Grok, require fresh
 The selector persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
 Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
 
-## Fleet add-on (config/fleet-dir / config/accounts.json / FM_FLEET_*)
+## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 
 The optional fleet add-on keeps its own operator configuration surfaces rather than duplicating them here.
-[`docs/fleet-quickstart.md`](fleet-quickstart.md) owns setup for the gitignored `config/fleet-dir`, `config/accounts.json`, `config/quota-overrides.json`, and `config/model-surfaces.json` files plus the tracked [`docs/examples/model-surfaces.json`](examples/model-surfaces.json) failover map default, and [`docs/fleet-token-economy.md`](fleet-token-economy.md) owns the `FM_FLEET_*` knobs and their defaults.
+[`docs/fleet-quickstart.md`](fleet-quickstart.md) owns setup for the gitignored `config/fleet-dir`, `config/admiral`, `config/accounts.json`, `config/quota-overrides.json`, and `config/model-surfaces.json` files plus the tracked [`docs/examples/model-surfaces.json`](examples/model-surfaces.json) picker-map default, and [`docs/fleet-token-economy.md`](fleet-token-economy.md) owns the `FM_FLEET_*` knobs and their defaults.
+`bin/fm-handoff-doc.sh` owns `FM_HANDOFF_DIR` and the handoff-store resolution that otherwise uses the shared fleet store only when `config/admiral` is present.
 
 ## Toolchain
 
