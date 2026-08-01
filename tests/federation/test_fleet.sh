@@ -10,6 +10,17 @@ fails=0
 ok(){ echo "PASS: $1"; }
 bad(){ echo "FAIL: $1"; fails=$((fails+1)); }
 
+# BSD `sed -i` REQUIRES a backup-suffix argument, so the GNU form
+# `sed -i EXPR FILE` makes BSD read EXPR as the suffix and FILE as the script: it
+# errors to stderr and leaves the file UNTOUCHED. Every in-place edit below sets
+# up a scenario (ageing a stamp, flipping a status), so on macOS they silently
+# did nothing and the assertions that followed graded the unmutated state.
+# bin/fm-fleet-lib.sh is already BSD-first; these tests were not.
+fm_portable_sed_i(){ # <expr> <file>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then sed -i '' "$1" "$2"
+  else sed -i "$1" "$2"; fi
+}
+
 # ---- 1. init ----
 D=$(mktemp -d); export FM_FLEET_DIR="$D/fleet"
 "$FLEET_CLI" init >/dev/null
@@ -34,20 +45,20 @@ D2=$(mktemp -d); export FM_FLEET_DIR="$D2/fleet"
 "$FLEET_CLI" init >/dev/null
 "$FLEET_CLI" queue FL-9 backend demo >/dev/null; "$FLEET_CLI" claim FL-9 bob >/dev/null
 # stale claimed -> should requeue
-sed -i 's/@[0-9TZ:-]\{1,\}/@2000-01-01T00:00:00Z/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/@[0-9TZ:-]\{1,\}/@2000-01-01T00:00:00Z/' "$FM_FLEET_DIR/backlog.md"
 "$FLEET_CLI" reap 3600 >/dev/null
 grep -q '\[id:FL-9\].*status:queued' "$FM_FLEET_DIR/backlog.md" && ok "reap requeues stale claim" || bad "reap requeue"
 # in-flight with old ts must NOT be requeued
 "$FLEET_CLI" queue FL-10 backend demo2 >/dev/null; "$FLEET_CLI" claim FL-10 bob >/dev/null
-sed -i 's/\(FL-10.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
-sed -i 's/@[0-9TZ:-]\{1,\}/@2000-01-01T00:00:00Z/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/\(FL-10.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/@[0-9TZ:-]\{1,\}/@2000-01-01T00:00:00Z/' "$FM_FLEET_DIR/backlog.md"
 "$FLEET_CLI" reap 3600 >/dev/null
 grep -q '\[id:FL-10\].*status:in-flight' "$FM_FLEET_DIR/backlog.md" && ok "reap leaves in-flight alone" || bad "reap in-flight"
 # an unreadable stamp means "cannot age it", not "ancient": reap must leave the item
 # claimed rather than yank it back from its owner (the failure mode a non-GNU `date`
 # used to produce for EVERY claim).
 "$FLEET_CLI" queue FL-11 backend demo3 >/dev/null; "$FLEET_CLI" claim FL-11 bob >/dev/null
-sed -i 's/\(FL-11.*\)@[0-9TZ:-]\{1,\}/\1@not-a-timestamp/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/\(FL-11.*\)@[0-9TZ:-]\{1,\}/\1@not-a-timestamp/' "$FM_FLEET_DIR/backlog.md"
 "$FLEET_CLI" reap 3600 >/dev/null
 grep -q '\[id:FL-11\].*status:claimed' "$FM_FLEET_DIR/backlog.md" && ok "reap leaves an unreadable stamp claimed (fail-safe)" || bad "reap unreadable stamp"
 
@@ -62,7 +73,7 @@ OPS
 r_back=$("$FLEET_CLI" route backend); r_web=$("$FLEET_CLI" route web)
 { [ "$r_back" = alice ] && [ "$r_web" = bob ]; } && ok "route: backend->alice, web->bob" || bad "route primary (got '$r_back'/'$r_web')"
 # alice offline -> backend falls to overflow (carol)
-sed -i 's/| alice \(.*\)| online |/| alice \1| offline |/' "$FM_FLEET_DIR/operators.md"
+fm_portable_sed_i 's/| alice \(.*\)| online |/| alice \1| offline |/' "$FM_FLEET_DIR/operators.md"
 r_off=$("$FLEET_CLI" route backend)
 [ "$r_off" = carol ] && ok "route: offline owner -> overflow" || bad "route overflow (got '$r_off')"
 
@@ -91,7 +102,7 @@ out=$(bin/fm-fleet-wait.sh bob --once --no-heartbeat 2>/dev/null); rc=$?
   || ok "handed-off item is no longer claimable"
 # in-flight work keeps its status through a reassignment
 "$FLEET_CLI" queue FL-4 web "inflight handoff" >/dev/null; "$FLEET_CLI" claim FL-4 alice >/dev/null
-sed -i 's/\(FL-4.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/\(FL-4.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
 "$FLEET_CLI" handoff FL-4 bob >/dev/null
 grep -q '\[id:FL-4\].*claimed-by:bob@[^ ]* status:in-flight' "$FM_FLEET_DIR/backlog.md" \
   && ok "handoff of an in-flight item keeps status:in-flight" || bad "handoff in-flight"

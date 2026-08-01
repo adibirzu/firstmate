@@ -22,6 +22,25 @@ bad(){ echo "FAIL: $1"; fails=$((fails+1)); }
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
 old_iso(){ echo "2000-01-01T00:00:00Z"; }
 
+# macOS is a declared supported platform and bin/fm-fleet-lib.sh is already
+# BSD-first, but these tests were not. BSD `sed -i` REQUIRES a backup-suffix
+# argument; the GNU form `sed -i EXPR FILE` makes BSD read EXPR as the suffix and
+# FILE as the script, so it errors to stderr and leaves the file UNTOUCHED. Every
+# such call here silently did nothing, and because the mutation is what sets up
+# the scenario, the assertions that followed tested the unmutated state - the
+# stale-heartbeat and quota-ceiling cases were vacuous on macOS, not failing
+# honestly. Ported via the same shim shape tests/fm-admiral-optin.test.sh uses.
+fm_portable_sed_i(){ # <expr> <file>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then sed -i '' "$1" "$2"
+  else sed -i "$1" "$2"; fi
+}
+# `date -u -d` is GNU-only. BSD parses with `-j -f <fmt>`. Mirrors the BSD-first,
+# GNU-fallback order bin/fm-fleet-lib.sh:46 already uses.
+iso_parses(){ # <iso-8601>
+  date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" >/dev/null 2>&1 \
+    || date -u -d "$1" >/dev/null 2>&1
+}
+
 quota_col() { # operators.md op -> quota column, trimmed
   awk -F'|' -v op="$2" '
     function trim(x){ gsub(/^ +| +$/,"",x); return x }
@@ -122,7 +141,7 @@ export FM_FLEET_DIR="$D/fleet"
 "$CLI" register bob web,mobile "$HOME/firstmate" claude-default >/dev/null 2>&1
 "$CLI" register carol overflow "$HOME/firstmate" claude-default >/dev/null 2>&1
 # force bob's seen stale (replace the seen column in bob's row with an old ts)
-sed -i "/^| bob /s#| [0-9][0-9TZ:-]\{1,\} |#| $(old_iso) |#" "$FM_FLEET_DIR/operators.md"
+fm_portable_sed_i "/^| bob /s#| [0-9][0-9TZ:-]\{1,\} |#| $(old_iso) |#" "$FM_FLEET_DIR/operators.md"
 # robustness post-condition: the sed must have hit the seen column, not quota (§5.4) —
 # with a two-digit stubbed quota the same pattern could also match col 8 if columns
 # ever reorder; this would otherwise be a silently-vacuous test.
@@ -134,7 +153,7 @@ r=$("$CLI" route web)
 # heartbeat bob back to fresh -> seen genuinely advances, and route returns bob
 "$CLI" heartbeat bob >/dev/null 2>&1
 fresh_seen=$(seen_col "$FM_FLEET_DIR/operators.md" bob)
-{ [ -n "$fresh_seen" ] && [ "$fresh_seen" != "$stale_seen" ] && date -u -d "$fresh_seen" >/dev/null 2>&1; } \
+{ [ -n "$fresh_seen" ] && [ "$fresh_seen" != "$stale_seen" ] && iso_parses "$fresh_seen"; } \
   && ok "heartbeat refreshes seen: advances past the stale value and parses as a timestamp" \
   || bad "heartbeat seen advance (stale='$stale_seen' fresh='$fresh_seen')"
 r=$("$CLI" route web)
@@ -157,7 +176,7 @@ export FM_FLEET_QUOTA_MIN=5
 r=$("$CLI" route backend)
 [ "$r" = carol ] && ok "route: owner below quota floor -> overflow" || bad "route quota floor (got '$r')"
 # raise alice's quota -> owner wins again
-sed -i "/^| alice /s#| 3 |#| 50 |#" "$FM_FLEET_DIR/operators.md"
+fm_portable_sed_i "/^| alice /s#| 3 |#| 50 |#" "$FM_FLEET_DIR/operators.md"
 r=$("$CLI" route backend)
 [ "$r" = alice ] && ok "route: owner above quota floor -> owner" || bad "route quota ok (got '$r')"
 
@@ -206,7 +225,7 @@ D4=$(mktemp -d); export FM_FLEET_DIR="$D4/fleet"; "$CLI" init >/dev/null
 out=$(bin/fm-fleet-wait.sh alice --once --no-heartbeat); rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'W-1'; } && ok "wait --once: fresh claim wakes (exit 0 + id)" || bad "wait fresh claim (rc=$rc out='$out')"
 bin/fm-fleet-wait.sh bob --once --no-heartbeat >/dev/null 2>&1 && bad "wait woke with no claim" || ok "wait --once: no claim -> exit 1 (LLM stays idle)"
-sed -i 's/\(W-1.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
+fm_portable_sed_i 's/\(W-1.*\)status:claimed/\1status:in-flight/' "$FM_FLEET_DIR/backlog.md"
 bin/fm-fleet-wait.sh alice --once --no-heartbeat >/dev/null 2>&1 && bad "wait woke on in-flight (already started)" || ok "wait --once: in-flight item is not a fresh wake"
 
 # 9. fm-fleet-join.sh: self-onboard writes config/fleet-dir + registers; idempotent.

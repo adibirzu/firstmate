@@ -17,6 +17,20 @@ fm_portable_sed_i() { # <expr> <file>
   if [ "$(uname -s 2>/dev/null)" = Darwin ]; then sed -i '' "$1" "$2"
   else sed -i "$1" "$2"; fi
 }
+# Host state the privileged Tier C step would change, as one comparable string.
+# `getent` is glibc-only and absent on macOS, so fall back to /etc/group the same
+# way bin/fm-fleet-preflight.sh and scripts/fleet-root-prereq.sh already do -
+# those two shipped the fallback, the test did not, and only the test broke.
+# Always exits 0: "absent" is a legitimate reading of an unprovisioned host, and
+# the assertion compares before/after, so a non-zero probe would say nothing
+# useful while risking the same silent-exit trap under any future errexit.
+fleet_host_snapshot() {
+  if command -v getent >/dev/null 2>&1; then getent group agents 2>/dev/null
+  else grep -E '^agents:' /etc/group 2>/dev/null | head -1
+  fi
+  fm_portable_mode /opt/agents/fleet 2>/dev/null
+  return 0
+}
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -98,11 +112,18 @@ test_preflight_names_the_opt_in_command() {
 
 test_root_prereq_check_needs_no_root_and_changes_nothing() {
   local out rc snap_before snap_after
-  snap_before=$(getent group agents 2>/dev/null; fm_portable_mode /opt/agents/fleet 2>/dev/null)
-  set +e
-  out=$(FM_FLEET_OPERATORS="$(id -un)" bash "$PREREQ" --check 2>&1); rc=$?
-  set -e
-  snap_after=$(getent group agents 2>/dev/null; fm_portable_mode /opt/agents/fleet 2>/dev/null)
+  # `set +e` / `set -e` around the probe was wrong: this file runs under `set -u`
+  # ONLY, so the trailing `set -e` did not RESTORE errexit, it ENABLED it for the
+  # first time. The very next line then legitimately returns non-zero on any host
+  # without the privileged Tier C setup - `getent` does not exist on macOS, and
+  # `fm_portable_mode /opt/agents/fleet` fails when that path is absent, which is
+  # the normal state - so the shell exited 1 silently, skipping this test's `pass`
+  # and the file's final "ALL PASS". Every assertion printed ok while the file
+  # exited 1, which is why it read as a harness quirk rather than a real failure.
+  # `|| rc=$?` captures the status without touching errexit at all.
+  snap_before=$(fleet_host_snapshot)
+  out=$(FM_FLEET_OPERATORS="$(id -un)" bash "$PREREQ" --check 2>&1) && rc=0 || rc=$?
+  snap_after=$(fleet_host_snapshot)
   [ "$snap_before" = "$snap_after" ] || fail "--check must not change host state"
   case "$out" in
     *"CHECK ONLY"*) ;;
