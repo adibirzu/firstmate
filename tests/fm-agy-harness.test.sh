@@ -73,12 +73,78 @@ test_agy_model_and_effort_flags() {
   if printf '%s\n' "$effort_agy_arm" | grep -Eq -- "--effort (xhigh|max)"; then
     fail "fm-spawn: agy effort arm must never emit --effort xhigh/max"
   fi
-  # ...but dropping the flag entirely is equally broken: a BASE model id refuses
-  # to launch without --effort, and the spawn would only surface that as a
-  # trust-gate timeout. firstmate's shared xhigh/max clamp to agy's ceiling.
-  printf '%s\n' "$effort_agy_arm" | grep -Fq "xhigh|max) printf -- '--effort high '" \
-    || fail "fm-spawn: agy must clamp xhigh/max to --effort high, not drop the flag"
-  pass "fm-spawn: agy gets --model, effort->--effort (low|medium|high), xhigh/max clamped to high"
+  pass "fm-spawn: agy gets --model and effort->--effort (low|medium|high)"
+}
+
+# Run the REAL effort_flag_for_harness against agy's verified probe matrix
+# instead of grepping for one shape of it - the emitted argv is the contract,
+# and every rewrite of the arm has to keep satisfying agy, not a literal.
+AGY_EFFORT_SOURCE=$(
+  sed -n '/^effort_flag_for_harness()/,/^}/p' "$SPAWN"
+  sed -n '/^shell_quote()/,/^}/p' "$SPAWN"
+)
+
+agy_effort_flag() {  # <effort> <model>
+  bash -c "
+set -u
+$AGY_EFFORT_SOURCE
+effort_flag_for_harness agy \"\$1\" \"\$2\"
+" bash "$1" "$2"
+}
+
+test_agy_effort_never_emits_a_combination_agy_rejects() {
+  # Probe matrix from docs/verification/agy-adapter.md:
+  #   P3  base id + no --effort            -> Error "requires --effort"
+  #   P6  base id + in-range --effort      -> Success
+  #   P1  baked id + no --effort           -> Success
+  #   P5  baked id + MATCHING --effort     -> Success
+  #   P4/P7 baked id + CONFLICTING --effort -> Error "conflicts with --effort"
+  # So an out-of-range shared tier (xhigh/max) may only cap to `high` when the
+  # id carries no baked suffix; against a baked id the cap WOULD conflict, and
+  # withholding the flag is the launchable answer.
+  local out
+  [ -n "$AGY_EFFORT_SOURCE" ] || fail "could not extract effort_flag_for_harness from fm-spawn"
+
+  out=$(agy_effort_flag low gemini-3.6-flash)
+  [ "$out" = "--effort 'low' " ] || fail "base id + low must pass through, got '$out'"
+  out=$(agy_effort_flag high gemini-3.6-flash)
+  [ "$out" = "--effort 'high' " ] || fail "base id + high must pass through, got '$out'"
+
+  # Base id: the cap is mandatory - dropping it makes agy exit "requires --effort".
+  out=$(agy_effort_flag xhigh gemini-3.6-flash)
+  [ "$out" = "--effort high " ] || fail "base id + xhigh must clamp to --effort high, got '$out'"
+  out=$(agy_effort_flag max gemini-3.6-flash)
+  [ "$out" = "--effort high " ] || fail "base id + max must clamp to --effort high, got '$out'"
+  # No model id at all: nothing can conflict, and the flag is still safe.
+  out=$(agy_effort_flag xhigh '')
+  [ "$out" = "--effort high " ] || fail "no model + xhigh must still clamp to --effort high, got '$out'"
+
+  # Baked id: capping to `high` is exactly probe P4's error. Withhold instead.
+  local baked
+  for baked in gemini-3.6-flash-low gemini-3.6-flash-medium gemini-3.6-flash-high; do
+    out=$(agy_effort_flag xhigh "$baked")
+    [ -z "$out" ] || fail "baked id '$baked' + xhigh must emit no effort flag, got '$out'"
+    out=$(agy_effort_flag max "$baked")
+    [ -z "$out" ] || fail "baked id '$baked' + max must emit no effort flag, got '$out'"
+  done
+
+  # In-range efforts still pass through verbatim against a baked id: a matching
+  # pair is P5 (Success) and a conflicting pair is the captain's own explicit
+  # request, which agy refuses loudly rather than firstmate silently rewriting.
+  out=$(agy_effort_flag low gemini-3.6-flash-low)
+  [ "$out" = "--effort 'low' " ] || fail "baked id + matching low must pass through, got '$out'"
+
+  # Nothing in the matrix may ever emit a value agy's --effort does not accept.
+  local e m
+  for e in low medium high xhigh max; do
+    for m in '' gemini-3.6-flash gemini-3.6-flash-low gemini-3.6-flash-medium gemini-3.6-flash-high; do
+      out=$(agy_effort_flag "$e" "$m")
+      case "$out" in
+        *xhigh*|*max*) fail "effort='$e' model='$m' emitted an unsupported effort: '$out'" ;;
+      esac
+    done
+  done
+  pass "fm-spawn: agy effort resolution never emits a model/effort pair agy rejects"
 }
 
 # --- crewmate-only posture --------------------------------------------------
@@ -382,6 +448,7 @@ test_agy_launch_template_is_pinned
 test_existing_launch_templates_untouched
 test_agy_is_a_known_bare_adapter_name
 test_agy_model_and_effort_flags
+test_agy_effort_never_emits_a_combination_agy_rejects
 test_agy_is_refused_as_a_secondmate_harness
 test_agy_not_recovery_graded_in_secondmate_sweep
 test_agy_detection_wired

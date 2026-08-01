@@ -653,7 +653,7 @@ model_flag_for_harness() {
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2
+  local harness=$1 effort=$2 model=${3:-}
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
     claude)
@@ -688,16 +688,24 @@ effort_flag_for_harness() {
     agy)
       # agy 1.1.9 accepts --effort low|medium|high (verified via --help and live
       # conflict probes; docs/verification/agy-adapter.md "Model and effort").
-      # xhigh and max are not accepted, so firstmate's shared tiers CAP at agy's
-      # ceiling instead of dropping the flag: a BASE model id (no -low/-medium/
-      # -high suffix) REQUIRES --effort, so omitting it makes agy exit with
-      # "requires --effort" and the spawn only surfaces that as a trust-gate
-      # timeout. When the model id already ends in -low/-medium/-high, a matching
-      # --effort is accepted and a conflicting --effort fails closed at launch
-      # with a clear agy error - firstmate does not rewrite model ids.
+      # Both axes are real, so the out-of-range shared tiers resolve against the
+      # MODEL ID rather than blindly: a BASE model id (no -low/-medium/-high
+      # suffix) REQUIRES --effort, so dropping the flag makes agy exit with
+      # "requires --effort" - xhigh/max therefore cap at agy's `high` ceiling.
+      # A model id that already BAKES an effort suffix launches on its own (P1),
+      # and a non-matching --effort fails closed (P4), so the cap is withheld
+      # there and the baked tier stands. firstmate never rewrites model ids.
+      # In-range low|medium|high always pass through: a matching baked id is
+      # accepted, and a conflicting one is the captain's own explicit pairing,
+      # which agy rejects with a clear error rather than silently reinterpreting.
       case "$effort" in
         low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
-        xhigh|max) printf -- '--effort high ' ;;
+        xhigh|max)
+          case "$model" in
+            *-low|*-medium|*-high) ;;
+            *) printf -- '--effort high ' ;;
+          esac
+          ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1764,7 +1772,7 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
