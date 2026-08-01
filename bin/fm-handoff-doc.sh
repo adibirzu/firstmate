@@ -29,6 +29,17 @@
 # Store resolves from: FM_HANDOFF_DIR -> <fleet-dir>/handoffs (only when this home
 # opted into the cross-operator tier) -> $FM_HOME/state/handoffs
 set -euo pipefail
+
+# Portable file mode: BSD stat (macOS) has no -c. macOS is a declared supported
+# platform (README badge), and the repo already branches this way in
+# bin/backends/herdr.sh.
+fm_portable_mode() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    stat -f '%Lp' "$1" 2>/dev/null
+  else
+    stat -c '%a' "$1" 2>/dev/null
+  fi
+}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
@@ -176,7 +187,7 @@ case "$cmd" in
     printf '%s\n' "$DIR"
     printf '  chosen by: %s\n' "$(fm_handoff_dir_source)"
     if [ -d "$DIR" ]; then
-      printf '  state: present, mode %s\n' "$(stat -c '%a' "$DIR" 2>/dev/null || printf '?')"
+      printf '  state: present, mode %s\n' "$(fm_portable_mode "$DIR" 2>/dev/null || printf '?')"
     else
       printf '  state: not created yet (publish creates it)\n'
     fi
@@ -260,7 +271,7 @@ case "$cmd" in
       .env|.env.*)
         printf 'fm-handoff-doc: refusing to publish %s (secrets)\n' "$src" >&2; exit 1 ;;
     esac
-    src_mode=$(stat -c '%a' "$src" 2>/dev/null || printf '644')
+    src_mode=$(fm_portable_mode "$src" 2>/dev/null || printf '644')
     if [ "$src_mode" = 600 ] && [ "$share_anyway" != 1 ] \
        && [ "$(fm_handoff_dir_source)" != "solo store (this home only)" ]; then
       printf 'fm-handoff-doc: %s is mode 0600 and the store is shared with other operators.\n' "$src" >&2

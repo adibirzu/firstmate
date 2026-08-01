@@ -13,6 +13,17 @@
 #   - fetch lands remote-tracking refs only, and never trusts an unverified bundle
 set -u
 
+# Portable helpers: BSD stat/sed (macOS) differ from GNU. macOS is a declared
+# supported platform, so the suite must not assume GNU coreutils.
+fm_portable_mode() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then stat -f '%Lp' "$1" 2>/dev/null
+  else stat -c '%a' "$1" 2>/dev/null; fi
+}
+fm_portable_sed_i() { # <expr> <file>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then sed -i '' "$1" "$2"
+  else sed -i "$1" "$2"; fi
+}
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -38,7 +49,7 @@ seed_doc() { # <path> [title]
 # Rewrite an entry's author so a test can model a document from ANOTHER operator
 # without needing a second uid.
 set_author() { # <store> <id> <author>
-  sed -i "s/^author=.*/author=$3/" "$1/$2/meta"
+  fm_portable_sed_i "s/^author=.*/author=$3/" "$1/$2/meta"
 }
 
 test_solo_is_the_default() {
@@ -65,7 +76,7 @@ test_publish_writes_a_readable_entry() {
   grep -q '^title=Fork consolidation$' "$entry/meta" \
     || fail "title must default to the document's first heading"
   grep -q "^author=$(id -un)$" "$entry/meta" || fail "meta must record the author"
-  [ "$(stat -c '%a' "$entry/note.md")" = 644 ] \
+  [ "$(fm_portable_mode "$entry/note.md")" = 644 ] \
     || fail "a shared document must be group-readable (0644)"
   pass "fm-handoff-doc: publish writes a readable entry with correct meta"
 }

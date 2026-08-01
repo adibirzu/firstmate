@@ -12,6 +12,21 @@
 # no root and never mutates, so an operator can inspect the delta before deciding
 # whether they want this tier at all.
 set -euo pipefail
+
+# Portable file mode: BSD stat (macOS) has no -c. macOS is a declared supported
+# platform (README badge), and the repo already branches this way in
+# bin/backends/herdr.sh.
+fm_portable_mode() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    stat -f '%Lp' "$1" 2>/dev/null
+  else
+    stat -c '%a' "$1" 2>/dev/null
+  fi
+}
+fm_portable_group() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then stat -f '%Sg' "$1" 2>/dev/null
+  else stat -c '%G' "$1" 2>/dev/null; fi
+}
 CHECK=0
 [ "${1:-}" != --check ] || { CHECK=1; shift; }
 GROUP=${FM_FLEET_GROUP:-agents}
@@ -29,7 +44,7 @@ if [ "$CHECK" = 1 ]; then
   needed=0
   echo "fleet-root-prereq: CHECK ONLY - nothing will be changed."
   echo
-  if getent group "$GROUP" >/dev/null 2>&1; then
+  if getent group "$GROUP" >/dev/null 2>&1 || grep -qE "^$GROUP:" /etc/group 2>/dev/null; then
     printf '  %-32s present\n' "group '$GROUP'"
   else
     printf '  %-32s ABSENT   would run: groupadd -f %s\n' "group '$GROUP'" "$GROUP"; needed=1
@@ -45,9 +60,9 @@ if [ "$CHECK" = 1 ]; then
   done
   if [ -d "$DIR" ]; then
     printf '  %-32s present  mode %s  group %s\n' "$DIR" \
-      "$(stat -c '%a' "$DIR" 2>/dev/null || echo '?')" \
-      "$(stat -c '%G' "$DIR" 2>/dev/null || echo '?')"
-    [ "$(stat -c '%a' "$DIR" 2>/dev/null)" = 2775 ] || { printf '  %-32s would re-apply mode 2775 (setgid)\n' ""; needed=1; }
+      "$(fm_portable_mode "$DIR" 2>/dev/null || echo '?')" \
+      "$(fm_portable_group "$DIR" 2>/dev/null || echo '?')"
+    [ "$(fm_portable_mode "$DIR" 2>/dev/null)" = 2775 ] || { printf '  %-32s would re-apply mode 2775 (setgid)\n' ""; needed=1; }
   else
     printf '  %-32s ABSENT   would create mode 2775, group %s\n' "$DIR" "$GROUP"; needed=1
   fi
@@ -92,7 +107,7 @@ find "$DIR" -type d -exec chmod 2775 {} +   # setgid dirs: files created here in
 find "$DIR" -type f -exec chmod g+rw {} +
 
 echo "--- verify ---"
-stat -c '%A %U:%G %n' "$DIR"
+ls -ld "$DIR"
 echo "expect: drwxrwsr-x root:$GROUP $DIR"
 echo
 echo "NEXT (per operator, NO root needed):"

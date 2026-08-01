@@ -7,6 +7,17 @@
 # path may install, create, or change anything on the host.
 set -u
 
+# Portable helpers: BSD stat/sed (macOS) differ from GNU. macOS is a declared
+# supported platform, so the suite must not assume GNU coreutils.
+fm_portable_mode() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then stat -f '%Lp' "$1" 2>/dev/null
+  else stat -c '%a' "$1" 2>/dev/null; fi
+}
+fm_portable_sed_i() { # <expr> <file>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then sed -i '' "$1" "$2"
+  else sed -i "$1" "$2"; fi
+}
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -87,11 +98,11 @@ test_preflight_names_the_opt_in_command() {
 
 test_root_prereq_check_needs_no_root_and_changes_nothing() {
   local out rc snap_before snap_after
-  snap_before=$(getent group agents 2>/dev/null; stat -c '%a' /opt/agents/fleet 2>/dev/null)
+  snap_before=$(getent group agents 2>/dev/null; fm_portable_mode /opt/agents/fleet 2>/dev/null)
   set +e
   out=$(FM_FLEET_OPERATORS="$(id -un)" bash "$PREREQ" --check 2>&1); rc=$?
   set -e
-  snap_after=$(getent group agents 2>/dev/null; stat -c '%a' /opt/agents/fleet 2>/dev/null)
+  snap_after=$(getent group agents 2>/dev/null; fm_portable_mode /opt/agents/fleet 2>/dev/null)
   [ "$snap_before" = "$snap_after" ] || fail "--check must not change host state"
   case "$out" in
     *"CHECK ONLY"*) ;;

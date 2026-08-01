@@ -19,6 +19,17 @@
 #
 # Exit: 0 when at least Tier A is ready; 1 when a Tier A prerequisite is missing.
 set -euo pipefail
+
+# Portable file mode: BSD stat (macOS) has no -c. macOS is a declared supported
+# platform (README badge), and the repo already branches this way in
+# bin/backends/herdr.sh.
+fm_portable_mode() { # <path>
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    stat -f '%Lp' "$1" 2>/dev/null
+  else
+    stat -c '%a' "$1" 2>/dev/null
+  fi
+}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 QUIET=0
@@ -36,13 +47,27 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # set they started with, so `id` can report a group the running process does not
 # actually carry - the single most confusing fleet failure there is.
 in_group_now() { # <group>
+  # Membership as this PROCESS carries it, not as /etc/group claims: a long-lived
+  # tmux server or the systemd --user manager keeps the group set it started with.
+  # /proc is the precise source but is Linux-only, so fall back to id(1) elsewhere.
   local gid
-  gid=$(getent group "$1" 2>/dev/null | cut -d: -f3) || return 1
-  [ -n "$gid" ] || return 1
-  grep -qE "^Groups:.*(^| )${gid}( |$)" "/proc/$$/status" 2>/dev/null
+  gid=$(portable_gid "$1") || return 1
+  if [ -r "/proc/$$/status" ]; then
+    grep -qE "^Groups:.*(^| )${gid}( |$)" "/proc/$$/status" 2>/dev/null
+  else
+    id -nG 2>/dev/null | tr ' ' '\n' | grep -qx "$1"
+  fi
 }
 
-group_exists() { getent group "$1" >/dev/null 2>&1; }
+# Group lookup without getent, which does not exist on macOS.
+portable_gid() { # <group>
+  local line
+  line=$(getent group "$1" 2>/dev/null) || line=$(grep -E "^$1:" /etc/group 2>/dev/null | head -1)
+  [ -n "$line" ] || return 1
+  printf '%s' "$line" | cut -d: -f3
+}
+
+group_exists() { portable_gid "$1" >/dev/null 2>&1; }
 
 FLEET_GROUP=${FM_FLEET_GROUP:-agents}
 FLEET_DIR=${FM_FLEET_DIR:-}
@@ -109,7 +134,7 @@ else
   row 'your membership' "$ROOT_FIX"
 fi
 if [ -d "$FLEET_DIR" ]; then
-  row "$FLEET_DIR" "present  mode $(stat -c '%a' "$FLEET_DIR" 2>/dev/null || printf '?')"
+  row "$FLEET_DIR" "present  mode $(fm_portable_mode "$FLEET_DIR" 2>/dev/null || printf '?')"
 else
   row "$FLEET_DIR" "$ROOT_FIX"
 fi
