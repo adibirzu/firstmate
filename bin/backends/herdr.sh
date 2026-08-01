@@ -469,8 +469,22 @@ fm_backend_herdr_projection_workspace_label() {  # <task-id> <projection-id>
 # The path is never under any one home's state/ and secondmates never write the
 # primary home. Returns non-zero when the named session's socket cannot be
 # resolved unambiguously.
+#
+# The namespace carries the calling operator's uid because /tmp is shared by
+# every operator on the box and this directory is created mode 700. Without the
+# uid, the first operator to create it owns it outright and every other
+# operator's namespace validation fails permanently - losing them the
+# presentation lock, and with it the projected resume path in fm-spawn, for as
+# long as that directory survives. A Herdr session socket is per-operator
+# anyway, so scoping the namespace by uid costs no mutual exclusion: two
+# operators never share one session/socket identity to serialize against.
 fm_backend_herdr_presentation_lock_namespace() {
-  printf '%s' '/tmp/firstmate-herdr-presentation'
+  local uid
+  uid=$(id -u 2>/dev/null) || return 1
+  case "$uid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '/tmp/firstmate-herdr-presentation-%s' "$uid"
 }
 
 fm_backend_herdr_presentation_lock_namespace_mode() {

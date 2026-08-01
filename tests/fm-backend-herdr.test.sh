@@ -2246,8 +2246,8 @@ test_presentation_session_lock_path_is_shared_across_homes() {
     || fail "session lock path resolution failed for home B"
   [ "$path_a" = "$path_b" ] || fail "same session/socket must resolve one shared lock path"
   case "$path_a" in
-    /tmp/firstmate-herdr-presentation/order-*.lock) ;;
-    *) fail "session lock path must use the shared machine namespace: $path_a" ;;
+    "/tmp/firstmate-herdr-presentation-$(id -u)/order-"*.lock) ;;
+    *) fail "session lock path must use this operator's machine namespace: $path_a" ;;
   esac
   case "$path_a" in
     */state/*) fail "session lock path must not live under a home state directory: $path_a" ;;
@@ -2272,6 +2272,62 @@ test_presentation_session_lock_path_is_shared_across_homes() {
       || fail "symlink parent socket paths must resolve one lock: $path_tmp vs $path_private"
   fi
   pass "herdr presentation lock: one path per session/socket across homes"
+}
+
+# The presentation lock namespace lives in /tmp, which every operator on the
+# box shares, and it is created mode 700.
+# A namespace without the uid therefore belongs outright to whichever operator
+# creates it first, and every other operator's ownership validation then fails
+# forever - which silently costs them the projected resume path in fm-spawn.
+# Federated boxes run several operators against one /tmp, so this is reachable
+# in normal use, not a contrived case.
+fake_id_fakebin() {  # <dir> -> echoes a fakebin dir whose `id -u` is $FM_FAKE_UID
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/id" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -u ] && [ -n "${FM_FAKE_UID:-}" ]; then printf '%s\n' "$FM_FAKE_UID"; exit 0; fi
+for real in /usr/bin/id /bin/id; do [ -x "$real" ] && exec "$real" "$@"; done
+exit 127
+SH
+  chmod +x "$fb/id"
+  printf '%s' "$fb"
+}
+
+test_presentation_lock_namespace_is_scoped_per_operator() {
+  local dir fb out_a out_b out
+  dir="$TMP_ROOT/presentation-lock-namespace-uid"; mkdir -p "$dir"
+  fb=$(fake_id_fakebin "$dir")
+  out_a=$(PATH="$fb:$PATH" FM_FAKE_UID=1001 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_lock_namespace' "$ROOT")
+  out_b=$(PATH="$fb:$PATH" FM_FAKE_UID=1004 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_lock_namespace' "$ROOT")
+  [ "$out_a" = /tmp/firstmate-herdr-presentation-1001 ] \
+    || fail "operator 1001 resolved an unexpected namespace: $out_a"
+  [ "$out_b" = /tmp/firstmate-herdr-presentation-1004 ] \
+    || fail "operator 1004 resolved an unexpected namespace: $out_b"
+  [ "$out_a" != "$out_b" ] || fail "two operators must not share one presentation lock namespace ($out_a)"
+  for out in "$out_a" "$out_b"; do
+    [ "$out" != /tmp/firstmate-herdr-presentation ] \
+      || fail "the uid-less namespace lets the first operator lock out every other one: $out"
+  done
+  pass "herdr presentation lock: the namespace is scoped per operator, not shared across uids"
+}
+
+test_presentation_lock_namespace_fails_closed_on_unusable_uid() {
+  local dir fb out status bad
+  dir="$TMP_ROOT/presentation-lock-namespace-baduid"; mkdir -p "$dir"
+  fb=$(fake_id_fakebin "$dir")
+  # An empty FM_FAKE_UID falls through to the real `id`, which is a valid uid;
+  # every other malformed value must refuse rather than build a path from it.
+  for bad in "not-a-uid" "10 04" "../escape"; do
+    out=$(PATH="$fb:$PATH" FM_FAKE_UID="$bad" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_lock_namespace' "$ROOT" 2>/dev/null)
+    status=$?
+    [ "$status" -ne 0 ] || fail "a malformed uid ('$bad') must refuse the namespace, got '$out'"
+    [ -z "$out" ] || fail "a malformed uid ('$bad') leaked a namespace: $out"
+  done
+  pass "herdr presentation lock: an unusable uid refuses the namespace rather than sharing one"
 }
 
 test_presentation_session_lock_path_rejects_malformed_socket() {
@@ -4011,6 +4067,8 @@ test_projection_order_anchors_the_parent_by_exact_id
 test_projection_order_foreign_new_child_before_parent_is_read_only
 test_projection_order_missing_parent_is_read_only
 test_presentation_session_lock_path_is_shared_across_homes
+test_presentation_lock_namespace_is_scoped_per_operator
+test_presentation_lock_namespace_fails_closed_on_unusable_uid
 test_presentation_session_lock_path_rejects_malformed_socket
 test_projection_order_rejects_malformed_socket
 test_projection_reclaim_refusal_matrix_is_non_mutating
