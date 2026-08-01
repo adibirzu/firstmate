@@ -69,6 +69,13 @@ export REAL_GIT_FOR_TEST
 #   $CASE/wt/           - a worktree of the project (the task worktree)
 # Echoes the case dir.
 make_case() {
+  # This helper RETURNS its path on stdout, so nothing else may write there.
+  # `git push` runs the caller's pre-push hook, and a hook that logs
+  # informationally to stdout instead of stderr lands its banner INSIDE the
+  # caller's `$(...)` capture, prefixing every derived path and collapsing the
+  # fixture with "No such file or directory". `-q` silences git, never the hook.
+  # Grouping the setup makes the stdout contract explicit for ANY hook.
+  {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
@@ -126,6 +133,7 @@ SH
   # Fresh watcher beacon so fm-guard stays quiet.
   touch "$case_dir/state/.last-watcher-beat"
 
+  } >/dev/null
   printf '%s\n' "$case_dir"
 }
 
