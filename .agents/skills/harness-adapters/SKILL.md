@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, and agy.
 user-invocable: false
 metadata:
   internal: true
@@ -127,6 +127,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
+| agy | `--model <id>` | `--effort <low\|medium\|high>` | Verified 2026-08-01 on Antigravity CLI 1.1.9. Base model ids require `--effort`; effort-baked model ids work alone; matching baked+effort works; conflict fails closed. Cap at `high`; omit `xhigh`/`max`. Preferred form: base model + `--effort`. |
 
 The concrete `harness` field owns adapter identity independently of the model provider: `harness=pi` with `model=xai/grok-*` is Pi using xAI, not `harness=grok`, and does not require Grok CLI login; `harness=grok` remains the standalone Grok Build CLI adapter.
 No script resolves that split for you: establish which credential store a tuple reads from the discovery surfaces below plus `quota-axi auth --json`'s per-provider sources, and show that reasoning rather than inferring it from a harness, model, or source name.
@@ -144,6 +145,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | pi / pi-signed | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
+| agy | Run `agy models`, which lists model ids available to the current Antigravity CLI install and account (includes effort-baked slugs). |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
@@ -397,3 +399,31 @@ The delivery-only spinner match covers the full moon-phase glyph set rather than
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal remains a wake notification; standalone Kimi has no busy-state source until one is live-verified.
+
+## agy (VERIFIED 2026-08-01, Antigravity CLI 1.1.9)
+
+agy runs as a persistent interactive TUI crewmate (product name: Antigravity CLI).
+A `-i` / `--prompt-interactive` prompt seeds AND auto-runs the first turn once the project-trust dialog is cleared, so the brief rides the launch command like claude/codex/cline/cursor-agent/copilot.
+
+| Fact | Value |
+|---|---|
+| Binary | `agy` from `PATH` (`~/.local/bin/agy`, standalone Mach-O). Detection matches `agy` in process ancestry and the env marker below. |
+| Launch | `agy --dangerously-skip-permissions [--model <id>] [--effort <low\|medium\|high>] -i "<brief>"`. `-i` seeds and auto-runs once trust clears (verified via tmux capture). |
+| Models | `agy models` lists effort-baked ids such as `gemini-3.6-flash-{low,medium,high}`, `gemini-3.5-flash-*`, `gemini-3.1-pro-{high,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`. |
+| Model / effort interaction | Base model (e.g. `gemini-3.6-flash`) **requires** `--effort`. Baked suffix alone works. Matching baked + `--effort` works. Conflicting baked + `--effort` fails closed (`conflicts with --effort=...`). Preferred firstmate form: base model + `--effort`. Ceiling is `high`; omit `xhigh`/`max`. |
+| Busy-pane signature | Braille spinner + `Generating...` / `Running...` mid-turn; stable footer token `esc to cancel` (clears the instant the turn ends). Idle footer is `? for shortcuts`. The busy token string is identical to cline's, but each harness owns its own constant and harness-scoped case (`FM_TMUX_AGY_BUSY_REGEX_DEFAULT`). No semantic task-state writer is wired yet (crewmate posture matches cline/cursor-agent/copilot). |
+| Exit command | `/exit` (verified rc 0). Prints `Resume with -c (or command below):` and `agy --conversation=<uuid>`. |
+| Interrupt | Single `Esc` mid-turn; body shows `Interrupted · What should Antigravity CLI do instead?`; session survives. |
+| Autonomy | `--dangerously-skip-permissions` auto-approves tool permission prompts (does **not** bypass project trust). |
+| **Trust dialog (blocking, GATED)** | Interactive mode on an untrusted directory shows `Do you trust the contents of this project?` (`Yes, I trust this folder` / `No, exit`). Default focus is Yes; one `Enter` accepts it and **persists** the path into `~/.gemini/antigravity-cli/settings.json` `trustedWorkspaces` (verified). `fm-spawn` wires a post-launch readiness gate only (no pre-seed of that operator-global settings file): while the dialog is present, send one Enter; once `esc to cancel` or `? for shortcuts` appears, proceed; on budget exhaustion, fail the spawn loudly. Past-trust deliberately does **not** use the substring `Antigravity CLI` because that text also appears inside the dialog body. |
+| Submission | Seeded `-i` prompt auto-submits once trust clears; typing then Enter submits follow-ups. |
+| Environment marker | `ANTIGRAVITY_AGENT=1` on child/tool processes (verified with clean `env -i` launch). Checked **before** `CLAUDECODE` in `fm-harness.sh` so an agy worker is never misread as claude. |
+| Composer | Bordered box with bare `>` prompt glyph; **no idle placeholder text** observed. Bordered `>` already reads empty in the shared classifier; no `FM_COMPOSER_IDLE_RE_DEFAULT` addition. |
+| Resume | `agy --conversation <id>` or `agy -c` / `--continue` (most recent for cwd). |
+| TTY | Interactive mode needs a pty; supervise only through a pane. |
+| Skill invocation | Not separately verified beyond natural language; use natural language if the exact slash skill form is uncertain. |
+
+Turn-end is observed from the pane, not a hook: the `esc to cancel` footer clears and the composer returns to `? for shortcuts`.
+agy is not wired for secondmate launches, so no `backends/tmux.sh` agent-process liveness entry is required yet, matching cline/cursor-agent/copilot.
+
+Full empirical capture evidence: [`docs/verification/agy-adapter.md`](../../../docs/verification/agy-adapter.md).

@@ -70,7 +70,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -425,7 +425,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -486,6 +486,22 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # agy (Antigravity CLI 1.1.9): `-i` / `--prompt-interactive` seeds AND
+    # auto-runs the first turn once the project-trust dialog is cleared
+    # (verified via tmux capture; docs/verification/agy-adapter.md) - the same
+    # argv-seed pattern as claude/codex/grok, not kimi's bare-launch+inject.
+    # `--dangerously-skip-permissions` is the autonomy flag (auto-approves tool
+    # permission prompts); it does NOT bypass the project trust dialog.
+    # MODEL/EFFORT: base model ids require `--effort`; effort-baked model ids
+    # (`…-low|medium|high`) work alone; matching baked+effort works; conflict
+    # fails closed. Preferred form is base model + `--effort`. Ceiling is
+    # `high`; omit xhigh/max. Turn-end is observed from the pane (`esc to
+    # cancel` clears; idle footer is `? for shortcuts`).
+    # PROJECT TRUST: fresh worktrees show "Do you trust the contents of this
+    # project?". fm-spawn clears it with a post-launch keystroke gate only
+    # (one Enter; past-trust first). No pre-seed of the operator-global
+    # settings file. See docs/verification/agy-adapter.md.
+    agy) printf '%s' 'agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -603,7 +619,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -640,6 +656,17 @@ effort_flag_for_harness() {
       # its --thinking flag.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    agy)
+      # agy 1.1.9 accepts --effort low|medium|high (verified via --help and live
+      # conflict probes; docs/verification/agy-adapter.md "Model and effort").
+      # xhigh and max are not accepted, so omit them rather than passing a
+      # known-bad value. When the model id already ends in -low/-medium/-high,
+      # a matching --effort is accepted and a conflicting --effort fails closed
+      # at launch with a clear agy error - firstmate does not rewrite model ids.
+      case "$effort" in
+        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1292,6 +1319,60 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+agy_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+agy_trust_dialog_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Do you trust the contents of this project?'
+}
+
+# Past the trust gate: EITHER the busy footer (`esc to cancel`, the seeded `-i`
+# prompt auto-runs the instant trust clears) OR the idle shortcuts bar
+# (`? for shortcuts`). Deliberately NOT "Antigravity CLI" - that literal also
+# appears inside the trust dialog ("Antigravity CLI requires permission..."),
+# so it would report past-trust while the dialog is still up. The `\?` in the
+# idle alternate is mandatory - unescaped it is an ERE quantifier.
+agy_pane_is_past_trust() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts'
+}
+
+# Clear agy's blocking project-trust dialog. There is deliberately NO pre-seed
+# of ~/.gemini/antigravity-cli/settings.json trustedWorkspaces: that file also
+# holds permission allow-lists, has no delegated writer, and is operator-global.
+# A single Enter accepts the default-focus "Yes, I trust this folder" (verified
+# to persist the path and proceed); answered at most once so a repeat Enter
+# after trust clears does not land as stray composer text. See
+# docs/verification/agy-adapter.md "Trust / permission gate".
+#
+# The POSITIVE past-trust anchor is tested FIRST: an Ink TUI need not scrub the
+# accepted trust frame from the terminal scrollback, and if agy leaves it there
+# the dialog literal stays in every 120-line capture forever. Dialog-first would
+# then never reach the success branch. Past-trust anchors ('esc to cancel',
+# '? for shortcuts') do not appear in the dialog body.
+agy_wait_for_trust_clear() {
+  local pane i=0 max=${FM_AGY_TRUST_POLLS:-60} interval=${FM_AGY_POLL_INTERVAL:-0.5} answered=0
+  while [ "$i" -lt "$max" ]; do
+    pane=$(agy_capture)
+    if agy_pane_is_past_trust "$pane"; then
+      return 0
+    elif agy_trust_dialog_present "$pane"; then
+      if [ "$answered" -eq 0 ]; then
+        spawn_send_key "$T" Enter
+        answered=1
+      fi
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+agy_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -1688,6 +1769,12 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = agy ]; then
+  if ! agy_wait_for_trust_clear; then
+    agy_spawn_fail "agy did not clear the project-trust gate to a ready or working pane"
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
