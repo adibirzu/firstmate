@@ -2236,7 +2236,16 @@ spawn_write_meta() {
       echo "projects=$SECONDMATE_PROJECTS"
     fi
   } >> "$tmp" || { rm -f "$tmp"; return 1; }
-  mv "$tmp" "$meta"
+  # The destination must be openable as a regular file before the rename: mv
+  # into an existing DIRECTORY named <id>.meta "succeeds" by moving the temp
+  # file inside it, so spawn would report a published endpoint that no reader
+  # can find. Let the redirect surface the real errno (Is a directory,
+  # Permission denied) instead of swallowing it.
+  if ! : >> "$meta"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$meta" || { rm -f "$tmp"; return 1; }
 }
 spawn_write_meta "$STATE/$ID.meta" || {
   echo "error: could not write meta for $ID" >&2
