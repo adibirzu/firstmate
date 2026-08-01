@@ -126,8 +126,40 @@ fm_handoff_waiting() { # <dir>
   done
 }
 
+# An id names one directory INSIDE the store and nothing else. Without this a
+# caller-supplied "../x" or an absolute path would resolve outside the store
+# entirely, so every lookup validates before it touches the filesystem.
+fm_handoff_valid_id() { # <id>
+  case "$1" in
+    ''|*/*|.|..|*..*) return 1 ;;
+  esac
+  case "$1" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# A document name is a bare filename within its own entry. The store is
+# group-writable on a multi-operator host, so `meta` is UNTRUSTED INPUT: a planted
+# entry carrying doc=../../../etc/something would otherwise make a reader open an
+# arbitrary path with the reader's own credentials.
+fm_handoff_valid_doc() { # <entry-dir> <name>
+  case "$2" in
+    ''|*/*|.|..|*..*) return 1 ;;
+  esac
+  # A bare name is still not enough: a symlink planted inside the entry would
+  # point anywhere. Only a real file that is genuinely inside the entry is read.
+  [ ! -L "$1/$2" ] && [ -f "$1/$2" ]
+}
+
 fm_handoff_require_entry() { # <dir> <id>
-  local entry="$1/$2"
+  local entry
+  if ! fm_handoff_valid_id "$2"; then
+    printf 'fm-handoff-doc: invalid handoff id "%s"\n' "$2" >&2
+    printf '  ids are a single name: letters, digits, dot, dash, underscore\n' >&2
+    return 1
+  fi
+  entry="$1/$2"
   if [ ! -d "$entry" ] || [ ! -f "$entry/meta" ]; then
     printf 'fm-handoff-doc: no handoff document "%s" in %s\n' "$2" "$1" >&2
     printf '  bin/fm-handoff-doc.sh list\n' >&2
@@ -188,8 +220,8 @@ case "$cmd" in
     id=${1:?usage: fm-handoff-doc.sh show <id>}
     entry=$(fm_handoff_require_entry "$DIR" "$id") || exit 1
     doc=$(fm_handoff_meta_get "$entry" doc)
-    if [ ! -f "$entry/$doc" ]; then
-      printf 'fm-handoff-doc: document missing from %s\n' "$entry" >&2
+    if ! fm_handoff_valid_doc "$entry" "$doc"; then
+      printf 'fm-handoff-doc: %s does not name a plain document inside its own entry; refusing to read it\n' "$id" >&2
       exit 1
     fi
     cat "$entry/$doc"

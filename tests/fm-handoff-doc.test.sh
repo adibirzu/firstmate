@@ -190,6 +190,57 @@ test_unknown_id_fails_clearly() {
   pass "fm-handoff-doc: an unknown id fails with a clear message"
 }
 
+test_an_id_cannot_escape_the_store() {
+  local home store out; read -r home store < <(new_home ho-traversal)
+  mkdir -p "$home/outside"
+  printf 'id=e\ntitle=t\nauthor=x\ncreated=2026-01-01T00:00:00Z\ndoc=d.md\nbundle=\n' \
+    > "$home/outside/meta"
+  printf 'OUTSIDE\n' > "$home/outside/d.md"
+  for bad in '../outside' "$home/outside" 'a/b' '..'; do
+    out=$(ho "$home" "$store" show "$bad" 2>&1) \
+      && fail "show must refuse the id '$bad'"
+    case "$out" in
+      *"invalid handoff id"*) ;;
+      *) fail "id '$bad' must be rejected as invalid, got: $out" ;;
+    esac
+  done
+  pass "fm-handoff-doc: an id cannot escape the store"
+}
+
+test_a_planted_meta_cannot_redirect_a_read() {
+  # The shared store is group-writable on a multi-operator host, so meta is
+  # untrusted input. A planted doc= must never make a reader open a path outside
+  # the entry with the reader's own credentials.
+  local home store out; read -r home store < <(new_home ho-planted)
+  printf 'SENSITIVE\n' > "$home/outside.md"
+  mkdir -p "$store/planted"
+  printf 'id=planted\ntitle=t\nauthor=x\ncreated=2026-01-01T00:00:00Z\ndoc=../../outside.md\nbundle=\n' \
+    > "$store/planted/meta"
+  out=$(ho "$home" "$store" show planted 2>&1) && fail "show must refuse a traversing doc="
+  case "$out" in
+    *SENSITIVE*) fail "show leaked a file outside the entry" ;;
+    *"inside its own entry"*) ;;
+    *) fail "a traversing doc= must be refused plainly, got: $out" ;;
+  esac
+  pass "fm-handoff-doc: a planted meta cannot redirect a read outside the entry"
+}
+
+test_a_symlinked_document_is_refused() {
+  local home store out; read -r home store < <(new_home ho-symlink)
+  printf 'SENSITIVE\n' > "$home/outside.md"
+  mkdir -p "$store/linked"
+  printf 'id=linked\ntitle=t\nauthor=x\ncreated=2026-01-01T00:00:00Z\ndoc=link.md\nbundle=\n' \
+    > "$store/linked/meta"
+  ln -s "$home/outside.md" "$store/linked/link.md"
+  out=$(ho "$home" "$store" show linked 2>&1) && fail "show must refuse a symlinked document"
+  case "$out" in
+    *SENSITIVE*) fail "show followed a symlink out of the entry" ;;
+    *"inside its own entry"*) ;;
+    *) fail "a symlinked document must be refused, got: $out" ;;
+  esac
+  pass "fm-handoff-doc: a symlinked document is refused"
+}
+
 # --- run --------------------------------------------------------------------
 test_solo_is_the_default
 test_publish_writes_a_readable_entry
@@ -201,4 +252,7 @@ test_show_works_against_a_read_only_store
 test_fetch_lands_remote_tracking_refs_only
 test_fetch_refuses_a_corrupt_bundle
 test_unknown_id_fails_clearly
+test_an_id_cannot_escape_the_store
+test_a_planted_meta_cannot_redirect_a_read
+test_a_symlinked_document_is_refused
 echo "ALL PASS: fm-handoff-doc"
