@@ -1115,7 +1115,16 @@ EOF
     "tasks-axi compact listing omitted blocked-by metadata"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "tasks-axi compact digest leaked an in-flight task body"
   assert_not_contains "$out" "QUEUED-BODY-LINE" "tasks-axi compact digest leaked a queued task body"
-  assert_contains "$out" "--- compact-startup ---" "in-flight meta identity disappeared from startup recovery digest"
+  # Assert the ID, not the whole header line. bin/fm-session-start.sh prints
+  # `--- <id> (<crew-name>) ---` whenever bin/fm-name.sh resolves a name, and
+  # falls back to a bare `--- <id> ---` only when it fails - the name is
+  # explicitly "derived, never stored, best-effort". Pinning the bare form made
+  # this assertion pass only on hosts where fm-name.sh happens NOT to work; where
+  # it does, the header reads `--- compact-startup (high-cutter) ---` and the
+  # suite failed for a naming feature working as designed. The id is the
+  # identity this test cares about, so match that and let the suffix vary.
+  # (The orphan-status assertion above stays exact: that path never adds a name.)
+  assert_contains "$out" "--- compact-startup" "in-flight meta identity disappeared from startup recovery digest"
   assert_contains "$out" "worktree=$home/projects/firstmate" "in-flight recovery worktree identity disappeared from startup digest"
   assert_contains "$out" "Full task bodies remain available on demand: tasks-axi show <id> --full" \
     "compact digest omitted the full-body lookup pointer"

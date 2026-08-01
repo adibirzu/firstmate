@@ -1012,7 +1012,11 @@ test_operational_followup_turn_e2e() {
     echo "skip: pi or tmux not found for Pi operational follow-up E2E"
     return 0
   fi
-  version=$(pi --version 2>/dev/null || true)
+  # `pi --version` prints to STDERR (exit 0), so `2>/dev/null` discarded the
+  # only output and left $version empty - the suite then failed with
+  # "could not determine the installed Pi version" against a perfectly
+  # working Pi. Merge both streams and keep the failure-tolerant `|| true`.
+  version=$(pi --version 2>&1 || true)
   record_pi_version_evidence "$version" "Pi operational follow-up E2E"
 
   project="$TMP_ROOT/followup-project"
@@ -1366,7 +1370,11 @@ test_hidden_block_geometry_e2e() {
     echo "skip: pi or tmux not found for Pi Calm hidden-block geometry E2E"
     return 0
   fi
-  version=$(pi --version 2>/dev/null || true)
+  # `pi --version` prints to STDERR (exit 0), so `2>/dev/null` discarded the
+  # only output and left $version empty - the suite then failed with
+  # "could not determine the installed Pi version" against a perfectly
+  # working Pi. Merge both streams and keep the failure-tolerant `|| true`.
+  version=$(pi --version 2>&1 || true)
   record_pi_version_evidence "$version" "Pi Calm hidden-block geometry E2E"
 
   project="$TMP_ROOT/geometry-project"
@@ -2470,7 +2478,11 @@ test_interactive_terminal_e2e() {
     echo "skip: pi or tmux not found for Pi calm interactive E2E"
     return 0
   fi
-  version=$(pi --version 2>/dev/null || true)
+  # `pi --version` prints to STDERR (exit 0), so `2>/dev/null` discarded the
+  # only output and left $version empty - the suite then failed with
+  # "could not determine the installed Pi version" against a perfectly
+  # working Pi. Merge both streams and keep the failure-tolerant `|| true`.
+  version=$(pi --version 2>&1 || true)
   record_pi_version_evidence "$version" "Pi calm interactive E2E"
 
   project="$TMP_ROOT/e2e-project"
