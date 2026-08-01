@@ -136,6 +136,11 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
+When a live ship or scout must change worker runtime mid-task (for example a harness that ran out of tokens), `bin/fm-runtime-handoff.sh` is the supported path: it exits the current agent with that harness's verified exit command, keeps the existing treehouse lease and worktree, relaunches a verified target harness through `fm-spawn.sh --reuse-worktree`, rewrites only the runtime and endpoint fields in `state/<id>.meta`, and re-delivers the original brief plus a progress note without regenerating the brief.
+A handoff refuses rather than guessing when the worktree, endpoint ownership, or target harness cannot be reconciled, and it never aborts or restarts a live no-mistakes run; the replacement agent is told to re-attach with `no-mistakes axi status`.
+Firstmate decides when to invoke handoff; there is no automatic migration daemon.
+Pane statusline quota fragments are a best-effort capacity signal via `bin/fm-statusline-quota-lib.sh` (unparseable means unknown, never exhausted); `quota-axi` remains best-effort and is not the sole input.
+Choosing Claude as a handoff target can share the same Claude budget as the supervising firstmate session - surface that tradeoff; do not encode a policy for it.
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.
