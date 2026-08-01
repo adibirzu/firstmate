@@ -2,7 +2,7 @@
 name: stuck-crewmate-recovery
 description: >-
   Agent-only playbook for stuck or missing ordinary Firstmate direct reports.
-  Use when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
+  Use when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer, or before changing a live crewmate's runtime mid-task.
   Reconciles recorded work before escalating from targeted inspection through safe relaunch or failure.
 user-invocable: false
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 # stuck-crewmate-recovery
 
-Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, or when a steer failed to land.
+Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, when a steer failed to land, or before changing a live direct report's runtime mid-task.
 
 Load `harness-adapters` before sending an interrupt, exit command, resume command, or harness-specific skill invocation.
 The target window's harness is recorded as `harness=` in `state/<id>.meta`.
@@ -51,7 +51,7 @@ Escalate in order:
 4. If the crewmate is genuinely wedged after redirection, or must change harness because the current runtime is out of capacity, use `bin/fm-runtime-handoff.sh` with a concise `--progress-note` rather than a fresh `fm-spawn`.
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
-   Treat an unparseable statusline quota reading as unknown capacity, never as exhaustion.
+   Read that capacity claim with `bin/fm-statusline-quota.sh <id>`, which reports `ok`, `low`, `unknown`, or `exhausted`, and treat an `unknown` statusline quota reading as unknown capacity, never as exhaustion.
    When you pick the target harness, a Claude target can draw on the same Claude budget as the supervising firstmate session, so surface that tradeoff to the captain instead of assuming it is fresh capacity.
    The worktree and commits persist; handoff is the cheap safe path.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
