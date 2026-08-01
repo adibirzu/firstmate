@@ -3,6 +3,14 @@
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+#        fm-spawn.sh <task-id> --reuse-worktree --harness <name> [--handoff-brief <path>] [--provider ...] [--model ...] [--effort ...] [--backend ...]
+#   --reuse-worktree relaunches an existing ship/scout task in its recorded
+#   worktree without a new treehouse lease (or Orca worktree acquisition). It is
+#   the launch half of bin/fm-runtime-handoff.sh: same task id, same worktree,
+#   same branch, different or same harness. It refuses when meta, worktree, or
+#   endpoint ownership cannot be reconciled, and never returns a still-held
+#   treehouse lease. --handoff-brief substitutes a launch-only prompt file while
+#   leaving data/<id>/brief.md untouched.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -200,6 +208,8 @@ PROVIDER=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+HANDOFF_BRIEF=
+REUSE_WORKTREE=0
 HARNESS_SET=0
 PROVIDER_SET=0
 MODEL_SET=0
@@ -218,6 +228,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      handoff-brief) HANDOFF_BRIEF=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -226,6 +237,7 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --reuse-worktree) REUSE_WORKTREE=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --provider) want_value=provider ;;
@@ -236,6 +248,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --handoff-brief) want_value=handoff-brief ;;
+    --handoff-brief=*) HANDOFF_BRIEF=${a#--handoff-brief=} ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -245,6 +259,7 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ -z "$HANDOFF_BRIEF" ] || [ -f "$HANDOFF_BRIEF" ] || { echo "error: --handoff-brief is not a readable file: $HANDOFF_BRIEF" >&2; exit 1; }
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -253,6 +268,18 @@ case "$PROVIDER" in
   ''|claude|codex|grok) ;;
   *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
 esac
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --reuse-worktree cannot be combined with --secondmate" >&2
+    exit 1
+  fi
+  [ "$HARNESS_SET" -eq 1 ] || { echo "error: --reuse-worktree requires an explicit --harness" >&2; exit 1; }
+fi
+# --handoff-brief is only meaningful with --reuse-worktree (runtime handoff).
+if [ -n "$HANDOFF_BRIEF" ] && [ "$REUSE_WORKTREE" != 1 ]; then
+  echo "error: --handoff-brief requires --reuse-worktree" >&2
+  exit 1
+fi
 
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
@@ -261,23 +288,34 @@ esac
 # recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
 # window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
 # so the default path's meta stays byte-identical.
+# --reuse-worktree is special: when --backend is omitted, keep the backend
+# already recorded for the task so a handoff does not silently move the
+# endpoint to a different session provider. That resolution runs after the
+# task id and meta are known (see reuse block below).
+BACKEND=
 if [ "$BACKEND_SET" -eq 1 ]; then
   BACKEND=$BACKEND_ARG
-else
+elif [ "$REUSE_WORKTREE" != 1 ]; then
   BACKEND=$(fm_backend_name)
 fi
-fm_backend_validate_spawn "$BACKEND" || exit 1
-fm_backend_source "$BACKEND" || exit 1
-if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
-  echo "error: backend=orca does not support --secondmate spawns yet" >&2
-  exit 1
-fi
-if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
-  echo "error: backend=cmux does not support --secondmate spawns yet" >&2
-  exit 1
-fi
-if [ "$BACKEND" = orca ]; then
-  fm_backend_orca_runtime_check || exit 1
+spawn_validate_backend() {
+  fm_backend_validate_spawn "$BACKEND" || return 1
+  fm_backend_source "$BACKEND" || return 1
+  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=orca does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = orca ]; then
+    fm_backend_orca_runtime_check || return 1
+  fi
+  return 0
+}
+if [ -n "$BACKEND" ]; then
+  spawn_validate_backend || exit 1
 fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
@@ -457,7 +495,8 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   done
   exit "$rc"
 fi
-ID=${POS[0]}
+ID=${POS[0]:-}
+[ -n "$ID" ] || { echo "error: missing task id" >&2; exit 2; }
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
@@ -468,8 +507,63 @@ SPAWN_TASK_LOCK_HELD=1
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
+REUSE_META=
+REUSE_OLD_TARGET=
+REUSE_PRESERVE_MODE=
+REUSE_PRESERVE_YOLO=
 
-if [ "$KIND" = secondmate ]; then
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  if [ "${#POS[@]}" -ne 1 ]; then
+    echo "error: --reuse-worktree takes only <task-id> (project and worktree come from state/$ID.meta)" >&2
+    exit 1
+  fi
+  REUSE_META="$STATE/$ID.meta"
+  [ -f "$REUSE_META" ] || { echo "error: --reuse-worktree requires existing meta at $REUSE_META" >&2; exit 1; }
+  [ ! -L "$REUSE_META" ] || { echo "error: meta for $ID is a symlink; refusing reuse-worktree" >&2; exit 1; }
+  REUSE_KIND=$(fm_meta_get "$REUSE_META" kind)
+  case "$REUSE_KIND" in
+    ship|scout) KIND=$REUSE_KIND ;;
+    secondmate)
+      echo "error: --reuse-worktree does not support kind=secondmate" >&2
+      exit 1
+      ;;
+    *)
+      echo "error: --reuse-worktree requires kind=ship or kind=scout in meta (got '${REUSE_KIND:-}')" >&2
+      exit 1
+      ;;
+  esac
+  PROJ=$(fm_meta_get "$REUSE_META" project)
+  WT_FROM_META=$(fm_meta_get "$REUSE_META" worktree)
+  REUSE_PRESERVE_MODE=$(fm_meta_get "$REUSE_META" mode)
+  REUSE_PRESERVE_YOLO=$(fm_meta_get "$REUSE_META" yolo)
+  [ -n "$PROJ" ] || { echo "error: meta for $ID is missing project=" >&2; exit 1; }
+  [ -n "$WT_FROM_META" ] || { echo "error: meta for $ID is missing worktree=" >&2; exit 1; }
+  [ -d "$PROJ" ] || { echo "error: recorded project for $ID does not exist: $PROJ" >&2; exit 1; }
+  [ -d "$WT_FROM_META" ] || { echo "error: recorded worktree for $ID does not exist: $WT_FROM_META" >&2; exit 1; }
+  if [ -z "$BACKEND" ]; then
+    BACKEND=$(fm_backend_of_meta "$REUSE_META")
+  fi
+  spawn_validate_backend || exit 1
+  if [ "$BACKEND" = orca ]; then
+    echo "error: --reuse-worktree does not support backend=orca yet (Orca owns worktree lifecycle; refuse rather than re-create a worktree)" >&2
+    exit 1
+  fi
+  REUSE_OLD_TARGET=$(fm_backend_target_of_meta "$REUSE_META")
+  if [ -n "$REUSE_OLD_TARGET" ]; then
+    case "$(fm_backend_agent_state "$BACKEND" "$REUSE_OLD_TARGET")" in
+      dead|missing) ;;
+      alive)
+        echo "error: existing endpoint for $ID is still alive; exit the agent (or use fm-runtime-handoff) before --reuse-worktree" >&2
+        exit 1
+        ;;
+      *)
+        echo "error: cannot reconcile existing endpoint ownership for $ID; refusing --reuse-worktree rather than guessing" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  ARG3=
+elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
     ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot)
       ARG3=${POS[1]:-}
@@ -488,10 +582,15 @@ if [ "$KIND" = secondmate ]; then
       ;;
   esac
 else
-  PROJ=${POS[1]}
+  PROJ=${POS[1]:-}
   ARG3=${POS[2]:-}
+  [ -n "$PROJ" ] || { echo "error: missing project directory" >&2; exit 1; }
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+if [ -z "$BACKEND" ]; then
+  echo "error: internal: backend was not resolved before launch" >&2
+  exit 1
+fi
 
 # The verified launch command per adapter. The knowledge half of each adapter
 # (busy-state source, exit command, dialogs, quirks) lives in the harness-adapters skill.
@@ -973,10 +1072,19 @@ if [ "$KIND" = secondmate ]; then
   fi
 else
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
-  WT=""
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    WT=$WT_FROM_META
+  else
+    WT=""
+  fi
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
+# Launch-only handoff prompt: feed the handoff file into the launch template
+# while leaving data/<id>/brief.md untouched on disk.
+if [ -n "$HANDOFF_BRIEF" ]; then
+  BRIEF=$HANDOFF_BRIEF
+fi
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -1568,6 +1676,15 @@ copilot_spawn_fail() {  # <detail>
 }
 
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    # In-place relaunch: the treehouse lease stays held by this task. Do not
+    # call treehouse get/return; only re-enter the recorded worktree.
+    POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
+    validate_spawn_worktree "recorded worktree (reuse-worktree)" "$T"
+    assert_worktree_colocated "$WT" "$POOL_HOME"
+    TREEHOUSE_LEASE_ABORT_CLEANUP=0
+    spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+  else
   # Firstmate acquires the worktree itself rather than sending `treehouse get` to
   # the pane, because the pool has to land on the repo's own filesystem and the
   # only way to select it is the HOME treehouse runs under (bin/fm-treehouse-lib.sh
@@ -1603,6 +1720,7 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # supported pane shell understands identically, which matters because the shell
   # is the operator's, not ours.
   spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+  fi
 
   # Confirm the pane really landed there before anything is launched into it.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
@@ -1911,6 +2029,10 @@ if [ "$KIND" = secondmate ]; then
   MODE=secondmate
   YOLO=off
   : "${SECONDMATE_PROJECTS:=}"
+elif [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_PRESERVE_MODE" ]; then
+  # Runtime handoff must not rewrite delivery posture; keep the recorded values.
+  MODE=$REUSE_PRESERVE_MODE
+  YOLO=${REUSE_PRESERVE_YOLO:-off}
 else
   PROJ_NAME=$(basename "$PROJ_ABS")
   read -r MODE YOLO <<EOF
@@ -1920,52 +2042,74 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
-{
-  echo "window=$META_WINDOW"
-  echo "endpoint_task_id=$ID"
-  echo "worktree=$WT"
-  echo "project=$PROJ_ABS"
-  echo "harness=$HARNESS"
-  [ -z "$PROVIDER" ] || echo "provider=$PROVIDER"
-  echo "kind=$KIND"
-  echo "mode=$MODE"
-  echo "yolo=$YOLO"
-  echo "tasktmp=$TASK_TMP"
-  echo "model=${MODEL:-default}"
-  echo "effort=${EFFORT:-default}"
-  [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
-  # backend= is written only for a non-default (non-tmux) backend, so the
-  # default path's meta stays byte-identical (absent backend= means tmux;
-  # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
-  if [ "$BACKEND" = herdr ]; then
-    echo "herdr_session=$HERDR_SES"
-    echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
-    echo "herdr_tab_id=$HERDR_TAB_ID"
-    echo "herdr_pane_id=$HERDR_PANE_ID"
+# On --reuse-worktree, rewrite only spawn-owned endpoint/runtime keys and
+# preserve every other meta line (pr=, pr_head=, x_*, custom fields). A full
+# truncate would drop PR and X-mode identity mid-task.
+spawn_write_meta() {
+  local meta=$1 tmp drop_re
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|provider|kind|mode|yolo|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects)='
+  tmp=$(mktemp "$STATE/.${ID}.meta.XXXXXX") || return 1
+  if [ "$REUSE_WORKTREE" = 1 ] && [ -f "$meta" ]; then
+    if ! { grep -Ev "$drop_re" "$meta" || true; } > "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+  else
+    : > "$tmp"
   fi
-  if [ "$BACKEND" = zellij ]; then
-    echo "zellij_session=$ZELLIJ_SES"
-    echo "zellij_tab_id=$ZELLIJ_TAB_ID"
-    echo "zellij_pane_id=$ZELLIJ_PANE_ID"
-  fi
-  if [ "$BACKEND" = orca ]; then
-    echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-    echo "terminal=$ORCA_TERMINAL"
-  fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
-  fi
-  if [ "$KIND" = secondmate ]; then
-    echo "home=$PROJ_ABS"
-    echo "projects=$SECONDMATE_PROJECTS"
-  fi
-} > "$STATE/$ID.meta"
+  {
+    echo "window=$META_WINDOW"
+    echo "endpoint_task_id=$ID"
+    echo "worktree=$WT"
+    echo "project=$PROJ_ABS"
+    echo "harness=$HARNESS"
+    [ -z "$PROVIDER" ] || echo "provider=$PROVIDER"
+    echo "kind=$KIND"
+    echo "mode=$MODE"
+    echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
+    # backend= is written only for a non-default (non-tmux) backend, so the
+    # default path's meta stays byte-identical (absent backend= means tmux;
+    # data/fm-backend-design-d7's P1 compatibility contract).
+    [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+    if [ "$BACKEND" = herdr ]; then
+      echo "herdr_session=$HERDR_SES"
+      echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
+      echo "herdr_tab_id=$HERDR_TAB_ID"
+      echo "herdr_pane_id=$HERDR_PANE_ID"
+    fi
+    if [ "$BACKEND" = zellij ]; then
+      echo "zellij_session=$ZELLIJ_SES"
+      echo "zellij_tab_id=$ZELLIJ_TAB_ID"
+      echo "zellij_pane_id=$ZELLIJ_PANE_ID"
+    fi
+    if [ "$BACKEND" = orca ]; then
+      echo "orca_worktree_id=$ORCA_WORKTREE_ID"
+      echo "terminal=$ORCA_TERMINAL"
+    fi
+    if [ "$BACKEND" = cmux ]; then
+      echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
+      echo "cmux_surface_id=$CMUX_SURFACE_ID"
+    fi
+    if [ "$KIND" = secondmate ]; then
+      echo "home=$PROJ_ABS"
+      echo "projects=$SECONDMATE_PROJECTS"
+    fi
+  } >> "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$meta"
+}
+spawn_write_meta "$STATE/$ID.meta" || {
+  echo "error: could not write meta for $ID" >&2
+  exit 1
+}
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 # The task now exists in state/, so fm-teardown.sh owns returning its worktree.
 # Returning it from here after this point would pull the lease out from under a
-# live task.
+# live task. --reuse-worktree never arms TREEHOUSE_LEASE_ABORT_CLEANUP, so this
+# assignment is a no-op there and remains correct for a fresh lease.
 TREEHOUSE_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
