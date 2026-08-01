@@ -784,13 +784,11 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   fi
   # --reuse-worktree relaunches ONE existing task from its own meta and takes no
   # id=repo pair; the shared_args re-exec below cannot carry it without turning a
-  # relaunch into a second lease for a task that already owns a worktree.
+  # relaunch into a second lease for a task that already owns a worktree. This
+  # also covers --handoff-brief, which the parser already binds to
+  # --reuse-worktree, so a batch handoff cannot reach the re-exec either.
   if [ "$REUSE_WORKTREE" = 1 ]; then
     echo "error: batch dispatch does not support --reuse-worktree; relaunch each task explicitly as 'fm-spawn.sh <task-id> --reuse-worktree'" >&2
-    exit 1
-  fi
-  if [ -n "$HANDOFF_BRIEF" ]; then
-    echo "error: batch dispatch does not support --handoff-brief; it only applies to a single --reuse-worktree relaunch" >&2
     exit 1
   fi
   rc=0
@@ -804,10 +802,6 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
-  if [ "$REUSE_WORKTREE" = 1 ]; then
-    echo "error: batch dispatch does not support --reuse-worktree; hand off one task at a time" >&2
-    exit 1
-  fi
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;

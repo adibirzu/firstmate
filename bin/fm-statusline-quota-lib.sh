@@ -8,6 +8,9 @@
 #
 # Contract (safety-critical):
 #   - Unparseable input is "unknown", never "exhausted".
+#   - Only the quota windows (five_hour_pct, weekly_pct) decide the status.
+#     context_pct is reported but never votes: it measures the context window,
+#     not remaining quota, and a compacting harness at 0% context is healthy.
 #   - A false exhaustion reading would migrate a healthy worker for no reason.
 #   - This library never decides to hand off; firstmate chooses when to act.
 #   - quota-axi remains best-effort elsewhere; this path is independent of it.
@@ -18,7 +21,8 @@
 #     Always exits 0. Fields always present: status, source.
 #     status is one of: ok | low | unknown
 #     "exhausted" is never emitted from unparseable input; only when a parsed
-#     remaining percentage is exactly 0 (or the literal "0% left" shape).
+#     remaining QUOTA percentage is exactly 0 (or the literal "0% left" shape).
+#     A signal that carries only a context reading stays unknown.
 #   fm_statusline_quota_verdict <text>
 #     Prints only the status token (ok|low|unknown|exhausted).
 
@@ -52,14 +56,20 @@ fm_statusline_quota_parse() {
     return 0
   fi
 
-  # A zero sample is exhausted and wins outright; otherwise any sample in 1..20
-  # is low; anything else leaves ok. Unparseable samples never downgrade.
-  status=ok
-  for n in $five_hr $weekly $context; do
+  # Only the quota windows decide status. context_pct is a context-window
+  # reading, not remaining capacity: a compacting harness at 0% context is
+  # healthy, and letting it vote would be exactly the false exhaustion this
+  # library refuses to emit. It stays a reported field and nothing more.
+  # A zero quota sample is exhausted and wins outright; otherwise any sample in
+  # 1..20 is low; anything else leaves ok. Unparseable samples never downgrade,
+  # and a signal carrying no quota window at all stays unknown.
+  status=unknown
+  for n in $five_hr $weekly; do
     case "$n" in
       ''|*[!0-9]*) continue ;;
       0) status=exhausted; break ;;
       [1-9]|1[0-9]|20) status=low ;;
+      *) if [ "$status" = unknown ]; then status=ok; fi ;;
     esac
   done
 
