@@ -104,6 +104,12 @@ case "$line_plain" in *"status:queued"*) plain_ok=1 ;; *) plain_ok=0 ;; esac
 [ "$dot_ok" -eq 1 ] && [ "$plain_ok" -eq 1 ] \
   && ok "claim treats punctuated task ids literally" \
   || bad "claim regex-matched neighboring task ids (A.1='$line_dot' A21='$line_plain')"
+"$CLI" claim A21 johnXdoe >/dev/null 2>&1 \
+  || bad "claim failed for neighboring operator id"
+wait_out=$(bin/fm-fleet-wait.sh john.doe --once --no-heartbeat 2>/dev/null || true)
+[ "$wait_out" = "[id:A.1]" ] \
+  && ok "wait treats punctuated operator ids literally" \
+  || bad "wait regex-matched neighboring operator ids (got '$wait_out')"
 export FM_FLEET_DIR="$D/fleet"
 
 # 3. heartbeat refreshes seen; a stale operator routes as offline

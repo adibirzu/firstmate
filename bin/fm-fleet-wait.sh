@@ -42,7 +42,14 @@ fm_fleet_assert_usable "$DIR" || exit 3
 # A fresh claim for this operator: claimed-by:<op>@<ts> with status:claimed
 # (NOT status:in-flight — once the firstmate starts an item it is no longer a wake).
 fresh_claims() {
-  grep -E "claimed-by:$op@[^ ]+ status:claimed" "$DIR/backlog.md" 2>/dev/null | grep -oE '\[id:[^]]+\]'
+  awk -v op="$op" '
+    function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+    function claimed_by(line){ if (match(line, /claimed-by:[^ @]+@/)) return substr(line, RSTART+11, RLENGTH-12); return "" }
+    claimed_by($0)==op && index($0, "status:claimed") {
+      id=item_id($0)
+      if (id != "") print "[id:" id "]"
+    }
+  ' "$DIR/backlog.md" 2>/dev/null
 }
 
 start=$(date -u +%s)

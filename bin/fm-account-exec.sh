@@ -21,8 +21,6 @@ cli=${1:?usage: fm-account-exec.sh <account> <cli> [args...]}; shift || true
 
 # apply_env exports the isolation env (incl. api-key from key_file) into THIS
 # shell — it must NOT run in $(...) or the exports die in the subshell. For
-# config-dir-flag harnesses it sets FM_ACCT_ARGV_SUFFIX ("FLAG dir") to splice
-# into argv.
+# config-dir-flag harnesses it sets FM_ACCT_ARGV_SUFFIX_ARGS to splice into argv.
 fm_account_apply_env "$acct" || exit 1
-# shellcheck disable=SC2086
-exec "$cli" $FM_ACCT_ARGV_SUFFIX "$@"
+exec "$cli" "${FM_ACCT_ARGV_SUFFIX_ARGS[@]}" "$@"
