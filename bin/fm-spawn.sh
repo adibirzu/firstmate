@@ -5,12 +5,15 @@
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #        fm-spawn.sh <task-id> --reuse-worktree --harness <name> [--handoff-brief <path>] [--provider ...] [--model ...] [--effort ...] [--backend ...]
 #   --reuse-worktree relaunches an existing ship/scout task in its recorded
-#   worktree without a new treehouse lease (or Orca worktree acquisition). It is
-#   the launch half of bin/fm-runtime-handoff.sh: same task id, same worktree,
-#   same branch, different or same harness. It refuses when meta, worktree, or
-#   endpoint ownership cannot be reconciled, and never returns a still-held
+#   worktree without a new treehouse lease. It is the launch half of
+#   bin/fm-runtime-handoff.sh: same task id, same worktree, same branch,
+#   different or same harness. It refuses when meta, worktree, or endpoint
+#   ownership cannot be reconciled, refuses kind=secondmate and backend=orca
+#   (Orca owns its own worktree lifecycle), and never returns a still-held
 #   treehouse lease. --handoff-brief substitutes a launch-only prompt file while
-#   leaving data/<id>/brief.md untouched.
+#   leaving data/<id>/brief.md untouched. Both flags relaunch exactly one task,
+#   so an id=repo batch dispatch refuses them rather than re-leasing worktrees
+#   for tasks that already own one.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile

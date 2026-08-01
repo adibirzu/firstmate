@@ -37,6 +37,7 @@ If the worktree or ownership cannot be reconciled safely, leave all state intact
 For a supported in-place relaunch - same task id, same worktree and lease, same brief, different or same harness - use `bin/fm-runtime-handoff.sh` (it drives `fm-spawn.sh --reuse-worktree`).
 That path owns clean exit of the old harness, meta rewrite of `harness=`/`model=`/`effort=`/`provider=` and the new endpoint fields while preserving other meta such as `pr=`, and the progress-note handoff prompt that tells the replacement agent to re-attach any live no-mistakes run rather than starting a second one.
 Do not hand-edit meta or kill a live endpoint around it.
+That path covers treehouse-backed tasks only; it refuses `backend=orca` because Orca owns its own worktree lifecycle, so an Orca task keeps the reconciliation above rather than an in-place relaunch.
 Quota exhaustion mid-task is a handoff case, not a teardown case: teardown correctly refuses unlanded work.
 
 ## Live-endpoint escalation
@@ -51,5 +52,6 @@ Escalate in order:
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    Treat an unparseable statusline quota reading as unknown capacity, never as exhaustion.
+   When you pick the target harness, a Claude target can draw on the same Claude budget as the supervising firstmate session, so surface that tradeoff to the captain instead of assuming it is fresh capacity.
    The worktree and commits persist; handoff is the cheap safe path.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
