@@ -52,6 +52,8 @@ fm_statusline_quota_parse() {
     return 0
   fi
 
+  # A zero sample is exhausted and wins outright; otherwise any sample in 1..20
+  # is low; anything else leaves ok. Unparseable samples never downgrade.
   status=ok
   for n in $five_hr $weekly $context; do
     case "$n" in
@@ -60,17 +62,6 @@ fm_statusline_quota_parse() {
       [1-9]|1[0-9]|20) status=low ;;
     esac
   done
-  # If any sample was zero we already set exhausted; otherwise low if any sample
-  # was in 1..20 and none were unparseable-only.
-  if [ "$status" != exhausted ]; then
-    status=ok
-    for n in $five_hr $weekly $context; do
-      case "$n" in
-        ''|*[!0-9]*) continue ;;
-        [1-9]|1[0-9]|20) status=low ;;
-      esac
-    done
-  fi
 
   printf 'status=%s source=%s' "$status" "$source"
   [ -n "$five_hr" ] && printf ' five_hour_pct=%s' "$five_hr"

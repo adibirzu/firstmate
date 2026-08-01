@@ -9,6 +9,9 @@
 #   - handoff refuses when the worktree cannot be reconciled
 #   - handoff refuses when the endpoint is still alive / ownership is ambiguous
 #   - handoff refuses an unverified target harness
+#   - the verified-exit path really runs: the recorded harness's exit command is
+#     delivered, the husk is killed once dead, and a harness that ignores it refuses
+#   - batch dispatch refuses --reuse-worktree instead of dropping it
 #   - statusline quota parse: unparseable => unknown, never exhausted
 set -u
 
@@ -39,19 +42,34 @@ case "$*" in
     exit 0
     ;;
   *"#{pane_current_command}"*)
-    printf '%s\n' "${FM_FAKE_PANE_CMD:-bash}"
+    # FM_FAKE_EXIT_MARKER models a harness that actually quit on its exit
+    # command: once the marker exists the pane is back at a plain shell.
+    if [ -n "${FM_FAKE_EXIT_MARKER:-}" ] && [ -f "${FM_FAKE_EXIT_MARKER}" ]; then
+      printf 'bash\n'
+    else
+      printf '%s\n' "${FM_FAKE_PANE_CMD:-bash}"
+    fi
     exit 0
     ;;
   *"list-windows"*)
     # Both create_task and agent_state inventory use window_name lines.
     # Present = print the bare window name; absent = empty.
-    if [ "${FM_FAKE_WINDOW_PRESENT:-0}" = 1 ] || [ -n "${FM_FAKE_EXISTING_WINDOW:-}" ]; then
+    # FM_FAKE_WINDOW_FILE makes presence mutable so kill-window can remove it.
+    if [ -n "${FM_FAKE_WINDOW_FILE:-}" ]; then
+      if [ -f "${FM_FAKE_WINDOW_FILE}" ]; then
+        printf '%s\n' "${FM_FAKE_EXISTING_WINDOW:-${FM_FAKE_WINDOW_NAME:-fm-task}}"
+      fi
+    elif [ "${FM_FAKE_WINDOW_PRESENT:-0}" = 1 ] || [ -n "${FM_FAKE_EXISTING_WINDOW:-}" ]; then
       printf '%s\n' "${FM_FAKE_EXISTING_WINDOW:-${FM_FAKE_WINDOW_NAME:-fm-task}}"
     fi
     exit 0
     ;;
 esac
 case "${1:-}" in
+  kill-window)
+    [ -z "${FM_FAKE_WINDOW_FILE:-}" ] || rm -f "$FM_FAKE_WINDOW_FILE"
+    exit 0
+    ;;
   display-message)
     case "$*" in
       *'#S'*) printf '%s\n' "${FM_FAKE_SESSION:-firstmate}" ;;
@@ -62,7 +80,7 @@ case "${1:-}" in
     esac
     exit 0
     ;;
-  has-session|new-session|kill-window|set-window-option|send-keys) exit 0 ;;
+  has-session|new-session|set-window-option|send-keys) exit 0 ;;
   new-window)
     # -P -F '#{window_id}'
     printf '@9\n'
@@ -91,16 +109,41 @@ exit 0
 SH
   chmod +x "$fakebin/treehouse"
 
-  # fm-send is invoked for exit; stub it.
-  cat > "$fakebin/fm-send-stub" <<'SH'
+  printf '%s\n' "$fakebin"
+}
+
+# make_bin_farm <case-dir>: a bin/ directory of symlinks to the REAL scripts with
+# only fm-send.sh replaced by a stub. fm-runtime-handoff.sh invokes fm-send.sh by
+# "$SCRIPT_DIR/fm-send.sh" (absolute sibling path), so a PATH stub can never
+# intercept it; running the handoff out of this farm can. Everything else stays
+# the shipped code, so the exit path under test is the real one.
+make_bin_farm() {
+  local dir=$1 src farm
+  farm="$dir/binfarm"
+  mkdir -p "$farm/backends" "$farm/quota-sources"
+  for src in "$ROOT"/bin/*; do
+    [ -f "$src" ] || continue
+    ln -sf "$src" "$farm/${src##*/}"
+  done
+  for src in "$ROOT"/bin/backends/*; do
+    [ -f "$src" ] || continue
+    ln -sf "$src" "$farm/backends/${src##*/}"
+  done
+  for src in "$ROOT"/bin/quota-sources/*; do
+    [ -f "$src" ] || continue
+    ln -sf "$src" "$farm/quota-sources/${src##*/}"
+  done
+  rm -f "$farm/fm-send.sh"   # never write THROUGH a symlink into the real bin/
+  cat > "$farm/fm-send.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "${FM_FAKE_SEND_LOG:-/dev/null}"
+# Only mark the harness as exited when the case asks for a compliant harness.
+[ -z "${FM_FAKE_SEND_MARKS_EXIT:-}" ] || : > "$FM_FAKE_SEND_MARKS_EXIT"
 exit 0
 SH
-  chmod +x "$fakebin/fm-send-stub"
-
-  printf '%s\n' "$fakebin"
+  chmod +x "$farm/fm-send.sh"
+  printf '%s\n' "$farm"
 }
 
 # setup_case <name> <id>: home + project + worktree with a commit and dirty file.
@@ -132,6 +175,11 @@ setup_case() {
   export FM_FAKE_WINDOW_PRESENT=0
   export FM_FAKE_PANE_CMD=bash
   export FM_FAKE_EXISTING_WINDOW=
+  # Mutable-endpoint knobs stay off unless a case opts in (exports persist
+  # across cases in this shell, so reset them every time).
+  export FM_FAKE_WINDOW_FILE=
+  export FM_FAKE_EXIT_MARKER=
+  export FM_FAKE_SEND_MARKS_EXIT=
   export PATH="$fakebin:$PATH"
   fm_write_meta "$CASE_HOME/state/$id.meta" \
     "window=firstmate:fm-$id" \
@@ -345,6 +393,102 @@ setup_case() {
     fail "handoff must not call treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
   fi
   pass "successful handoff preserves work, updates meta, reuses brief"
+}
+
+# --- success: verified exit path (alive -> exit command -> dead) ------------
+
+{
+  setup_case exit-path task-x1
+  export FM_FAKE_WINDOW_FILE="$CASE_DIR/window.present"
+  : > "$FM_FAKE_WINDOW_FILE"
+  export FM_FAKE_EXIT_MARKER="$CASE_DIR/exited"
+  export FM_FAKE_SEND_MARKS_EXIT="$FM_FAKE_EXIT_MARKER"
+  export FM_FAKE_PANE_CMD=codex
+  : > "$FM_FAKE_SEND_LOG"
+  : > "$FM_FAKE_TREEHOUSE_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  head_before=$(git -C "$CASE_WT" rev-parse HEAD)
+
+  set +e
+  out=$(
+    FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_SETTLE_POLLS=2 \
+    FM_HANDOFF_EXIT_POLLS=5 FM_HANDOFF_EXIT_SLEEP=0 \
+    "$farm/fm-runtime-handoff.sh" task-x1 --harness claude \
+      --progress-note "Exited codex cleanly; work is unlanded." 2>&1
+  )
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "handoff over the live exit path should succeed: $out"
+  assert_contains "$out" "handed-off task-x1" "handoff success line"
+
+  send_log=$(cat "$FM_FAKE_SEND_LOG")
+  assert_contains "$send_log" "task-x1 /quit" "codex exit command delivered via fm-send"
+  [ -f "$FM_FAKE_EXIT_MARKER" ] || fail "exit command should have been sent"
+  [ ! -f "$FM_FAKE_WINDOW_FILE" ] || fail "dead endpoint husk should have been killed"
+
+  [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "exit path must preserve HEAD"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "exit path must preserve uncommitted changes"
+  meta=$(cat "$CASE_HOME/state/task-x1.meta")
+  assert_contains "$meta" "harness=claude" "meta harness updated over the exit path"
+  assert_contains "$meta" "pr=https://example.test/pr/1" "pr= preserved over the exit path"
+  if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
+    fail "exit path must not call treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
+  fi
+  status_log=$(cat "$CASE_HOME/state/task-x1.status")
+  assert_contains "$status_log" "working: runtime handoff to claude" "handoff logs a 'working' status verb"
+  case "$status_log" in
+    *"status: working:"*) fail "status line must not double-prefix the verb: $status_log" ;;
+  esac
+  pass "sends the recorded harness's exit command and completes once the pane is dead"
+}
+
+# --- refusal: harness ignores the exit command and stays alive --------------
+
+{
+  setup_case exit-refuses task-x2
+  export FM_FAKE_WINDOW_FILE="$CASE_DIR/window.present"
+  : > "$FM_FAKE_WINDOW_FILE"
+  # No FM_FAKE_SEND_MARKS_EXIT: the send lands but the harness never exits.
+  export FM_FAKE_PANE_CMD=codex
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  head_before=$(git -C "$CASE_WT" rev-parse HEAD)
+
+  set +e
+  out=$(
+    FM_ROOT_OVERRIDE="$ROOT" \
+    FM_HANDOFF_EXIT_POLLS=2 FM_HANDOFF_EXIT_SLEEP=0 \
+    "$farm/fm-runtime-handoff.sh" task-x2 --harness claude 2>&1
+  )
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a still-alive endpoint after exit must refuse"
+  assert_contains "$out" "still 'alive' after exit attempt" "still-alive refusal message"
+
+  send_log=$(cat "$FM_FAKE_SEND_LOG")
+  assert_contains "$send_log" "task-x2 /quit" "exit command was attempted before refusing"
+  [ -f "$FM_FAKE_WINDOW_FILE" ] || fail "refusal must not kill a live endpoint"
+  [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "refusal must preserve HEAD"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must preserve uncommitted changes"
+  meta=$(cat "$CASE_HOME/state/task-x2.meta")
+  assert_contains "$meta" "harness=codex" "refusal leaves the recorded harness alone"
+  pass "refuses when the endpoint is still alive after the exit command"
+}
+
+# --- refusal: batch dispatch never silently drops --reuse-worktree ----------
+
+{
+  setup_case refuse-batch task-c1
+  set +e
+  out=$("$SPAWN" "task-c1=$CASE_PROJ" --reuse-worktree --harness claude 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "batch dispatch with --reuse-worktree should refuse"
+  assert_contains "$out" "batch dispatch does not support --reuse-worktree" "batch reuse refusal message"
+  if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
+    fail "batch refusal must not lease a worktree; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
+  fi
+  pass "refuses --reuse-worktree in batch dispatch instead of leasing a second worktree"
 }
 
 # --- refusal: missing original brief ---------------------------------------
