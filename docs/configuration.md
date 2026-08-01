@@ -275,7 +275,7 @@ Profile `provider`, `model`, and `effort` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 Native `claude`, `codex`, and `grok` profiles establish the same-named provider without a redundant field; when present, their provider must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
-Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
+Kimi 0.29.1 is rejected from every `config/crew-dispatch.json` profile because its guarded Herdr lifecycle exit was not deterministic after interrupt; use an explicit Kimi dispatch outside that file instead, and no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
 If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
