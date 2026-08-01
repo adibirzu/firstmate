@@ -110,6 +110,12 @@ wait_out=$(bin/fm-fleet-wait.sh john.doe --once --no-heartbeat 2>/dev/null || tr
 [ "$wait_out" = "[id:A.1]" ] \
   && ok "wait treats punctuated operator ids literally" \
   || bad "wait regex-matched neighboring operator ids (got '$wait_out')"
+"$CLI" register scopeX apiXv2 "$HOME/firstmate" claude-default >/dev/null 2>&1
+"$CLI" register scope.dot api.v2 "$HOME/firstmate" claude-default >/dev/null 2>&1
+r=$("$CLI" route api.v2)
+[ "$r" = scope.dot ] \
+  && ok "route treats punctuated scopes literally" \
+  || bad "route regex-matched a neighboring scope (got '$r')"
 export FM_FLEET_DIR="$D/fleet"
 
 # 3. heartbeat refreshes seen; a stale operator routes as offline

@@ -443,25 +443,31 @@ fm_fleet_reap() { # dir ttl_seconds
 fm_fleet_route() { # dir scope
   local dir=$1 scope=$2 now ttl floor
   now=$(date -u +%s); ttl=${FM_FLEET_HEARTBEAT_TTL:-90}; floor=${FM_FLEET_QUOTA_MIN:-5}
-  awk -F'|' -v s="$scope" -v now="$now" -v ttl="$ttl" -v floor="$floor" "$_FM_FLEET_AWK_EPOCH"'
-    function trim(x){ gsub(/^ +| +$/,"",x); return x }
-    function eligible(st,seen,q,   ep){
-      if(st!="online") return 0
-      ep=epoch(seen); if(ep>0 && (now-ep)>ttl) return 0
-      if(q!="" && q!="-" && (q+0)<floor) return 0
-      return 1
-    }
-    /^\| *[a-zA-Z0-9_.-]+ *\|/ {
-      op=trim($2); sc=$3; gsub(/ /,"",sc); st=trim($6); seen=trim($7); q=trim($8)
-      if(op=="operator") next
-      if(!eligible(st,seen,q)) next
-      if(any=="") any=op
-      if(owner=="" && (","sc",") ~ (","s",")) owner=op
-      if(ov=="" && (","sc",") ~ /,overflow,/) ov=op
-    }
-    END{ print (owner!=""?owner:(ov!=""?ov:any)) }
-  ' "$dir/operators.md"
-}
+	  awk -F'|' -v s="$scope" -v now="$now" -v ttl="$ttl" -v floor="$floor" "$_FM_FLEET_AWK_EPOCH"'
+	    function trim(x){ gsub(/^ +| +$/,"",x); return x }
+	    function has_scope(sc,wanted,   parts,n,i){
+	      gsub(/ /,"",sc)
+	      n=split(sc,parts,",")
+	      for(i=1;i<=n;i++) if(parts[i]==wanted) return 1
+	      return 0
+	    }
+	    function eligible(st,seen,q,   ep){
+	      if(st!="online") return 0
+	      ep=epoch(seen); if(ep>0 && (now-ep)>ttl) return 0
+	      if(q!="" && q!="-" && (q+0)<floor) return 0
+	      return 1
+	    }
+	    /^\| *[a-zA-Z0-9_.-]+ *\|/ {
+	      op=trim($2); sc=$3; st=trim($6); seen=trim($7); q=trim($8)
+	      if(op=="operator") next
+	      if(!eligible(st,seen,q)) next
+	      if(any=="") any=op
+	      if(owner=="" && has_scope(sc,s)) owner=op
+	      if(ov=="" && has_scope(sc,"overflow")) ov=op
+	    }
+	    END{ print (owner!=""?owner:(ov!=""?ov:any)) }
+	  ' "$dir/operators.md"
+	}
 
 # --- visibility ---------------------------------------------------------------
 
