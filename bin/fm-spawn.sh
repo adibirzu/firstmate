@@ -1634,12 +1634,25 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 fi
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
-# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
+# Per-task temp root: /tmp/fm-<uid>-<id>/ with Go's build temp nested at gotmp/.
+# Go won't create GOTMPDIR, so mkdir before it is used; fm-teardown removes the
+# whole root (reading the path this spawn recorded as tasktmp=, so changing the
+# shape here never orphans an already-running task's temp).
+# Nested (not a bare .../gotmp) so other per-task temp can live alongside later,
+# and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-TASK_TMP="/tmp/fm-$ID"
+#
+# The uid is part of the path for the same reason the herdr presentation lock
+# namespace carries one (fm_backend_herdr_presentation_lock_namespace): task ids
+# are not unique across operators, so on a multi-operator box a uid-less
+# /tmp/fm-<id> is created by whoever spawns that id first and is then owned by
+# them outright. Every other operator's mkdir silently lands in a directory it
+# cannot write, and teardown's rm -rf fails with EACCES.
+TASK_TMP_UID=$(id -u 2>/dev/null || true)
+case "$TASK_TMP_UID" in
+  ''|*[!0-9]*) TASK_TMP_UID=nouid ;;
+esac
+TASK_TMP="/tmp/fm-$TASK_TMP_UID-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
 # Per-harness turn-end hook where enabled: a file that touches
