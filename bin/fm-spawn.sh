@@ -778,6 +778,17 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
   fi
+  # --reuse-worktree relaunches ONE existing task from its own meta and takes no
+  # id=repo pair; the shared_args re-exec below cannot carry it without turning a
+  # relaunch into a second lease for a task that already owns a worktree.
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    echo "error: batch dispatch does not support --reuse-worktree; relaunch each task explicitly as 'fm-spawn.sh <task-id> --reuse-worktree'" >&2
+    exit 1
+  fi
+  if [ -n "$HANDOFF_BRIEF" ]; then
+    echo "error: batch dispatch does not support --handoff-brief; it only applies to a single --reuse-worktree relaunch" >&2
+    exit 1
+  fi
   rc=0
   shared_args=()
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
