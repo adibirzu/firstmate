@@ -160,6 +160,7 @@ test_agy_is_refused_as_a_secondmate_harness() {
     || fail "fm-spawn: post-resolution agy secondmate guard missing (covers --harness and config/secondmate-harness)"
   # The bare-name parse arm must not silently accept agy either.
   local sm_case
+  # shellcheck disable=SC2016  # single quotes are deliberate: $KIND is literal sed pattern text
   sm_case=$(sed -n '/^if \[ "\$KIND" = secondmate \]; then/,/^fi$/p' "$SPAWN" | head -20)
   printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|codex\|opencode\|pi\|pi-signed\|grok\|kimi\)" \
     || fail "fm-spawn: secondmate bare-adapter allowlist changed or still carries agy"
@@ -255,9 +256,9 @@ test_agy_idle_line_not_busy() {
 
 test_agy_does_not_borrow_foreign_signatures() {
   # Same posture as other adapters: reject foreign harness tokens that are not
-  # agy's own. Note: 'esc to cancel' is also cline's token; that is agy's own
-  # verified signature too (docs/verification/agy-adapter.md), so it is not a
-  # foreign borrow when harness=agy.
+  # agy's own. Note: 'esc to cancel' is not exclusive to agy, but it is agy's
+  # own verified signature too (docs/verification/agy-adapter.md), so it is not
+  # a foreign borrow when harness=agy.
   local foreign
   for foreign in 'esc to interrupt' 'esc interrupt' 'Working...' 'Ctrl+c:cancel' 'ctrl+c to stop' 'Working.*esc interrupt'; do
     if printf '%s' "$foreign" | fm_busy_lines_match agy; then
@@ -382,11 +383,11 @@ if agy_wait_for_trust_clear; then echo OK; else echo FAIL; fi
 }
 
 test_agy_trust_gate_clears_when_dialog_stays_in_scrollback() {
-  # An Ink TUI need not scrub the accepted trust frame from the scrollback
-  # (cursor-agent does not), which keeps the dialog literal inside every
-  # capture forever. The gate must still succeed the moment a past-trust
-  # anchor appears below it, or it burns the whole poll budget and reports a
-  # false spawn failure while a trusted, working agent runs unsupervised.
+  # An Ink TUI need not scrub the accepted trust frame from the scrollback,
+  # which keeps the dialog literal inside every capture forever. The gate must
+  # still succeed the moment a past-trust anchor appears below it, or it burns
+  # the whole poll budget and reports a false spawn failure while a trusted,
+  # working agent runs unsupervised.
   local tmpd send_log out sends
   tmpd=$(mktemp -d "${TMPDIR:-/tmp}/fm-agy-trust-scrollback.XXXXXX")
   send_log=$tmpd/sends
