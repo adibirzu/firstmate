@@ -37,7 +37,12 @@ set -u
 classify() {
   local _fm_stub_native=$1 harness=$2 state=$3
   (
+    # Both of these are consumed by the sourced classifier, not by this file:
+    # fm_busy_classify reaches the stub through `command -v`, and
+    # fm_busy_native_stale reads the threshold. ShellCheck sees neither use.
+    # shellcheck disable=SC2329  # invoked indirectly by fm_busy_classify
     fm_backend_busy_state() { printf '%s' "$_fm_stub_native"; }
+    # shellcheck disable=SC2034  # read by fm_busy_native_stale in fm-busy-lib.sh
     FM_BUSY_NATIVE_MAX_SECONDS=120
     fm_busy_classify herdr win:0 "$harness" t1 "$state" "idle pane tail"
   )
@@ -146,7 +151,9 @@ test_boolean_view_rejects_a_stale_native_busy() {
   tmpd=$(fm_test_tmproot busy-bool); mkdir -p "$tmpd"
   age_marker "$tmpd" 200
   if (
+    # shellcheck disable=SC2329  # invoked indirectly by fm_busy_classify
     fm_backend_busy_state() { printf busy; }
+    # shellcheck disable=SC2034  # read by fm_busy_native_stale in fm-busy-lib.sh
     FM_BUSY_NATIVE_MAX_SECONDS=120
     fm_busy_is_busy herdr win:0 cline t1 "$tmpd" "idle pane tail"
   ); then

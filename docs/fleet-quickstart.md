@@ -11,6 +11,16 @@ one needs no setup at all:
 
 Start at the tier you actually need. Each is independent and additive.
 
+Not sure which one you need?
+Ask, before installing anything:
+
+```bash
+bin/fm-fleet.sh preflight     # read-only: what this home is ready for, and what each tier still needs
+```
+
+It changes nothing.
+Tier C is the only tier that ever needs root, and it stays **opt-in**: a home without the `config/admiral` flag behaves exactly as a single-operator home always has.
+
 | | Use case | Root needed? | Setup |
 |---|---|---|---|
 | **A** | *"Which of my subscriptions still has budget, and can work route itself there?"* | no | ~2 min |
@@ -135,9 +145,11 @@ into another user's `/home/<other>` is refused.
 Each operator runs their **own** first mate as themselves. Nobody reads anyone
 else's home. The only shared surface is the fleet directory.
 
-**One-time, root, once per host** — review the script first, it is short and additive:
+**One-time, root, once per host** — review the script first, it is short and additive.
+See exactly what it would change before approving it, with no root and no mutation:
 
 ```bash
+bash scripts/fleet-root-prereq.sh --check      # reports the delta, exits 1 iff action is needed
 sudo FM_FLEET_OPERATORS="alice bob carol" bash scripts/fleet-root-prereq.sh
 ```
 
@@ -206,6 +218,42 @@ while it waits. The agent burns no tokens idling and wakes only on real work. Se
 [fleet-token-economy.md](fleet-token-economy.md).
 
 ---
+
+## Handoff documents
+
+A finished session usually leaves a narrative — what landed, what is still open, which branch carries it.
+`bin/fm-handoff-doc.sh` gives that document a home and a way to be found.
+
+This is a third, distinct object.
+`fm-fleet.sh handoff` reassigns a queued *task*; `fm-backlog-handoff.sh` moves *backlog items*; this hands off the *write-up plus the refs*.
+
+It works **solo**, with no fleet, no group, and no root:
+
+```bash
+bin/fm-handoff-doc.sh publish HANDOFF.md --bundle my/branch   # store it, with the work attached
+bin/fm-handoff-doc.sh check                                   # is anything waiting for me?
+bin/fm-handoff-doc.sh show <id>                               # read it
+bin/fm-handoff-doc.sh fetch <id>                              # refs -> refs/remotes/handoff/*
+bin/fm-handoff-doc.sh where                                   # which store, and why
+```
+
+`check` prints one line and exits non-zero when nothing is waiting, so a session-start hook can call it unconditionally and stay silent.
+
+**Why the store matters.**
+A handoff written into your own home is unreachable to anyone else: home directories are commonly mode `0750`, so another operator on the same host cannot even traverse the path.
+With Tier C opted in, the store moves to the shared fleet directory and every operator in the group can find it.
+Without the opt-in it stays in your own home, which is the right default for one person.
+
+**Reader state is yours.**
+Whether you have read a document is recorded in *your* home, never in the publisher's entry.
+The shared store can therefore stay strictly read-only for consumers, and no reader can alter another operator's handoff.
+
+**Fetch is deliberately inert.**
+It verifies the bundle first, then writes only `refs/remotes/handoff/*`.
+It never checks out, never merges, and never moves one of your branches — what to do with the work stays your decision.
+
+Publishing into a shared store is a disclosure, not a copy.
+`publish` refuses a `.env` outright, and refuses a mode-`0600` source unless you pass `--share-anyway`.
 
 ## How the fleet directory is chosen
 

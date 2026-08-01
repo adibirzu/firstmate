@@ -4,6 +4,9 @@
 # docs/fleet-addon.md, and .agents/skills/federation/SKILL.md.
 #
 # Usage:
+#   fm-fleet.sh preflight                    (which tier is this home ready for; read-only)
+#   fm-fleet.sh admiral [status|enable|disable]
+#                                            (cross-operator tier opt-in; config/admiral)
 #   fm-fleet.sh init
 #   fm-fleet.sh register  <op> <scopes-csv> <home> [accounts]
 #   fm-fleet.sh heartbeat <op>
@@ -37,7 +40,10 @@ cmd=${1:-}; shift || true
 # Every verb that touches an existing fleet must find one first. `init` creates it;
 # quota/models/pick are surface-local and need no fleet at all.
 case "$cmd" in
-  init|budget|quota|models|pick|'') : ;;
+  # preflight/admiral exist precisely to be usable BEFORE there is a fleet: one
+  # reports what a tier would need, the other records the opt-in that turns the
+  # cross-operator tier on. Requiring a fleet for either would be circular.
+  init|budget|quota|models|pick|preflight|admiral|'') : ;;
   # register/heartbeat/leave are how you BECOME an operator, and they already need
   # write access to the shared dir (POSIX group), so they skip the ownership check.
   register|heartbeat|leave) fm_fleet_assert_initialized "$DIR" || exit 1 ;;
@@ -58,8 +64,35 @@ case "$cmd" in
   heartbeat) fm_fleet_heartbeat "$DIR" "$1" ;;
   leave)     fm_fleet_leave "$DIR" "$1" ;;
   budget)    rc=0; fm_fleet_budget_ok || rc=1; echo "$fm_fleet_budget_reason"; exit "$rc" ;;
+  preflight) exec "$SCRIPT_DIR/fm-fleet-preflight.sh" "$@" ;;
+  # The cross-operator opt-in, following the config/berths idiom: a gitignored flag
+  # file whose ABSENCE leaves this home behaving exactly as a solo home always has.
+  # Enabling records consent; it installs nothing and needs no root.
+  admiral)
+    case "${1:-status}" in
+      enable)
+        mkdir -p "$FM_HOME/config"
+        : > "$FM_HOME/config/admiral"
+        echo "admiral: enabled — this home now participates in the cross-operator tier"
+        echo "  store: $("$SCRIPT_DIR/fm-handoff-doc.sh" where | head -1)"
+        ;;
+      disable)
+        rm -f "$FM_HOME/config/admiral"
+        echo "admiral: disabled — this home is solo again; nothing else changed"
+        ;;
+      status)
+        if [ -f "$FM_HOME/config/admiral" ]; then
+          echo "admiral: enabled (config/admiral present)"
+        else
+          echo "admiral: disabled (config/admiral absent — the default)"
+          echo "  enable with: bin/fm-fleet.sh admiral enable"
+        fi
+        ;;
+      *) echo "usage: fm-fleet.sh admiral [status|enable|disable]" >&2; exit 1 ;;
+    esac
+    ;;
   quota)     fm_fleet_quota_report ;;
   models)    fm_fleet_models_report ;;
   pick)      fm_fleet_pick_surface "${1:?usage: fm-fleet.sh pick <model-family>}" ;;
-  *) echo "usage: fm-fleet.sh init|register|heartbeat|leave|queue|claim|handoff|drain|reap|route|budget|quota|models|pick|status|view" >&2; exit 1 ;;
+  *) echo "usage: fm-fleet.sh preflight|admiral|init|register|heartbeat|leave|queue|claim|handoff|drain|reap|route|budget|quota|models|pick|status|view" >&2; exit 1 ;;
 esac
