@@ -260,6 +260,15 @@ chmod +x "$FAKEBIN/herdr" "$FAKEBIN/treehouse"
 chmod +x "$FAKEBIN/herdr-workspace-mover"
 export PATH="$FAKEBIN:$PATH"
 export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
+# This suite deliberately races two teardowns against one herdr session and
+# asserts BOTH complete - that is what "concurrent projected cleanup is
+# serialized" means. Real herdr work by the lock holder can exceed the 5s
+# default bound on a loaded machine, and the loser then refuses with
+# "presentation lock is contended", failing whichever of fixture A or B lost the
+# race - it alternated run to run, which is what identified this as a bound and
+# not a defect. Wait up to 60s here so the assertion tests serialization rather
+# than machine speed. The product default is unchanged for real teardowns.
+export FM_HERDR_PRESENTATION_LOCK_RETRIES=600
 
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"

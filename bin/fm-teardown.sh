@@ -1172,7 +1172,16 @@ $TEARDOWN_HERDR_LOCK_RECORDS
 FMEOF
   fi
   attempt=0
-  while [ "$attempt" -lt 50 ]; do
+  # The presentation lock SERIALIZES concurrent teardowns; it is not a
+  # fail-fast. The bound stays 50 x 0.1s = 5s by default, unchanged, but is now
+  # overridable the same way FM_TREEHOUSE_RETURN_LOCK_RETRIES already is above.
+  # Two teardowns racing for one herdr session can legitimately need longer than
+  # 5s when the holder is doing real herdr work on a loaded machine, and the
+  # loser then refuses with "contended" even though serialization was working -
+  # exactly what tests/fm-backend-herdr-presentation-e2e.test.sh asserts must
+  # NOT happen. Raising the ceiling only makes the waiter wait longer before
+  # giving up; it cannot turn a refusal into a wrong mutation.
+  while [ "$attempt" -lt "${FM_HERDR_PRESENTATION_LOCK_RETRIES:-50}" ]; do
     if fm_lock_try_acquire "$lock_path"; then
       if ! verified_lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session") \
         || [ "$verified_lock_path" != "$lock_path" ]; then
