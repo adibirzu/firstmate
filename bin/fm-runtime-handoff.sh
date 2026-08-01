@@ -279,12 +279,8 @@ case "$STATE_NOW" in
     ;;
   *)
     # ambiguous | unreadable | unverified | unknown
-    if [ "$SKIP_EXIT" = 1 ] && [ "$STATE_NOW" = missing ]; then
-      :
-    else
-      echo "error: cannot reconcile endpoint ownership for $ID (agent state='$STATE_NOW'); refusing handoff rather than guessing" >&2
-      exit 1
-    fi
+    echo "error: cannot reconcile endpoint ownership for $ID (agent state='$STATE_NOW'); refusing handoff rather than guessing" >&2
+    exit 1
     ;;
 esac
 
@@ -354,4 +350,4 @@ fi
 
 printf 'handed-off %s from harness=%s to harness=%s worktree=%s\n' \
   "$ID" "${OLD_HARNESS:-unknown}" "$HARNESS" "$WT"
-printf 'status: working: runtime handoff to %s; continue from original brief\n' "$HARNESS" >> "$STATE/$ID.status" || true
+printf 'working: runtime handoff to %s; continue from original brief\n' "$HARNESS" >> "$STATE/$ID.status" || true
