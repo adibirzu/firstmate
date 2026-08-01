@@ -146,6 +146,11 @@ OLD_BIN_UNCHANGED_SIBLINGS="fm-gate-refuse-lib.sh fm-guard.sh fm-lock-lib.sh fm-
 OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh fm-marker-lib.sh"
 
+# sed program that extracts `<lib>.sh` from a `. "$SCRIPT_DIR/<lib>.sh"` source
+# line. Single-quoted deliberately: the `\$` is a literal dollar inside the
+# regex, matching the text `$SCRIPT_DIR`, not a shell expansion.
+# shellcheck disable=SC2016
+SOURCED_LIB_SED='s#^[[:space:]]*\.[[:space:]]+"\$(SCRIPT_DIR|FM_ROOT|ROOT)[^"]*/([A-Za-z0-9._-]+\.sh)".*#\2#p'
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
   local name=$1 root bin f
   root="$TMP_ROOT/$name"
@@ -163,6 +168,23 @@ build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry p
   for f in $OLD_BIN_REFACTORED; do
     git -C "$ROOT" show "$BASE_REF:bin/$f" > "$bin/$f"
     chmod +x "$bin/$f"
+  done
+  # BACKSTOP: copy any sibling the assembled scripts source that the explicit
+  # lists above missed. Those lists are hand-maintained and rot whenever a
+  # script gains a dependency - OLD_BIN_UNCHANGED_SIBLINGS had already fallen
+  # behind fm-treehouse-lib.sh, so the old fm-teardown.sh died on a missing
+  # `source` and the suite reported "should succeed: expected exit 0, got 1".
+  # Additive only: it never overwrites a file already placed above, so the
+  # BASE_REF versions of the refactored scripts stay exactly as written.
+  local dep
+  for f in "$bin"/*.sh; do
+    [ -f "$f" ] || continue
+    while IFS= read -r dep; do
+      [ -n "$dep" ] || continue
+      [ -e "$bin/$dep" ] && continue
+      [ -f "$ROOT/bin/$dep" ] || continue
+      cp "$ROOT/bin/$dep" "$bin/$dep"
+    done < <(sed -nE "$SOURCED_LIB_SED" "$f")
   done
   printf '%s\n' "$root"
 }
