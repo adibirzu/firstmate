@@ -79,6 +79,7 @@ make_case() {
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 # `treehouse return --force <wt>`: succeed silently.
+[ -z "${TREEHOUSE_HOME_LOG:-}" ] || printf '%s\t%s\n' "${1:-}" "${HOME:-}" >> "$TREEHOUSE_HOME_LOG"
 exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
@@ -161,6 +162,10 @@ write_meta() {
     "project=$case_dir/project" \
     "kind=$kind" \
     "mode=$mode"
+}
+
+treehouse_home_for_verb() {
+  awk -F '\t' -v verb="$2" '$1==verb { print $2; exit }' "$1"
 }
 
 # Commit something on the worktree's task branch. Args: case_dir [message]
@@ -443,11 +448,17 @@ SH
 }
 
 add_stat_error() {
-  local case_dir=$1
-  cat > "$case_dir/fakebin/stat" <<'SH'
+  local case_dir=$1 real_stat
+  real_stat=$(command -v stat)
+  cat > "$case_dir/fakebin/stat" <<SH
 #!/usr/bin/env bash
-echo "stat: simulated failure" >&2
-exit 1
+case "\${1:-} \${2:-}" in
+  "-c %Y"|"-f %m")
+    echo "stat: simulated failure" >&2
+    exit 1
+    ;;
+esac
+exec "$real_stat" "\$@"
 SH
   chmod +x "$case_dir/fakebin/stat"
 }
@@ -608,6 +619,28 @@ test_no_mistakes_origin_remote_allows() {
   grep -F 'blockers are gone and date is due' "$case_dir/stdout" >/dev/null \
     || fail "nm-origin: teardown manual prompt did not preserve date-gate check"
   pass "no-mistakes worktree with HEAD on origin is torn down (no regression)"
+}
+
+test_teardown_returns_worktree_under_project_pool_home() {
+  local case_dir rc homelog expected_home recorded_home
+  case_dir=$(make_case pool-home-return)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  homelog="$case_dir/treehouse-home.log"
+  expected_home=$(bash -c '. "$1"; fm_treehouse_pool_home "$2"' _ "$ROOT/bin/fm-treehouse-lib.sh" "$case_dir/project")
+
+  set +e
+  TREEHOUSE_HOME_LOG="$homelog" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-home-return: teardown should succeed for landed work"
+  recorded_home=$(treehouse_home_for_verb "$homelog" return)
+  [ "$recorded_home" = "$expected_home" ] \
+    || fail "pool-home-return: treehouse return used HOME '$recorded_home', expected '$expected_home'"
+  pass "teardown returns task worktrees under the project pool HOME"
 }
 
 test_no_mistakes_truly_unpushed_refuses() {
@@ -1830,6 +1863,7 @@ test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
+test_teardown_returns_worktree_under_project_pool_home
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_teardown_missing_busy_sidecar_completes

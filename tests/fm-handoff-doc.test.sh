@@ -79,6 +79,26 @@ test_publish_refuses_an_env_file() {
   pass "fm-handoff-doc: publish refuses a .env outright"
 }
 
+test_publish_suffixes_colliding_entry_ids() {
+  local home store base first second; read -r home store < <(new_home ho-collision)
+  local src="$home/note.md"
+  seed_doc "$src" "Repeatable handoff"
+  ho "$home" "$store" publish "$src" >/dev/null || fail "first publish failed"
+
+  printf '# Repeatable handoff\n\nSecond body.\n' > "$src"
+  ho "$home" "$store" publish "$src" >/dev/null || fail "second publish failed"
+
+  base="$(date -u +%Y-%m-%d)-repeatable-handoff"
+  first="$store/$base"
+  second="$store/$base-2"
+  [ -f "$first/meta" ] || fail "first publish entry is missing"
+  [ -f "$second/meta" ] || fail "colliding publish must allocate a suffixed entry"
+  grep -q '^id=.*-2$' "$second/meta" || fail "suffixed entry must record its own id"
+  grep -q 'Body\.' "$first/note.md" || fail "second publish overwrote the first document"
+  grep -q 'Second body\.' "$second/note.md" || fail "second publish did not copy its document"
+  pass "fm-handoff-doc: publish suffixes colliding entry ids"
+}
+
 test_check_is_quiet_for_your_own_document() {
   local home store; read -r home store < <(new_home ho-own)
   local src="$home/note.md"; seed_doc "$src"
@@ -263,6 +283,7 @@ test_a_symlinked_document_is_refused() {
 test_solo_is_the_default
 test_publish_writes_a_readable_entry
 test_publish_refuses_an_env_file
+test_publish_suffixes_colliding_entry_ids
 test_check_is_quiet_for_your_own_document
 test_check_reports_another_operators_document
 test_seen_state_is_reader_local_and_never_touches_the_store

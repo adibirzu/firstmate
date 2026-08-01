@@ -184,7 +184,7 @@ hash_pane() {
 # <tail40> is the same bounded capture already read for hashing and is consumed
 # by the contract's scoped rendered fallback paths.
 window_is_busy() {  # <window> <tail40>
-  local w=$1 tail40=$2 backend harness task meta verdict state source lines
+  local w=$1 tail40=$2 backend harness task meta verdict state lines
   local bs key now native_max since
   backend=$(window_backend "$w")
   harness=$(window_harness "$w")
@@ -203,17 +203,8 @@ window_is_busy() {  # <window> <tail40>
       verdict=$(fm_busy_classify "$backend" "$w" "$harness" "${task:-unknown}" "$STATE" "$tail40")
     fi
     state=${verdict%% *}
-    source=${verdict#* }
-    [ "$source" != "$verdict" ] || source=
-    if [ "$state" = busy ] && [ "$source" != herdr-native ]; then
-      rm -f "$STATE/.busy-since-$key"
-      return 0
-    fi
-    if [ "$state" != busy ]; then
-      rm -f "$STATE/.busy-since-$key"
-      return 1
-    fi
-    bs=busy
+    [ "$state" = busy ]
+    return
   else
     bs=$(fm_backend_busy_state "$backend" "$w" 2>/dev/null)
   fi

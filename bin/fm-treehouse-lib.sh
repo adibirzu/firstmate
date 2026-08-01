@@ -149,6 +149,18 @@ fm_treehouse_preserve_user_config() {
   fi
 }
 
+fm_treehouse_with_pool_home() {  # <repo-dir> <command> [arg...]
+  local repo=$1 pool_home
+  shift
+  pool_home=$(fm_treehouse_pool_home "$repo") || return 1
+  ( cd "$repo" && fm_treehouse_preserve_user_config && HOME="$pool_home" "$@" )
+}
+
+fm_treehouse_return() {  # <repo-dir> <worktree-or-home>
+  local repo=$1 target=$2
+  fm_treehouse_with_pool_home "$repo" treehouse return --force "$target"
+}
+
 # Check the invariant on a worktree that already exists, whoever created it.
 # Exit 0 colocated, 1 split, 2 undeterminable (never treat 2 as a violation).
 # On 0 or 1 the three FM_TREEHOUSE_* variables carry the evidence for the caller's

@@ -199,10 +199,29 @@ JSON
   pass "existing explicit wrapper-provider and native Grok routes remain selectable"
 }
 
+test_new_verified_adapters_with_providers_are_selectable() {
+  local home fakebin quota out harness provider
+  home=$(make_home new-adapters)
+  fakebin=$(make_fakebin new-adapters)
+  quota="$home/quota.json"
+  write_quota "$quota" fresh 80 fresh 80
+
+  out=$(run_select "$home" "$fakebin" "$quota" state.json \
+    '[{"harness":"cline","provider":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"cursor-agent","provider":"codex","model":"claude-opus-4-8"},{"harness":"copilot","provider":"claude","model":"gpt-5.6","effort":"max"}]' 2>/dev/null)
+  harness=$(printf '%s\n' "$out" | jq -r .harness)
+  provider=$(printf '%s\n' "$out" | jq -r .provider)
+  case "$harness:$provider" in
+    cline:claude|cursor-agent:codex|copilot:claude) ;;
+    *) fail "new verified adapter profile selected an unexpected concrete route: $out" ;;
+  esac
+  pass "new verified adapters remain selectable with explicit provider identity"
+}
+
 test_distribution_is_deterministic_balanced_and_array_order_independent
 test_stale_unavailable_and_reserve_thresholds_fail_closed
 test_verified_failure_creates_cooldown_and_failover
 test_invalid_profiles_and_settings_are_actionable
 test_existing_wrapper_and_grok_routes_remain_selectable
+test_new_verified_adapters_with_providers_are_selectable
 
 echo "# all fm-dispatch-select tests passed"

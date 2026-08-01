@@ -347,10 +347,10 @@ spawn_abort_cleanup() {
     TREEHOUSE_LEASE_ABORT_CLEANUP=0
     if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
       if [ "$herdr_pane_close_refused" = 1 ]; then
-        echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+        echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
       else
-        ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 \
-          || echo "warning: could not return the leased worktree $WT; run 'treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+        fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
+          || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
       fi
     fi
   fi

@@ -34,6 +34,19 @@ seen_col() { # operators.md op -> seen column, trimmed
     trim($2)==op { print trim($7) }
   ' "$1"
 }
+operator_count() { # operators.md op -> exact row count
+  awk -F'|' -v op="$2" '
+    function trim(x){ gsub(/^ +| +$/,"",x); return x }
+    trim($2)==op { n++ }
+    END { print n + 0 }
+  ' "$1"
+}
+backlog_line_for_id() { # backlog.md id -> exact item line
+  awk -v id="$2" '
+    function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+    item_id($0)==id { print; exit }
+  ' "$1"
+}
 
 # --- Hermeticity (Fable #3): stub quota-axi so register/heartbeat/route never
 # depend on the operator's real, wall-clock-varying quota-axi state. Cases below
@@ -69,6 +82,29 @@ q=$(quota_col "$FM_FLEET_DIR/operators.md" alice)
 "$CLI" register alice backend,infra "$HOME/firstmate" claude-default >/dev/null 2>&1
 n=$(grep -cE "^\| *alice *\|" "$FM_FLEET_DIR/operators.md")
 [ "$n" -eq 1 ] && ok "register is idempotent (one row)" || bad "register duplicated (n=$n)"
+
+# 2b. punctuated identifiers are compared literally, never as regex fragments
+DREG=$(mktemp -d); export FM_FLEET_DIR="$DREG/fleet"; "$CLI" init >/dev/null
+"$CLI" register john.doe backend "$HOME/firstmate" claude-default >/dev/null 2>&1
+"$CLI" register johnXdoe overflow "$HOME/firstmate" claude-default >/dev/null 2>&1
+"$CLI" register john.doe backend "$HOME/firstmate" claude-default >/dev/null 2>&1
+[ "$(operator_count "$FM_FLEET_DIR/operators.md" john.doe)" -eq 1 ] \
+  && [ "$(operator_count "$FM_FLEET_DIR/operators.md" johnXdoe)" -eq 1 ] \
+  && ok "register treats punctuated operator ids literally" \
+  || bad "register regex-matched a neighboring operator id"
+"$CLI" queue A21 backend "neighbor id" >/dev/null 2>&1
+"$CLI" queue A.1 backend "punctuated id" >/dev/null 2>&1 \
+  || bad "queue treated A.1 as a duplicate of A21"
+"$CLI" claim A.1 john.doe >/dev/null 2>&1 \
+  || bad "claim failed for punctuated task id"
+line_dot=$(backlog_line_for_id "$FM_FLEET_DIR/backlog.md" A.1)
+line_plain=$(backlog_line_for_id "$FM_FLEET_DIR/backlog.md" A21)
+case "$line_dot" in *"claimed-by:john.doe@"*"status:claimed"*) dot_ok=1 ;; *) dot_ok=0 ;; esac
+case "$line_plain" in *"status:queued"*) plain_ok=1 ;; *) plain_ok=0 ;; esac
+[ "$dot_ok" -eq 1 ] && [ "$plain_ok" -eq 1 ] \
+  && ok "claim treats punctuated task ids literally" \
+  || bad "claim regex-matched neighboring task ids (A.1='$line_dot' A21='$line_plain')"
+export FM_FLEET_DIR="$D/fleet"
 
 # 3. heartbeat refreshes seen; a stale operator routes as offline
 "$CLI" register bob web,mobile "$HOME/firstmate" claude-default >/dev/null 2>&1

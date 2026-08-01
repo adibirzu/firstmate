@@ -270,9 +270,16 @@ case "$cmd" in
 
     [ -n "$title" ] || title=$(sed -n 's/^##*[[:space:]]*//p' "$src" | head -1)
     [ -n "$title" ] || title=$(basename "$src")
-    id="$(date -u +%Y-%m-%d)-$(fm_handoff_slug "$title")"
+    base_id="$(date -u +%Y-%m-%d)-$(fm_handoff_slug "$title")"
+    id="$base_id"
+    n=1
+    mkdir -p "$DIR"
+    while ! mkdir "$DIR/$id" 2>/dev/null; do
+      [ -e "$DIR/$id" ] || { printf 'fm-handoff-doc: could not create entry %s/%s\n' "$DIR" "$id" >&2; exit 1; }
+      n=$((n + 1))
+      id="$base_id-$n"
+    done
     entry="$DIR/$id"
-    mkdir -p "$entry"
     install -m 0644 "$src" "$entry/$(basename "$src")"
 
     bundle_note=none

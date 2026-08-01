@@ -65,7 +65,7 @@ SH
   # Fake treehouse: `get --lease` prints the worktree path on stdout, exactly as
   # the real one does, and records the HOME it was invoked under - that HOME is
   # the entire pool-selection mechanism, so a test can assert it arrived.
-  cat > "$fakebin/treehouse" <<'SH'
+	  cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
@@ -75,7 +75,10 @@ case "${1:-}" in
     printf '%s\n' "${FM_FAKE_TREEHOUSE_WT:-}"
     exit 0
     ;;
-  return) exit 0 ;;
+  return)
+    printf '%s\n' "${HOME:-}" > "${FM_FAKE_TREEHOUSE_RETURN_HOMEFILE:-/dev/null}"
+    exit 0
+    ;;
 esac
 exit 0
 SH
@@ -113,6 +116,7 @@ $1
 EOF
   SENDKEYS_LOG="$CASE_DIR/sendkeys.log"
   TREEHOUSE_HOMEFILE="$CASE_DIR/treehouse-home"
+  TREEHOUSE_RETURN_HOMEFILE="$CASE_DIR/treehouse-return-home"
   TREEHOUSE_ARGSFILE="$CASE_DIR/treehouse-args"
 }
 
@@ -126,6 +130,7 @@ run_settle_spawn() {
     FM_FAKE_PANE_STALE_READS="$STALE_READS" FM_FAKE_PANE_COUNTFILE="$COUNTFILE" \
     FM_FAKE_TREEHOUSE_WT="$lease_wt" \
     FM_FAKE_TREEHOUSE_HOMEFILE="$TREEHOUSE_HOMEFILE" \
+    FM_FAKE_TREEHOUSE_RETURN_HOMEFILE="$TREEHOUSE_RETURN_HOMEFILE" \
     FM_FAKE_TREEHOUSE_ARGSFILE="$TREEHOUSE_ARGSFILE" \
     FM_FAKE_SENDKEYS_LOG="$SENDKEYS_LOG" \
     PATH="$FAKEBIN_DIR:$PATH" \
@@ -220,7 +225,7 @@ test_treehouse_is_leased_under_the_resolved_pool_home() {
 # The lease output is the authority for worktree=. A pane that never arrives is a
 # failed spawn, not a spawn that silently records some other path.
 test_pane_that_never_lands_fails_the_spawn() {
-  local rec id out status
+  local rec id out status expected_home recorded_home
   id=settle-never-lands-z5
   rec=$(make_settle_case settle-never-lands "$id" 999999)
   read_settle_record "$rec"
@@ -232,6 +237,10 @@ test_pane_that_never_lands_fails_the_spawn() {
     "the failure did not name the pane never reaching the worktree"
   [ ! -f "$HOME_DIR/state/$id.meta" ] \
     || fail "a spawn whose pane never landed still published task metadata"
+  expected_home=$(bash -c '. "$1"; fm_treehouse_pool_home "$2"' _ "$LIB" "$PROJ_DIR")
+  recorded_home=$(cat "$TREEHOUSE_RETURN_HOMEFILE")
+  [ "$recorded_home" = "$expected_home" ] \
+    || fail "abort cleanup returned under HOME '$recorded_home', expected '$expected_home'"
   pass "a pane that never enters the leased worktree fails the spawn loudly"
 }
 

@@ -120,7 +120,7 @@ fm_fleet_assert_owned() { # dir
   [ "$(fm_fleet_dir_source)" = default ] || return 0
   [ -z "${FM_FLEET_ACCEPT_DEFAULT:-}" ] || return 0
   me=$(id -un)
-  grep -qE "^\| *${me} *\|" "$dir/operators.md" 2>/dev/null && return 0
+  fm_fleet_operator_exists "$dir" "$me" && return 0
 
   {
     printf 'fm-fleet: %s is an existing fleet, but you are not one of its operators\n' "$dir"
@@ -203,6 +203,38 @@ fm_fleet_lock() { # dir
 }
 fm_fleet_unlock() { flock -u 9 2>/dev/null || true; }
 
+fm_fleet_operator_exists() { # dir operator
+  awk -F'|' -v op="$2" '
+    function trim(x){ gsub(/^ +| +$/,"",x); return x }
+    trim($2)==op { found=1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$1/operators.md" 2>/dev/null
+}
+
+fm_fleet_backlog_id_present() { # dir id
+  awk -v id="$2" '
+    function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+    item_id($0)==id { found=1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$1/backlog.md" 2>/dev/null
+}
+
+fm_fleet_backlog_id_status_present() { # dir id status
+  awk -v id="$2" -v status="$3" '
+    function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+    item_id($0)==id && index($0, "status:" status) { found=1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$1/backlog.md" 2>/dev/null
+}
+
+fm_fleet_count_operator_status() { # dir operator status
+  awk -v op="$2" -v status="$3" '
+    function claimed_by(line){ if (match(line, /claimed-by:[^ @]+@/)) return substr(line, RSTART+11, RLENGTH-12); return "" }
+    claimed_by($0)==op && index($0, "status:" status) { count++ }
+    END { print count + 0 }
+  ' "$1/backlog.md" 2>/dev/null
+}
+
 # Append an item to ## Queued. The id is the KB's primary key — claim/handoff/reap
 # all address items by it — so a duplicate is rejected under the lock we already
 # hold. Without this, two items share an id and the single-match awk rules below
@@ -210,7 +242,7 @@ fm_fleet_unlock() { flock -u 9 2>/dev/null || true; }
 fm_fleet_queue() { # dir id scope desc
   local dir=$1 id=$2 scope=$3 desc=$4
   fm_fleet_lock "$dir" || return 1
-  if grep -q "\[id:$id\]" "$dir/backlog.md"; then
+  if fm_fleet_backlog_id_present "$dir" "$id"; then
     echo "fm-fleet: id already in the backlog, refusing to queue a duplicate: $id" >&2
     fm_fleet_unlock
     return 1
@@ -230,9 +262,10 @@ fm_fleet_claim() { # dir id operator
   local dir=$1 id=$2 op=$3 ts rc=1
   ts=$(fm_fleet_now)
   fm_fleet_lock "$dir" || return 1
-  if grep -q "\[id:$id\].*status:queued" "$dir/backlog.md"; then
+  if fm_fleet_backlog_id_status_present "$dir" "$id" queued; then
     awk -v id="$id" -v op="$op" -v ts="$ts" '
-      held == "" && $0 ~ ("\\[id:" id "\\].*status:queued") {
+      function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+      held == "" && item_id($0)==id && $0 ~ /status:queued/ {
         sub(/status:queued/, "claimed-by:" op "@" ts " status:claimed"); held=$0; next
       }
       /^## Claimed$/ { print; if (held != "") { print ""; print held; held="" } ; next }
@@ -258,9 +291,10 @@ fm_fleet_handoff() { # dir id to_operator
   local dir=$1 id=$2 to=$3 ts rc=1
   ts=$(fm_fleet_now)
   fm_fleet_lock "$dir" || return 1
-  if grep -q "\[id:$id\]" "$dir/backlog.md"; then
+  if fm_fleet_backlog_id_present "$dir" "$id"; then
     awk -v id="$id" -v to="$to" -v ts="$ts" '
-      $0 ~ ("\\[id:" id "\\]") {
+      function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+      item_id($0)==id {
         if ($0 ~ /claimed-by:[^ ]+/) { sub(/claimed-by:[^ ]+/, "claimed-by:" to "@" ts); print; next }
         if (held == "" && $0 ~ /status:queued/) {
           sub(/status:queued/, "claimed-by:" to "@" ts " status:claimed"); held=$0; next
@@ -294,11 +328,20 @@ fm_fleet_drain_handoff() { # dir id
   local dir=$1 id=$2 holder scope to ts hc rc=1 handoffs
   hc=${FM_FLEET_HANDOFF_CAP:-3}
   fm_fleet_lock "$dir" || return 1
-  if grep -q "\[id:$id\]" "$dir/backlog.md"; then
+  if fm_fleet_backlog_id_present "$dir" "$id"; then
     rc=0
-    scope=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/scope:[^ |]+/)){print substr($0,RSTART+6,RLENGTH-6);exit} print ""; exit }' "$dir/backlog.md")
-    holder=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/claimed-by:[^ @]+/)){print substr($0,RSTART+11,RLENGTH-11);exit} print ""; exit }' "$dir/backlog.md")
-    handoffs=$(awk -v id="$id" '$0 ~ ("\\[id:" id "\\]"){ if(match($0,/handoffs:[0-9]+/)){print substr($0,RSTART+9,RLENGTH-9);exit} print "0"; exit }' "$dir/backlog.md")
+    scope=$(awk -v id="$id" '
+      function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+      item_id($0)==id { if(match($0,/scope:[^ |]+/)){print substr($0,RSTART+6,RLENGTH-6);exit} print ""; exit }
+    ' "$dir/backlog.md")
+    holder=$(awk -v id="$id" '
+      function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+      item_id($0)==id { if(match($0,/claimed-by:[^ @]+/)){print substr($0,RSTART+11,RLENGTH-11);exit} print ""; exit }
+    ' "$dir/backlog.md")
+    handoffs=$(awk -v id="$id" '
+      function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+      item_id($0)==id { if(match($0,/handoffs:[0-9]+/)){print substr($0,RSTART+9,RLENGTH-9);exit} print "0"; exit }
+    ' "$dir/backlog.md")
     handoffs=${handoffs:-0}
     to=$(fm_fleet_route "$dir" "$scope")
     ts=$(fm_fleet_now)
@@ -308,7 +351,8 @@ fm_fleet_drain_handoff() { # dir id
     elif [ -n "$to" ] && [ "$handoffs" -lt "$hc" ]; then
       # Hand off to an operator with headroom; stamp claimed-by + bump handoffs.
       awk -v id="$id" -v to="$to" -v ts="$ts" -v h="$((handoffs + 1))" '
-        $0 ~ ("\\[id:" id "\\]") {
+        function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+        item_id($0)==id {
           if ($0 ~ /claimed-by:[^ ]+/) sub(/claimed-by:[^ ]+/, "claimed-by:" to "@" ts)
           else sub(/status:[a-z-]+/, "claimed-by:" to "@" ts " status:claimed")
           if ($0 ~ /handoffs:[0-9]+/) sub(/handoffs:[0-9]+/, "handoffs:" h)
@@ -324,7 +368,8 @@ fm_fleet_drain_handoff() { # dir id
       # No operator with headroom or the per-item cap is reached: explicit
       # "fleet out of tokens" (status:drained) instead of a silent drop.
       awk -v id="$id" '
-        $0 ~ ("\\[id:" id "\\]") {
+        function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
+        item_id($0)==id {
           sub(/claimed-by:[^ ]+ /, "", $0)
           if ($0 !~ /status:drained/) sub(/status:[a-z-]+/, "status:drained")
           print; next
@@ -434,8 +479,8 @@ fm_fleet_status() { # dir
   echo "operator            claimed  in-flight  last-event"
   while IFS= read -r op; do
     [ -n "$op" ] || continue
-    c=$(grep -c "claimed-by:$op@.*status:claimed" "$dir/backlog.md" 2>/dev/null || true)
-    inflt=$(grep -c "claimed-by:$op@.*status:in-flight" "$dir/backlog.md" 2>/dev/null || true)
+    c=$(fm_fleet_count_operator_status "$dir" "$op" claimed)
+    inflt=$(fm_fleet_count_operator_status "$dir" "$op" in-flight)
     last=$(awk -F'\t' -v o="$op" '$2==o{t=$1} END{print t}' "$dir/events.log" 2>/dev/null)
     printf "%-20s %-8s %-10s %s\n" "$op" "${c:-0}" "${inflt:-0}" "${last:--}"
   done < <(awk -F'|' '/^\| *[a-zA-Z0-9_.-]+ *\|/{op=$2; gsub(/^ +| +$/,"",op); if(op!="operator" && op !~ /^-+$/) print op}' "$dir/operators.md")
@@ -463,7 +508,10 @@ fm_fleet_register() { # dir op scopes home [accounts]
   fm_fleet_assert_own_home "$home" || return 1
   ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
   fm_fleet_lock "$dir" || return 1
-  grep -vE "^\| *$op *\|" "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+  awk -F'|' -v OFS='|' -v op="$op" '
+    function trim(x){ gsub(/^ +| +$/,"",x); return x }
+    trim($2)!=op { print }
+  ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
   printf '| %s | %s | %s | %s | online | %s | %s |\n' "$op" "$scopes" "$home" "$accounts" "$ts" "$q" >> "$dir/operators.md"
   fm_fleet_event "$dir" "$op" register "-" "scope:$scopes"
   fm_fleet_commit "$dir" "fleet: register $op"
@@ -476,7 +524,7 @@ fm_fleet_heartbeat() { # dir op
   local dir=$1 op=$2 ts q rc=1
   ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
   fm_fleet_lock "$dir" || return 1
-  if grep -qE "^\| *$op *\|" "$dir/operators.md"; then
+  if fm_fleet_operator_exists "$dir" "$op"; then
     awk -F'|' -v OFS='|' -v op="$op" -v ts=" $ts " -v q=" $q " '
       function trim(x){ gsub(/^ +| +$/,"",x); return x }
       trim($2)==op { $6=" online "; $7=ts; $8=q; NF=(NF<9?9:NF); print; next }
@@ -496,7 +544,7 @@ fm_fleet_heartbeat() { # dir op
 fm_fleet_leave() { # dir op
   local dir=$1 op=$2 rc=1
   fm_fleet_lock "$dir" || return 1
-  if grep -qE "^\| *$op *\|" "$dir/operators.md"; then
+  if fm_fleet_operator_exists "$dir" "$op"; then
     awk -F'|' -v OFS='|' -v op="$op" '
       function trim(x){ gsub(/^ +| +$/,"",x); return x }
       trim($2)==op { $6=" offline "; print; next }
