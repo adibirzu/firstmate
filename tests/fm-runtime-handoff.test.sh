@@ -8,11 +8,13 @@
 #     non-owned keys such as pr= are preserved
 #   - handoff refuses when the worktree cannot be reconciled
 #   - handoff refuses when the endpoint is still alive / ownership is ambiguous
-#   - handoff refuses an unverified target harness
+#   - handoff refuses an unverified target harness, an unknown option, and a
+#     --backend that differs from the recorded one, all before any exit
 #   - the verified-exit path really runs: the recorded harness's exit command is
 #     delivered, the husk is killed once dead, and a harness that ignores it refuses
 #   - batch dispatch refuses --reuse-worktree instead of dropping it
-#   - statusline quota parse: unparseable => unknown, never exhausted
+#   - statusline quota parse: unparseable => unknown, never exhausted, and a
+#     context-window reading never decides low/exhausted
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -235,6 +237,31 @@ setup_case() {
   pass "claude zero 5hr => exhausted"
 }
 
+{
+  v=$(fm_statusline_quota_verdict 'Context 0% left · weekly 80% left')
+  [ "$v" = ok ] || fail "spent context with healthy weekly quota should be ok, got $v"
+  pass "zero context with healthy weekly => ok (context never votes)"
+}
+
+{
+  v=$(fm_statusline_quota_verdict 'Context 5% left · weekly 90% left')
+  [ "$v" = ok ] || fail "low context with healthy weekly should be ok, got $v"
+  pass "low context with healthy weekly => ok"
+}
+
+{
+  v=$(fm_statusline_quota_verdict 'Context 0% left')
+  [ "$v" = unknown ] || fail "context-only statusline carries no quota window, got $v"
+  pass "context-only statusline => unknown (never exhausted)"
+}
+
+{
+  line=$(fm_statusline_quota_parse 'Context 40% left · weekly 3% left')
+  assert_contains "$line" "context_pct=40" "context stays a reported field"
+  assert_contains "$line" "status=low" "weekly alone drives the status"
+  pass "context_pct is reported but informational"
+}
+
 # --- refusal: unverified harness -------------------------------------------
 
 {
@@ -247,6 +274,67 @@ setup_case() {
   assert_contains "$out" "not a verified adapter" "unverified harness message"
   [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must not touch worktree"
   pass "refuses unverified target harness"
+}
+
+# Every refusal below runs the LIVE-endpoint shape through the bin farm, so the
+# stubbed fm-send.sh proves the destructive exit never happened.
+
+# A harness with no launch_template in fm-spawn.sh must be refused BEFORE the
+# exit, or the worker dies for a target that can never launch.
+{
+  setup_case refuse-no-template task-u2
+  export FM_FAKE_WINDOW_PRESENT=1
+  export FM_FAKE_PANE_CMD=codex
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  for h in cline cursor-agent copilot; do
+    set +e
+    out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-u2 --harness "$h" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "harness '$h' has no launch template and must refuse"
+    assert_contains "$out" "not a verified adapter" "no-template harness message ($h)"
+    [ ! -s "$FM_FAKE_SEND_LOG" ] || fail "refusal for '$h' must not deliver an exit command"
+  done
+  [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must not touch worktree"
+  pass "refuses harnesses with no launch template before any exit"
+}
+
+# --- refusal: --provider is not part of the relaunch contract ---------------
+
+{
+  setup_case refuse-provider task-pv1
+  export FM_FAKE_WINDOW_PRESENT=1
+  export FM_FAKE_PANE_CMD=codex
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  set +e
+  out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-pv1 --harness claude --provider grok 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "--provider is unsupported and must refuse"
+  assert_contains "$out" "unknown option --provider" "unknown provider option message"
+  [ ! -s "$FM_FAKE_SEND_LOG" ] || fail "unknown option must not deliver an exit command"
+  pass "refuses --provider instead of forwarding it to an unsupported spawn flag"
+}
+
+# --- refusal: --backend that differs from the recorded backend --------------
+
+{
+  setup_case refuse-backend-switch task-b1
+  export FM_FAKE_WINDOW_PRESENT=1
+  export FM_FAKE_PANE_CMD=codex
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  set +e
+  out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-b1 --harness claude --backend herdr 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "backend switch should refuse"
+  assert_contains "$out" "differs from the backend recorded" "backend switch message"
+  [ ! -s "$FM_FAKE_SEND_LOG" ] || fail "backend switch must not deliver an exit command"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must not touch worktree"
+  pass "refuses --backend that does not match the recorded backend"
 }
 
 # --- refusal: missing worktree ---------------------------------------------

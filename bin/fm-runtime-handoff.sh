@@ -4,7 +4,7 @@
 #
 # Usage:
 #   fm-runtime-handoff.sh <task-id> --harness <name> \
-#     [--model <name>] [--effort <level>] [--provider <claude|codex|grok>] \
+#     [--model <name>] [--effort <level>] \
 #     [--progress-note <text>] [--progress-note-file <path>] \
 #     [--skip-exit] [--backend <name>]
 #
@@ -16,7 +16,7 @@
 #   3. Remove only the dead endpoint (pane/window), never the worktree or lease.
 #   4. Relaunch the chosen verified harness in the EXISTING worktree with the
 #      existing brief plus a concise progress note (brief file is not rewritten).
-#   5. Rewrite harness=/model=/effort=/provider= (and the new endpoint fields)
+#   5. Rewrite harness=/model=/effort= (and the new endpoint fields)
 #      in state/<id>.meta while preserving every other meta line (pr=, x_*, ...).
 #
 # Hard refusals:
@@ -24,6 +24,8 @@
 #   - kind=secondmate (secondmate recovery is a different owner)
 #   - live or ambiguous endpoint ownership after exit attempt
 #   - unverified target harness (no launch template)
+#   - --backend naming a different provider than the one recorded in meta, whose
+#     endpoint string only the recorded backend can read
 #   - primary-checkout or non-isolated worktree path
 #   - backend=orca, refused by the relaunch half, because Orca owns its own
 #     worktree lifecycle and there is no lease to preserve in place
@@ -70,12 +72,11 @@ usage: fm-runtime-handoff.sh <task-id> --harness <name> [options]
   --harness <name>              required verified target harness
   --model <name>                optional model axis for the new launch
   --effort <low|medium|high|xhigh|max>
-  --provider <claude|codex|grok>
   --progress-note <text>        concise progress for the replacement agent
   --progress-note-file <path>   same, read from a file
   --skip-exit                   skip the old harness exit command (endpoint
                                 must already be dead/missing)
-  --backend <name>              keep recorded backend when omitted
+  --backend <name>              must match the recorded backend; omit to keep it
 EOF
   exit 2
 }
@@ -84,7 +85,6 @@ ID=
 HARNESS=
 MODEL=
 EFFORT=
-PROVIDER=
 BACKEND_ARG=
 PROGRESS_NOTE=
 PROGRESS_NOTE_FILE=
@@ -100,7 +100,6 @@ for a in "$@"; do
       harness) HARNESS=$a ;;
       model) MODEL=$a ;;
       effort) EFFORT=$a ;;
-      provider) PROVIDER=$a ;;
       backend) BACKEND_ARG=$a ;;
       progress-note) PROGRESS_NOTE=$a ;;
       progress-note-file) PROGRESS_NOTE_FILE=$a ;;
@@ -116,8 +115,6 @@ for a in "$@"; do
     --model=*) MODEL=${a#--model=} ;;
     --effort) want_value=effort ;;
     --effort=*) EFFORT=${a#--effort=} ;;
-    --provider) want_value=provider ;;
-    --provider=*) PROVIDER=${a#--provider=} ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=} ;;
     --progress-note) want_value=progress-note ;;
@@ -145,10 +142,6 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
-esac
-case "$PROVIDER" in
-  ''|claude|codex|grok) ;;
-  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
 esac
 
 META="$STATE/$ID.meta"
@@ -196,7 +189,7 @@ fi
 
 # Verified harness only: reuse spawn's launch_template gate by requiring a known name.
 case "$HARNESS" in
-  claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot) ;;
+  claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
   *)
     echo "error: target harness '$HARNESS' is not a verified adapter; refuse rather than launching it" >&2
     exit 1
@@ -214,16 +207,22 @@ fi
 # Exit command facts from harness-adapters (do not invent adapters here).
 handoff_exit_spec() {  # <harness> -> prints "text:<cmd>" or "key:<key>"
   case "$1" in
-    claude|opencode|grok|kimi|copilot) printf 'text:/exit\n' ;;
-    codex|pi|pi-signed|cursor-agent) printf 'text:/quit\n' ;;
-    cline) printf 'key:C-c\n' ;;
+    claude|opencode|grok|kimi) printf 'text:/exit\n' ;;
+    codex|pi|pi-signed) printf 'text:/quit\n' ;;
     *) return 1 ;;
   esac
 }
 
+# The recorded backend owns the recorded endpoint string: every ownership check
+# below (state, exit, kill) must run through it. A --backend naming a different
+# provider would read the old provider's target through the new provider, report
+# missing, and leave the old agent alive beside the relaunched one, so refuse.
 BACKEND=$(fm_backend_of_meta "$META")
 TARGET=$(fm_backend_target_of_meta "$META")
-[ -n "$BACKEND_ARG" ] && BACKEND=$BACKEND_ARG
+if [ -n "$BACKEND_ARG" ] && [ "$BACKEND_ARG" != "$BACKEND" ]; then
+  echo "error: --backend '$BACKEND_ARG' differs from the backend recorded for $ID ('$BACKEND'); refusing handoff rather than checking the old endpoint through a different session provider" >&2
+  exit 1
+fi
 
 agent_state_of() {
   if [ -z "$TARGET" ]; then
@@ -349,9 +348,9 @@ SPAWN_ARGS=(
 )
 [ -z "$MODEL" ] || SPAWN_ARGS+=(--model "$MODEL")
 [ -z "$EFFORT" ] || SPAWN_ARGS+=(--effort "$EFFORT")
-[ -z "$PROVIDER" ] || SPAWN_ARGS+=(--provider "$PROVIDER")
 [ -z "$BACKEND_ARG" ] || SPAWN_ARGS+=(--backend "$BACKEND_ARG")
-# When no explicit backend, spawn --reuse-worktree keeps the recorded backend.
+# When no explicit backend, spawn --reuse-worktree keeps the recorded backend,
+# which is the only backend an explicit --backend is allowed to name here.
 
 if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-spawn.sh" "${SPAWN_ARGS[@]}"; then
   echo "error: in-place relaunch failed for $ID; worktree and unlanded work were left intact" >&2
