@@ -760,14 +760,26 @@ grep -F "did not yield an isolated worktree" "$TMP_ROOT/abort-b.err" >/dev/null 
   || fail "post-create abort fixture B did not reach the armed validation failure"
 ABORT_A_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane")
 ABORT_B_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane")
-ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
+ABORT_A_WS=$(cat "$POST_CREATE_ABORT_CONTROL/abort-a/workspace")
+ABORT_B_WS=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/workspace")
+# Serialization is asserted on the mutations the abort path actually emits.
+# The task pane is NOT removed with pane.close: the emptying-close plan proves a
+# lone idle shell and ends it, so Herdr removes the emptied workspace through its
+# own focus-preserving pane-death path (the raw explicit close steals focus to the
+# neighbour workspace - upstream #1328). That path emits no pane-close mutation at
+# all, so requiring one here could only ever pass on a Herdr lacking the death
+# path. What must hold is that each spawn completes its whole presentation
+# critical section - create, then its own seeded prune - before the other spawn
+# creates anything. That is exactly what the lock exists to guarantee.
+# assert_cleanup_focus_preserved below is what proves the task panes are gone.
+ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v aw="$ABORT_A_WS" -v bw="$ABORT_B_WS" '
   $1 == "workspace-create" && $4 ~ /^└ abort-a · p:/ { print "create-a" }
   $1 == "workspace-create" && $4 ~ /^└ abort-b · p:/ { print "create-b" }
-  $1 == "pane-close" && $4 == a { print "close-a" }
-  $1 == "pane-close" && $4 == b { print "close-b" }
+  $1 == "pane-close" { ws = $4; sub(/:.*$/, "", ws)
+                       if (ws == aw) print "prune-a"; else if (ws == bw) print "prune-b" }
 ')
 case "$ABORT_SEQUENCE" in
-  $'create-a\nclose-a\ncreate-b\nclose-b'|$'create-b\nclose-b\ncreate-a\nclose-a') ;;
+  $'create-a\nprune-a\ncreate-b\nprune-b'|$'create-b\nprune-b\ncreate-a\nprune-a') ;;
   *) fail "concurrent post-create abort cleanup interleaved outside the presentation lock: $ABORT_SEQUENCE" ;;
 esac
 ABORT_UNRESTORED=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
