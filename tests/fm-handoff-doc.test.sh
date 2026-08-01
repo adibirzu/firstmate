@@ -225,6 +225,24 @@ test_a_planted_meta_cannot_redirect_a_read() {
   pass "fm-handoff-doc: a planted meta cannot redirect a read outside the entry"
 }
 
+test_reserved_entry_names_are_refused() {
+  # Publishing a file named "meta" would be overwritten by the metadata written
+  # just after it, silently losing the document.
+  local home store out; read -r home store < <(new_home ho-reserved)
+  local name
+  for name in meta handoff.bundle; do
+    mkdir -p "$home/src"
+    seed_doc "$home/src/$name" "Reserved $name"
+    out=$(ho "$home" "$store" publish "$home/src/$name" 2>&1) \
+      && fail "publish must refuse the reserved name '$name'"
+    case "$out" in
+      *"reserved name"*) ;;
+      *) fail "'$name' must be refused as reserved, got: $out" ;;
+    esac
+  done
+  pass "fm-handoff-doc: reserved entry names are refused"
+}
+
 test_a_symlinked_document_is_refused() {
   local home store out; read -r home store < <(new_home ho-symlink)
   printf 'SENSITIVE\n' > "$home/outside.md"
@@ -255,4 +273,5 @@ test_unknown_id_fails_clearly
 test_an_id_cannot_escape_the_store
 test_a_planted_meta_cannot_redirect_a_read
 test_a_symlinked_document_is_refused
+test_reserved_entry_names_are_refused
 echo "ALL PASS: fm-handoff-doc"

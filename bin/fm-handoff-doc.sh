@@ -244,6 +244,16 @@ case "$cmd" in
     done
     [ -f "$src" ] || { printf 'fm-handoff-doc: no such file: %s\n' "$src" >&2; exit 1; }
 
+    # An entry owns two names. Copying a source over either one destroys the entry:
+    # a document called "meta" is overwritten by the metadata written moments later,
+    # and the document is silently lost.
+    case "$(basename "$src")" in
+      meta|handoff.bundle)
+        printf 'fm-handoff-doc: "%s" is a reserved name inside a handoff entry\n' "$(basename "$src")" >&2
+        printf '  rename the file, or pass a copy under a different name\n' >&2
+        exit 1 ;;
+    esac
+
     # The shared store is group-readable by design. Publishing a file the operator
     # kept private is therefore a disclosure, not a copy — make them say so.
     case "$(basename "$src")" in
