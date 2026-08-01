@@ -69,8 +69,9 @@ Antigravity CLI requires permission to read, edit, and execute files here.
 - Accepting "Yes" **persisted** the path into
   `~/.gemini/antigravity-cli/settings.json` → `trustedWorkspaces` (observed
   array growth including `/tmp/fm-agy-fresh.TO2lcN`).
-- That settings file also holds permission allow-lists; firstmate therefore uses
-  a keystroke-only readiness gate (like copilot), not a pre-seed write.
+- That settings file also holds permission allow-lists, is operator-global, and
+  has no delegated writer; firstmate therefore uses a keystroke-only readiness
+  gate, not a pre-seed write.
 
 Past-trust anchors (must not match the dialog itself):
 
@@ -81,9 +82,9 @@ Deliberately **not** the substring `Antigravity CLI` — it appears inside the d
 
 The readiness gate tests the past-trust anchors **before** the dialog literal.
 Whether the accepted frame is scrubbed from the 120-line capture window was not
-pinned down empirically, and cursor-agent's Ink TUI demonstrably leaves its own
-trust frame in the scrollback forever. Dialog-first ordering would therefore
-risk never reaching the success branch, exhausting the poll budget, and
+pinned down empirically, and an Ink-style TUI is under no obligation to clear an
+accepted dialog from the terminal scrollback. Dialog-first ordering would
+therefore risk never reaching the success branch, exhausting the poll budget, and
 reporting a false spawn failure while a trusted agent works unsupervised.
 Because the anchors above provably do not match the dialog body, past-trust-first
 is correct under either scrollback behavior.
@@ -93,7 +94,7 @@ is correct under either scrollback behavior.
 composer text) and polls up to `FM_AGY_TRUST_POLLS` (default 60) at
 `FM_AGY_POLL_INTERVAL` (default 0.5s). On exhaustion `agy_spawn_fail()` appends
 `failed: ...` to `$STATE/$ID.status`, prints `error: ...; inspect window $T` to
-stderr, and `bin/fm-spawn.sh` exits 1 — the same shape as `copilot_spawn_fail`.
+stderr, and `bin/fm-spawn.sh` exits 1 — the same shape as `kimi_spawn_fail`.
 
 ## Launch and brief delivery
 
@@ -115,16 +116,15 @@ agent auto-runs the first turn. Verified capture: seeded brief
 | Idle | footer `? for shortcuts`; status `Gemini 3.6 Flash · low` |
 
 `esc to cancel` is the stable mid-turn token and clears the instant the turn ends.
-No firstmate-owned semantic busy writer is wired yet for this adapter (same
-crewmate posture as cline/cursor-agent/copilot: delivery busy via
-`fm-tmux-lib.sh`, task-state classification remains `unknown missing` until a
-lifecycle source is credited). Hooks exist (`Stop`, `PreInvocation`, …) under
-`.agents/hooks.json` / plugin paths — a future primary or semantic busy path,
-not required for crewmate dispatch.
+No firstmate-owned semantic busy writer is wired yet for this adapter: delivery
+busy comes from `fm-tmux-lib.sh`, and task-state classification remains
+`unknown missing` until a lifecycle source is credited. Hooks exist (`Stop`,
+`PreInvocation`, …) under `.agents/hooks.json` / plugin paths — a future primary
+or semantic busy path, not required for crewmate dispatch.
 
-The busy token string matches cline's `esc to cancel` exactly.
-Each harness owns its own constant and harness-scoped matcher case so neither
-borrows the other's identity.
+`esc to cancel` is agy's own token, held in its own constant
+(`FM_TMUX_AGY_BUSY_REGEX_DEFAULT`) and matched only from the harness-scoped
+`agy` case, so it can never be borrowed as another harness's identity.
 
 ## Interrupt and exit
 
@@ -153,7 +153,7 @@ borrows the other's identity.
 | Layer | Value |
 |---|---|
 | Env marker | `ANTIGRAVITY_AGENT=1` on tool children (verified with `env -i` clean launch writing env to a file). Checked **before** `CLAUDECODE` in `fm-harness.sh`. |
-| Process ancestry | command name `agy` (and argv substring `*agy*`) |
+| Process ancestry | exact command name `agy`, or an anchored argv match (whole ` agy ` token, `/agy ` path token, or trailing `/agy`). A bare `agy` substring is deliberately not accepted, because it also occurs inside ordinary words such as "legacy". |
 
 ## Autonomy
 
@@ -171,10 +171,18 @@ In a disposable tmux session on a fresh `/tmp` worktree:
 4. Esc mid-turn cancels with `Interrupted · ...` and leaves the session alive.
 5. `/exit` prints resume id and exits 0; `--conversation` / `-c` restore history.
 
-## Upstream note
+## Blast radius and regression entry point
 
-Captain sequencing mentioned reconciling with upstream after PR #1461.
-This adapter is self-contained on firstmate's current wiring shape
-(launch template, keystroke trust gate, delivery busy regex, harness detection).
-Upstream may prefer a different trust-persistence or busy-source design once
-#1461 lands; call that out in the PR body rather than blocking this option.
+The adapter is self-contained on firstmate's existing wiring shape: launch
+template, keystroke trust gate, delivery busy regex, harness detection, and the
+secondmate refusal. It adds no new script and no new runtime-backend surface.
+
+```sh
+tests/fm-agy-harness.test.sh
+```
+
+That test pins the launch template, the model/effort resolution matrix
+(including the `xhigh`/`max` clamp-versus-withhold split), the trust-gate
+ordering and single-Enter budget, the harness-scoped busy token, detection
+precedence ahead of `CLAUDECODE`, and the secondmate refusal on all three
+harness-resolution paths.
