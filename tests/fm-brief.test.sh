@@ -695,7 +695,7 @@ test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
   home="$TMP_ROOT/worker-safety-home"
   mkdir -p "$home/data"
 
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-ship firstmate >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-ship firstmate --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/brief-safety-ship/brief.md"
   assert_present "$brief" "ship brief was not scaffolded"
   assert_grep "Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply" "$brief" \
