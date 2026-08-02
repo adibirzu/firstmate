@@ -106,7 +106,8 @@
 # The verified harness adapters firstmate launches (AGENTS.md section 4). A
 # fleet root is one of these CLIs running anywhere on the machine, not just in
 # this home: every home, pool, and the operator's own interactive agent sessions
-# share the same physical RAM.
+# share the same physical RAM. fm_capacity_fleet_totals owns how a process is
+# matched against this list.
 FM_CAPACITY_WORKER_NAMES="claude codex opencode pi pi-signed grok kimi"
 
 FM_CAPACITY_CONFIG_FILE="spawn-capacity"
@@ -325,36 +326,71 @@ fm_capacity_probe_mem_pressure() {
   printf '%s\n' unknown
 }
 
-# Prints "<resident_mb> <agent_roots> <processes_in_those_trees>", or three
-# unknowns. Whole process trees, because an agent's language runtimes and tool
-# servers are memory the fleet caused and keeps. Resident sizes are summed per
-# process, so pages shared between processes are counted more than once; the
-# reported figure is therefore an upper bound on the fleet's true footprint and
-# is labelled as resident in the report rather than presented as exact.
-fm_capacity_probe_fleet() {
-  local snapshot out
-  if [ -n "${FM_CAPACITY_FLEET_RSS_MB:-}" ] || [ -n "${FM_CAPACITY_FLEET_AGENTS:-}" ] \
-     || [ -n "${FM_CAPACITY_FLEET_PROCS:-}" ]; then
-    printf '%s %s %s\n' "${FM_CAPACITY_FLEET_RSS_MB:-unknown}" \
-      "${FM_CAPACITY_FLEET_AGENTS:-unknown}" "${FM_CAPACITY_FLEET_PROCS:-unknown}"
-    return 0
-  fi
-  snapshot=$(ps -A -o pid=,ppid=,rss=,comm= 2>/dev/null) || snapshot=
-  # A ps that returns nothing did not observe an empty machine: this shell is
-  # itself a process, so no output means the read failed.
-  [ -n "$snapshot" ] || { printf '%s %s %s\n' unknown unknown unknown; return 0; }
-  out=$(printf '%s\n' "$snapshot" | awk -v names="$FM_CAPACITY_WORKER_NAMES" '
-    BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+# Separates the two ps snapshots handed to fm_capacity_fleet_totals on one
+# stream. Every ps line begins with a pid, so this can never collide with real
+# output.
+FM_CAPACITY_SNAPSHOT_SEP="--- fm-capacity argv ---"
+
+# fm_capacity_fleet_totals <comm-snapshot> <argv-snapshot>
+# Pure matcher over two ps snapshots: "<pid> <ppid> <rss> <comm>" lines and
+# "<pid> <full argv>" lines. Prints "<resident_mb> <agent_roots> <procs>".
+# Kept separate from the probe below so the matching rules can be exercised
+# against fixed snapshots; the probe owns reading the live machine.
+#
+# WHICH PROCESSES ARE FLEET ROOTS
+# FM_CAPACITY_WORKER_NAMES is the source of truth, and it is matched the way the
+# harness detectors this repo already depends on match it (bin/fm-harness.sh
+# detect_own, bin/fm-session-lock-lib.sh): the command basename usually names
+# the adapter, but when that basename is a bare interpreter the adapter is named
+# in the script path it was handed instead. Several verified adapters are
+# npm-installed and run exactly that way, so basename equality alone would find
+# no fleet at all on a machine full of them - and reporting a confident zero for
+# a read that actually failed is the one thing this file may never do.
+fm_capacity_fleet_totals() {
+  printf '%s\n%s\n%s\n' "${2:-}" "$FM_CAPACITY_SNAPSHOT_SEP" "${1:-}" \
+    | awk -v names="$FM_CAPACITY_WORKER_NAMES" -v sep="$FM_CAPACITY_SNAPSHOT_SEP" '
+    BEGIN { nw = split(names, list, " "); for (i = 1; i <= nw; i++) want[list[i]] = 1 }
+    # An adapter basename, or a packaged one that keeps the adapter as its
+    # leading name component ("claude-code", "codex.js"). Deliberately not a
+    # bare substring test: "pip" must never read as "pi".
+    function names_worker(s,   i) {
+      if (s in want) return 1
+      for (i = 1; i <= nw; i++)
+        if (index(s, list[i] "-") == 1 || index(s, list[i] "_") == 1 \
+            || index(s, list[i] ".") == 1) return 1
+      return 0
+    }
+    # The adapter as a whole path or word component of an interpreter argv,
+    # anchored on both sides for the same reason.
+    function argv_names_worker(s,   i) {
+      for (i = 1; i <= nw; i++)
+        if (s ~ ("(^|/|[[:space:]])" list[i] "([-_./]|[[:space:]]|$)")) return 1
+      return 0
+    }
+    $0 == sep { commphase = 1; next }
+    !commphase {
+      if (NF < 2) next
+      line = $0
+      sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", line)
+      argv[$1] = line
+      next
+    }
     {
+      if (NF < 4) next
       pid = $1; ppid = $2; rss = $3
-      # macOS ps prints an absolute executable path and may append arguments;
+      # comm is the whole remainder of the line, not one field: macOS ps prints
+      # an absolute executable path, which may itself contain spaces, while
       # Linux prints a bare name. Reduce both to the command basename.
-      cmd = $4
-      sub(/.*\//, "", cmd)
+      cmd = $0
+      sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", cmd)
+      base = cmd
+      sub(/.*\//, "", base)
       parent[pid] = ppid
       size[pid] = rss
       known[pid] = 1
-      if (cmd in want) { root[pid] = 1; agents++ }
+      hit = names_worker(base)
+      if (!hit && (base ~ /^node/ || base ~ /^python/)) hit = argv_names_worker(argv[pid])
+      if (hit) { root[pid] = 1; agents++ }
     }
     END {
       for (p in known) {
@@ -369,7 +405,32 @@ fm_capacity_probe_fleet() {
         }
       }
       printf "%d %d %d\n", total / 1024, agents + 0, procs + 0
-    }') || out=
+    }'
+}
+
+# Prints "<resident_mb> <agent_roots> <processes_in_those_trees>", or three
+# unknowns. Whole process trees, because an agent's language runtimes and tool
+# servers are memory the fleet caused and keeps. Resident sizes are summed per
+# process, so pages shared between processes are counted more than once; the
+# reported figure is therefore an upper bound on the fleet's true footprint and
+# is labelled as resident in the report rather than presented as exact.
+fm_capacity_probe_fleet() {
+  local snapshot argv_snapshot out
+  if [ -n "${FM_CAPACITY_FLEET_RSS_MB:-}" ] || [ -n "${FM_CAPACITY_FLEET_AGENTS:-}" ] \
+     || [ -n "${FM_CAPACITY_FLEET_PROCS:-}" ]; then
+    printf '%s %s %s\n' "${FM_CAPACITY_FLEET_RSS_MB:-unknown}" \
+      "${FM_CAPACITY_FLEET_AGENTS:-unknown}" "${FM_CAPACITY_FLEET_PROCS:-unknown}"
+    return 0
+  fi
+  snapshot=$(ps -A -o pid=,ppid=,rss=,comm= 2>/dev/null) || snapshot=
+  # A ps that returns nothing did not observe an empty machine: this shell is
+  # itself a process, so no output means the read failed.
+  [ -n "$snapshot" ] || { printf '%s %s %s\n' unknown unknown unknown; return 0; }
+  # The argv read is what makes an interpreter-launched adapter visible, so a ps
+  # that cannot produce it leaves the fleet unmeasured rather than undercounted.
+  argv_snapshot=$(ps -A -o pid=,args= 2>/dev/null) || argv_snapshot=
+  [ -n "$argv_snapshot" ] || { printf '%s %s %s\n' unknown unknown unknown; return 0; }
+  out=$(fm_capacity_fleet_totals "$snapshot" "$argv_snapshot") || out=
   [ -n "$out" ] || { printf '%s %s %s\n' unknown unknown unknown; return 0; }
   printf '%s\n' "$out"
 }

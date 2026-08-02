@@ -468,6 +468,58 @@ test_malformed_settings_refuse_rather_than_silently_defaulting() {
   pass "malformed capacity settings refuse loudly instead of reverting to defaults"
 }
 
+# --- what the fleet probe actually counts ------------------------------------
+#
+# Every case above injects the fleet measurement, so these two cover the reading
+# itself: which live processes are counted as fleet, and what happens when they
+# cannot be read at all.
+
+# fleet_totals <comm-snapshot> <argv-snapshot>: the library's pure matcher, run
+# in a subshell so sourcing it cannot disturb this suite's own environment.
+fleet_totals() {
+  ( . "$ROOT/bin/fm-capacity-lib.sh"; fm_capacity_fleet_totals "$1" "$2" )
+}
+
+test_fleet_probe_counts_interpreter_launched_harnesses() {
+  local comm argv out
+  # An npm-installed adapter's own command name is the interpreter, not the
+  # adapter, so counting by command name alone would find no fleet here at all
+  # and report a confident, silent zero.
+  comm='1 0 4000 /sbin/launchd
+100 1 300000 /opt/homebrew/bin/node
+101 100 200000 /usr/bin/python3
+200 1 150000 /Users/op/Library/Application Support/my tools/claude
+300 1 90000 /usr/bin/pip'
+  argv='100 node /Users/op/.npm/lib/node_modules/@anthropic-ai/claude-code/cli.js
+101 python3 /usr/local/lib/agent/tool-server.py
+300 pip install something'
+  out=$(fleet_totals "$comm" "$argv")
+
+  # 300000 + 200000 + 150000 KB of resident memory, across the node-launched
+  # adapter and the directly-launched one, plus the tool server the first holds.
+  # launchd is not fleet, and pip must never be read as the "pi" adapter.
+  [ "$out" = "634 2 3" ] || fail "the fleet probe miscounted live processes: got '$out', wanted '634 2 3'"
+  pass "the fleet probe counts interpreter-launched adapters and spaced paths, and not lookalikes"
+}
+
+test_fleet_probe_reports_unknown_when_processes_cannot_be_read() {
+  local dir fakebin out
+  dir="$TMP_ROOT/fleet-unreadable"
+  mkdir -p "$dir"
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+
+  out=$(env -u FM_CAPACITY_FLEET_RSS_MB -u FM_CAPACITY_FLEET_AGENTS -u FM_CAPACITY_FLEET_PROCS \
+    PATH="$fakebin:$PATH" bash -c ". '$ROOT/bin/fm-capacity-lib.sh'; fm_capacity_probe_fleet")
+  [ "$out" = "unknown unknown unknown" ] \
+    || fail "an unreadable process table must be unknown, not a count: got '$out'"
+  pass "a process table that cannot be read is an explicit unknown, never a fabricated zero"
+}
+
 # --- the operator-facing report ---------------------------------------------
 
 test_capacity_report_shows_the_numbers_without_failing() {
@@ -503,4 +555,6 @@ test_absent_swap_is_an_answer_not_an_unknown
 test_operator_can_raise_the_limits
 test_operator_can_switch_the_guard_off
 test_malformed_settings_refuse_rather_than_silently_defaulting
+test_fleet_probe_counts_interpreter_launched_harnesses
+test_fleet_probe_reports_unknown_when_processes_cannot_be_read
 test_capacity_report_shows_the_numbers_without_failing

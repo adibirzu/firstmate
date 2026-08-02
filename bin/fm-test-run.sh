@@ -916,9 +916,12 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       ;;
     bin/fm-capacity.sh|bin/fm-capacity-lib.sh|tests/capacity-pin.sh)
-      # The capacity guard admits every spawn path, so a change here also
-      # re-runs the secondmate and real-Herdr suites that drive real spawns.
+      # The capacity guard admits every spawn path, so a change here re-runs at
+      # least everything bin/fm-spawn.sh itself selects - pure-contract-unit
+      # included, because several of its suites execute a real fm-spawn.sh -
+      # plus the secondmate and real-Herdr suites that drive real spawns too.
       printf '%s\n' backend-dispatch
+      printf '%s\n' pure-contract-unit
       printf '%s\n' secondmate
       printf '%s\n' real-herdr-gated
       ;;
