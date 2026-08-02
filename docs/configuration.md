@@ -174,6 +174,7 @@ Memory is the binding signal, not CPU.
 On the machine this was built against, saturation looked like 155 MB unused of 24 GB with 20 GB of swap consumed after 25.7 million swapouts, while CPU usage was about 4.6 of 10 cores and no agent appeared among the top consumers at all.
 The 1m load average of 299 measured processes frozen on paging rather than work queued for CPU, so load average is reported as corroborating context and never refuses unless the operator asks it to.
 The fleet's own footprint is measured over whole process trees rather than counted, because a paused agent keeps every page it allocated - which is why pausing whole domains during that incident did not drain the machine.
+That footprint is read machine-wide rather than per home: every verified harness process tree counts, including agents in other firstmate homes and your own interactive agent session, because they all hold the same physical memory.
 
 Settings live in the local gitignored `config/spawn-capacity`, one `key = value` per line, with `#` comments and blank lines allowed.
 An absent file means the defaults below.
