@@ -253,6 +253,10 @@ chmod +x "$FAKEBIN/herdr-workspace-mover"
 export PATH="$FAKEBIN:$PATH"
 export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 # This suite runs against its own isolated lab session, so a Herdr pane

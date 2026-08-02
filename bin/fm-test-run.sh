@@ -188,6 +188,7 @@ family_for_basename() {
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
     fm-tmux-agent-liveness.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-strict.test.sh|fm-spawn-batch.test.sh|\
+    fm-spawn-capacity.test.sh|\
     fm-spawn-dispatch-profile.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
@@ -913,6 +914,13 @@ families_for_changed_path() {
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
+      ;;
+    bin/fm-capacity.sh|bin/fm-capacity-lib.sh|tests/capacity-pin.sh)
+      # The capacity guard admits every spawn path, so a change here also
+      # re-runs the secondmate and real-Herdr suites that drive real spawns.
+      printf '%s\n' backend-dispatch
+      printf '%s\n' secondmate
+      printf '%s\n' real-herdr-gated
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh)
       printf '%s\n' snapshot-bearings
