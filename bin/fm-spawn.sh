@@ -83,7 +83,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
@@ -493,7 +493,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -559,6 +559,17 @@ launch_template() {
     # Its turn-end signal is a globally configured Stop hook plus a guarded
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
+    # agy (Antigravity CLI): the brief MUST ride -i/--prompt-interactive.
+    # A TRAILING POSITIONAL PROMPT IS SILENTLY DROPPED and agy still launches a
+    # healthy-looking interactive TUI with an empty composer and exit status 0
+    # (verified 2026-08-03 on agy 1.1.10), which is indistinguishable from every
+    # other quiet-worker failure. -i delivers the prompt, echoes it as a real user
+    # message, and keeps the session interactive afterwards.
+    # --dangerously-skip-permissions is the autonomy flag: it was proven by A/B in
+    # an isolated HOME to override agy's own permissions.allow list, which prompts
+    # for an unlisted command without it. It does NOT dismiss agy's per-workspace
+    # trust dialog; that is handled after launch, like claude/codex/pi.
+    agy) printf '%s' 'agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -671,7 +682,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|agy)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -708,6 +719,14 @@ effort_flag_for_harness() {
       # its --thinking flag.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    agy)
+      # agy 1.1.10 --effort accepts only low|medium|high and REFUSES to launch on
+      # anything else ("invalid --effort \"xhigh\" (valid: low, medium, high)"),
+      # so omit xhigh and max rather than passing a launch-fatal value.
+      case "$effort" in
+        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model

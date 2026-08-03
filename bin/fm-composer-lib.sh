@@ -22,6 +22,15 @@
 # injection target). The AGENT prompt glyphs `❯` (claude) and `›` (codex) are a
 # genuine empty agent composer either way, bordered or bare.
 #
+# "Bordered" is decided by the CALLER, not by this owner, and a composer
+# container need not be a corner-drawn box. agy (Antigravity CLI) draws its
+# composer as a bare `>` between two full-width U+2500 rules with no corner
+# glyphs, so bin/fm-tmux-lib.sh's fm_tmux_find_rule_composer recognizes that
+# structure and passes bordered=1 for the cursor row. Without that, agy's idle
+# composer would hit the shell-glyph rule above and every healthy idle agy
+# worker would read as a dead shell. agy needs no FM_COMPOSER_IDLE_RE: its empty
+# composer carries no placeholder or ghost text at all.
+#
 # GHOST/PLACEHOLDER TEXT is the other half of this owner (task
 # afk-herdr-false-pending): a harness fills an otherwise-empty composer with
 # de-emphasized ghost text - claude's rotating prompt suggestion, codex's idle

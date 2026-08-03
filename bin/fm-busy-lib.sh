@@ -34,6 +34,7 @@
 #   codex-hook, codex-appserver  reserved: Codex, gated by
 #                    fm_busy_codex_semantic_source
 #   kimi-wire, kimi-hook  reserved: standalone Kimi, gated by fm_busy_kimi_verified
+#   agy-ls           reserved: agy, gated by fm_busy_agy_verified
 # Firstmate-owned sources accepted for every converted adapter:
 #   fm-spawn         the launch-brief turn seeded at spawn
 #   fm-interrupt     a firstmate-controlled interruption of the worker
@@ -41,12 +42,13 @@
 # Classifier-only sources (never written into a record):
 #   endpoint-gone, herdr-native, grok-regex, missing, malformed,
 #   gen-mismatch, source-mismatch, kimi-unverified, codex-unverified,
-#   capture-failed, no-target
+#   agy-unverified, capture-failed, no-target
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
 # with the producing source as the second token. Precedence:
 #   1. dead endpoint (fm_busy_classify_live only) -> dead endpoint-gone
 #   2. standalone Kimi before verification       -> unknown kimi-unverified
+#      standalone agy before verification        -> unknown agy-unverified
 #   3. a valid, gen-matching, source-trusted record -> its state and source
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
@@ -94,6 +96,27 @@ FM_BUSY_KIMI_VERIFIED_VERSIONS=""
 
 fm_busy_kimi_verified() {
   [ -n "$FM_BUSY_KIMI_VERIFIED_VERSIONS" ]
+}
+
+# fm_busy_agy_verified: gate for a standalone agy (Antigravity CLI) semantic
+# busy source. agy 1.1.10 verdict (live, 2026-08-03): NOT verified, so agy
+# classifies unknown agy-unverified and fm-spawn wires no agy busy events.
+# agy's rendered footer is deliberately NOT a state source. `esc to cancel`
+# does bracket a model turn, but agy backgrounds a long shell command after
+# roughly five seconds and the footer reverts to the idle `? for shortcuts`
+# while that task is still running (observed live with `sleep 45`), so the
+# rendered tail reports idle during genuine work. agy does expose an
+# ANTIGRAVITY_LS_ADDRESS language-server endpoint to its children, which is
+# the most promising candidate source, but it was not live-verified here.
+# To open the gate: live-verify the chosen source brackets a real turn on a
+# firstmate-launched worker including the interrupt path, record the version,
+# exact commands, and observed output in docs/verification/supervision.md, add
+# the verified version string(s) here, and land the wiring in fm-spawn behind
+# this same gate in the same change.
+FM_BUSY_AGY_VERIFIED_VERSIONS=""
+
+fm_busy_agy_verified() {
+  [ -n "$FM_BUSY_AGY_VERIFIED_VERSIONS" ]
 }
 
 # fm_busy_codex_appserver_observable: capability/version negotiation for the
@@ -176,6 +199,10 @@ fm_busy_sources_for_harness() {  # <harness>
     kimi*)
       fm_busy_kimi_verified || { printf ''; return 0; }
       adapter='kimi-wire kimi-hook'
+      ;;
+    agy*)
+      fm_busy_agy_verified || { printf ''; return 0; }
+      adapter='agy-ls'
       ;;
     *) printf ''; return 0 ;;
   esac
@@ -274,6 +301,12 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     codex*)
       if ! fm_busy_codex_semantic_source; then
         printf 'unknown codex-unverified'
+        return 0
+      fi
+      ;;
+    agy*)
+      if ! fm_busy_agy_verified; then
+        printf 'unknown agy-unverified'
         return 0
       fi
       ;;

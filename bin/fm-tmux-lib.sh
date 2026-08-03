@@ -302,6 +302,31 @@ EOF
   return 1
 }
 
+# fm_tmux_find_rule_composer: some harnesses draw the composer as a bare prompt
+# glyph delimited by full-width horizontal RULES with no corner glyphs, so
+# fm_tmux_find_composer_box (which anchors on corners) never finds a box. Without
+# this, such a composer falls through to the bare-row fallback, where a lone `>`
+# hits the shell-prompt-glyph rule and is classified `unknown` - a healthy idle
+# agent misread as a dead shell. agy (Antigravity CLI) renders exactly this shape:
+# the cursor row holds `>` between two full-width U+2500 runs.
+# This stays positive structural proof rather than a glyph guess: a dead shell
+# prompt is never sandwiched between two non-empty, equal-width, pure-rule rows.
+fm_tmux_find_rule_composer() {  # <cursor-y> <plain-visible-pane> -> 0 when rule-delimited
+  local cy=$1 pane=$2 above below
+  [ "$cy" -ge 1 ] || return 1
+  above=$(printf '%s\n' "$pane" | sed -n "${cy}p")
+  below=$(printf '%s\n' "$pane" | sed -n "$((cy + 2))p")
+  above="${above#"${above%%[![:space:]]*}"}"
+  above="${above%"${above##*[![:space:]]}"}"
+  below="${below#"${below%%[![:space:]]*}"}"
+  below="${below%"${below##*[![:space:]]}"}"
+  [ -n "$above" ] && [ -n "$below" ] || return 1
+  [ "${#above}" = "${#below}" ] || return 1
+  [ -z "${above//─/}" ] || return 1
+  [ -z "${below//─/}" ] || return 1
+  return 0
+}
+
 # fm_tmux_composer_state classification contract:
 # A row is structural only when its first or last non-whitespace character is a
 # composer edge. A complete box has matching border families and bounded top and
@@ -357,6 +382,14 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   fi
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) \
     || { printf 'unknown'; return 0; }
+  # No corner-anchored box, but the cursor row may still be a rule-delimited
+  # composer (see fm_tmux_find_rule_composer). That structure is the harness's
+  # own composer, so classify the row as bordered and let a bare prompt glyph
+  # read as empty instead of as a dead shell.
+  if fm_tmux_find_rule_composer "$cy" "$plain"; then
+    fm_tmux_composer_row_state "$raw" 1 0
+    return 0
+  fi
   if fm_tmux_row_has_composer_edge "$(printf '%s\n' "$raw" | fm_composer_strip_ansi)"; then
     printf 'unknown'
     return 0

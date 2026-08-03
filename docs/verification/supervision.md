@@ -73,6 +73,7 @@ Each pass polled `state/<id>.busy-state` while a real turn ran.
 | Codex | codex-cli 0.145.0 | None usable | See below; classifies `unknown codex-unverified`. |
 | Kimi (standalone) | not installed | None usable | No binary on `PATH`, so the gate stays closed and it classifies `unknown kimi-unverified`. |
 | Grok | 0.2.112 | Isolated rendered-tail fallback | Retained unconverted; the approved audit could not credit a live structured-lifecycle run. |
+| agy | Antigravity CLI 1.1.10 | None usable | Verified 2026-08-03; classifies `unknown agy-unverified`. See the agy adapter section below for why its rendered footer was rejected. |
 
 Codex was probed two ways, both refused:
 
@@ -273,3 +274,133 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+## agy adapter verification
+
+The agy (Antigravity CLI) adapter was verified end to end on 2026-08-03 against `agy 1.1.10`, authenticated as a Google AI Pro account.
+All probes ran on a private tmux socket (`tmux -L fmagy`) and in throwaway `HOME` and firstmate-home directories, so no fleet endpoint was touched.
+
+### Prompt delivery: a trailing positional prompt is silently dropped
+
+```sh
+agy --dangerously-skip-permissions 'Reply with exactly the word POSITIONAL_READ and nothing else.'
+```
+
+After the workspace trust dialog was accepted, agy rendered its normal banner (`Antigravity CLI 1.1.10`, account, `Gemini 3.6 Flash (High)`, workspace path) and an EMPTY composer.
+The prompt was never delivered, nothing was printed about it, and the process stayed healthy.
+
+```sh
+agy --dangerously-skip-permissions -i 'Reply with exactly the word PROMPT_INTERACTIVE_READ and nothing else.'
+```
+
+The same session echoed `> Reply with exactly the word PROMPT_INTERACTIVE_READ and nothing else.` as a real user message, answered `PROMPT_INTERACTIVE_READ`, and returned to an interactive composer.
+`-i` is therefore the only delivery form firstmate may use.
+
+### End-to-end proof that a spawned crewmate READ its brief
+
+A scout brief was scaffolded into a throwaway firstmate home and its `{TASK}` replaced with a secret that existed nowhere else, then spawned through `fm-spawn`'s raw-launch escape hatch:
+
+```sh
+FM_HOME="$H" FM_BACKEND=tmux bin/fm-spawn.sh agy-trial "$H/projects/agyprobe" --scout \
+  'agy --dangerously-skip-permissions -i "$(cat __BRIEF__)"'
+```
+
+`fm-spawn` recorded `harness=agy`, the worker showed the trust dialog, `bin/fm-send.sh <window> --key Enter` accepted it, and the worker then appended to the status file named only inside its brief:
+
+```
+done: brief-read-proof secret=ORCHID-7734-VELVET sum=7735
+```
+
+The secret and the computed sum are both unavailable to a worker that never received the brief, so this is comprehension rather than a successful launch.
+
+### Autonomy flag overrides agy's own permission model
+
+The captain profile could not be used as the control: its `~/.gemini/antigravity-cli/settings.json` sets `toolPermission: "always-proceed"`, and without any autonomy flag agy still ran `xxd f.txt`, a command absent from its `permissions.allow`.
+The A/B therefore ran in an isolated `HOME` containing only `antigravity-oauth-token` and a settings file.
+
+Control, no flag, agy's default permission posture:
+
+```
+Requesting permission for:
+   xxd g.txt
+Do you want to proceed?
+> 1. Yes
+  ...
+  4. No
+```
+
+Treatment, identical profile and command, with `--dangerously-skip-permissions`: the command ran with no dialog and returned `TREAT_RAN` plus the file contents.
+Repeated with an explicit `permissions.allow` of `command(ls)` and `command(pwd)`, which does not contain the command: still no dialog, `EXPLICIT_TREAT_RAN` plus contents.
+An unrecognized `toolPermission` value is rejected at launch with a blocking `⚠ Settings Error ... invalid settings: toolPermission: unrecognized value "always-ask"` dialog, so a malformed settings file wedges a worker before it reads its brief.
+
+### Launch-profile flags fail loudly
+
+```
+$ agy --effort xhigh -p "hi"
+Error: invalid model selection (--model "" --effort "xhigh"): invalid --effort "xhigh" (valid: low, medium, high)
+$ agy --model bogus-model-xyz -p "hi"
+Error: invalid model selection (--model "bogus-model-xyz" --effort ""): model bogus-model-xyz is not recognized as a known model or custom model in settings
+$ agy --model gemini-3.6-flash-low --effort low -p "Reply exactly: FLAGS_OK"
+FLAGS_OK
+```
+
+`agy models` lists the account's model ids one per line.
+
+### Why the rendered footer is not a busy source
+
+`esc to cancel` replaces the idle `? for shortcuts` while a model turn runs.
+It is not sufficient, because agy backgrounds a long shell command after roughly five seconds and hands the model back:
+
+```
+--- t=9s  footer --- esc to cancel
+--- t=18s footer --- esc to cancel        ● [13:38:33] sleep 45; echo SLOWDONE running
+--- t=27s footer --- ? for shortcuts      ● [13:38:33] sleep 45; echo SLOWDONE running
+--- t=36s footer --- ? for shortcuts      ● [13:38:33] sleep 45; echo SLOWDONE running
+```
+
+The footer reported idle for the last two thirds of a `sleep 45` that had not finished, so a rendered-tail source built on it would report idle during genuine work.
+The right-hand status does show `N task(s) · /tasks` while background tasks are outstanding.
+`fm_busy_agy_verified` therefore stays closed and agy classifies `unknown agy-unverified`.
+
+### Composer structure
+
+With the composer idle, `#{cursor_y}` was 47 and the surrounding rows were:
+
+```
+line47: len=200 pure U+2500
+line48: len=1   '>'
+line49: len=200 pure U+2500
+line50: '? for shortcuts ... Gemini 3.6 Flash · high'
+```
+
+There are no corner glyphs, so `fm_tmux_find_composer_box` finds no box and the bare `>` would otherwise hit the shell-prompt-glyph rule and read as a dead shell.
+`fm_tmux_find_rule_composer` requires two non-empty, equal-width, pure-U+2500 rows around the cursor row before treating it as bordered.
+The task strip agy draws while background work is outstanding is a separate rule-delimited region below the composer, and detection is cursor-anchored, so it does not shift the read.
+
+### Skill roots
+
+Probe skills were planted in four locations and the slash popup queried for each:
+
+| Location | Discovered |
+| --- | --- |
+| `<worktree>/.agents/skills/<name>/SKILL.md` | yes |
+| `<worktree>/.claude/skills/<name>/SKILL.md` | no |
+| `<worktree>/.gemini/skills/<name>/SKILL.md` | no |
+| `~/.gemini/config/skills/<name>/` | yes |
+| `~/.claude/skills/` and `~/.agents/skills/` | no |
+
+`/no-mistakes` returns `No matches`, so an agy crewmate must drive a validation run through natural language and the `no-mistakes axi` CLI rather than the slash command.
+
+### Other observed facts
+
+`pane_current_command` is the exact name `agy` when launched as the pane's own command.
+Children receive `ANTIGRAVITY_AGENT=1`, `ANTIGRAVITY_CONVERSATION_ID`, and `ANTIGRAVITY_LS_ADDRESS`; agy sets no `CLAUDECODE`.
+`/exit` exits and prints `Resume with -c (or command below): agy --conversation=<id>`.
+A CSAT survey (`How's the CLI experience so far? [1] Good [2] Fine [3] Bad [0] Skip`) appeared after a completed turn and blocked the worker until `0` was sent.
+`/usage` shows weekly and five-hour quota per model group (the Gemini group read 95% weekly remaining at verification time); it is TUI-only, and agy exposes no scriptable capacity surface, which is why agy must be a single non-array crew-dispatch profile.
+
+Deterministic entry point:
+
+```sh
+tests/fm-agy-harness.test.sh
+```

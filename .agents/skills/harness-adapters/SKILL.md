@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, and agy.
 user-invocable: false
 metadata:
   internal: true
@@ -127,6 +127,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
+| agy | `--model <model>` | `--effort <low\|medium\|high>` | Verified 2026-08-03 on Antigravity CLI 1.1.10. Both flags validate LOUDLY and refuse to launch on a bad value (`invalid --effort "xhigh" (valid: low, medium, high)`; an unknown model prints the accepted list), so neither is ever silently dropped. The ceiling is `high`, so firstmate omits `xhigh` and `max`. Model ids also carry their own effort suffix (`gemini-3.6-flash-high`), and a suffixed model plus an explicit `--effort` is accepted together. |
 
 The concrete `harness` field owns adapter identity independently of the model provider: `harness=pi` with `model=xai/grok-*` is Pi using xAI, not `harness=grok`, and does not require Grok CLI login; `harness=grok` remains the standalone Grok Build CLI adapter.
 No script resolves that split for you: establish which credential store a tuple reads from the discovery surfaces below plus `quota-axi auth --json`'s per-provider sources, and show that reasoning rather than inferring it from a harness, model, or source name.
@@ -144,6 +145,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | pi / pi-signed | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
+| agy | Run `agy models`, which prints one model id per line for the current account. |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
@@ -163,6 +165,10 @@ Natural language is acceptable if uncertain.
 - pi and pi-signed: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) handles this through the structural composer reader; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
 - kimi: `/<skill>`, for example `/no-mistakes`.
+- agy: `/<skill>` opens a slash-autocomplete popup whose footer reads `enter Select`, so it carries the same Enter-swallow hazard as codex's `$` and grok's `/` popups.
+  agy's skill roots are NOT the shared ones: it discovers PROJECT skills from `<worktree>/.agents/skills/<name>/SKILL.md` and USER skills from `~/.gemini/config/skills/`, and reads neither `.claude/skills` nor `.gemini/skills` in a project nor `~/.claude/skills` / `~/.agents/skills` at user level (all four verified live by planting probe skills).
+  The practical consequence is that firstmate's own `.agents/skills/` ARE visible to an agy crewmate working in the firstmate repo, but the user-level `no-mistakes` skill is NOT: `/no-mistakes` returns `No matches`.
+  Drive a no-mistakes run on agy with natural language plus the `no-mistakes axi` CLI, exactly as the opencode and pi adapters do, rather than assuming the slash command exists.
 
 ## Submission acknowledgement hazards
 
@@ -397,3 +403,61 @@ The delivery-only spinner match covers the full moon-phase glyph set rather than
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal remains a wake notification; standalone Kimi has no busy-state source until one is live-verified.
+
+## agy (VERIFIED 2026-08-03, Antigravity CLI 1.1.10)
+
+Google's Antigravity CLI, launched as the executable `agy` from `PATH`.
+For its supported model and effort axes, see the [launch-profile-axes table](#launch-profile-axes).
+
+| Fact | Value |
+|---|---|
+| Binary | `agy` from `PATH`. `pane_current_command` reports the exact name `agy`, which is what the tmux agent-liveness classifier matches. |
+| Launch | `agy --dangerously-skip-permissions -i "<brief>"`. The brief MUST ride `-i`/`--prompt-interactive`. |
+| Busy state | Unknown until a semantic source is live-verified, gated by `fm_busy_agy_verified`. The rendered footer is deliberately not a state source; see the false-idle hazard below. |
+| Exit command | `/exit` (alias `quit`). On exit agy prints `Resume with -c (or command below):` followed by the exact resume command. |
+| Interrupt | Single Escape; the footer shows `esc to cancel` while a model turn is running. |
+| Skill invocation | `/<skill>`, with agy's own skill roots - see the skill-invocation section above. |
+| Autonomy | `--dangerously-skip-permissions`. |
+| Env marker | `ANTIGRAVITY_AGENT=1`, set for child/tool processes. agy sets no `CLAUDECODE` of its own, so the marker is unambiguous. Children also receive `ANTIGRAVITY_CONVERSATION_ID` and an `ANTIGRAVITY_LS_ADDRESS` language-server endpoint. |
+| Resume | `agy -c` / `--continue` for the most recent conversation in the cwd, or `agy --conversation=<id>` for an exact one. |
+| Composer | A bare `>` on the cursor row between two full-width U+2500 rules, with NO corner glyphs and no placeholder or ghost text. |
+
+**THE LANDMINE: a trailing positional prompt is silently dropped.**
+`agy --dangerously-skip-permissions '<brief>'` launches a completely healthy-looking interactive TUI with an EMPTY composer and never delivers the prompt.
+Nothing errors and the exit status stays 0, so the result is indistinguishable from every other quiet-worker failure mode: alive pane, idle composer, no status appended, eventual `stale:`.
+Firstmate's claude, codex, grok, and pi templates all put the encoded brief last as a positional argument, so porting any of them naively to agy produces exactly this silent failure.
+`-i` is the fix: it delivers the prompt, echoes it as a real user message, answers it, and leaves the session interactive for later steers.
+Verified both ways, and then verified end to end by a real spawned agy crewmate that reported a secret only its brief contained.
+
+**Autonomy really does override agy's own permission model, proven by A/B.**
+agy carries a `permissions.allow` command list in `~/.gemini/antigravity-cli/settings.json`, so the flag had to be demonstrated rather than assumed.
+Do not run that A/B against a live captain profile: a `toolPermission` of `always-proceed` there auto-approves everything and masks the flag entirely, which is exactly how an autonomy flag that silently failed to apply would look.
+Verified in an isolated `HOME` holding only the credential and a settings file: without the flag agy raised `Requesting permission for: xxd g.txt / Do you want to proceed?`, and with the flag the identical command in the identical profile ran with no dialog, both under agy's default posture and under an explicit `permissions.allow` of `command(ls), command(pwd)` that did not contain the command.
+`always-ask` is not a valid `toolPermission` value; agy validates that file and blocks at launch with a `Settings Error` dialog on an unrecognized one, so a malformed settings file wedges a worker before it ever reads its brief.
+
+**Two post-launch dialogs, neither dismissed by the autonomy flag.**
+First, a per-workspace trust gate: `Do you trust the contents of this project?` with `> Yes, I trust this folder`.
+It appears on every fresh pooled worktree because agy keys trust on the exact path in `settings.json`'s `trustedWorkspaces`, so a rotating worktree pool hits it on essentially every spawn.
+Accept it with Enter from an active firstmate session, exactly like claude and codex, then confirm the brief started processing.
+Second, an occasional CSAT survey, `How's the CLI experience so far?` with `[1] Good [2] Fine [3] Bad [0] Skip`, observed appearing after a completed turn; send `0` to dismiss it.
+Both block the worker while showing an otherwise healthy pane.
+
+**False idle while a shell command runs in the background.**
+agy backgrounds a long shell command after roughly five seconds (`WaitMsBeforeAsync: 5000`) and hands the model back.
+Observed live with `sleep 45`: the footer showed `esc to cancel` for the first seconds, then reverted to the idle `? for shortcuts` while the task line `● [13:38:33] sleep 45; echo SLOWDONE running` was still present and the command had not finished.
+So `esc to cancel` brackets a model turn but NOT the work, and any rendered-tail busy source built on it would report idle during genuine work.
+The right-hand status does carry `N task(s) · /tasks` while background tasks are outstanding, which is the honest signal if a future verification wants one.
+
+**Composer structure and why the shared reader needed a change.**
+agy's composer is not a corner-drawn box, so `fm_tmux_find_composer_box` never finds one and the bare `>` would fall through to the shell-prompt-glyph rule and classify as a dead shell - every healthy idle agy worker misread.
+`fm_tmux_find_rule_composer` in `bin/fm-tmux-lib.sh` closes that: it requires the cursor row to sit between two non-empty, equal-width, pure-U+2500 rows before treating the row as bordered.
+The task strip agy draws below the composer is its own separate rule-delimited region, and the composer detection is cursor-anchored, so an outstanding background task does not shift what gets read.
+
+**Capacity is real but not scriptable.**
+agy exposes no capacity flag or subcommand and caches nothing readable on disk, and `quota-axi` implements no Antigravity provider, so agy must be a single non-array crew-dispatch profile; it can never be a candidate in an array that the completion-aware selector has to compare.
+It does expose an interactive `/usage` (quota) slash command showing weekly and five-hour windows per model group, which is useful to a human but is TUI-only and not machine-readable.
+agy authenticates from `~/.gemini/antigravity-cli/antigravity-oauth-token` (keys `token` and `auth_method`), which is live and refreshed.
+Do NOT key anything on `~/.gemini/oauth_creds.json`: that file belongs to the separate Gemini CLI and expired 2026-06-11, so reading it would wrongly conclude agy is dead.
+
+agy has no turn-end hook surface wired, so it produces no per-turn wake signal and firstmate falls back to stale-pane detection for an agy crewmate.
+A fresh agy profile also requires interactive onboarding (colour scheme, then a Terms of Service screen with a data-collection consent checkbox), so agy is not usable from a clean sandboxed profile without a human first, though a normal spawn inherits the already-onboarded home.
