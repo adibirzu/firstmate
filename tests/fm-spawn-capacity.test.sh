@@ -165,7 +165,9 @@ test_crewmate_spawn_refuses_when_saturated() {
   rec=$(make_case crewmate "$id")
   read_case_record "$rec"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR")
+  # A ship spawn now requires an explicit --mode and --yolo; the capacity refusal
+  # must fire regardless, so pass both rather than letting an arg check mask it.
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 1 "$status" "a crewmate spawn must be declined on a machine that is out of memory"
   assert_contains "$out" "refusing to start ship task $id" "refusal did not name the declined crewmate work"
@@ -209,7 +211,7 @@ test_spawn_proceeds_when_the_machine_has_headroom() {
   rec=$(make_case headroom "$id")
   read_case_record "$rec"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "a spawn on a machine with memory to spare must proceed"
   assert_contains "$out" "spawned $id harness=claude" "the healthy-machine spawn did not report success"
@@ -226,7 +228,7 @@ test_refusal_states_measured_and_wanted_values() {
   rec=$(make_case legible "$id")
   read_case_record "$rec"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR") || true
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off) || true
 
   # Every signal is named with both its real measurement and its limit, so the
   # operator can see the actual numbers and decide whether to override.
@@ -269,7 +271,7 @@ test_refusal_leaves_live_work_untouched() {
   meta_before=$(cat "$HOME_DIR/state/$live_id.meta")
   status_before=$(cat "$HOME_DIR/state/$live_id.status")
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 1 "$status" "the out-of-memory spawn must be declined"
 
@@ -301,7 +303,7 @@ spawn_under() {
   id="capacity-signal-$name"
   rec=$(make_case "signal-$name" "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$@" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$@" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code "$want" "$status" "the $name case did not reach the expected decision"
   printf '%s\n' "$out"
@@ -355,7 +357,7 @@ test_operator_can_opt_into_a_load_limit() {
   printf 'load_per_core_max = 4\n' > "$HOME_DIR/config/spawn-capacity"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
-    FM_CAPACITY_LOAD1=299.00 -- "$id" "$PROJ_DIR")
+    FM_CAPACITY_LOAD1=299.00 -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 1 "$status" "an explicit load ceiling must be able to decline a spawn"
   assert_contains "$out" "no headroom left on load" "the opted-in load ceiling did not decline the spawn"
@@ -402,7 +404,7 @@ test_operator_can_opt_into_allowing_unknown_signals() {
   printf 'on_unknown = allow\n' > "$HOME_DIR/config/spawn-capacity"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
-    FM_CAPACITY_SWAP_USED_MB=unknown -- "$id" "$PROJ_DIR")
+    FM_CAPACITY_SWAP_USED_MB=unknown -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "on_unknown = allow must let an unmeasurable signal through"
   assert_contains "$out" "spawned $id" "the opted-in spawn did not proceed"
@@ -432,7 +434,7 @@ max_memory_pressure = warn
 max_fleet_memory_pct = 90
 EOF
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "raised limits must admit a spawn the defaults declined"
   assert_contains "$out" "spawned $id" "the spawn did not proceed under raised limits"
@@ -446,7 +448,7 @@ test_operator_can_switch_the_guard_off() {
   read_case_record "$rec"
   printf 'mode = off\n' > "$HOME_DIR/config/spawn-capacity"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "mode = off must admit the spawn"
   assert_contains "$out" "spawned $id" "the spawn did not proceed with the guard switched off"
@@ -460,7 +462,7 @@ test_malformed_settings_refuse_rather_than_silently_defaulting() {
   read_case_record "$rec"
   printf 'max_swap_used_pct = plenty\n' > "$HOME_DIR/config/spawn-capacity"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" -- "$id" "$PROJ_DIR")
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
   status=$?
   expect_code 1 "$status" "malformed settings must refuse, not quietly fall back to defaults"
   assert_contains "$out" "max_swap_used_pct must be an integer 0-100 or off" \
