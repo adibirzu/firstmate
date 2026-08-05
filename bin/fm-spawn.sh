@@ -332,7 +332,12 @@ fi
 # firstmate's per-task decision, so they are required and closed-set validated
 # here rather than resolved from the project registry. Scouts deliver a report
 # and record no delivery posture; secondmate spawns hardcode theirs.
-if [ "$KIND" = ship ]; then
+# A --reuse-worktree relaunch is a runtime handoff of an EXISTING task, so its
+# delivery contract is already recorded in state/<id>.meta and is inherited
+# below rather than re-resolved here. Demanding the flags again would force the
+# caller to restate a decision the task already carries, and a wrong restatement
+# would silently rewrite the recorded contract mid-task.
+if [ "$KIND" = ship ] && [ "$REUSE_WORKTREE" != 1 ]; then
   [ "$MODE_SET" -eq 1 ] || {
     echo "error: ship spawns require --mode <no-mistakes|direct-PR|local-only>; resolve it at intake from the captain's instruction and the project's registered posture in data/projects.md" >&2
     exit 1
@@ -2159,13 +2164,18 @@ fi
 # carrier, and this host only delivers it. The validated --traceparent value
 # then IS the decision, so the enablement snapshot handed to the new Secondmate
 # agrees with the carrier it receives exactly as on the local path.
+# Runtime handoff must not rewrite delivery posture; keep the recorded values.
+# This is independent of trace context below: a handoff still resolves its own
+# carrier, so the two must not share one if/elif chain or a reuse spawn would
+# skip trace resolution entirely and launch with an unset SPAWN_TRACE_EFFECTIVE.
+if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_PRESERVE_MODE" ]; then
+  MODE=$REUSE_PRESERVE_MODE
+  YOLO=${REUSE_PRESERVE_YOLO:-off}
+fi
+
 if [ "$TRACEPARENT_SET" -eq 1 ]; then
   SPAWN_TRACE_EFFECTIVE=on
   SPAWN_TRACEPARENT=$TRACEPARENT_ARG
-elif [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_PRESERVE_MODE" ]; then
-  # Runtime handoff must not rewrite delivery posture; keep the recorded values.
-  MODE=$REUSE_PRESERVE_MODE
-  YOLO=${REUSE_PRESERVE_YOLO:-off}
 else
   SPAWN_TRACE_EFFECTIVE=$(fm_trace_context_session_effective "$STATE/.trace-context-effective")
   if [ "$SPAWN_TRACE_EFFECTIVE" = on ]; then
