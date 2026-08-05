@@ -339,13 +339,13 @@ test_selected_provider_is_persisted_and_native_identity_is_enforced() {
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness pi --provider claude --model anthropic/example)
   status=$?
   expect_code 0 "$status" "explicit selected provider should be persisted for a non-native route"
   assert_grep "provider=claude" "$HOME_DIR/state/$id.meta" "meta missing selected routing provider"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     profile-provider-mismatch-z13a "$PROJ_DIR" --harness codex --provider claude)
   status=$?
   expect_code 1 "$status" "native provider mismatch must refuse before spawn"
@@ -386,7 +386,7 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   launch=$(cat "$LAUNCH_LOG")
   [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
 
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     profile-raw-provider-z15 "$PROJ_DIR" "custom-agent --flag" --provider claude)
   status=$?
   expect_code 1 "$status" "raw launch commands must reject subscription routing providers"
