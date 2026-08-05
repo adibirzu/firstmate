@@ -15,8 +15,9 @@
 # herdr-verification-p2.md "Task container shape", refined by
 # docs/herdr-backend.md "Default task container shape"): ONE herdr workspace PER
 # FIRSTMATE HOME (the primary, and each secondmate, gets its own), ONE herdr TAB
-# per task inside its home's workspace. An optional, default-off presentation
-# flag creates a disposable workspace for a clean fresh task instead. That
+# per task inside its home's workspace. The default-on presentation projection
+# creates a disposable workspace for a clean fresh task instead unless the home
+# opts out. That
 # workspace is a non-authoritative visual projection containing only the normal
 # task pane. Its random token and mutable label never authorize lookup,
 # adoption, reuse, closure, deletion, task ownership, or endpoint selection.
@@ -108,8 +109,8 @@ FM_BACKEND_HERDR_ESCALATED_PREFIX=".herdr-escalated-"
 # at a seeded secondmate home's root, containing exactly that secondmate's id.
 # The primary firstmate home never carries this marker.
 FM_BACKEND_HERDR_SECONDMATE_MARKER=".fm-secondmate-home"
-# The default-off presentation projection is intentionally separate from the
-# authoritative task endpoint record.
+# The presentation projection is intentionally separate from the authoritative
+# task endpoint record.
 # A per-task journal lives under state/ as <id>.herdr-presentation.
 # Version 1 records only the attempted projection's random correlator.
 # Version 2 additionally binds the successful projection's exact home,
@@ -118,7 +119,50 @@ FM_BACKEND_HERDR_SECONDMATE_MARKER=".fm-secondmate-home"
 # No send, capture, Treehouse, or general task-ownership path reads it.
 FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX=".herdr-presentation"
 
-# fm_backend_herdr_berth_suffix: the "-<berth>" tail a primary home's workspace
+# The config item a home writes to opt OUT of the projection.
+FM_BACKEND_HERDR_PRESENTATION_CONFIG="herdr-presentation-spaces"
+
+# fm_backend_herdr_presentation_enabled <config-dir>: true when this home's
+# children should be projected into disposable one-task workspaces
+# (docs/herdr-backend.md "Presentation spaces" owns the full contract).
+# Projection is ON by default, so an absent config file enables it; a home opts
+# out by writing "off". Values are read with the whole-file whitespace-stripped
+# convention the other scalar config items already use (config/backlog-backend,
+# config/crew-harness), plus case folding. An empty file is the historical
+# presence-based opt-in form and still means on, so no home that had the
+# projection enabled can be turned off by the default flip. An unrecognized
+# value warns and keeps the default rather than failing a spawn over a purely
+# visual setting, so a typo is visible instead of silently disabling anything.
+fm_backend_herdr_presentation_enabled() {  # <config-dir>
+  local config_dir=${1:-} file value
+  [ -n "$config_dir" ] || return 0
+  file="$config_dir/$FM_BACKEND_HERDR_PRESENTATION_CONFIG"
+  [ -f "$file" ] || return 0
+  value=$(tr -d '[:space:]' < "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]') || value=""
+  case "$value" in
+    off) return 1 ;;
+    ''|on) return 0 ;;
+    *)
+      echo "warning: $file: unrecognized value \"$value\"; herdr presentation spaces stay on (write \"off\" to opt out)" >&2
+      return 0
+      ;;
+  esac
+}
+
+# fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
+# label (docs/herdr-backend.md "Default task container shape"). The PRIMARY home (no
+# secondmate marker) resolves to the constant "firstmate", byte-identical to
+# every pre-existing task's recorded label - no forced migration. A SECONDMATE
+# home resolves to "2ndmate-<secondmate-id>", so its tasks land in their own
+# workspace, obviously distinguishable from the primary's (and from every
+# other secondmate's) in herdr's spaces sidebar. Read fresh from FM_HOME on
+# every call rather than cached at source time: FM_HOME is the home's own
+# durable identity, not env plumbing threaded through a call chain, so the
+# label is automatically stable across every respawn/recovery for the life of
+# that home. fm-spawn.sh briefly shadows FM_HOME to a secondmate's own home
+# when the PRIMARY spawns that secondmate (its own process's FM_HOME still
+# names the primary at that point) - see fm-spawn.sh's herdr case arm.
+# fm_backend_herdr_berth_suffix: the "@<berth>" tail a primary home's workspace
 # label carries while this session is berthed, or empty. FM_BERTH is exported by
 # bin/fm-berth.sh (which owns berth mechanics and validates the name); this
 # re-validates because FM_BERTH is an ordinary env var a hand-run session could
@@ -142,28 +186,6 @@ fm_backend_herdr_berth_suffix() {
   printf '@%s' "$berth"
 }
 
-# fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
-# label (docs/herdr-backend.md "Default task container shape"). An UNBERTHED
-# PRIMARY home (no secondmate marker) resolves to the constant "firstmate",
-# byte-identical to every pre-existing task's recorded label - no forced
-# migration. A BERTHED primary home appends its berth, "firstmate@<berth>", so
-# concurrent per-project sessions in one home occupy visibly separate spaces
-# instead of several identically-named "firstmate" workspaces nobody can tell
-# apart. The "@" separator is deliberate: "firstmate-<id>" is the LEGACY
-# secondmate workspace format (docs/herdr-backend.md "Watching and task
-# containers"), which is never migrated automatically, and herdr enforces no
-# label uniqueness - a dash would make a berth indistinguishable from one of
-# those leftovers. A SECONDMATE home resolves to "2ndmate-<secondmate-id>", so its tasks
-# land in their own workspace, obviously distinguishable from the primary's (and
-# from every other secondmate's) in herdr's spaces sidebar. The berth is
-# deliberately NOT applied to that arm: a berth is a slice of the PRIMARY's own
-# session, and fm-spawn.sh briefly shadows FM_HOME to a secondmate's own home
-# when the primary spawns that secondmate (its own process's FM_HOME still names
-# the primary at that point, and would still carry the primary's FM_BERTH) - see
-# fm-spawn.sh's herdr case arm. Read fresh from FM_HOME on every call rather than
-# cached at source time: FM_HOME is the home's own durable identity, not env
-# plumbing threaded through a call chain, so the label is automatically stable
-# across every respawn/recovery for the life of that home.
 fm_backend_herdr_workspace_label() {
   local marker="$FM_HOME/$FM_BACKEND_HERDR_SECONDMATE_MARKER" id
   if [ -f "$marker" ]; then
@@ -469,16 +491,16 @@ fm_backend_herdr_projection_workspace_label() {  # <task-id> <projection-id>
 # The path is never under any one home's state/ and secondmates never write the
 # primary home. Returns non-zero when the named session's socket cannot be
 # resolved unambiguously.
-#
-# The namespace carries the calling operator's uid because /tmp is shared by
-# every operator on the box and this directory is created mode 700. Without the
-# uid, the first operator to create it owns it outright and every other
-# operator's namespace validation fails permanently - losing them the
-# presentation lock, and with it the projected resume path in fm-spawn, for as
-# long as that directory survives. A Herdr session socket is per-operator
-# anyway, so scoping the namespace by uid costs no mutual exclusion: two
-# operators never share one session/socket identity to serialize against.
 fm_backend_herdr_presentation_lock_namespace() {
+  # The namespace carries the calling operator's uid because /tmp is shared by
+  # every operator on the box and this directory is created mode 700. Without
+  # the uid, the first operator to create it owns it outright and every other
+  # operator's ownership validation fails permanently - losing them the
+  # presentation lock, and with it the projected resume path in fm-spawn, for as
+  # long as that directory survives. This branch is what makes several operators
+  # on one host ordinary, so the collision it would otherwise cause is in scope
+  # here. A Herdr session socket is per-operator anyway, so scoping by uid costs
+  # no mutual exclusion: two operators never share one session/socket identity.
   local uid
   uid=$(id -u 2>/dev/null) || return 1
   case "$uid" in
@@ -2488,23 +2510,21 @@ fm_backend_herdr_strip_ansi() {  # <text>
 # that recognized only codex's bold-wrapped bare prompt and missed claude's own
 # dim ghost - the overnight away-mode injection wedge on the primary claude pane.
 FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
-# Known ghost/placeholder composer text: the shared fleet-wide default
-# (bin/fm-composer-lib.sh), extended there when another verified harness needs
-# its own idle placeholder recognized, so the four adapters cannot drift.
-FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
+# Known ghost/placeholder composer text. Extend this if another
+# herdr-verified harness needs its own idle placeholder recognized.
+FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-'^Type a message\.\.\.$'}
 # Known bare (unbordered) prompt glyphs a composer row may start with: ❯
-# (claude), › (codex), and → (cursor-agent) only. Generic shell-style glyphs
-# > $ % # are still recognized after a bordered composer row has already been
-# structurally found.
+# (claude) and › (codex) only. Generic shell-style glyphs > $ % # are still
+# recognized after a bordered composer row has already been structurally found.
 # Deliberately an alternation, not a `[...]` bracket expression: under a C/POSIX
 # locale (LC_CTYPE=C, the fleet default), grep's bracket expressions match
 # individual BYTES rather than whole multibyte characters, so `[❯›]` silently
-# decomposes into shared UTF-8 bytes and spuriously matches
+# decomposes into the shared leading UTF-8 byte (0xE2) and spuriously matches
 # ANY multibyte glyph in that range - including box-drawing corners like ╰,
 # misclassifying a bordered composer's bottom border row as the bare shape.
 # An alternation's branches are matched as whole literal byte sequences and
 # stay correct regardless of locale.
-FM_BACKEND_HERDR_BARE_PROMPT_RE=${FM_BACKEND_HERDR_BARE_PROMPT_RE:-'^(❯|›|→)'}
+FM_BACKEND_HERDR_BARE_PROMPT_RE=${FM_BACKEND_HERDR_BARE_PROMPT_RE:-'^(❯|›)'}
 # Pi allows a multi-line composer between its horizontal separators. Bound the
 # structural candidate so two unrelated transcript rules with an arbitrarily
 # large region between them can never be promoted into a composer.
@@ -2668,7 +2688,7 @@ EOF
   fi
   # Delegate the empty/pending/unknown decision to the shared owner. The bare
   # shape only ever starts with an AGENT glyph (FM_BACKEND_HERDR_BARE_PROMPT_RE
-  # is '^(❯|›|→)'), so a bare shell prompt never reaches here - it stays 'unknown'
+  # is '^(❯|›)'), so a bare shell prompt never reaches here - it stays 'unknown'
   # via the no-composer-row path above, exactly as before.
   fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_HERDR_IDLE_RE"
 }

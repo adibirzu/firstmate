@@ -134,7 +134,7 @@ run_settle_spawn() {
     FM_FAKE_TREEHOUSE_ARGSFILE="$TREEHOUSE_ARGSFILE" \
     FM_FAKE_SENDKEYS_LOG="$SENDKEYS_LOG" \
     PATH="$FAKEBIN_DIR:$PATH" \
-    "$SPAWN" "$id" "$PROJ_DIR" 2>&1
+    "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1
 }
 
 # A single stale first read (the exact incident) must not be accepted: the
