@@ -176,6 +176,12 @@ test_invalid_profiles_and_settings_are_actionable() {
   out=$(run_select "$home" "$fakebin" "$quota" settings.json '[{"harness":"codex"}]' 2>&1) || rc=$?
   expect_code 2 "$rc" "out-of-range reserve must be rejected"
   assert_contains "$out" "reservePercent must be an integer from 0 to 99" "settings error omitted its range"
+
+  printf '%s\n' '[]' > "$home/config/crew-dispatch.json"
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" root-array.json '[{"harness":"codex"}]' 2>&1) || rc=$?
+  expect_code 2 "$rc" "non-object dispatch config roots must be rejected"
+  assert_contains "$out" "config/crew-dispatch.json must be an object" "root schema refusal was unclear"
   pass "subscription route mismatches and malformed settings fail as configuration errors"
 }
 
