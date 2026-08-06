@@ -459,6 +459,28 @@ EOF
   return 0
 }
 
+# Print every decision key already CLOSED by a captain-held transfer in this
+# stream, one per line, first-seen order, de-duplicated. A key in this set has
+# SPENT its durable identity: fm-decision-hold.sh writes the transfer only after
+# binding that key to a verified backlog hold, so a LATER needs-decision or blocked
+# event carrying the same key is a DIFFERENT decision that the existing hold cannot
+# represent. Untagged events all carry the key "default", so this is the only
+# mechanical signal separating a second untagged decision from the first one. Pure
+# read of the file, no globals beyond the optional captain-held verb override.
+status_captain_held_keys() {  # <status-file>
+  local f=$1 line verb key held seen=''
+  [ -f "$f" ] || return 0
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    verb=$(status_line_verb "$line")
+    [ "$verb" = "$held" ] || continue
+    key=$(_fm_decision_key "$line") || continue
+    case " $seen " in *" $key "*) continue ;; esac
+    seen="$seen $key"
+    printf '%s\n' "$key"
+  done < "$f"
+}
+
 # Fold material routed-work phases in the same keyed event stream.
 # A working or declared-pause event opens or replaces one phase for its key.
 # A later done, failed, needs-decision, blocked, or resolved event carrying that
