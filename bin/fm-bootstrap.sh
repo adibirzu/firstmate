@@ -590,7 +590,7 @@ secondmate_liveness_sweep() {
     [ -n "$target" ] || target="$window"
     agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || agent_state=unreadable
     case "$harness" in
-      claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot) ;;
+      claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
       *)
         case "$agent_state" in dead|missing) agent_state=unverified-harness ;; esac
         ;;

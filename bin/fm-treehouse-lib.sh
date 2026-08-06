@@ -147,6 +147,15 @@ fm_treehouse_preserve_user_config() {
     GH_CONFIG_DIR="$xdg/gh"
     export GH_CONFIG_DIR
   fi
+  # Pinning is best effort, so the function must not report failure when there
+  # was nothing to pin. Callers chain it as
+  #   cd "$repo" && fm_treehouse_preserve_user_config && HOME=... treehouse get
+  # and a bash function returns the status of its last command - so a machine
+  # with no $XDG_CONFIG_HOME/gh directory, or one that already exports
+  # GH_CONFIG_DIR, left this returning 1 and short-circuited the lease. The
+  # spawn then died with "treehouse returned no usable worktree path (got '')",
+  # which reads like a treehouse fault and is not one.
+  return 0
 }
 
 fm_treehouse_with_pool_home() {  # <repo-dir> <command> [arg...]

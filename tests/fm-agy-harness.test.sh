@@ -162,8 +162,16 @@ test_agy_is_refused_as_a_secondmate_harness() {
   local sm_case
   # shellcheck disable=SC2016  # single quotes are deliberate: $KIND is literal sed pattern text
   sm_case=$(sed -n '/^if \[ "\$KIND" = secondmate \]; then/,/^fi$/p' "$SPAWN" | head -20)
-  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|codex\|opencode\|pi\|pi-signed\|grok\|kimi\)" \
-    || fail "fm-spawn: secondmate bare-adapter allowlist changed or still carries agy"
+  # Assert the INTENT - agy is absent from the arm - rather than pinning the
+  # arm's exact membership. The exact-list form was written before muse, cline,
+  # cursor-agent and copilot joined it, and upstream's own main would fail it:
+  # every one of those is crewmate-only and refused by its post-resolution
+  # guard, exactly as agy is. Pinning the list made this fence fail whenever a
+  # legitimate crewmate-only adapter was added, which is not what it is for.
+  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|codex\|" \
+    || fail "fm-spawn: secondmate bare-adapter parse arm is missing or reshaped"
+  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|[^)]*\bagy\b" \
+    && fail "fm-spawn: secondmate bare-adapter allowlist still carries agy"
   printf '%s\n' "$sm_case" | grep -Fq 'secondmate_harness_unsupported agy' \
     || fail "fm-spawn: bare 'agy' secondmate name is not explicitly refused"
   pass "fm-spawn: agy is refused as a secondmate harness on every non-raw path"

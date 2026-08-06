@@ -92,11 +92,9 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
-#   overrides it for this spawn (either kind). A non-flag string containing
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
-#   overrides it for this spawn (either kind); agy is crewmate-only and a
-#   --secondmate spawn refuses it. A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse|agy)
+#   overrides it for this spawn (either kind); agy and muse are crewmate-only and
+#   a --secondmate spawn refuses them. A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
 #   refuses before endpoint creation when it is unavailable; it never falls back to pi.
@@ -1223,7 +1221,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot|agy)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac

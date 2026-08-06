@@ -119,7 +119,9 @@ make_spawn_case() {
   id="muse-$name-x1"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" \
     "$home/xdgconfig" "$home/xdgdata"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  # A ship brief records its delivery contract; fm-spawn warns on stderr when
+  # one does not, and these cases assert on stderr. Scaffold the real shape.
+  printf 'brief\nDelivery contract: mode=no-mistakes yolo=off\n' > "$home/data/$id/brief.md"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$id"
