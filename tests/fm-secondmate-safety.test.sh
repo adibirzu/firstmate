@@ -265,6 +265,11 @@ EOF
   pass "home seed validation rejects nested home routes"
 }
 
+treehouse_home_for_verb() {
+  awk -F '\t' -v verb="$2" '$1==verb { print $2; exit }' "$1"
+}
+
+
 test_home_seed_uses_treehouse_acquired_home() {
   local home acquired acquired_abs fakebin log lease homelog out expected_pool recorded_pool
   home="$TMP_ROOT/dash-home"
