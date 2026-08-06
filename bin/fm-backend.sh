@@ -319,6 +319,15 @@ fm_backend_required_tools() {  # <backend>
   esac
 }
 
+# Source the shared timeout helpers on demand. Kept lazy so the common backend
+# paths do not pay for a library only the orca identity probe needs.
+fm_backend_source_timeout_lib() {
+  [ -z "${FM_TIMEOUT_LIB_SOURCED:-}" ] || return 0
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$FM_BACKEND_LIB_DIR/fm-timeout-lib.sh" || return 1
+  FM_TIMEOUT_LIB_SOURCED=1
+}
+
 fm_backend_required_tool_available() {  # <backend> <tool>
   local backend=$1 tool=$2 required
   required=$(fm_backend_required_tools "$backend") || return 1
@@ -327,6 +336,26 @@ fm_backend_required_tool_available() {  # <backend> <tool>
     cmux:cmux)
       fm_backend_source cmux >/dev/null 2>&1 || return 1
       fm_backend_cmux_bin >/dev/null 2>&1
+      ;;
+    orca:orca)
+      # `orca` is not a unique name. On Linux it is overwhelmingly the GNOME
+      # screen reader (/usr/bin/orca, package `orca`), and a bare presence check
+      # accepts it - reporting the toolchain complete on a machine with no Orca
+      # app at all, then failing later with an error about starting Orca.
+      #
+      # Identity is settled by asking, not by the name: the Orca app answers
+      # `status` and the screen reader does not (it prints "The following are
+      # not valid: status --json" and exits non-zero once it cannot reach a
+      # desktop). The call is time-bounded because on a Linux DESKTOP the
+      # screen reader does not exit - it launches, starts speaking, and never
+      # returns - and an unbounded probe here would hang the caller.
+      command -v orca >/dev/null 2>&1 || return 1
+      fm_backend_source_timeout_lib 2>/dev/null || true
+      if command -v fm_run_timed >/dev/null 2>&1; then
+        fm_run_timed "${FM_BACKEND_ORCA_PROBE_TIMEOUT:-10}" orca status --json >/dev/null 2>&1
+      else
+        orca status --json >/dev/null 2>&1
+      fi
       ;;
     *) command -v "$tool" >/dev/null 2>&1 ;;
   esac
