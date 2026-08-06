@@ -180,7 +180,7 @@ fm_composer_strip_ghost() {
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
 FM_COMPOSER_IDLE_RE_DEFAULT='^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
-FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→]'
+FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 # fm_composer_classify_content: the single shared composer-content verdict.
 #   <bordered> 1 when <content> came from a genuine agent-composer container (a
@@ -231,7 +231,7 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   # Strip a leading prompt glyph, then re-judge the remainder.
   case "$content" in
     '❯ '*|'› '*|'→ '*|'⟩ '*|'> '*|'$ '*|'% '*|'# '*) content=${content#??} ;;
-    '❯'*|'›'*|'→'|'⟩'*|'>'*|'$'*|'%'*|'#'*) content=${content#?} ;;
+    '❯'*|'›'*|'→'*|'⟩'*|'>'*|'$'*|'%'*|'#'*) content=${content#?} ;;
   esac
   content="${content#"${content%%[![:space:]]*}"}"
   content="${content%"${content##*[![:space:]]}"}"
