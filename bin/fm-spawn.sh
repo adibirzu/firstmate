@@ -123,6 +123,13 @@
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
+#   Every kind - crewmate, scout, and secondmate - is admitted by the
+#   machine-capacity guard first (bin/fm-capacity-lib.sh, settings in
+#   config/spawn-capacity): it reads live free memory, swap in use, kernel memory
+#   pressure, and the memory the fleet's own process trees hold, and refuses a
+#   spawn when the machine has no headroom, printing what it measured against
+#   what it wanted. It only declines NEW work and never touches anything already
+#   running.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -223,6 +230,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-treehouse-lib.sh
@@ -826,6 +835,14 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
 fi
 ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+# Machine-capacity guard (bin/fm-capacity-lib.sh). Every kind of direct report -
+# crewmate, scout, and secondmate - passes through here, in every home, so this
+# one call is the whole fleet's admission control. It runs before the task lock
+# and before any backend, worktree, or metadata mutation, so a refusal leaves
+# nothing half-created. It reads machine state and declines; it never touches
+# work that is already running. A batch re-execs this script per pair, so each
+# pair is admitted against the machine as the previous pair left it.
+fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   echo "error: another spawn is already creating task $ID" >&2

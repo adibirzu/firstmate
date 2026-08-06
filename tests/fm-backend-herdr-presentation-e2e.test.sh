@@ -270,6 +270,10 @@ export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 # than machine speed. The product default is unchanged for real teardowns.
 export FM_HERDR_PRESENTATION_LOCK_RETRIES=600
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 # This suite runs against its own isolated lab session, so a Herdr pane

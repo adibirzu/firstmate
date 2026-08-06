@@ -54,6 +54,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-berth.sh`            | Print opt-in per-project session-berth environments and lock status                  |
 | `fm-name.sh`             | Derive a stable readable crew name from a task id                                    |
 | `fm-treehouse-lib.sh`    | Shared per-project worktree-pool placement and the worktree/object-store same-filesystem invariant |
+| `fm-capacity.sh`         | Report live machine headroom and what a spawn attempted now would decide             |
+| `fm-capacity-lib.sh`     | Memory-first machine-capacity probes and the spawn-admission decision                |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer-content classification for all backends          |

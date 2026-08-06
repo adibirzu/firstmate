@@ -170,6 +170,43 @@ An inherited `data/captain-shared.md` counts in a secondmate's total but remains
 The internal `/stow` skill curates only the editable local files in that case and reports the primary-owned shared file as a concrete exception if it alone exceeds the budget.
 The helper's header owns exact parsing, publication, and report output mechanics.
 
+## Machine capacity (config/spawn-capacity)
+
+Every spawn - crewmate, scout, and secondmate, in every home - is admitted only when the machine still has room for another agent.
+`bin/fm-spawn.sh` consults the check before it creates anything, and a refusal prints each signal with the value it measured and the value it wanted.
+Run `bin/fm-capacity.sh` at any time to see the same reading without attempting a spawn, or `bin/fm-capacity.sh check` for a script-friendly exit status.
+
+The check declines new work and nothing else.
+It never stops, reaps, or deprioritizes an agent that is already running, because the memory that saturates the machine belongs to workers that are already alive and stopping them would destroy unlanded work.
+Restoring headroom on a machine that is already saturated is the operator's decision, not this check's.
+
+Memory is the binding signal, not CPU.
+On the machine this was built against, saturation looked like 155 MB unused of 24 GB with 20 GB of swap consumed after 25.7 million swapouts, while CPU usage was about 4.6 of 10 cores and no agent appeared among the top consumers at all.
+The 1m load average of 299 measured processes frozen on paging rather than work queued for CPU, so load average is reported as corroborating context and never refuses unless the operator asks it to.
+The fleet's own footprint is measured over whole process trees rather than counted, because a paused agent keeps every page it allocated - which is why pausing whole domains during that incident did not drain the machine.
+That footprint is read machine-wide rather than per home: every verified harness process tree counts, including agents in other firstmate homes and your own interactive agent session, because they all hold the same physical memory.
+
+Settings live in the local gitignored `config/spawn-capacity`, one `key = value` per line, with `#` comments and blank lines allowed.
+An absent file means the defaults below.
+A malformed file refuses with the parse error rather than reverting to defaults, because a mistyped limit that silently reads as the default is indistinguishable from no limit at all.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `enforce` | `off` disables the check entirely |
+| `min_free_memory_mb` | `1024` | memory a new agent must be able to claim without forcing the machine to reclaim or page |
+| `max_swap_used_pct` | `50` | share of configured swap already in use; `off` to skip |
+| `max_memory_pressure` | `normal` | worst kernel memory-pressure verdict still admitted: `normal`, `warn`, or `ignore` |
+| `max_fleet_memory_pct` | `40` | share of installed memory the fleet's own process trees may hold, leaving the majority of the machine to its operator; `off` to skip |
+| `load_per_core_max` | `off` | 1m load average per logical core, off by default because load also rises on paging stalls; set a positive decimal to make it a limit |
+| `on_unknown` | `refuse` | what to do when a signal cannot be read at all |
+
+A signal that cannot be read is reported as an explicit unknown and never passes silently.
+By default an unreadable signal refuses, because the check could not prove there is headroom and the operator keeping his machine outranks fleet throughput; set `on_unknown = allow` on a platform where a signal is genuinely unavailable.
+A machine with no swap configured is a real answer rather than an unknown, and is admitted on that signal.
+
+This setting is primary-authoritative and is propagated to every registered secondmate home through the inherited-local-material contract in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), because every home shares one physical machine and its admission limits must be one setting rather than a per-home guess.
+`bin/fm-capacity-lib.sh`'s header owns the exact probe, parsing, and decision mechanics, including the per-signal measurement overrides used for tests and diagnosis.
+
 ## Secondmate routes (data/secondmates.md)
 
 Persistent secondmate routes live locally in `data/secondmates.md`.
@@ -356,7 +393,7 @@ When a running home advances and its loaded instruction surface (`AGENTS.md`, `b
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a registered secondmate is skipped or its relaunch fails; already-live and successfully relaunched secondmates are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `backend`, `herdr-presentation-spaces`, `startup-memory-budget`, `trace-context`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
+It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `backend`, `herdr-presentation-spaces`, `startup-memory-budget`, `trace-context`, `spawn-capacity`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
 When an allowlisted config item changes for an already-running local home, it sends the literal-content reread pointer described in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md); unchanged allowlisted config sends no pointer unless a previous delivery is pending.
 A changed remote home instead receives one durably recorded marked re-read instruction after the allowlisted bytes have transferred because primary-local generation paths are not meaningful on another host.
 The locked bootstrap inheritance pass uses the same placement-specific behavior; see `secondmate-provisioning` for the single contract owner.

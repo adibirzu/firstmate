@@ -43,6 +43,10 @@ command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (requi
 
 export FM_GATE_REFUSE_BYPASS=1
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 # This suite asserts that HERDR_ENV=1 alone selects the backend, and it runs

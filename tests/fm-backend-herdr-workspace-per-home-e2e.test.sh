@@ -51,6 +51,10 @@ command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
 command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (required by fm-spawn.sh)"; exit 0; }
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 

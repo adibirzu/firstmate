@@ -75,6 +75,7 @@ config/herdr-presentation-spaces  optional presence flag for Herdr's default-off
 config/berths   optional presence flag enabling per-project session berths, so one home can run one concurrent session per project; LOCAL, gitignored; see docs/configuration.md "Session berths" and bin/fm-berth.sh --help
 config/herdr-presentation-spaces  optional "off" opt-out from Herdr's default-on disposable single-task visual projection; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Presentation spaces"
 config/trace-context  optional presence flag enabling default-off native W3C trace-context propagation to spawned agents; LOCAL, gitignored; inherited by secondmate homes; see docs/configuration.md "Trace context propagation" and docs/trace-context.md
+config/spawn-capacity  optional machine-capacity limits every spawn is admitted against; LOCAL, gitignored; primary-authoritative and inherited by secondmate homes because every home shares one physical machine; see docs/configuration.md "Machine capacity (config/spawn-capacity)"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
@@ -280,6 +281,8 @@ Write the task-specific brief under section 11 before spawning.
 
 Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in section 4.
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
+Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `docs/configuration.md` "Machine capacity (config/spawn-capacity)" owns that contract.
+A capacity refusal is a stop-and-report result: relay the measured numbers to the captain and never loosen or disable those limits without the captain's explicit word, and never restore headroom by stopping live work, which hard rule 3 forbids.
 After spawning, confirm the worker is processing the brief, handle any trust dialog through `harness-adapters`, and record ship or scout work as under way.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
