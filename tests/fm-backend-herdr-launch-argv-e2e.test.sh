@@ -63,6 +63,7 @@ recorded_cwd() {  # <label>
 }
 
 marker_process_present() {
+  # shellcheck disable=SC2009
   ps -eo command | grep -Fq -- "--add-dir $MARKER"
 }
 
