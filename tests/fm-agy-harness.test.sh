@@ -233,7 +233,7 @@ test_agy_env_marker_takes_precedence() {
   local out
   out=$(ANTIGRAVITY_AGENT=1 CLAUDECODE=1 "$HARNESS")
   [ "$out" = agy ] || fail "expected harness=agy when both markers set, got '$out'"
-  out=$(ANTIGRAVITY_AGENT= CLAUDECODE=1 "$HARNESS")
+  out=$(ANTIGRAVITY_AGENT='' CLAUDECODE=1 "$HARNESS")
   [ "$out" = claude ] || fail "expected harness=claude when only CLAUDECODE set, got '$out'"
   pass "fm-harness: ANTIGRAVITY_AGENT beats CLAUDECODE; CLAUDECODE alone still means claude"
 }
