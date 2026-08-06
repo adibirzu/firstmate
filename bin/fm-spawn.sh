@@ -94,8 +94,11 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
 #   overrides it for this spawn (either kind). A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
+#   overrides it for this spawn (either kind); agy is crewmate-only and a
+#   --secondmate spawn refuses it. A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
 #   refuses before endpoint creation when it is unavailable; it never falls back to pi.
@@ -833,8 +836,22 @@ PROJ=
 ARG3=
 FIRSTMATE_HOME=
 
+# agy is verified for CREWMATE launches only. backends/tmux.sh carries no agy
+# agent-process liveness signature, so a live agy secondmate classifies
+# `ambiguous` on every session start and its liveness can never be confirmed.
+# Refusing the combination loudly - here for the bare name, and again after
+# HARNESS resolution for --harness and the config/secondmate-harness chain -
+# keeps the supervisor from owning an endpoint it cannot read.
+secondmate_harness_unsupported() {  # <harness>
+  echo "error: $1 is verified for crewmate launches only and is not wired as a secondmate harness (no backends/tmux.sh agent-process liveness signature); choose a secondmate-verified harness" >&2
+  exit 1
+}
+
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
+    agy)
+      secondmate_harness_unsupported agy
+      ;;
     ''|claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot)
       ARG3=${POS[1]:-}
       ;;
@@ -950,6 +967,23 @@ launch_template() {
     # operator's home (see copilot_wait_for_trust_clear below for the full
     # reasoning).
     copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # agy (Antigravity CLI 1.1.9): `-i` / `--prompt-interactive` seeds AND
+    # auto-runs the first turn once the project-trust dialog is cleared
+    # (verified via tmux capture; docs/verification/agy-adapter.md) - the same
+    # argv-seed pattern as claude/codex/grok, not kimi's bare-launch+inject.
+    # `--dangerously-skip-permissions` is the autonomy flag (auto-approves tool
+    # permission prompts); it does NOT bypass the project trust dialog.
+    # MODEL/EFFORT: base model ids require `--effort`; effort-baked model ids
+    # (`…-low|medium|high`) work alone; matching baked+effort works; conflict
+    # fails closed. Preferred form is base model + `--effort`. Ceiling is
+    # `high`, so firstmate's shared xhigh/max clamp down to it. Turn-end is
+    # observed from the pane (`esc to cancel` clears; idle footer is
+    # `? for shortcuts`). CREWMATE ONLY - see the secondmate refusal above.
+    # PROJECT TRUST: fresh worktrees show "Do you trust the contents of this
+    # project?". fm-spawn clears it with a post-launch keystroke gate only
+    # (one Enter; past-trust first). No pre-seed of the operator-global
+    # settings file. See docs/verification/agy-adapter.md.
+    agy) printf '%s' 'agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -1016,6 +1050,17 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+# Crewmate-only harnesses reach HARNESS through three paths: the bare name
+# (rejected above), --harness=, and the config/secondmate-harness fallback
+# chain. This is the single point all three pass through. The raw launch
+# command stays exempt - it is the explicit unverified-adapter escape hatch.
+if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then
+  case "$ARG3" in
+    *' '*) ;;
+    *) secondmate_harness_unsupported agy ;;
+  esac
+fi
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
@@ -1157,14 +1202,14 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2
+  local harness=$1 effort=$2 model=${3:-}
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
     claude)
@@ -1231,6 +1276,29 @@ effort_flag_for_harness() {
       case "$effort" in
         low|medium|high|xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
         max) printf -- '--reasoning-effort %s ' "$(shell_quote ultra)" ;;
+      esac
+      ;;
+    agy)
+      # agy 1.1.9 accepts --effort low|medium|high (verified via --help and live
+      # conflict probes; docs/verification/agy-adapter.md "Model and effort").
+      # Both axes are real, so the out-of-range shared tiers resolve against the
+      # MODEL ID rather than blindly: a BASE model id (no -low/-medium/-high
+      # suffix) REQUIRES --effort, so dropping the flag makes agy exit with
+      # "requires --effort" - xhigh/max therefore cap at agy's `high` ceiling.
+      # A model id that already BAKES an effort suffix launches on its own (P1),
+      # and a non-matching --effort fails closed (P4), so the cap is withheld
+      # there and the baked tier stands. firstmate never rewrites model ids.
+      # In-range low|medium|high always pass through: a matching baked id is
+      # accepted, and a conflicting one is the captain's own explicit pairing,
+      # which agy rejects with a clear error rather than silently reinterpreting.
+      case "$effort" in
+        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+        xhigh|max)
+          case "$model" in
+            *-low|*-medium|*-high) ;;
+            *) printf -- '--effort high ' ;;
+          esac
+          ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1974,6 +2042,59 @@ kimi_spawn_fail() {  # <detail>
 cursor_capture() {
   fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
 }
+agy_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+agy_trust_dialog_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Do you trust the contents of this project?'
+}
+
+# Past the trust gate: EITHER the busy footer (`esc to cancel`, the seeded `-i`
+# prompt auto-runs the instant trust clears) OR the idle shortcuts bar
+# (`? for shortcuts`). Deliberately NOT "Antigravity CLI" - that literal also
+# appears inside the trust dialog ("Antigravity CLI requires permission..."),
+# so it would report past-trust while the dialog is still up. The `\?` in the
+# idle alternate is mandatory - unescaped it is an ERE quantifier.
+agy_pane_is_past_trust() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts'
+}
+
+# Clear agy's blocking project-trust dialog. There is deliberately NO pre-seed
+# of ~/.gemini/antigravity-cli/settings.json trustedWorkspaces: that file also
+# holds permission allow-lists, has no delegated writer, and is operator-global.
+# A single Enter accepts the default-focus "Yes, I trust this folder" (verified
+# to persist the path and proceed); answered at most once so a repeat Enter
+# after trust clears does not land as stray composer text. See
+# docs/verification/agy-adapter.md "Trust / permission gate".
+#
+# The POSITIVE past-trust anchor is tested FIRST: an Ink TUI need not scrub the
+# accepted trust frame from the terminal scrollback, and if agy leaves it there
+# the dialog literal stays in every 120-line capture forever. Dialog-first would
+# then never reach the success branch. Past-trust anchors ('esc to cancel',
+# '? for shortcuts') do not appear in the dialog body.
+agy_wait_for_trust_clear() {
+  local pane i=0 max=${FM_AGY_TRUST_POLLS:-60} interval=${FM_AGY_POLL_INTERVAL:-0.5} answered=0
+  while [ "$i" -lt "$max" ]; do
+    pane=$(agy_capture)
+    if agy_pane_is_past_trust "$pane"; then
+      return 0
+    elif agy_trust_dialog_present "$pane"; then
+      if [ "$answered" -eq 0 ]; then
+        spawn_send_key "$T" Enter
+        answered=1
+      fi
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+agy_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
 
 cursor_trust_dialog_present() {  # <plain-pane-capture>
   printf '%s\n' "$1" | grep -Fq 'Workspace Trust Required'
@@ -2555,7 +2676,7 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
@@ -2627,6 +2748,12 @@ fi
 if [ "$HARNESS" = copilot ]; then
   if ! copilot_wait_for_trust_clear; then
     copilot_spawn_fail "copilot did not clear the folder-trust gate to a ready or working pane"
+    exit 1
+  fi
+fi
+if [ "$HARNESS" = agy ]; then
+  if ! agy_wait_for_trust_clear; then
+    agy_spawn_fail "agy did not clear the project-trust gate to a ready or working pane"
     exit 1
   fi
 fi

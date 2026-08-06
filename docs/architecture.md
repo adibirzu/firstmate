@@ -173,6 +173,9 @@ Secondmate launches are exempt because they resolve the secondmate harness and a
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 After Firstmate filters a matched array for task fit and reasoning class, `fm-dispatch-select.mjs` uses fresh metered evidence, excludes provider cooldowns, and rotates eligible subscriptions through private home-local state.
 Static and explicit dispatch keep spawn launch compatible across claude, codex, grok, pi, opencode, kimi, muse, cline, cursor-agent, and copilot, while automatic subscription arrays exclude Kimi and preserve the selected profile for later audit.
+That keeps spawn launch compatible across claude, codex, grok, pi, opencode, kimi, and agy while preserving the requested profile for later audit.
+agy is the one exception to plain omission: its ceiling is `high`, so `xhigh` and `max` are resolved against the requested model id rather than simply dropped.
+A base model id refuses to launch without `--effort`, so those tiers clamp down to `--effort high`; an id that already bakes a `-low`, `-medium`, or `-high` suffix launches on its own and rejects a non-matching `--effort`, so the flag is withheld and the baked tier stands.
 
 ## Optional secondmates
 

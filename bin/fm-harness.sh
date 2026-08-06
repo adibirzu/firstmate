@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|muse|agy|cline|cursor-agent|copilot
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -35,6 +35,13 @@ detect_own() {
   # multiplexer's stored environment can silently misidentify one of them before
   # ancestry is consulted. This is a precedence hazard, not evidence that
   # CLAUDECODE inheritance into a kimi child was observed; it was not observed.
+  # agy (Antigravity CLI) sets ANTIGRAVITY_AGENT=1 for its child/tool
+  # processes (verified 2026-08-01 on agy 1.1.9 via a clean env -i tool
+  # child write; docs/verification/agy-adapter.md). MUST be checked before
+  # CLAUDECODE: some interactive environments also surface CLAUDECODE=1 in
+  # the process tree, and that marker would otherwise misidentify an agy
+  # worker as claude.
+  [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   if [ "${PI_CODING_AGENT:-}" = "true" ]; then
     if [ "${FM_PI_HARNESS:-}" = pi-signed ]; then echo pi-signed; else echo pi; fi
@@ -68,6 +75,7 @@ detect_own() {
       *cline*) echo cline; return ;;
       *cursor*) echo cursor-agent; return ;;
       *copilot*) echo copilot; return ;;
+      agy) echo agy; return ;;
       kimi) echo kimi; return ;;
       # muse's installed launcher ~/.local/bin/muse execs ~/.local/bin/muse-bin-<version>
       # (verified in the published launcher, muse 0.1.0-R708.1), so the live process
@@ -88,6 +96,10 @@ detect_own() {
           *cline*) echo cline; return ;;
           *cursor*) echo cursor-agent; return ;;
           *copilot*) echo copilot; return ;;
+          # Anchored like the pi arm below: a bare `agy` substring also occurs
+          # inside ordinary words ("legacy"), so only a whole argv token or a
+          # trailing path segment counts.
+          *" agy "*|*"/agy "*|*/agy) echo agy; return ;;
           *" pi "*|*/pi) echo pi; return ;;
         esac ;;
       MainThread)

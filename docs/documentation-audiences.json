@@ -362,6 +362,7 @@
     },
     {
       "path": "docs/verification/cursor-agent-adapter.md",
+      "path": "docs/verification/agy-adapter.md",
       "audience": "maintainer-verification"
     },
     {

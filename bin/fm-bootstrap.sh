@@ -904,7 +904,7 @@ crew_dispatch_validate() {
     return 0
   fi
   err=$(jq -r '
-    def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","muse","cline","cursor-agent","copilot"] | index($h);
+    def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","muse","agy","cline","cursor-agent","copilot"] | index($h);
     def effort_ok($h; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
@@ -916,6 +916,8 @@ crew_dispatch_validate() {
       elif $h == "cline" then (["low","medium","high","xhigh"] | index($e))
       elif $h == "copilot" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "opencode" or $h == "kimi" or $h == "cursor-agent" then false
+      elif $h == "agy" then (["low","medium","high"] | index($e))
+      elif $h == "opencode" or $h == "kimi" then false
       else true
       end;
     def profiles($value):
