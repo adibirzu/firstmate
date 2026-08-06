@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--provider <claude|codex|grok>] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -16,13 +16,19 @@
 #   loud one-line deviation notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
+#        fm-spawn.sh <task-id> --reuse-worktree --harness <name> [--handoff-brief <path>] [--model ...] [--effort ...] [--backend ...]
+#   --reuse-worktree relaunches an existing ship/scout task in its recorded
+#   worktree without running treehouse get (or Orca worktree acquisition). It is
+#   the launch half of bin/fm-runtime-handoff.sh: same task id, same worktree,
+#   same branch, different or same harness. It refuses when meta, worktree, or
+#   endpoint ownership cannot be reconciled. --handoff-brief substitutes a
+#   launch-only prompt file while leaving data/<id>/brief.md untouched.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
-#   --provider records the subscription provider selected for a dispatch profile.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -31,18 +37,10 @@
 #   bin/fm-backend.sh's fm_backend_detect, with cmux fallback details in
 #   docs/cmux-backend.md),
 #   then tmux.
-#   For every backend except orca, firstmate leases the task worktree itself with
-#   `treehouse get --lease`, run under a HOME that puts the pool on the repo's own
-#   filesystem (bin/fm-treehouse-lib.sh owns why that HOME is the only lever), and
-#   then sends the pane a plain cd. The lease is durable, so fm-teardown.sh returning
-#   the worktree is what frees the pool slot; a spawn that fails before publishing
-#   state/<id>.meta returns its own lease.
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
-#   terminal, so ship/scout Orca spawns acquire no treehouse lease and firstmate
-#   cannot place their worktree - a split from the object store is reported, not
-#   refused; cmux is a session provider only, exactly like herdr/zellij, so it
-#   leases like the rest. An
+#   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
+#   session provider only, exactly like herdr/zellij, so it does. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
@@ -60,12 +58,9 @@
 #   outside herdr has no workspace to inherit and uses this home's own labeled
 #   workspace, which must then match exactly one. --secondmate is the deliberate
 #   exception: it stands up that secondmate home's own workspace.
-#   Herdr additionally uses a presentation-only layout by default when the
-#   selected client and running server meet the Herdr 0.8.0 floor. The local
-#   config/herdr-presentation-spaces file can say off to disable it or on to
-#   opt in below that floor; an empty file remains the historical opt-in form.
-#   A clean fresh task first writes state/<id>.herdr-presentation atomically,
-#   then creates a disposable
+#   Herdr additionally uses a default-on presentation-only layout unless the
+#   local config/herdr-presentation-spaces file says off. A clean fresh task first
+#   writes state/<id>.herdr-presentation atomically, then creates a disposable
 #   workspace containing only the ordinary task pane. A successful clean create
 #   upgrades its attempt journal with exact home, session, workspace, tab, pane,
 #   parent, and label bindings. On a same-identity restart, that complete binding
@@ -95,9 +90,8 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse|agy)
-#   overrides it for this spawn (either kind); agy and muse are crewmate-only and
-#   a --secondmate spawn refuses them. A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
+#   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
 #   refuses before endpoint creation when it is unavailable; it never falls back to pi.
@@ -122,17 +116,10 @@
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
-#   Every kind - crewmate, scout, and secondmate - is admitted by the
-#   machine-capacity guard first (bin/fm-capacity-lib.sh, settings in
-#   config/spawn-capacity): it reads live free memory, swap in use, kernel memory
-#   pressure, and the memory the fleet's own process trees hold, and refuses a
-#   spawn when the machine has no headroom, printing what it measured against
-#   what it wanted. It only declines NEW work and never touches anything already
-#   running.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--provider/--model/--effort/--backend/--mode/--yolo
+#   source of truth; shared --scout/--harness/--model/--effort/--backend/--mode/--yolo
 #   applies to every pair. A ship batch therefore carries one delivery contract, and each
 #   pair still checks it against its own brief; a batch spanning modes is two invocations.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
@@ -153,9 +140,6 @@
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
-# muse installs no hook at all - its plugin engine is off in the default build - so
-# it writes state/<id>.muse-session to bind the pane to muse's own session event
-# log; muse is crewmate/scout only and is refused for --secondmate.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
@@ -228,12 +212,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
-# shellcheck source=bin/fm-capacity-lib.sh
-. "$SCRIPT_DIR/fm-capacity-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
-# shellcheck source=bin/fm-treehouse-lib.sh
-. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
@@ -246,15 +226,15 @@ fm_refuse_if_gate_agent
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 HARNESS_ARG=
-PROVIDER=
 MODEL=
 EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+HANDOFF_BRIEF=
+REUSE_WORKTREE=0
 HARNESS_SET=0
-PROVIDER_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
@@ -270,13 +250,13 @@ for a in "$@"; do
     esac
     case "$want_value" in
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
-      provider) PROVIDER=$a; PROVIDER_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      handoff-brief) HANDOFF_BRIEF=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -285,10 +265,9 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --reuse-worktree) REUSE_WORKTREE=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
-    --provider) want_value=provider ;;
-    --provider=*) PROVIDER=${a#--provider=}; PROVIDER_SET=1 ;;
     --model) want_value=model ;;
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
@@ -301,12 +280,13 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --handoff-brief) want_value=handoff-brief ;;
+    --handoff-brief=*) HANDOFF_BRIEF=${a#--handoff-brief=} ;;
     *) POS+=("$a") ;;
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
-[ "$PROVIDER_SET" -eq 0 ] || [ -n "$PROVIDER" ] || { echo "error: --provider requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
@@ -326,14 +306,23 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
     exit 1
   }
 fi
+[ -z "$HANDOFF_BRIEF" ] || [ -f "$HANDOFF_BRIEF" ] || { echo "error: --handoff-brief is not a readable file: $HANDOFF_BRIEF" >&2; exit 1; }
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
-case "$PROVIDER" in
-  ''|claude|codex|grok) ;;
-  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
-esac
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --reuse-worktree cannot be combined with --secondmate" >&2
+    exit 1
+  fi
+  [ "$HARNESS_SET" -eq 1 ] || { echo "error: --reuse-worktree requires an explicit --harness" >&2; exit 1; }
+fi
+# --handoff-brief is only meaningful with --reuse-worktree (runtime handoff).
+if [ -n "$HANDOFF_BRIEF" ] && [ "$REUSE_WORKTREE" != 1 ]; then
+  echo "error: --handoff-brief requires --reuse-worktree" >&2
+  exit 1
+fi
 
 # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
 # firstmate's per-task decision, so they are required and closed-set validated
@@ -630,28 +619,38 @@ fi
 # recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
 # window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
 # so the default path's meta stays byte-identical.
+# --reuse-worktree is special: when --backend is omitted, keep the backend
+# already recorded for the task so a handoff does not silently move the
+# endpoint to a different session provider. That resolution runs after the
+# task id and meta are known (see reuse block below).
+BACKEND=
 if [ "$BACKEND_SET" -eq 1 ]; then
   BACKEND=$BACKEND_ARG
-else
+elif [ "$REUSE_WORKTREE" != 1 ]; then
   BACKEND=$(fm_backend_name)
 fi
-fm_backend_validate_spawn "$BACKEND" || exit 1
-fm_backend_source "$BACKEND" || exit 1
-if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
-  echo "error: backend=orca does not support --secondmate spawns yet" >&2
-  exit 1
-fi
-if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
-  echo "error: backend=cmux does not support --secondmate spawns yet" >&2
-  exit 1
-fi
-if [ "$BACKEND" = orca ]; then
-  fm_backend_orca_runtime_check || exit 1
+spawn_validate_backend() {
+  fm_backend_validate_spawn "$BACKEND" || return 1
+  fm_backend_source "$BACKEND" || return 1
+  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=orca does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = orca ]; then
+    fm_backend_orca_runtime_check || return 1
+  fi
+  return 0
+}
+if [ -n "$BACKEND" ]; then
+  spawn_validate_backend || exit 1
 fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -681,18 +680,12 @@ parse_orca_worktree_result() {
 }
 
 spawn_abort_cleanup() {
-  local status=$? herdr_pane_close_refused=0
-  # The projection pane close must run BEFORE the lease return below: under the
-  # leased flow the pane's top-level shell has cwd in the worktree, so
-  # `treehouse return --force` kills that shell and Herdr's last-pane cleanup
-  # destroys the workspace and steals focus before the exact-pane close could
-  # restore it (same ordering fm-teardown.sh enforces on the normal path).
+  local status=$?
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
       echo "warning: herdr presentation focus lock unavailable; retaining the projection journal and refusing concurrent abort cleanup" >&2
       HERDR_PROJECTION_ABORT_CLEANUP=0
-      herdr_pane_close_refused=1
     fi
   fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ]; then
@@ -705,23 +698,6 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
-  fi
-  # A treehouse lease is durable: unlike the old interactive `treehouse get`, the
-  # pool slot is NOT freed when the pane dies. If this spawn fails before the task
-  # exists in state/, teardown will never run for it, so the lease has to come back
-  # here or the slot is held with nothing to release it. The one exception is a
-  # refused pane close above: returning then would kill the still-live pane and
-  # steal focus, so the slot is left with the exact recovery command instead.
-  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
-    TREEHOUSE_LEASE_ABORT_CLEANUP=0
-    if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
-      if [ "$herdr_pane_close_refused" = 1 ]; then
-        echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
-      else
-        fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
-          || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
-      fi
-    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -805,7 +781,6 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   rc=0
   shared_args=()
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
-  [ -z "$PROVIDER" ] || shared_args+=(--provider "$PROVIDER")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
@@ -814,6 +789,10 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    echo "error: batch dispatch does not support --reuse-worktree; hand off one task at a time" >&2
+    exit 1
+  fi
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -831,16 +810,9 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   done
   exit "$rc"
 fi
-ID=${POS[0]}
+ID=${POS[0]:-}
+[ -n "$ID" ] || { echo "error: missing task id" >&2; exit 2; }
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
-# Machine-capacity guard (bin/fm-capacity-lib.sh). Every kind of direct report -
-# crewmate, scout, and secondmate - passes through here, in every home, so this
-# one call is the whole fleet's admission control. It runs before the task lock
-# and before any backend, worktree, or metadata mutation, so a refusal leaves
-# nothing half-created. It reads machine state and declines; it never touches
-# work that is already running. A batch re-execs this script per pair, so each
-# pair is admitted against the machine as the previous pair left it.
-fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   echo "error: another spawn is already creating task $ID" >&2
@@ -850,24 +822,65 @@ SPAWN_TASK_LOCK_HELD=1
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
+REUSE_META=
+REUSE_OLD_TARGET=
+REUSE_PRESERVE_MODE=
+REUSE_PRESERVE_YOLO=
 
-# agy is verified for CREWMATE launches only. backends/tmux.sh carries no agy
-# agent-process liveness signature, so a live agy secondmate classifies
-# `ambiguous` on every session start and its liveness can never be confirmed.
-# Refusing the combination loudly - here for the bare name, and again after
-# HARNESS resolution for --harness and the config/secondmate-harness chain -
-# keeps the supervisor from owning an endpoint it cannot read.
-secondmate_harness_unsupported() {  # <harness>
-  echo "error: $1 is verified for crewmate launches only and is not wired as a secondmate harness (no backends/tmux.sh agent-process liveness signature); choose a secondmate-verified harness" >&2
-  exit 1
-}
-
-if [ "$KIND" = secondmate ]; then
-  case "${POS[1]:-}" in
-    agy)
-      secondmate_harness_unsupported agy
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  if [ "${#POS[@]}" -ne 1 ]; then
+    echo "error: --reuse-worktree takes only <task-id> (project and worktree come from state/$ID.meta)" >&2
+    exit 1
+  fi
+  REUSE_META="$STATE/$ID.meta"
+  [ -f "$REUSE_META" ] || { echo "error: --reuse-worktree requires existing meta at $REUSE_META" >&2; exit 1; }
+  [ ! -L "$REUSE_META" ] || { echo "error: meta for $ID is a symlink; refusing reuse-worktree" >&2; exit 1; }
+  REUSE_KIND=$(fm_meta_get "$REUSE_META" kind)
+  case "$REUSE_KIND" in
+    ship|scout) KIND=$REUSE_KIND ;;
+    secondmate)
+      echo "error: --reuse-worktree does not support kind=secondmate" >&2
+      exit 1
       ;;
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot)
+    *)
+      echo "error: --reuse-worktree requires kind=ship or kind=scout in meta (got '${REUSE_KIND:-}')" >&2
+      exit 1
+      ;;
+  esac
+  PROJ=$(fm_meta_get "$REUSE_META" project)
+  WT_FROM_META=$(fm_meta_get "$REUSE_META" worktree)
+  REUSE_PRESERVE_MODE=$(fm_meta_get "$REUSE_META" mode)
+  REUSE_PRESERVE_YOLO=$(fm_meta_get "$REUSE_META" yolo)
+  [ -n "$PROJ" ] || { echo "error: meta for $ID is missing project=" >&2; exit 1; }
+  [ -n "$WT_FROM_META" ] || { echo "error: meta for $ID is missing worktree=" >&2; exit 1; }
+  [ -d "$PROJ" ] || { echo "error: recorded project for $ID does not exist: $PROJ" >&2; exit 1; }
+  [ -d "$WT_FROM_META" ] || { echo "error: recorded worktree for $ID does not exist: $WT_FROM_META" >&2; exit 1; }
+  if [ -z "$BACKEND" ]; then
+    BACKEND=$(fm_backend_of_meta "$REUSE_META")
+  fi
+  spawn_validate_backend || exit 1
+  if [ "$BACKEND" = orca ]; then
+    echo "error: --reuse-worktree does not support backend=orca yet (Orca owns worktree lifecycle; refuse rather than re-create a worktree)" >&2
+    exit 1
+  fi
+  REUSE_OLD_TARGET=$(fm_backend_target_of_meta "$REUSE_META")
+  if [ -n "$REUSE_OLD_TARGET" ]; then
+    case "$(fm_backend_agent_state "$BACKEND" "$REUSE_OLD_TARGET")" in
+      dead|missing) ;;
+      alive)
+        echo "error: existing endpoint for $ID is still alive; exit the agent (or use fm-runtime-handoff) before --reuse-worktree" >&2
+        exit 1
+        ;;
+      *)
+        echo "error: cannot reconcile existing endpoint ownership for $ID; refusing --reuse-worktree rather than guessing" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  ARG3=
+elif [ "$KIND" = secondmate ]; then
+  case "${POS[1]:-}" in
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -884,10 +897,15 @@ if [ "$KIND" = secondmate ]; then
       ;;
   esac
 else
-  PROJ=${POS[1]}
+  PROJ=${POS[1]:-}
   ARG3=${POS[2]:-}
+  [ -n "$PROJ" ] || { echo "error: missing project directory" >&2; exit 1; }
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+if [ -z "$BACKEND" ]; then
+  echo "error: internal: backend was not resolved before launch" >&2
+  exit 1
+fi
 
 # The verified launch command per adapter. The knowledge half of each adapter
 # (busy-state source, exit command, dialogs, quirks) lives in the harness-adapters skill.
@@ -928,112 +946,17 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # cline (Cline CLI 3.0.46): `-i --tui` opens the persistent interactive TUI and
-    # a positional prompt seeds AND auto-runs the first turn (verified via tmux
-    # capture; see docs/verification/cline-adapter.md). --auto-approve true keeps the
-    # unattended crewmate autonomous (the targeted equivalent of claude's
-    # --dangerously-skip-permissions; it is on by default but passed explicitly for
-    # version robustness). Turn-end is observed by the pane classifier (the braille
-    # "esc to cancel" spinner clears and the composer returns to its idle
-    # placeholder), so no launch-side turn-end placeholder is needed. Effort maps to
-    # --thinking (see the effort helper below), never --effort.
-    cline) printf '%s' 'cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # cursor-agent (Cursor CLI 2026.07): the default `agent` is a persistent interactive
-    # TUI; a positional prompt seeds AND auto-runs the first turn (verified via tmux
-    # capture) once the workspace is trusted. --force ("Run Everything") makes the
-    # crewmate autonomous (equivalent of claude's --dangerously-skip-permissions). Effort
-    # is a MODEL bracket param (e.g. 'claude-opus-4-8[effort=high]'), not a flag, so no
-    # __EFFORTFLAG__. WORKSPACE TRUST: interactive mode shows a blocking "Workspace Trust
-    # Required" dialog that --trust does NOT bypass (headless-only). fm-spawn clears it
-    # with both verified bypasses (harness-adapters skill +
-    # docs/verification/cursor-agent-adapter.md): the per-harness setup below pre-seeds
-    # ~/.cursor/projects/<slug>/.workspace-trusted before launch, and the post-launch
-    # readiness gate answers a residual dialog with `a` (covering the undocumented
-    # long-path slug variant), failing the spawn loudly instead of hanging on the dialog.
-    cursor-agent) printf '%s' 'cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # copilot (GitHub Copilot CLI 1.0.75): `-i <prompt>` ("Start interactive mode
-    # and automatically execute this prompt") seeds AND auto-runs the first turn
-    # once the folder-trust dialog is cleared (verified via tmux capture; see
-    # docs/verification/copilot-adapter.md) - the same argv-seed pattern as
-    # claude/codex/cline/cursor-agent, not kimi's bare-launch+inject. `--allow-all`
-    # (== --yolo; the non-jargon spelling is used for diff legibility) is the
-    # targeted equivalent of claude's --dangerously-skip-permissions. `--no-ask-user`
-    # additionally disables the ask_user tool: a live test with a deliberately
-    # underspecified brief did NOT stall without it, but it is included anyway as a
-    # zero-downside defensive flag - there is no attended human to answer ask_user
-    # in a supervised crewmate pane. Turn-end is observed by the pane classifier (the
-    # `Working.*esc interrupt` busy footer clears and the composer returns to its
-    # bare `❯` idle glyph), so no launch-side turn-end placeholder is needed. Effort
-    # maps to --reasoning-effort (see the effort helper below), accepting the full
-    # shared low|medium|high|xhigh|max vocabulary with no tier omitted.
-    # FOLDER TRUST: a genuinely fresh worktree is never on copilot's persistent
-    # allow-list, so the blocking "Confirm folder trust" dialog above appears on
-    # every launch into it, and no CLI flag bypasses it (--allow-all/--allow-all-*
-    # and the untested --add-dir were all probed and disproved - see
-    # docs/verification/copilot-adapter.md "Trust / permission gate"). fm-spawn
-    # clears it with a post-launch readiness gate ONLY: while the dialog is present,
-    # send a single default-focus Enter (session-scoped trust, "Yes"); once the pane
-    # reaches the busy footer or idle status bar, proceed; on budget exhaustion, fail
-    # the spawn loudly (copilot_spawn_fail). Deliberately NO pre-seed of that
-    # allow-list, unlike cursor-agent's per-project marker: copilot's only pre-seed
-    # target is a single shared, global, credential-bearing JSONC config file, with
-    # no delegated writer and no config-dir override to isolate it - the
-    # keystroke-only mechanism gets the same guarantee with zero writes to the
-    # operator's home (see copilot_wait_for_trust_clear below for the full
-    # reasoning).
-    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # agy (Antigravity CLI 1.1.9): `-i` / `--prompt-interactive` seeds AND
-    # auto-runs the first turn once the project-trust dialog is cleared
-    # (verified via tmux capture; docs/verification/agy-adapter.md) - the same
-    # argv-seed pattern as claude/codex/grok, not kimi's bare-launch+inject.
-    # `--dangerously-skip-permissions` is the autonomy flag (auto-approves tool
-    # permission prompts); it does NOT bypass the project trust dialog.
-    # MODEL/EFFORT: base model ids require `--effort`; effort-baked model ids
-    # (`…-low|medium|high`) work alone; matching baked+effort works; conflict
-    # fails closed. Preferred form is base model + `--effort`. Ceiling is
-    # `high`, so firstmate's shared xhigh/max clamp down to it. Turn-end is
-    # observed from the pane (`esc to cancel` clears; idle footer is
-    # `? for shortcuts`). CREWMATE ONLY - see the secondmate refusal above.
-    # PROJECT TRUST: fresh worktrees show "Do you trust the contents of this
-    # project?". fm-spawn clears it with a post-launch keystroke gate only
-    # (one Enter; past-trust first). No pre-seed of the operator-global
-    # settings file. See docs/verification/agy-adapter.md.
-    agy) printf '%s' 'agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
-    # muse (Muse Code): a positional prompt starts the supervised interactive
-    # session. --yolo is the single flag that makes a crewmate pane viable: muse
-    # ships approval prompts AND a filesystem/network sandbox ON by default
-    # (--sandbox-network defaults to proxy-only, which refuses outright without a
-    # managed proxy), and it gates a fresh workspace behind a trust dialog. One
-    # --yolo disables approval, disables the sandbox so git and network work, and
-    # trusts the workspace for the run, so no dialog appears on the fresh
-    # per-task worktree (verified, muse 0.1.0-R708.1).
-    # MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on is the privacy control:
-    # muse otherwise loads the OPERATOR's foreign personal rules from ~/.claude
-    # into every run and ships them to Meta-hosted inference, even under an
-    # isolated XDG_CONFIG_HOME. exec mode's --no-foreign-personal-context flag is
-    # NOT accepted by the interactive TUI (it exits with "unexpected argument"),
-    # so this env var is the only control that reaches a pane worker. Verified to
-    # drop the foreign rules_file context block while KEEPING the project's own
-    # AGENTS.md rules, which the crewmate contract depends on.
-    # muse's turn-end signal rides neither the launch command nor a hook: its
-    # plugin engine is off in the default build, so firstmate folds muse's own
-    # session event log instead (bin/fm-busy-lib.sh), bound by the sidecar
-    # written below. Nothing to place in the template for it.
-    # codex, opencode, and kimi are also markerless and share this inherited-marker hazard; changing their verified launch boundaries belongs in follow-up work.
-    muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
 
-RAW_LAUNCH=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
-    RAW_LAUNCH=1
     LAUNCH=$ARG3
     HARNESS=""
     for word in $LAUNCH; do
@@ -1068,44 +991,9 @@ case "$ARG3" in
     ;;
 esac
 
-# Crewmate-only harnesses reach HARNESS through three paths: the bare name
-# (rejected above), --harness=, and the config/secondmate-harness fallback
-# chain. This is the single point all three pass through. The raw launch
-# command stays exempt - it is the explicit unverified-adapter escape hatch.
-if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then
-  case "$ARG3" in
-    *' '*) ;;
-    *) secondmate_harness_unsupported agy ;;
-  esac
-fi
-
-if [ "$RAW_LAUNCH" = 1 ] && [ -n "$PROVIDER" ]; then
-  echo "error: raw launch commands cannot carry a subscription routing provider" >&2
-  exit 1
-fi
-
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
 esac
-
-case "$HARNESS" in
-  kimi)
-    [ -z "$PROVIDER" ] || { echo "error: Kimi cannot carry a subscription routing provider" >&2; exit 1; }
-    ;;
-  claude|codex|grok)
-    [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || { echo "error: native harness $HARNESS requires provider $HARNESS" >&2; exit 1; }
-    ;;
-esac
-# muse is verified as a CREWMATE/SCOUT adapter only. A secondmate is a firstmate
-# instance, so it needs a primary supervision protocol; muse has none, and its
-# Claude-compatible hook dialect explicitly rejects the model-reawakening and
-# asyncRewake handlers that firstmate's primary turn-end supervision is built on
-# (muse 0.1.0-R708.1). Refusing here keeps that gap loud instead of standing up a
-# secondmate whose supervision cycle could never be armed.
-if [ "$KIND" = secondmate ] && [ "$HARNESS" = muse ]; then
-  echo "error: muse is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-fi
 
 # pi-signed is an explicitly selected executable identity, not an alias that may
 # silently fall back to pi. Resolve it from PATH before creating an endpoint and
@@ -1171,67 +1059,18 @@ resolve_kimi_binary() {
   return 1
 }
 
-resolve_muse_binary() {
-  local candidate dir
-  candidate=$(command -v muse 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-      /*) printf '%s\n' "$candidate"; return 0 ;;
-      *)
-        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-        if [ -n "$dir" ]; then
-          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-          return 0
-        fi
-        ;;
-    esac
-  fi
-  echo "error: muse executable not found on PATH; install Muse Code or select a different verified harness" >&2
-  return 1
-}
-
-# muse_credential_present: 0 when a launched muse pane can reach its provider
-# without an interactive login. muse offers exactly two credential paths
-# (verified, muse 0.1.0-R708.1): the META_API_KEY environment variable, which
-# always takes priority, and a stored credential written by `muse auth set` or
-# `muse login` into <config>/muse/auth.json. This is a PREFLIGHT rather than a
-# rendered-screen check because an unauthenticated pane does not exit - it sits
-# on an OAuth device-code prompt ("Sign in at this page ... Waiting for
-# approval...") waiting for a human who is not there, which would look to
-# supervision like a wedged worker rather than a missing credential.
-muse_worker_meta_api_key_present() {
-  local session worker_env
-  [ "$BACKEND" = tmux ] || return 1
-  if [ -n "${TMUX:-}" ]; then
-    session=$(tmux display-message -p '#S' 2>/dev/null) || return 1
-  else
-    tmux has-session -t firstmate 2>/dev/null || return 1
-    session=firstmate
-  fi
-  worker_env=$(tmux show-environment -t "$session" META_API_KEY 2>/dev/null) || return 1
-  case "$worker_env" in
-    META_API_KEY=?*) return 0 ;;
-  esac
-  return 1
-}
-
-muse_credential_present() {
-  local auth=$1
-  [ -s "$auth" ] || muse_worker_meta_api_key_present
-}
-
 model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot|agy)
+    claude|codex|opencode|pi|pi-signed|grok|kimi)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
 }
 
 effort_flag_for_harness() {
-  local harness=$1 effort=$2 model=${3:-}
+  local harness=$1 effort=$2
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
   case "$harness" in
     claude)
@@ -1263,66 +1102,6 @@ effort_flag_for_harness() {
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
-    cline)
-      # cline 3.0.46 maps the reasoning-effort axis to --thinking, which accepts
-      # none|low|medium|high|xhigh (verified in `cline --help`; a live launch with
-      # `--thinking high` showed "(high)" in the model status bar). It has no `max`
-      # tier, so omit max rather than passing an unsupported value.
-      case "$effort" in
-        low|medium|high|xhigh) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
-      esac
-      ;;
-    copilot)
-      # copilot 1.0.75 accepts --effort, --reasoning-effort <level> with the
-      # FULLEST vocabulary of any adapter: none|minimal|low|medium|high|xhigh|max
-      # (verified via --help AND a zero-quota pre-flight validation probe:
-      # `--reasoning-effort bogus-tier` was rejected with exit 1 before any API
-      # call, listing exactly those seven choices). firstmate's shared axis
-      # (low|medium|high|xhigh|max) is a full subset, so all five tiers pass
-      # through - no tier needs omitting, unlike cline (no max) or codex/grok
-      # (lower ceilings). --reasoning-effort (long form) is used over the
-      # --effort alias for greppability, matching codex's spelling convention.
-      case "$effort" in
-        low|medium|high|xhigh|max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
-      esac
-      ;;
-    muse)
-      # muse 0.1.0-R708.1 --reasoning-effort accepts none|minimal|low|medium|
-      # high|xhigh|ultra and defaults to high, so low..xhigh map straight across.
-      # ultra is muse's max-CLASS level, so firstmate's max maps onto it - but
-      # only ever as an EXPLICIT captain choice, never as a fallback, because
-      # AGENTS.md section 4 forbids selecting max without captain preference and
-      # the omitted effort here leaves muse on its own high default. muse's extra
-      # none/minimal levels sit below firstmate's shared vocabulary and are
-      # deliberately unreachable rather than remapped onto low.
-      case "$effort" in
-        low|medium|high|xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
-        max) printf -- '--reasoning-effort %s ' "$(shell_quote ultra)" ;;
-      esac
-      ;;
-    agy)
-      # agy 1.1.9 accepts --effort low|medium|high (verified via --help and live
-      # conflict probes; docs/verification/agy-adapter.md "Model and effort").
-      # Both axes are real, so the out-of-range shared tiers resolve against the
-      # MODEL ID rather than blindly: a BASE model id (no -low/-medium/-high
-      # suffix) REQUIRES --effort, so dropping the flag makes agy exit with
-      # "requires --effort" - xhigh/max therefore cap at agy's `high` ceiling.
-      # A model id that already BAKES an effort suffix launches on its own (P1),
-      # and a non-matching --effort fails closed (P4), so the cap is withheld
-      # there and the baked tier stands. firstmate never rewrites model ids.
-      # In-range low|medium|high always pass through: a matching baked id is
-      # accepted, and a conflicting one is the captain's own explicit pairing,
-      # which agy rejects with a clear error rather than silently reinterpreting.
-      case "$effort" in
-        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
-        xhigh|max)
-          case "$model" in
-            *-low|*-medium|*-high) ;;
-            *) printf -- '--effort high ' ;;
-          esac
-          ;;
-      esac
-      ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
@@ -1330,26 +1109,6 @@ effort_flag_for_harness() {
     # task metadata but never reaches the launch command.
   esac
 }
-
-case "$LAUNCH" in
-  *__MUSEBIN__*)
-    MUSE_BIN=$(resolve_muse_binary) || exit 1
-    MUSE_CONFIG_HOME=$(resolve_directory_input XDG_CONFIG_HOME "${XDG_CONFIG_HOME:-${HOME:-}/.config}") || exit 1
-    MUSE_DATA_HOME=$(resolve_directory_input XDG_DATA_HOME "${XDG_DATA_HOME:-${HOME:-}/.local/share}") || exit 1
-    MUSE_AUTH_FILE="$MUSE_CONFIG_HOME/muse/auth.json"
-    if ! muse_credential_present "$MUSE_AUTH_FILE"; then
-      if [ -n "${META_API_KEY:-}" ]; then
-        echo "error: muse has no worker-reachable credential; META_API_KEY is set for fm-spawn but cannot be proven present in the $BACKEND worker environment. Store the fleet credential at '$MUSE_AUTH_FILE' with 'muse login' or 'muse auth set --api-key-stdin'. The secret will not be copied into the launch command." >&2
-      else
-        echo "error: muse has no worker-reachable credential; META_API_KEY cannot be proven present in the $BACKEND worker environment and '$MUSE_AUTH_FILE' is absent or empty. Store the fleet credential with 'muse login' or 'muse auth set --api-key-stdin'." >&2
-      fi
-      exit 1
-    fi
-    LAUNCH=${LAUNCH//__MUSEBIN__/$(shell_quote "$MUSE_BIN")}
-    LAUNCH=${LAUNCH//__MUSECONFIG__/$(shell_quote "$MUSE_CONFIG_HOME")}
-    LAUNCH=${LAUNCH//__MUSEDATA__/$(shell_quote "$MUSE_DATA_HOME")}
-    ;;
-esac
 
 case "$LAUNCH" in
   *__KIMIBIN__*)
@@ -1545,7 +1304,11 @@ if [ "$KIND" = secondmate ]; then
   fi
 else
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
-  WT=""
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    WT=$WT_FROM_META
+  else
+    WT=""
+  fi
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
@@ -1584,6 +1347,11 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+# Launch-only handoff prompt: feed the handoff file into the launch template
+# while leaving data/<id>/brief.md untouched on disk.
+if [ -n "$HANDOFF_BRIEF" ]; then
+  BRIEF=$HANDOFF_BRIEF
+fi
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -1632,21 +1400,6 @@ validate_spawn_worktree() {  # <source> <inspect-target>
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
-}
-
-# A worktree split from its object store cannot run the validation pipeline at
-# all: git blocks in read_gitfile_gently and `no-mistakes init`/`axi run` hang
-# forever (bin/fm-treehouse-lib.sh owns the full explanation). Refuse the spawn
-# instead of launching a crew that is guaranteed to wedge hours later, on the one
-# path firstmate places itself. An undeterminable answer is not a violation.
-assert_worktree_colocated() {  # <worktree> <pool-home>
-  local wt=$1 pool_home=$2 status=0
-  fm_treehouse_worktree_colocated "$wt" || status=$?
-  if [ "$status" = 1 ]; then
-    echo "error: worktree $wt (filesystem $FM_TREEHOUSE_WT_DEVICE) is on a different filesystem than its object store $FM_TREEHOUSE_STORE (filesystem $FM_TREEHOUSE_STORE_DEVICE); the validation pipeline would hang in that worktree, so refusing to launch. Firstmate selected pool root $pool_home/.treehouse; a treehouse.toml in the repo root overrides that." >&2
-    exit 1
-  fi
-  return 0
 }
 
 herdr_projection_meta_field_exact() {  # <meta> <key>
@@ -1766,7 +1519,7 @@ case "$BACKEND" in
     fi
     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
     HERDR_PROJECTED=0
-    if [ "$KIND" != secondmate ] && fm_backend_herdr_presentation_enabled "$CONFIG" "$STATE"; then
+    if [ "$KIND" != secondmate ] && fm_backend_herdr_presentation_enabled "$CONFIG"; then
       HERDR_SES=$(fm_backend_herdr_session)
       HERDR_PARENT_LABEL=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_workspace_label)
       if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; then
@@ -1816,9 +1569,6 @@ case "$BACKEND" in
         # live named-session socket before journal publication.
         if ! fm_backend_herdr_server_ensure "$HERDR_SES"; then
           echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
-        elif [ "${FM_BACKEND_HERDR_PRESENTATION_PREFERENCE:-default}" = default ] \
-          && ! fm_backend_herdr_presentation_default_supported "$STATE" "$HERDR_SES"; then
-          :
         elif spawn_herdr_presentation_order_lock_acquire "$HERDR_SES"; then
           # The projected child is placed and bound UNDER this launcher's exact
           # parent workspace. Its own herdr pane identity names that workspace
@@ -1950,16 +1700,6 @@ EOF
       exit 1
     fi
     validate_spawn_worktree "orca worktree create" "$W"
-    # Orca owns its own worktree placement - `orca worktree create` takes no root
-    # or path argument - so firstmate cannot put this one on the object store's
-    # filesystem the way it does for a treehouse pool. Report a split rather than
-    # refusing: the crew can still ship through direct-PR or local-only, and this
-    # is pre-existing Orca behavior, not something this spawn introduced.
-    ORCA_COLOCATED_STATUS=0
-    fm_treehouse_worktree_colocated "$WT" || ORCA_COLOCATED_STATUS=$?
-    if [ "$ORCA_COLOCATED_STATUS" = 1 ]; then
-      echo "warning: orca placed worktree $WT (filesystem $FM_TREEHOUSE_WT_DEVICE) on a different filesystem than its object store $FM_TREEHOUSE_STORE (filesystem $FM_TREEHOUSE_STORE_DEVICE); the no-mistakes validation pipeline will hang in that worktree. Use a delivery mode that does not run it, or configure Orca to place worktrees on the repo's filesystem." >&2
-    fi
     if [ -z "$ORCA_TERMINAL" ]; then
       ORCA_TERMINAL=$(fm_backend_orca_terminal_create "$ORCA_WORKTREE_ID" "$W") || exit 1
     fi
@@ -2064,259 +1804,83 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-cursor_capture() {
-  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
-}
-agy_capture() {
-  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
-}
-
-agy_trust_dialog_present() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Fq 'Do you trust the contents of this project?'
-}
-
-# Past the trust gate: EITHER the busy footer (`esc to cancel`, the seeded `-i`
-# prompt auto-runs the instant trust clears) OR the idle shortcuts bar
-# (`? for shortcuts`). Deliberately NOT "Antigravity CLI" - that literal also
-# appears inside the trust dialog ("Antigravity CLI requires permission..."),
-# so it would report past-trust while the dialog is still up. The `\?` in the
-# idle alternate is mandatory - unescaped it is an ERE quantifier.
-agy_pane_is_past_trust() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts'
-}
-
-# Clear agy's blocking project-trust dialog. There is deliberately NO pre-seed
-# of ~/.gemini/antigravity-cli/settings.json trustedWorkspaces: that file also
-# holds permission allow-lists, has no delegated writer, and is operator-global.
-# A single Enter accepts the default-focus "Yes, I trust this folder" (verified
-# to persist the path and proceed); answered at most once so a repeat Enter
-# after trust clears does not land as stray composer text. See
-# docs/verification/agy-adapter.md "Trust / permission gate".
-#
-# The POSITIVE past-trust anchor is tested FIRST: an Ink TUI need not scrub the
-# accepted trust frame from the terminal scrollback, and if agy leaves it there
-# the dialog literal stays in every 120-line capture forever. Dialog-first would
-# then never reach the success branch. Past-trust anchors ('esc to cancel',
-# '? for shortcuts') do not appear in the dialog body.
-agy_wait_for_trust_clear() {
-  local pane i=0 max=${FM_AGY_TRUST_POLLS:-60} interval=${FM_AGY_POLL_INTERVAL:-0.5} answered=0
-  while [ "$i" -lt "$max" ]; do
-    pane=$(agy_capture)
-    if agy_pane_is_past_trust "$pane"; then
-      return 0
-    elif agy_trust_dialog_present "$pane"; then
-      if [ "$answered" -eq 0 ]; then
-        spawn_send_key "$T" Enter
-        answered=1
-      fi
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-agy_spawn_fail() {  # <detail>
-  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
-  echo "error: $1; inspect window $T" >&2
-}
-
-cursor_trust_dialog_present() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Fq 'Workspace Trust Required'
-}
-
-# Past the trust gate: the idle composer placeholder (→-prefixed, verified) or
-# the mid-turn busy anchor (the seeded positional brief auto-runs the moment
-# trust clears, so the pane may go straight to Working / "ctrl+c to stop").
-cursor_pane_is_past_trust() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Eq '→ (Plan, search, build anything|Add a follow-up)|ctrl\+c to stop'
-}
-
-# Clear cursor-agent's blocking workspace-trust dialog. The pre-seeded
-# .workspace-trusted marker normally skips it entirely; when the dialog still
-# appears (e.g. cursor's length-capped slug variant for very long worktree
-# paths), answer it ONCE with the verified `a` keypress and keep polling.
-# `a` is sent at most once: after trust clears, a repeat keypress would land
-# in the composer as stray text. A pane that never reaches a ready/working
-# signal within the poll budget is a failed spawn, not a silent hang.
-cursor_wait_for_trust_clear() {
-  local pane i=0 max=${FM_CURSOR_TRUST_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} answered=0
-  while [ "$i" -lt "$max" ]; do
-    pane=$(cursor_capture)
-    # Test the POSITIVE past-trust anchor FIRST: cursor's TUI never clears the
-    # 'Workspace Trust Required' frame from the terminal scrollback, so the
-    # dialog literal stays in every capture FOREVER with the live conversation
-    # rendering below it. Checking dialog_present first would make this elif
-    # success branch unreachable, exhaust the poll budget, and report a false
-    # failure while a trusted, working agent runs unsupervised. Only when the
-    # pane is NOT yet past the gate does the dialog-present branch fire and send
-    # the one-shot `a` keypress.
-    if cursor_pane_is_past_trust "$pane"; then
-      return 0
-    elif cursor_trust_dialog_present "$pane"; then
-      if [ "$answered" -eq 0 ]; then
-        spawn_send_literal "$T" a
-        answered=1
-      fi
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-cursor_spawn_fail() {  # <detail>
-  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
-  echo "error: $1; inspect window $T" >&2
-}
-
-copilot_capture() {
-  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
-}
-
-copilot_trust_dialog_present() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Fq 'Confirm folder trust'
-}
-
-# Past the trust gate: EITHER the busy footer (the seeded `-i` prompt
-# auto-runs the instant trust clears, per docs/verification/copilot-adapter.md
-# "Launch", so the pane normally goes straight to busy) OR the idle status
-# bar. Deliberately NOT the bare idle-composer glyph (U+276F): the trust
-# dialog's own option cursor renders with that exact same codepoint
-# (docs/verification/copilot-adapter.md "Trust / permission gate"), so a
-# bare-glyph anchor would match the dialog itself and report "past trust"
-# while it is still up (T3 has a dedicated regression fence for this). The
-# busy literal is necessarily duplicated from FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT
-# (bin/fm-tmux-lib.sh) because fm-spawn.sh does not source fm-tmux-lib.sh; a
-# drift fence (T3.4) pins the two together. The `\?` in the idle alternate is
-# mandatory - unescaped it is an ERE quantifier and silently stops matching a
-# literal `?`.
-copilot_pane_is_past_trust() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Eq 'Working.*esc interrupt|/ commands · \? help'
-}
-
-# Clear copilot's blocking folder-trust dialog. There is deliberately NO
-# pre-seed of copilot's persistent trust allow-list here (unlike cursor's
-# per-harness setup below): that allow-list lives in a single shared, global
-# JSONC config file that also holds the operator's live OAuth credential, has
-# no delegated writer (`copilot config` is a help topic, not a mutating
-# subcommand) and no config-directory override to isolate a test copy - so
-# any pre-seed write path would have to satisfy atomicity, byte-for-byte
-# header preservation, and concurrency-safety forever, on every dispatch, for
-# a benefit ("maybe skip a dialog this poll already handles") that does not
-# justify the risk to a credential. See docs/verification/copilot-adapter.md
-# "Trust / permission gate" (options analysis) for the full reasoning. This
-# keystroke-only mechanism therefore never opens, reads, or writes that
-# file at all: zero blast radius on the operator's home, by construction.
-#
-# Default focus on the dialog is option 1 ("Yes", session-scoped trust,
-# verified) so a single Enter clears it; answered at most once (S7) - a
-# repeat Enter after trust clears would land in the composer as stray text.
-copilot_wait_for_trust_clear() {
-  local pane i=0 max=${FM_COPILOT_TRUST_POLLS:-60} interval=${FM_COPILOT_POLL_INTERVAL:-0.5} answered=0
-  while [ "$i" -lt "$max" ]; do
-    pane=$(copilot_capture)
-    if copilot_trust_dialog_present "$pane"; then
-      if [ "$answered" -eq 0 ]; then
-        spawn_send_key "$T" Enter
-        answered=1
-      fi
-    elif copilot_pane_is_past_trust "$pane"; then
-      return 0
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
-copilot_spawn_fail() {  # <detail>
-  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
-  echo "error: $1; inspect window $T" >&2
-}
-
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  # Firstmate acquires the worktree itself rather than sending `treehouse get` to
-  # the pane, because the pool has to land on the repo's own filesystem and the
-  # only way to select it is the HOME treehouse runs under (bin/fm-treehouse-lib.sh
-  # owns why). An interactive `treehouse get` opens the crew's shell as a child of
-  # treehouse, so that HOME would be inherited by the agent and by everything it
-  # runs - wrong ~/.claude, wrong git config, wrong gh credentials. Leasing here
-  # keeps the override inside this process: the pane only ever receives a plain cd.
-  # The lease's own `git fetch` still needs the real git and gh config, which that
-  # same substitution hides, so fm_treehouse_preserve_user_config pins them first.
-  #
-  # The lease is durable, so every exit path between here and metadata publication
-  # must return it; TREEHOUSE_LEASE_ABORT_CLEANUP arms spawn_abort_cleanup for that.
-  # fm-teardown.sh already returns the worktree by absolute path on the normal path.
-  POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
-  LEASE_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-lease-err.XXXXXXXX")
-  WT=$( cd "$PROJ_ABS" && fm_treehouse_preserve_user_config && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>"$LEASE_ERR_FILE" ) || {
-    echo "error: treehouse could not lease a worktree for $PROJ_ABS under pool root $POOL_HOME/.treehouse" >&2
-    [ ! -s "$LEASE_ERR_FILE" ] || sed 's/^/  treehouse: /' "$LEASE_ERR_FILE" >&2
-    rm -f "$LEASE_ERR_FILE"
-    exit 1
-  }
-  rm -f "$LEASE_ERR_FILE"
-  if [ -z "$WT" ] || [ ! -d "$WT" ]; then
-    echo "error: treehouse returned no usable worktree path for $PROJ_ABS (got '${WT:-}')" >&2
-    exit 1
-  fi
-  TREEHOUSE_LEASE_ABORT_CLEANUP=1
+  if [ "$REUSE_WORKTREE" = 1 ]; then
+    # In-place relaunch: keep the existing worktree; never run treehouse get.
+    validate_spawn_worktree "recorded worktree (reuse-worktree)" "$T"
+    spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+    # Confirm the pane really entered the recorded worktree before launch.
+    WT_REAL=$(real_path_or_raw "$WT")
+    landed=0
+    for _ in $(seq 1 60); do
+      p=$(spawn_current_path "$WT_TARGET" || true)
+      if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT_REAL" ]; then
+        landed=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$landed" -ne 1 ]; then
+      echo "error: pane did not enter the recorded worktree $WT within 60s; inspect window $T" >&2
+      exit 1
+    fi
+  else
+  spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
-  validate_spawn_worktree "treehouse get --lease" "$T"
-  assert_worktree_colocated "$WT" "$POOL_HOME"
-
-  # Move the pane into the leased worktree. `cd` is the one instruction every
-  # supported pane shell understands identically, which matters because the shell
-  # is the operator's, not ours.
-  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
-
-  # Confirm the pane really landed there before anything is launched into it.
+  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
   # worktree and tangle a hook into the primary checkout. The window id never lies.
-  # The expected path is known exactly now, so - unlike the old "any path that is
-  # not the project" wait - a transient stale pane_current_path (seen live on some
-  # tmux/WSL setups as another real git checkout entirely) can never be mistaken
-  # for arrival. Compare physically: a symlinked prefix would otherwise never match.
-  WT_REAL=$(real_path_or_raw "$WT")
-  landed=0
-  SETTLE_POLLS=${FM_SPAWN_SETTLE_POLLS:-60}
-  for _ in $(seq 1 "$SETTLE_POLLS"); do
+  # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
+  # prefix would otherwise make the pane's OS-level cwd read differ from
+  # PROJ_ABS on the very first poll, before the pane has actually moved.
+  #
+  # A single read that already differs from PROJ_ABS_REAL is not proof the pane
+  # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
+  # transiently reports an unrelated stale path (seen live as another real git
+  # checkout entirely) before the shell catches up with treehouse get's cd. That
+  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
+  # below (it resolves to a real, distinct worktree top-level too), so accepting it
+  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
+  # two consecutive reads to agree on the same non-project path before accepting it;
+  # a mismatch just becomes the new candidate rather than resetting the wait, so a
+  # pane that is already settled by the first real read only costs the one existing
+  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  candidate=""
+  for _ in $(seq 1 60); do
     p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT_REAL" ]; then
-      landed=1
-      break
+    if [ -n "$p" ]; then
+      p_real=$(real_path_or_raw "$p")
+      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
+        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+          WT="$p"
+          break
+        fi
+        candidate="$p_real"
+      else
+        candidate=""
+      fi
+    else
+      candidate=""
     fi
     sleep 1
   done
-  if [ "$landed" -ne 1 ]; then
-    echo "error: pane did not enter the leased worktree $WT within 60s; inspect window $T" >&2
+  if [ -z "$WT" ]; then
+    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
     exit 1
+  fi
+
+  validate_spawn_worktree "treehouse get" "$T"
   fi
 fi
 
-# Per-task temp root: /tmp/fm-<uid>-<id>/ with Go's build temp nested at gotmp/.
-# Go won't create GOTMPDIR, so mkdir before it is used; fm-teardown removes the
-# whole root (reading the path this spawn recorded as tasktmp=, so changing the
-# shape here never orphans an already-running task's temp).
-# Nested (not a bare .../gotmp) so other per-task temp can live alongside later,
-# and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
+# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
+# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
+# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
+# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-#
-# The uid is part of the path for the same reason the herdr presentation lock
-# namespace carries one (fm_backend_herdr_presentation_lock_namespace): task ids
-# are not unique across operators, so on a multi-operator box a uid-less
-# /tmp/fm-<id> is created by whoever spawns that id first and is then owned by
-# them outright. Every other operator's mkdir silently lands in a directory it
-# cannot write, and teardown's rm -rf fails with EACCES.
-TASK_TMP_UID=$(id -u 2>/dev/null || true)
-case "$TASK_TMP_UID" in
-  ''|*[!0-9]*) TASK_TMP_UID=nouid ;;
-esac
-TASK_TMP="/tmp/fm-$TASK_TMP_UID-$ID"
+TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
 # Per-harness turn-end hook where enabled: a file that touches
@@ -2536,34 +2100,6 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;
-    muse*)
-      # muse's turn lifecycle is neither a hook nor a launch flag: its plugin
-      # engine (the only hook surface) is disabled in the default build, so
-      # firstmate reads muse's own durable session event log instead
-      # (bin/fm-busy-lib.sh owns the fold). That is a PULL
-      # source with no writer, so nothing is armed and no record is seeded -
-      # exactly the reason standalone Kimi is not armed either.
-      # This sidecar is the whole binding: it pins the sessions root, the
-      # workspace root that muse records in each log's metadata, this pane's
-      # binding identity, and every matching main log that predates this pane.
-      # The classifier then accepts only one new matching log, so it never
-      # guesses between pane incarnations. Recording the resolved root here
-      # also means a later change to XDG_DATA_HOME cannot silently re-point an
-      # already-running task at a different log tree.
-      MUSE_SESSIONS_ROOT="${MUSE_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}/muse/sessions"
-      MUSE_BINDING_ID="$$.$RANDOM.$(date +%s)"
-      rm -f "$STATE/$ID.muse-session-current"
-      {
-        printf 'sessions_root=%s\n' "$MUSE_SESSIONS_ROOT"
-        printf 'workspace_root=%s\n' "$WT"
-        printf 'binding_id=%s\n' "$MUSE_BINDING_ID"
-        while IFS= read -r MUSE_PRIOR_LOG; do
-          [ -n "$MUSE_PRIOR_LOG" ] && printf 'prior_log=%s\n' "$MUSE_PRIOR_LOG"
-        done <<EOF
-$(fm_busy_muse_matching_logs "$MUSE_SESSIONS_ROOT" "$WT" || true)
-EOF
-      } > "$STATE/$ID.muse-session"
-      ;;
     kimi*)
       # Kimi's Stop hook is global, but it is inert unless cwd contains this
       # task's token pointer and the token resolves through Firstmate's private
@@ -2578,23 +2114,6 @@ EOF
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
-      ;;
-    cursor-agent)
-      # Workspace-trust pre-seed (verified bypass, docs/verification/
-      # cursor-agent-adapter.md): a pre-existing .workspace-trusted marker makes
-      # cursor-agent skip the blocking interactive trust dialog entirely. The
-      # slug is the worktree abspath with the leading / dropped and every /
-      # replaced by -; the length-capped+hash variant cursor uses for very long
-      # paths is not reproduced here, so the post-launch readiness gate below
-      # still answers a residual dialog with `a`. An existing marker is kept
-      # (its recorded trustedAt stays authoritative).
-      CURSOR_PROJECT_DIR="${CURSOR_HOME:-$HOME/.cursor}/projects/$(printf '%s' "${WT#/}" | tr '/' '-')"
-      if [ ! -f "$CURSOR_PROJECT_DIR/.workspace-trusted" ]; then
-        mkdir -p "$CURSOR_PROJECT_DIR"
-        printf '{"trustedAt":"%s","workspacePath":"%s"}\n' \
-          "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$(json_escape "$WT")" \
-          > "$CURSOR_PROJECT_DIR/.workspace-trusted"
-      fi
       ;;
   esac
 fi
@@ -2634,6 +2153,10 @@ fi
 if [ "$TRACEPARENT_SET" -eq 1 ]; then
   SPAWN_TRACE_EFFECTIVE=on
   SPAWN_TRACEPARENT=$TRACEPARENT_ARG
+elif [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_PRESERVE_MODE" ]; then
+  # Runtime handoff must not rewrite delivery posture; keep the recorded values.
+  MODE=$REUSE_PRESERVE_MODE
+  YOLO=${REUSE_PRESERVE_YOLO:-off}
 else
   SPAWN_TRACE_EFFECTIVE=$(fm_trace_context_session_effective "$STATE/.trace-context-effective")
   if [ "$SPAWN_TRACE_EFFECTIVE" = on ]; then
@@ -2645,54 +2168,72 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
-{
-  echo "window=$META_WINDOW"
-  echo "endpoint_task_id=$ID"
-  echo "worktree=$WT"
-  echo "project=$PROJ_ABS"
-  echo "harness=$HARNESS"
-  [ -z "$PROVIDER" ] || echo "provider=$PROVIDER"
-  echo "kind=$KIND"
-  [ -z "$MODE" ] || echo "mode=$MODE"
-  [ -z "$YOLO" ] || echo "yolo=$YOLO"
-  echo "tasktmp=$TASK_TMP"
-  echo "model=${MODEL:-default}"
-  echo "effort=${EFFORT:-default}"
-  [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
-  # Default-off writes no traceparent= line (meta stays byte-identical).
-  # backend= is written only for a non-default (non-tmux) backend, so the
-  # default path's meta stays byte-identical (absent backend= means tmux;
-  # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
-  if [ "$BACKEND" = herdr ]; then
-    echo "herdr_session=$HERDR_SES"
-    echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
-    echo "herdr_tab_id=$HERDR_TAB_ID"
-    echo "herdr_pane_id=$HERDR_PANE_ID"
+# On --reuse-worktree, rewrite only spawn-owned endpoint/runtime keys and
+# preserve every other meta line (pr=, pr_head=, x_*, custom fields). A full
+# truncate would drop PR and X-mode identity mid-task.
+spawn_write_meta() {
+  local meta=$1 tmp drop_re
+  # Every key a spawn owns must be listed, or a --reuse-worktree relaunch keeps
+  # the previous run's value. traceparent= is spawn-written too, so a stale
+  # carrier would otherwise survive a handoff and mis-attribute the new run.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects)='
+  tmp=$(mktemp "$STATE/.${ID}.meta.XXXXXX") || return 1
+  if [ "$REUSE_WORKTREE" = 1 ] && [ -f "$meta" ]; then
+    if ! { grep -Ev "$drop_re" "$meta" || true; } > "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+  else
+    : > "$tmp"
   fi
-  if [ "$BACKEND" = zellij ]; then
-    echo "zellij_session=$ZELLIJ_SES"
-    echo "zellij_tab_id=$ZELLIJ_TAB_ID"
-    echo "zellij_pane_id=$ZELLIJ_PANE_ID"
-  fi
-  if [ "$BACKEND" = orca ]; then
-    echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-    echo "terminal=$ORCA_TERMINAL"
-  fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
-  fi
-  if [ "$KIND" = secondmate ]; then
-    echo "home=$PROJ_ABS"
-    echo "projects=$SECONDMATE_PROJECTS"
-  fi
-} > "$STATE/$ID.meta"
+  {
+    echo "window=$META_WINDOW"
+    echo "endpoint_task_id=$ID"
+    echo "worktree=$WT"
+    echo "project=$PROJ_ABS"
+    echo "harness=$HARNESS"
+    echo "kind=$KIND"
+    echo "mode=$MODE"
+    echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
+    # backend= is written only for a non-default (non-tmux) backend, so the
+    # default path's meta stays byte-identical (absent backend= means tmux;
+    # data/fm-backend-design-d7's P1 compatibility contract).
+    [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+    if [ "$BACKEND" = herdr ]; then
+      echo "herdr_session=$HERDR_SES"
+      echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
+      echo "herdr_tab_id=$HERDR_TAB_ID"
+      echo "herdr_pane_id=$HERDR_PANE_ID"
+    fi
+    if [ "$BACKEND" = zellij ]; then
+      echo "zellij_session=$ZELLIJ_SES"
+      echo "zellij_tab_id=$ZELLIJ_TAB_ID"
+      echo "zellij_pane_id=$ZELLIJ_PANE_ID"
+    fi
+    if [ "$BACKEND" = orca ]; then
+      echo "orca_worktree_id=$ORCA_WORKTREE_ID"
+      echo "terminal=$ORCA_TERMINAL"
+    fi
+    if [ "$BACKEND" = cmux ]; then
+      echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
+      echo "cmux_surface_id=$CMUX_SURFACE_ID"
+    fi
+    if [ "$KIND" = secondmate ]; then
+      echo "home=$PROJ_ABS"
+      echo "projects=$SECONDMATE_PROJECTS"
+    fi
+  } >> "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$meta"
+}
+spawn_write_meta "$STATE/$ID.meta" || {
+  echo "error: could not write meta for $ID" >&2
+  exit 1
+}
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
-# The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Returning it from here after this point would pull the lease out from under a
-# live task.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
@@ -2701,7 +2242,7 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
@@ -2743,7 +2284,7 @@ spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.
-if [ -n "$SPAWN_TRACEPARENT" ]; then
+if [ -n "${SPAWN_TRACEPARENT:-}" ]; then
   if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
     if ! echo "traceparent=$SPAWN_TRACEPARENT" >> "$STATE/$ID.meta"; then
       LAUNCH="unset TRACEPARENT; $LAUNCH"
@@ -2764,24 +2305,6 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
-if [ "$HARNESS" = cursor-agent ]; then
-  if ! cursor_wait_for_trust_clear; then
-    cursor_spawn_fail "cursor-agent did not clear the workspace-trust gate to a ready or working pane"
-    exit 1
-  fi
-fi
-if [ "$HARNESS" = copilot ]; then
-  if ! copilot_wait_for_trust_clear; then
-    copilot_spawn_fail "copilot did not clear the folder-trust gate to a ready or working pane"
-    exit 1
-  fi
-fi
-if [ "$HARNESS" = agy ]; then
-  if ! agy_wait_for_trust_clear; then
-    agy_spawn_fail "agy did not clear the project-trust gate to a ready or working pane"
-    exit 1
-  fi
-fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

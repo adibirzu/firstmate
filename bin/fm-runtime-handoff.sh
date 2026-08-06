@@ -164,6 +164,8 @@ esac
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 OLD_HARNESS=$(fm_meta_get "$META" harness)
+RECORDED_MODE=$(fm_meta_get "$META" mode)
+RECORDED_YOLO=$(fm_meta_get "$META" yolo)
 [ -n "$WT" ] || { echo "error: meta for $ID is missing worktree=" >&2; exit 1; }
 [ -n "$PROJ" ] || { echo "error: meta for $ID is missing project=" >&2; exit 1; }
 [ -d "$WT" ] || { echo "error: recorded worktree for $ID does not exist: $WT" >&2; exit 1; }
@@ -346,6 +348,8 @@ SPAWN_ARGS=(
   --harness "$HARNESS"
   --handoff-brief "$HANDOFF_PROMPT"
 )
+[ -z "$RECORDED_MODE" ] || SPAWN_ARGS+=(--mode "$RECORDED_MODE")
+[ -z "$RECORDED_YOLO" ] || SPAWN_ARGS+=(--yolo "$RECORDED_YOLO")
 [ -z "$MODEL" ] || SPAWN_ARGS+=(--model "$MODEL")
 [ -z "$EFFORT" ] || SPAWN_ARGS+=(--effort "$EFFORT")
 [ -z "$BACKEND_ARG" ] || SPAWN_ARGS+=(--backend "$BACKEND_ARG")

@@ -430,7 +430,7 @@ setup_case() {
   export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=codex
   set +e
-  out=$("$SPAWN" task-a1 --reuse-worktree --harness claude 2>&1)
+  out=$("$SPAWN" task-a1 --reuse-worktree --mode no-mistakes --yolo off --harness claude 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "alive endpoint should refuse reuse-worktree"
@@ -445,7 +445,7 @@ setup_case() {
   export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=something-unknown
   set +e
-  out=$("$SPAWN" task-q1 --reuse-worktree --harness claude 2>&1)
+  out=$("$SPAWN" task-q1 --reuse-worktree --mode no-mistakes --yolo off --harness claude 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "ambiguous endpoint should refuse"
@@ -465,7 +465,7 @@ setup_case() {
   branch_before=$(git -C "$CASE_WT" rev-parse --abbrev-ref HEAD)
 
   set +e
-  out=$(FM_SPAWN_SETTLE_POLLS=2 "$SPAWN" task-s1 --reuse-worktree --harness claude --model sonnet --effort high 2>&1)
+  out=$(FM_SPAWN_SETTLE_POLLS=2 "$SPAWN" task-s1 --reuse-worktree --mode no-mistakes --yolo off --harness claude --model sonnet --effort high 2>&1)
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "reuse-worktree should succeed: $out"
@@ -618,7 +618,7 @@ setup_case() {
 {
   setup_case refuse-batch task-c1
   set +e
-  out=$("$SPAWN" "task-c1=$CASE_PROJ" --reuse-worktree --harness claude 2>&1)
+  out=$("$SPAWN" "task-c1=$CASE_PROJ" --reuse-worktree --mode no-mistakes --yolo off --harness claude 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "batch dispatch with --reuse-worktree should refuse"
@@ -682,7 +682,7 @@ SH
     "yolo=off"
   : > "$FM_FAKE_TREEHOUSE_LOG"
   set +e
-  out=$("$SPAWN" task-o1 --reuse-worktree --harness claude 2>&1)
+  out=$("$SPAWN" task-o1 --reuse-worktree --mode no-mistakes --yolo off --harness claude 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "orca-backed reuse should refuse"
