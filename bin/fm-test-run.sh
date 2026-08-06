@@ -137,8 +137,9 @@ family_for_basename() {
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
-    fm-dispatch-select.test.sh|fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
-    fm-kimi-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
+    fm-dispatch-select.test.sh|fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|\
+    fm-grok-harness.test.sh|fm-kimi-harness.test.sh|fm-muse-harness.test.sh|\
+    fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
@@ -181,7 +182,9 @@ family_for_basename() {
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-grok-continuity-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-liveness-drift-live-e2e.test.sh|\
+    fm-muse-signals-live-e2e.test.sh|\
     fm-opencode-primary-live-e2e.test.sh|fm-pi-primary-live-e2e.test.sh|\
+    fm-sessionstart-hook-live-e2e.test.sh|\
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh)
       printf '%s\n' live-harness-optin
       ;;
@@ -921,6 +924,20 @@ families_for_changed_path() {
     bin/fm-spawn-acct.sh|bin/quota-copilot-usage.sh|bin/quota-cursor-usage.sh|\
     bin/quota-sources/*|scripts/fleet-root-prereq.sh)
       printf '%s\n' federation
+      ;;
+    bin/fm-sessionstart-run.sh|.claude/settings.json|.codex/hooks.json|\
+    .pi/extensions/fm-primary-turnend-guard.ts)
+      # The run tier's two harness-supplied facts (source vocabulary and
+      # context-reset stdout injection) only show up against a real harness.
+      printf '%s\n' session-bootstrap
+      printf '%s\n' live-harness-optin
+      ;;
+    bin/fm-timeout-lib.sh)
+      # The shared hard bound: session start's runtime bound, the fleet/bearings
+      # snapshots, and the vendor auth probe all depend on it.
+      printf '%s\n' session-bootstrap
+      printf '%s\n' snapshot-bearings
+      printf '%s\n' pure-contract-unit
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
