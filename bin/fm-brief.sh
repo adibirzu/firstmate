@@ -297,6 +297,13 @@ EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
 
+# Shared worker-safety rules, defined once and referenced by both the scout
+# and ship Rules sections below (one-owner rule; firstmate-coding-guidelines).
+RULE_NO_PROMPT="8. A decision above your authority is reported only through rule 6's status-file mechanism, then you stop.
+   Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply - nobody reads this pane, so a prompt just burns your window idling for a reply that never comes."
+RULE_NO_POLL="9. Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off, such as a validation run or CI.
+   Firstmate already supervises every task centrally, and a worker-side loop burns turns for no signal firstmate lacks - follow that step's own response flow, or report and stop."
+
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -333,6 +340,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+$RULE_NO_PROMPT
+$RULE_NO_POLL
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -448,6 +457,8 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+$RULE_NO_PROMPT
+$RULE_NO_POLL
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
