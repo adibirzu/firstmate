@@ -185,6 +185,19 @@ fm_control_backend_state_verified() {  # <backend>
   return 1
 }
 
+# Whether <harness>'s agent-state classification is recovery-grade: whether a
+# dead or missing reading for it may be trusted as proof the agent exited. An
+# adapter outside this list (agy, or anything unrecognized) can register as
+# absent on a backend while its process still owns the pane, so its dead
+# readings are downgraded (bin/fm-bootstrap.sh's secondmate sweep) or refused
+# (bin/fm-spawn.sh --relaunch), never trusted as recovery-grade.
+fm_control_harness_state_recovery_grade() {  # <harness>
+  case "${1-}" in
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse) return 0 ;;
+  esac
+  return 1
+}
+
 # The per-task wiring artifacts a harness leaves behind, so a relaunch that
 # changes harness (or re-arms the same one with a fresh busy generation) can
 # clear the previous incarnation's wiring instead of leaving a stale hook

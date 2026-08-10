@@ -8,6 +8,16 @@
 # It changes nothing outside: (1) the `agents` group, (2) group membership for the
 # listed operators, (3) /opt/agents/fleet (mode 2775 setgid). Reverse steps at the end.
 #
+# Required modes, exactly: every directory under the fleet dir is root:agents
+# 2775 (setgid so created files inherit the group; group-writable; world-readable)
+# and every file in it is 0664. Those modes are safe ONLY because the dir is
+# data: nothing on any operator's PATH lives here, nothing here is executed or
+# sourced, and the dir must never hold a git repository the fleet runs git
+# against, because git executes hooks, fsmonitor, and filter commands from
+# repo-local config, which here would be another operator's code. This script
+# refuses a dir containing .git for that reason, and bin/fm-fleet-lib.sh never
+# runs git in the KB.
+#
 # Pass --check to see exactly what it WOULD change and nothing else. --check needs
 # no root and never mutates, so an operator can inspect the delta before deciding
 # whether they want this tier at all.
@@ -66,6 +76,9 @@ if [ "$CHECK" = 1 ]; then
   else
     printf '  %-32s ABSENT   would create mode 2775, group %s\n' "$DIR" "$GROUP"; needed=1
   fi
+  if [ -e "$DIR/.git" ]; then
+    printf '  %-32s PRESENT  must be removed: the shared KB never holds a git repo\n' "$DIR/.git"; needed=1
+  fi
   echo
   if [ "$needed" = 0 ]; then
     echo "Result: no action required. Nothing to install."
@@ -100,6 +113,18 @@ for u in $OPERATORS; do
     echo "skip: OS user '$u' does not exist"
   fi
 done
+
+if [ -e "$DIR/.git" ]; then
+  cat >&2 <<EOF
+$0: refusing: $DIR/.git exists.
+
+The shared fleet dir is group-writable, and running git in a group-writable
+repo executes another operator's code (hooks, fsmonitor, and filter drivers
+come from repo-local config). Move any history elsewhere, remove $DIR/.git,
+and re-run.
+EOF
+  exit 1
+fi
 
 mkdir -p "$DIR/locks"
 chgrp -R "$GROUP" "$DIR"

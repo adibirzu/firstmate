@@ -310,7 +310,7 @@ session. `export XDG_RUNTIME_DIR=/run/user/$(id -u)`.
 | shared POSIX group | — | — | ✓ |
 
 No daemon, no database, no network service — coordination is `flock` plus a
-git-backed directory on a shared filesystem.
+group-writable data directory on a shared filesystem.
 
 Linux is the tested platform. `flock(1)` and GNU `realpath -m` must be present (the
 cross-uid path guard needs `-m` to normalize a directory that does not exist yet),

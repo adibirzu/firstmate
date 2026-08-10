@@ -1021,12 +1021,17 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
   }
+  RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
+  RELAUNCH_PRIOR_ADAPTER=$(fm_control_harness_family "$RELAUNCH_PRIOR_HARNESS") || RELAUNCH_PRIOR_ADAPTER=$RELAUNCH_PRIOR_HARNESS
+  fm_control_harness_state_recovery_grade "$RELAUNCH_PRIOR_ADAPTER" || {
+    echo "error: task $ID's recorded harness '${RELAUNCH_PRIOR_HARNESS:-unknown}' has no recovery-grade agent-state classification, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
+    exit 1
+  }
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
   [ "$RELAUNCH_STATE" = dead ] || {
     echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
     exit 1
   }
-  RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)

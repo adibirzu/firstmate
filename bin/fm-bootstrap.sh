@@ -150,6 +150,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-control-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-control-lib.sh"
 # fm-timing-lib.sh is inert unless FM_TIMING_LOG names a file, which only the
 # deferred network stage sets, so an ordinary bootstrap run records nothing.
 # shellcheck source=bin/fm-timing-lib.sh disable=SC1091
@@ -685,12 +687,9 @@ secondmate_liveness_one() {  # <meta> <id>
   target=$(fm_backend_target_of_meta "$meta")
   [ -n "$target" ] || target="$window"
   agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || agent_state=unreadable
-  case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse) ;;
-    *)
-      case "$agent_state" in dead|missing) agent_state=unverified-harness ;; esac
-      ;;
-  esac
+  if ! fm_control_harness_state_recovery_grade "$harness"; then
+    case "$agent_state" in dead|missing) agent_state=unverified-harness ;; esac
+  fi
   case "$agent_state" in
     alive)
       if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then

@@ -4,7 +4,7 @@ Two general, reusable optional capabilities in FirstMate:
 
 1. **Federated / multi-operator mode** — several OS operators (each their own
    first mate, own accounts), coordinating through a shared, cross-uid-safe,
-   git-backed KB with atomic claim/lock, scope routing, cross-operator handoff,
+   data-only KB with atomic claim/lock, scope routing, cross-operator handoff,
    TTL reap, and a realtime `fleet view`.
 2. **Per-spawn multi-account** — a `--account` axis that launches a crewmate under
    a chosen account with isolated auth, plus quota-aware account selection.
@@ -22,7 +22,7 @@ Existing spawn, backend, bootstrap, and configuration paths carry the narrow int
 FirstMate today propagates prefs by **filesystem copy from main into secondmate
 homes**. That breaks across uids (it would require writing another user's home).
 The add-on uses a **shared-dir + read/claim** model instead: operators share only
-a group-writable, git-backed KB and **never write each other's private homes**.
+a group-writable, data-only KB and **never write each other's private homes**.
 
 ### Shared KB (`$FM_FLEET_DIR`, default `/opt/agents/fleet`)
 - `operators.md` — `| operator | scope | home | accounts | status | seen | quota |`
@@ -49,7 +49,7 @@ that owns `budget | quota | models | pick`; every consumer keeps sourcing only
 `bin/fm-fleet-lib.sh`.
 
 - **Atomic claim** — under `flock`, verify item is `queued`, stamp
-  `claimed-by:<op>@<ts> status:claimed`, move to `## Claimed`, log, commit. Two
+  `claimed-by:<op>@<ts> status:claimed`, move to `## Claimed`, log the event. Two
   operators can never grab the same item (proven by a concurrent race test).
 - **Routing** — `route <scope>`: scope-primary (the online operator whose scope
   contains it), then the `overflow`-scoped operator, then any eligible operator
@@ -270,4 +270,4 @@ bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; t
    integration points).
 3. **axi-style tool** — possible but *not* simpler: the bash scripts would need
    npm-bin repackaging + a SessionStart hook, and federation needs a shared
-   git-backed dir that doesn't fit the per-user axi model. Recommend #1/#2.
+   group-writable dir that doesn't fit the per-user axi model. Recommend #1/#2.

@@ -146,7 +146,7 @@ _fm_account_headroom() { # iso env cdir kfile qbin prov
     api-key-env)
       [ -r "$kfile" ] || return 0
       key=$(head -n1 "$kfile"); [ -n "$key" ] || return 0
-      out=$(env "$env=$key" "$qbin" --provider "$prov" --json 2>/dev/null) ;;
+      out=$(export "$env=$key"; "$qbin" --provider "$prov" --json 2>/dev/null) ;;
     *) return 0 ;;
   esac
   printf '%s' "$out" | jq -r --arg p "$prov" '

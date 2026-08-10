@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # fm-fleet-lib.sh — FirstMate federated multi-operator KB library.
 #
-# Cross-uid-safe coordination through a SHARED group-writable git-backed dir only.
+# Cross-uid-safe coordination through a SHARED group-writable data dir only.
 # Operators never write each other's private homes; they share this KB and use
 # flock advisory locks on the backlog for atomic, no-overlap claims.
+# The KB is data only: nothing in it is executed or sourced, and it must never
+# hold a git repository the fleet runs git against, because git executes hooks,
+# fsmonitor, and filter commands from repo-local config, which in a
+# group-writable dir is another operator's code. events.log is the audit
+# trail; scripts/fleet-root-prereq.sh's header owns the required modes.
 #
 # KB layout ($dir):
 #   operators.md  md table: | operator | scope | home | accounts | status | seen | quota |
@@ -172,22 +177,25 @@ fm_fleet_event() { # dir operator event id detail
   printf '%s\t%s\t%s\t%s\t%s\n' "$(fm_fleet_now)" "$op" "$ev" "$id" "$detail" >> "$dir/events.log"
 }
 
-fm_fleet_commit() { # dir message
-  local dir=$1 msg=$2
-  git -C "$dir" add -A >/dev/null 2>&1 || return 0
-  git -C "$dir" commit -q -m "$msg" >/dev/null 2>&1 || true
+# Unpredictable same-dir temp file for an atomic table rewrite. mktemp creates
+# it 0600 with O_EXCL, so a pre-placed symlink at a guessable name can never
+# redirect the write into another operator's files; 0664 restores the shared
+# mode of the table it replaces.
+fm_fleet_tmpfile() { # dir table-basename
+  local t
+  t=$(mktemp "$1/$2.XXXXXX") || return 1
+  chmod 0664 "$t" || { rm -f "$t"; return 1; }
+  printf '%s\n' "$t"
 }
 
 fm_fleet_init() {
   local dir=$1
   fm_fleet_assert_shared "$dir" || return 1
   mkdir -p "$dir/locks"
-  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || git -C "$dir" init -q
   [ -f "$dir/operators.md" ] || printf '# Fleet operators\n\n| operator | scope | home | accounts | status | seen | quota |\n|---|---|---|---|---|---|---|\n' > "$dir/operators.md"
   [ -f "$dir/projects.md" ]  || printf '# Fleet projects\n\n| project | owner | path |\n|---|---|---|\n' > "$dir/projects.md"
   [ -f "$dir/backlog.md" ]   || printf '# Fleet backlog\n\n## Queued\n\n## Claimed\n\n## In-flight\n\n## Done\n' > "$dir/backlog.md"
   [ -f "$dir/events.log" ]   || : > "$dir/events.log"
-  fm_fleet_commit "$dir" "fleet: init"
 }
 
 # --- backlog mutation (all under flock) ---------------------------------------
@@ -240,29 +248,30 @@ fm_fleet_count_operator_status() { # dir operator status
 # hold. Without this, two items share an id and the single-match awk rules below
 # silently drop one of them from backlog.md. Returns 1 if the id is already present.
 fm_fleet_queue() { # dir id scope desc
-  local dir=$1 id=$2 scope=$3 desc=$4
+  local dir=$1 id=$2 scope=$3 desc=$4 tmp
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_backlog_id_present "$dir" "$id"; then
     echo "fm-fleet: id already in the backlog, refusing to queue a duplicate: $id" >&2
     fm_fleet_unlock
     return 1
   fi
+  tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
   awk -v line="- [id:$id] scope:$scope | $desc | status:queued" '
     { print }
     /^## Queued$/ { print ""; print line }
-  ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+  ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
   fm_fleet_event "$dir" "-" queue "$id" "scope:$scope"
-  fm_fleet_commit "$dir" "fleet: queue $id"
   fm_fleet_unlock
 }
 
 # Move a queued item to Claimed, stamp claimed-by + status:claimed. Returns 0 on
 # win, 1 if the item is not currently queued (already claimed / absent).
 fm_fleet_claim() { # dir id operator
-  local dir=$1 id=$2 op=$3 ts rc=1
+  local dir=$1 id=$2 op=$3 ts rc=1 tmp
   ts=$(fm_fleet_now)
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_backlog_id_status_present "$dir" "$id" queued; then
+    tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
     awk -v id="$id" -v op="$op" -v ts="$ts" '
       function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
       held == "" && item_id($0)==id && $0 ~ /status:queued/ {
@@ -270,9 +279,8 @@ fm_fleet_claim() { # dir id operator
       }
       /^## Claimed$/ { print; if (held != "") { print ""; print held; held="" } ; next }
       { print }
-    ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+    ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
     fm_fleet_event "$dir" "$op" claim "$id" ""
-    fm_fleet_commit "$dir" "fleet: claim $id by $op"
     rc=0
   fi
   fm_fleet_unlock
@@ -288,10 +296,11 @@ fm_fleet_claim() { # dir id operator
 # line stayed queued for anyone else to claim on top of the stamp.
 # Returns 0 if the item exists.
 fm_fleet_handoff() { # dir id to_operator
-  local dir=$1 id=$2 to=$3 ts rc=1
+  local dir=$1 id=$2 to=$3 ts rc=1 tmp
   ts=$(fm_fleet_now)
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_backlog_id_present "$dir" "$id"; then
+    tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
     awk -v id="$id" -v to="$to" -v ts="$ts" '
       function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
       item_id($0)==id {
@@ -303,9 +312,8 @@ fm_fleet_handoff() { # dir id to_operator
       }
       /^## Claimed$/ { print; if (held != "") { print ""; print held; held="" } ; next }
       { print }
-    ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+    ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
     fm_fleet_event "$dir" "$to" handoff "$id" "assigned"
-    fm_fleet_commit "$dir" "fleet: handoff $id to $to"
     rc=0
   fi
   fm_fleet_unlock
@@ -325,7 +333,7 @@ fm_fleet_handoff() { # dir id to_operator
 # Prints the chosen operator on a handoff, "drained" on exhaustion, "unchanged"
 # if the holder still has headroom. Returns 0 on a decision, 1 if the item absent.
 fm_fleet_drain_handoff() { # dir id
-  local dir=$1 id=$2 holder scope to ts hc rc=1 handoffs
+  local dir=$1 id=$2 holder scope to ts hc rc=1 handoffs tmp
   hc=${FM_FLEET_HANDOFF_CAP:-3}
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_backlog_id_present "$dir" "$id"; then
@@ -350,6 +358,7 @@ fm_fleet_drain_handoff() { # dir id
       echo "unchanged"
     elif [ -n "$to" ] && [ "$handoffs" -lt "$hc" ]; then
       # Hand off to an operator with headroom; stamp claimed-by + bump handoffs.
+      tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
       awk -v id="$id" -v to="$to" -v ts="$ts" -v h="$((handoffs + 1))" '
         function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
         item_id($0)==id {
@@ -360,13 +369,13 @@ fm_fleet_drain_handoff() { # dir id
           print; next
         }
         { print }
-      ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+      ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
       fm_fleet_event "$dir" "$to" handoff "$id" "drain-overflow"
-      fm_fleet_commit "$dir" "fleet: drain-overflow handoff $id to $to (handoffs:$((handoffs + 1)))"
       echo "$to"
     else
       # No operator with headroom or the per-item cap is reached: explicit
       # "fleet out of tokens" (status:drained) instead of a silent drop.
+      tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
       awk -v id="$id" '
         function item_id(line){ if (match(line, /\[id:[^]]+\]/)) return substr(line, RSTART+4, RLENGTH-5); return "" }
         item_id($0)==id {
@@ -375,9 +384,8 @@ fm_fleet_drain_handoff() { # dir id
           print; next
         }
         { print }
-      ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+      ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
       fm_fleet_event "$dir" "-" drain "$id" "fleet out of tokens"
-      fm_fleet_commit "$dir" "fleet: $id marked drained (fleet out of tokens)"
       echo "drained"
     fi
   fi
@@ -389,9 +397,10 @@ fm_fleet_drain_handoff() { # dir id
 # than ttl seconds go back to Queued (never-started work from an offline operator).
 # status:in-flight items are left alone.
 fm_fleet_reap() { # dir ttl_seconds
-  local dir=$1 ttl=${2:-86400} now
+  local dir=$1 ttl=${2:-86400} now tmp
   now=$(date -u +%s)
   fm_fleet_lock "$dir" || return 1
+  tmp=$(fm_fleet_tmpfile "$dir" backlog.md) || { fm_fleet_unlock; return 1; }
   # Buffered two-pass: collect stale claimed lines (removing them in place),
   # then re-emit and insert the requeued copies under ## Queued.
   awk -v ttl="$ttl" -v now="$now" "$_FM_FLEET_AWK_EPOCH"'
@@ -415,9 +424,8 @@ fm_fleet_reap() { # dir ttl_seconds
         if (lines[i]=="## Queued") for (j=1;j<=rn;j++) { print ""; print req[j] }
       }
     }
-  ' "$dir/backlog.md" > "$dir/backlog.md.tmp" && mv "$dir/backlog.md.tmp" "$dir/backlog.md"
+  ' "$dir/backlog.md" > "$tmp" && mv "$tmp" "$dir/backlog.md"
   fm_fleet_event "$dir" "-" reap "-" "ttl=$ttl"
-  fm_fleet_commit "$dir" "fleet: reap stale claims (ttl=$ttl)"
   fm_fleet_unlock
 }
 
@@ -510,34 +518,35 @@ fm_fleet_assert_own_home() { # home
 # Upsert this operator's row (self-onboard / update). Idempotent: an existing row for
 # <op> is replaced, not duplicated. Stamps status:online, seen:now, quota:now.
 fm_fleet_register() { # dir op scopes home [accounts]
-  local dir=$1 op=$2 scopes=$3 home=$4 accounts=${5:-} ts q
+  local dir=$1 op=$2 scopes=$3 home=$4 accounts=${5:-} ts q tmp
   fm_fleet_assert_own_home "$home" || return 1
   ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
   fm_fleet_lock "$dir" || return 1
+  tmp=$(fm_fleet_tmpfile "$dir" operators.md) || { fm_fleet_unlock; return 1; }
   awk -F'|' -v OFS='|' -v op="$op" '
     function trim(x){ gsub(/^ +| +$/,"",x); return x }
     trim($2)!=op { print }
-  ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+  ' "$dir/operators.md" > "$tmp" && mv "$tmp" "$dir/operators.md"
   printf '| %s | %s | %s | %s | online | %s | %s |\n' "$op" "$scopes" "$home" "$accounts" "$ts" "$q" >> "$dir/operators.md"
   fm_fleet_event "$dir" "$op" register "-" "scope:$scopes"
-  fm_fleet_commit "$dir" "fleet: register $op"
   fm_fleet_unlock
 }
 
 # Refresh this operator's liveness: seen:now + quota:now + status:online. Bash-only,
 # meant to run on a cheap timer/daemon (NOT the LLM) so being "online" costs 0 tokens.
 fm_fleet_heartbeat() { # dir op
-  local dir=$1 op=$2 ts q rc=1
+  local dir=$1 op=$2 ts q rc=1 tmp
   ts=$(fm_fleet_now); q=$(fm_fleet_quota_now)
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_operator_exists "$dir" "$op"; then
+    tmp=$(fm_fleet_tmpfile "$dir" operators.md) || { fm_fleet_unlock; return 1; }
     awk -F'|' -v OFS='|' -v op="$op" -v ts=" $ts " -v q=" $q " '
       function trim(x){ gsub(/^ +| +$/,"",x); return x }
       trim($2)==op { $6=" online "; $7=ts; $8=q; NF=(NF<9?9:NF); print; next }
       { print }
-    ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
-    # No git commit / event line: heartbeat is transient liveness, not audit history.
-    # Committing every beat would bloat the KB log and churn the lock. The seen
+    ' "$dir/operators.md" > "$tmp" && mv "$tmp" "$dir/operators.md"
+    # No event line: heartbeat is transient liveness, not audit history.
+    # Logging every beat would bloat events.log and churn the lock. The seen
     # column IS the liveness record; on a same-machine shared FS the file write is
     # visible to every operator immediately.
     rc=0
@@ -548,16 +557,16 @@ fm_fleet_heartbeat() { # dir op
 
 # Mark this operator offline (clean shutdown). Routing skips it immediately.
 fm_fleet_leave() { # dir op
-  local dir=$1 op=$2 rc=1
+  local dir=$1 op=$2 rc=1 tmp
   fm_fleet_lock "$dir" || return 1
   if fm_fleet_operator_exists "$dir" "$op"; then
+    tmp=$(fm_fleet_tmpfile "$dir" operators.md) || { fm_fleet_unlock; return 1; }
     awk -F'|' -v OFS='|' -v op="$op" '
       function trim(x){ gsub(/^ +| +$/,"",x); return x }
       trim($2)==op { $6=" offline "; print; next }
       { print }
-    ' "$dir/operators.md" > "$dir/operators.md.tmp" && mv "$dir/operators.md.tmp" "$dir/operators.md"
+    ' "$dir/operators.md" > "$tmp" && mv "$tmp" "$dir/operators.md"
     fm_fleet_event "$dir" "$op" leave "-" ""
-    fm_fleet_commit "$dir" "fleet: leave $op"
     rc=0
   fi
   fm_fleet_unlock

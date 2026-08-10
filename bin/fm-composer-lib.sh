@@ -177,11 +177,14 @@ fm_composer_strip_ghost() {
 # build anything" / "→ Add a follow-up" (cursor draws the → glyph in-line, so
 # the anchored alternates carry it). Bare agent prompt glyphs: ❯ (claude),
 # › (codex), → (cursor-agent), and ⟩ (muse) - never the shell glyphs > $ % #,
-# which stay dead-shell-unsafe on a bare row.
+# which stay dead-shell-unsafe on a bare row. The glyph set MUST stay an
+# alternation, never a bracket class: consumers grep under LC_ALL=C, where GNU
+# grep matches a bracket class byte-wise, and every glyph here shares its 0xE2
+# lead byte with the box-drawing border characters.
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
 FM_COMPOSER_IDLE_RE_DEFAULT='^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
-FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→⟩]'
+FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 # fm_composer_classify_content: the single shared composer-content verdict.
 #   <bordered> 1 when <content> came from a genuine agent-composer container (a

@@ -200,7 +200,6 @@ Do not add model-specific versions of that policy.
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
-When an active ship or scout session is blocked due to token/quota exhaustion or harness limits, Firstmate may adopt and relaunch the blocked session in place using `bin/fm-runtime-handoff.sh <task-id> --harness <name> [--model <name>] [--effort <level>] [--progress-note <text>]`. This cleanly exits the blocked agent, preserves the existing worktree, lease, PR metadata, and work-in-progress without loss, and relaunches the replacement agent in the same worktree to continue execution seamlessly.
 
 ## 5. Recovery
 

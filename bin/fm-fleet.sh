@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-fleet.sh — FirstMate federation CLI. Coordinates multiple operators through a
-# shared, cross-uid-safe, git-backed KB. See docs/fleet-quickstart.md,
+# shared, cross-uid-safe, data-only KB. See docs/fleet-quickstart.md,
 # docs/fleet-addon.md, and .agents/skills/federation/SKILL.md.
 #
 # Usage:

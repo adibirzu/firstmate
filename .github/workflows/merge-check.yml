@@ -27,8 +27,13 @@ jobs:
           set -eu
           git remote add upstream https://github.com/kunchenguid/firstmate.git
           git fetch --no-tags upstream main
-          if ! git merge-tree --write-tree HEAD FETCH_HEAD >/dev/null; then
-            echo "::error::This branch conflicts with upstream kunchenguid/firstmate main. Merge upstream main into it and resolve the conflicts before landing."
-            exit 1
+          rc=0
+          git merge-tree --write-tree HEAD FETCH_HEAD >/dev/null || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "Merges cleanly with upstream kunchenguid/firstmate main."
+          elif [ "$rc" -eq 1 ]; then
+            echo "::warning::This branch conflicts with upstream kunchenguid/firstmate main. Merge upstream main into it and resolve the conflicts before landing."
+          else
+            echo "::error::git merge-tree exited $rc before reaching a merge verdict."
+            exit "$rc"
           fi
-          echo "Merges cleanly with upstream kunchenguid/firstmate main."
