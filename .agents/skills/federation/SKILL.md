@@ -13,7 +13,7 @@ metadata:
 Multiple operators (e.g. `alice`/`bob`/`carol` — any OS users on the host), each
 running their **own** first mate as themselves, whose firstmate homes may be named
 and located differently, coordinate through one **shared, group-writable,
-git-backed KB** so
+data-only KB** so
 work is routed by domain, never overlaps, and is visible in realtime. This skill
 owns that procedure. The CLI is `bin/fm-fleet.sh` (lib: `bin/fm-fleet-lib.sh`).
 
@@ -78,10 +78,9 @@ exercises every code path.
 
 ## Notes
 
-- Every KB mutation is git-committed in the shared dir → durable "who did what
-  when" audit; optionally mirror to a private GitHub repo for offsite/cross-box.
-  Heartbeats are the one exception — a transient file write, never committed, so
-  liveness does not bloat the log.
+- Every KB mutation appends a line to `events.log` in the shared dir, the durable "who did what when" audit.
+  The data-only KB contract is owned by the `bin/fm-fleet-lib.sh` header.
+  Heartbeats are the one exception - a transient file write, never logged, so liveness does not bloat the log.
 - Quota-secondary routing is implemented: each operator self-publishes its
   `quota-axi` min headroom into its `operators.md` `quota` column on heartbeat, and
   `route` skips any operator below `FM_FLEET_QUOTA_MIN` (no cross-user auth needed).
