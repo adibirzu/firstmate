@@ -48,12 +48,13 @@ jobs:
           # unreachable API can never pass an unsigned PR.
           body=${PR_BODY:-}
           origin='event payload'
-          if [ -n "${GH_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] && command -v gh >/dev/null 2>&1; then
+          repo=${GH_REPO:-${GITHUB_REPOSITORY:-}}
+          if [ -n "${GH_TOKEN:-}" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
             live_attempts=6
             live_delay_seconds=15
             attempt=1
             while [ "$attempt" -le "$live_attempts" ]; do
-              if ! live_body=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null); then
+              if ! live_body=$(gh api "repos/${repo}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null); then
                 echo "::warning::could not read the live body for PR #${PR_NUMBER}; judging the event payload snapshot instead."
                 break
               fi

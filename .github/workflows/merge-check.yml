@@ -1,0 +1,61 @@
+name: Merge check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changed-lint:
+    name: Changed shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Run changed-shard lint
+        env:
+          GITHUB_ACTIONS: "false"
+          CI: "false"
+        run: bin/fm-lint.sh
+
+  changed-tests:
+    name: Changed behavior tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Run changed tests
+        run: bin/fm-test-run.sh --changed --base origin/main
+
+  upstream-merge-probe:
+    name: Upstream main merge probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Probe merge against upstream main
+        run: |
+          set -eu
+          git remote add upstream https://github.com/kunchenguid/firstmate.git
+          git fetch upstream main
+          git merge-tree --write-tree HEAD upstream/main >/dev/null
