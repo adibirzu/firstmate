@@ -28,13 +28,13 @@ costs nothing. This is the single biggest saving vs. N self-polling primaries.
 | Concern | Mechanism | Tokens |
 |---|---|---|
 | Claim / route / handoff / reap | `fm-fleet.sh` (flock + awk) | 0 |
-| Liveness | `fm-fleet.sh heartbeat` (file write, **no git commit**) | 0 |
+| Liveness | `fm-fleet.sh heartbeat` (file write, **no event line**) | 0 |
 | Wait-for-work | `fm-fleet-wait.sh` (poll/block) | 0 |
 | Quota headroom | `quota-axi` published into `operators.md` | 0 |
 | Sync between operators | shared group-writable FS (same box) — live, no bus | 0 |
 
-Heartbeats deliberately **do not** `git commit` — liveness is transient, so it never
-bloats the KB audit log or churns the lock.
+Heartbeats deliberately write **no** `events.log` line - liveness is transient, so it never bloats the audit trail or churns the lock.
+The data-only KB contract is owned by the `bin/fm-fleet-lib.sh` header.
 
 ## Don't hand work to a drained account
 
