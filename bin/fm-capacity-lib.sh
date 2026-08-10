@@ -108,7 +108,7 @@
 # this home: every home, pool, and the operator's own interactive agent sessions
 # share the same physical RAM. fm_capacity_fleet_totals owns how a process is
 # matched against this list.
-FM_CAPACITY_WORKER_NAMES="claude codex opencode pi pi-signed grok kimi"
+FM_CAPACITY_WORKER_NAMES="claude codex opencode pi pi-signed grok kimi muse"
 
 FM_CAPACITY_CONFIG_FILE="spawn-capacity"
 
