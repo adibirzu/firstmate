@@ -34,6 +34,12 @@ FM_TEST_LIB_SOURCED=1
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
+# Pin the machine-capacity spawn guard to a fixed healthy machine so spawn tests
+# do not depend on how loaded the runner happens to be; tests/capacity-pin.sh
+# owns the values and the rationale.
+# shellcheck source=tests/capacity-pin.sh
+. "$(dirname "${BASH_SOURCE[0]}")/capacity-pin.sh"
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034
