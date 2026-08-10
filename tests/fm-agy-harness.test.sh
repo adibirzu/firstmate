@@ -161,9 +161,15 @@ test_agy_is_refused_as_a_secondmate_harness() {
   # The bare-name parse arm must not silently accept agy either.
   local sm_case
   # shellcheck disable=SC2016  # single quotes are deliberate: $KIND is literal sed pattern text
-  sm_case=$(sed -n '/^if \[ "\$KIND" = secondmate \]; then/,/^fi$/p' "$SPAWN" | head -20)
-  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|codex\|opencode\|pi\|pi-signed\|grok\|kimi\)" \
-    || fail "fm-spawn: secondmate bare-adapter allowlist changed or still carries agy"
+  sm_case=$(sed -n '/^\(el\)\?if \[ "\$KIND" = secondmate \]; then/,/^fi$/p' "$SPAWN" | head -20)
+  # The allowlist legitimately grows as more adapters are verified for secondmate
+  # launches, so this pins the invariant that matters rather than the exact set:
+  # the bare-name arm exists, and agy is not one of the names it accepts.
+  printf '%s\n' "$sm_case" | grep -Eq "^ *''\|claude\|" \
+    || fail "fm-spawn: secondmate bare-adapter allowlist arm not found"
+  if printf '%s\n' "$sm_case" | grep -E "^ *''\|" | grep -Fq 'agy'; then
+    fail "fm-spawn: secondmate bare-adapter allowlist still carries agy"
+  fi
   printf '%s\n' "$sm_case" | grep -Fq 'secondmate_harness_unsupported agy' \
     || fail "fm-spawn: bare 'agy' secondmate name is not explicitly refused"
   pass "fm-spawn: agy is refused as a secondmate harness on every non-raw path"
@@ -171,13 +177,16 @@ test_agy_is_refused_as_a_secondmate_harness() {
 
 test_agy_not_recovery_graded_in_secondmate_sweep() {
   local sweep
-  sweep=$(sed -n '/^secondmate_liveness_sweep()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
-  [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_sweep not found"
-  if printf '%s\n' "$sweep" | grep -Eq '^ *claude\|.*\|agy\) *;;'; then
+  # The per-secondmate reading owns this allowlist; the sweep delegates to it.
+  sweep=$(sed -n '/^secondmate_liveness_one()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
+  [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_one not found"
+  # As with the spawn allowlist, the verified set legitimately grows, so pin the
+  # invariant instead of the exact membership: the arm exists and agy is not in it.
+  printf '%s\n' "$sweep" | grep -Eq '^ *claude\|.*\) *;;' \
+    || fail "fm-bootstrap: secondmate recovery-grade allowlist arm not found"
+  if printf '%s\n' "$sweep" | grep -E '^ *claude\|.*\) *;;' | grep -Fq 'agy'; then
     fail "fm-bootstrap: agy must not be in the secondmate recovery-grade harness allowlist"
   fi
-  printf '%s\n' "$sweep" | grep -Fq 'claude|codex|opencode|pi|pi-signed|grok|kimi) ;;' \
-    || fail "fm-bootstrap: secondmate recovery-grade allowlist changed unexpectedly"
   pass "fm-bootstrap: agy dead/missing readings are not trusted as secondmate recovery-grade"
 }
 
