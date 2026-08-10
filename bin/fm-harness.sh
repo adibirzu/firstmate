@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|muse|agy|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -35,6 +35,10 @@ detect_own() {
   # multiplexer's stored environment can silently misidentify one of them before
   # ancestry is consulted. This is a precedence hazard, not evidence that
   # CLAUDECODE inheritance into a kimi child was observed; it was not observed.
+  # agy (Antigravity CLI) sets ANTIGRAVITY_AGENT=1 for its child/tool
+  # processes (verified 2026-08-01 on agy 1.1.9). Check before CLAUDECODE so
+  # an agy worker is never misidentified when both markers are present.
+  [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   if [ "${PI_CODING_AGENT:-}" = "true" ]; then
     if [ "${FM_PI_HARNESS:-}" = pi-signed ]; then echo pi-signed; else echo pi; fi
@@ -74,6 +78,7 @@ detect_own() {
       *cline*) echo cline; return ;;
       *cursor*) echo cursor-agent; return ;;
       *copilot*) echo copilot; return ;;
+      agy) echo agy; return ;;
       kimi) echo kimi; return ;;
       # muse's installed launcher ~/.local/bin/muse execs ~/.local/bin/muse-bin-<version>
       # (verified in the published launcher, muse 0.1.0-R708.1), so the live process
@@ -94,6 +99,7 @@ detect_own() {
           *cline*) echo cline; return ;;
           *cursor*) echo cursor-agent; return ;;
           *copilot*) echo copilot; return ;;
+          *" agy "*|*"/agy "*|*/agy) echo agy; return ;;
           *" pi "*|*/pi) echo pi; return ;;
         esac ;;
       MainThread)

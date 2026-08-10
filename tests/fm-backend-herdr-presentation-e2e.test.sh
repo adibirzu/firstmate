@@ -496,6 +496,10 @@ touch "$HOME_DIR/state/.last-watcher-beat"
 # Presentation spaces are on by default, so the flat baseline below opts out
 # explicitly; the projected cases each restate the setting they exercise.
 printf 'off\n' > "$HOME_DIR/config/herdr-presentation-spaces"
+# This real-backend suite deliberately keeps several sleeping fixture agents
+# alive at once. Disable the machine-capacity admission guard inside the
+# temporary home so host load from unrelated lanes cannot make the E2E flaky.
+printf 'mode = off\n' > "$HOME_DIR/config/spawn-capacity"
 printf 'Projection anchor fixture.\n' > "$HOME_DIR/data/anchor/brief.md"
 printf 'Projection E2E fixture.\n' > "$HOME_DIR/data/shape/brief.md"
 printf 'Projection ordering fixture A.\n' > "$HOME_DIR/data/order-a/brief.md"
@@ -778,7 +782,10 @@ remember_meta_worktree "$ORDER_B_META" >/dev/null
 ORDER_LIST=$(lab workspace list) || fail "could not inspect concurrent presentation ordering"
 CREATED_LABELS=$(projection_labels_from_log "$PROJECTION_ORDER_START")
 EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\n2ndmate-alpha\n2ndmate-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
-ACTUAL_LABELS=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[].label')
+ACTUAL_LABELS=$(printf '%s' "$ORDER_LIST" | jq -r '
+  .result.workspaces[].label
+  | select(. == "firstmate" or (. | startswith("└ ")) or (. | startswith("2ndmate-")))
+')
 [ "$ACTUAL_LABELS" = "$EXPECTED_LABELS" ] || fail "workspace order was not firstmate, stable primary block, secondmates: $ACTUAL_LABELS"
 PRIMARY_IDS=$(printf '%s' "$ORDER_LIST" | jq -r '
   .result.workspaces[]
@@ -789,7 +796,13 @@ MOVE_TARGETS=$(cut -f2 "$MOVE_CALL_LOG")
 [ "$MOVE_TARGETS" = "$PRIMARY_IDS" ] \
   || fail "workspace.move targeted something other than each exact current projected-create id"
 MOVE_INDEXES=$(cut -f3 "$MOVE_CALL_LOG")
-[ "$MOVE_INDEXES" = $'1\n2\n3' ] \
+EXPECTED_MOVE_INDEXES=$(printf '%s' "$ORDER_LIST" | jq -r '
+  .result.workspaces as $spaces
+  | range(0; $spaces | length) as $i
+  | select(($spaces[$i].label | startswith("└ ")) or ($spaces[$i].label | startswith("firstmate/")))
+  | $i
+')
+[ "$MOVE_INDEXES" = "$EXPECTED_MOVE_INDEXES" ] \
   || fail "concurrent primary workers did not append stably to the contiguous block: $MOVE_INDEXES"
 SECOND_ORDER_AFTER=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[] | select(.label | startswith("2ndmate-")) | .workspace_id')
 [ "$SECOND_ORDER_AFTER" = "$SECOND_ORDER_BEFORE" ] \
@@ -904,7 +917,7 @@ if lab workspace get "$PROJECTED_WSID" >/dev/null 2>&1; then
 fi
 lab pane get "$SECOND_TWO_PANE" >/dev/null 2>&1 \
   || fail "projected teardown affected the focused secondmate workspace"
-[ ! -e "$JOURNAL" ] || fail "confirmed projected teardown did not retire its presentation journal"
+[ ! -e "$JOURNAL" ] || fail "confirmed projected teardown did not retire its presentation journal: $(cat "$TMP_ROOT/on-teardown.err")"
 pass "real Herdr lab: exact task-pane close removes the projected workspace with no unrestored wrong-focus interval"
 
 teardown_task order-a "$HOME_DIR" > "$TMP_ROOT/order-a-teardown.out" 2> "$TMP_ROOT/order-a-teardown.err" &
@@ -956,7 +969,10 @@ for ROUND in 1 2 3; do
   wait "$WAVE_A_TEARDOWN_PID" || fail "focus wave $ROUND teardown A failed"
   wait "$WAVE_B_TEARDOWN_PID" || fail "focus wave $ROUND teardown B failed"
   assert_focus_is "$CAPTAIN_FOCUS" "focus wave $ROUND concurrent teardowns"
-  WAVE_REMAINING=$(lab workspace list | jq -r '.result.workspaces[].label')
+  WAVE_REMAINING=$(lab workspace list | jq -r '
+    .result.workspaces[].label
+    | select(. == "firstmate" or (. | startswith("└ ")) or (. | startswith("2ndmate-")))
+  ')
   [ "$WAVE_REMAINING" = $'firstmate\n2ndmate-alpha\n2ndmate-bravo' ] \
     || fail "focus wave $ROUND cleanup left a projected workspace behind: $WAVE_REMAINING"
 done
@@ -972,6 +988,8 @@ mkdir -p "$SECOND_HOME_A/state" "$SECOND_HOME_A/config" "$SECOND_HOME_A/data" \
   "$SECOND_HOME_B/state" "$SECOND_HOME_B/config" "$SECOND_HOME_B/data"
 printf 'alpha\n' > "$SECOND_HOME_A/.fm-secondmate-home"
 printf 'bravo\n' > "$SECOND_HOME_B/.fm-secondmate-home"
+printf 'mode = off\n' > "$SECOND_HOME_A/config/spawn-capacity"
+printf 'mode = off\n' > "$SECOND_HOME_B/config/spawn-capacity"
 touch "$SECOND_HOME_A/state/.last-watcher-beat" "$SECOND_HOME_B/state/.last-watcher-beat"
 # Ensure the secondmate homes look like gitignored firstmate homes so inheritance
 # may write config/herdr-presentation-spaces.

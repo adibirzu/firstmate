@@ -21,6 +21,10 @@ file_mode() {
   fi
 }
 
+treehouse_home_for_verb() {
+  awk -F '\t' -v verb="$2" '$1==verb { print $2; exit }' "$1"
+}
+
 install_fake_process_event_sweep() {
   local home=$1 log=$2
   mkdir -p "$home/bin"
