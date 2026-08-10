@@ -127,65 +127,27 @@ resolve_permissive_tmux_kill_ref() {
 
 # --- shared: a pre-refactor bin/ shim --------------------------------------
 #
-# build_old_bin echoes a directory whose bin/ subdir holds the PRE-REFACTOR
-# fm-send.sh, fm-peek.sh, fm-watch.sh, fm-spawn.sh, fm-teardown.sh, and any
-# changed source-library dependency (all extracted from BASE_REF), plus copies
-# of every OTHER sibling script those five entrypoints source, so those copies are exactly
-# what BASE_REF would have used too. Copies keep BASH_SOURCE-based sibling
-# resolution inside the synthetic tree on both macOS and Linux; symlinks make
-# that resolution shell/platform-dependent. FM_ROOT_OVERRIDE pointed at this dir's
-# root makes "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
-# fm-backend.sh (and its bin/backends/ adapters) is the dispatcher every one
-# of the five REFACTORED scripts sources; it must be a real, reachable file in
-# the old bin/ too or `. "$SCRIPT_DIR/fm-backend.sh"` aborts under set -eu -
-# hence the dispatcher is a copied sibling, while the tmux adapter is extracted
-# from BASE_REF so conformance tests retain the exact historical behavior even
-# when this branch changes tmux dispatch semantics.
-OLD_BIN_UNCHANGED_SIBLINGS="fm-gate-refuse-lib.sh fm-guard.sh fm-lock-lib.sh fm-tasks-axi-lib.sh fm-pr-lib.sh fm-tangle-lib.sh fm-tmux-lib.sh fm-composer-lib.sh fm-wake-lib.sh fm-classify-lib.sh fm-supervision-lib.sh fm-ff-lib.sh fm-config-inherit-lib.sh fm-project-mode.sh fm-harness.sh fm-crew-state.sh fm-nm-run-lib.sh fm-decision-hold.sh fm-backend.sh fm-operational-input.sh fm-public-followup-lib.sh fm-secondmate-registry-lib.sh fm-secondmate-parent-lib.sh fm-x-lib.sh"
-# A pull-request merge may add a new main-only dependency that the branch's older baseline does not have yet.
-OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh"
-OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh fm-marker-lib.sh"
+# build_old_bin echoes a directory whose bin/ subdir is the complete bin/ tree
+# from BASE_REF.
+# Materializing the whole historical tree keeps every entrypoint and sourced
+# sibling on the same revision, while avoiding a hand-maintained dependency
+# list that can omit a newly sourced helper and make the old process abort
+# before it reaches the behavior under test.
+# FM_ROOT_OVERRIDE pointed at this dir's root makes
+# "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
+# The teardown conformance case applies its explicitly historical tmux adapter
+# after this complete baseline has been materialized.
 
-# sed program that extracts `<lib>.sh` from a `. "$SCRIPT_DIR/<lib>.sh"` source
-# line. Single-quoted deliberately: the `\$` is a literal dollar inside the
-# regex, matching the text `$SCRIPT_DIR`, not a shell expansion.
-# shellcheck disable=SC2016
-SOURCED_LIB_SED='s#^[[:space:]]*\.[[:space:]]+"\$(SCRIPT_DIR|FM_ROOT|ROOT)[^"]*/([A-Za-z0-9._-]+\.sh)".*#\2#p'
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
-  local name=$1 root bin f
+  local name=$1 root archive
   root="$TMP_ROOT/$name"
-  bin="$root/bin"
-  mkdir -p "$bin"
-  for f in $OLD_BIN_UNCHANGED_SIBLINGS; do
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  for f in $OLD_BIN_OPTIONAL_SIBLINGS; do
-    [ -f "$ROOT/bin/$f" ] || continue
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  cp -R "$ROOT/bin/backends" "$bin/backends"
-  git -C "$ROOT" show "$BASE_REF:bin/backends/tmux.sh" > "$bin/backends/tmux.sh"
-  for f in $OLD_BIN_REFACTORED; do
-    git -C "$ROOT" show "$BASE_REF:bin/$f" > "$bin/$f"
-    chmod +x "$bin/$f"
-  done
-  # BACKSTOP: copy any sibling the assembled scripts source that the explicit
-  # lists above missed. Those lists are hand-maintained and rot whenever a
-  # script gains a dependency - OLD_BIN_UNCHANGED_SIBLINGS had already fallen
-  # behind fm-treehouse-lib.sh, so the old fm-teardown.sh died on a missing
-  # `source` and the suite reported "should succeed: expected exit 0, got 1".
-  # Additive only: it never overwrites a file already placed above, so the
-  # BASE_REF versions of the refactored scripts stay exactly as written.
-  local dep
-  for f in "$bin"/*.sh; do
-    [ -f "$f" ] || continue
-    while IFS= read -r dep; do
-      [ -n "$dep" ] || continue
-      [ -e "$bin/$dep" ] && continue
-      [ -f "$ROOT/bin/$dep" ] || continue
-      cp "$ROOT/bin/$dep" "$bin/$dep"
-    done < <(sed -nE "$SOURCED_LIB_SED" "$f")
-  done
+  archive="$root/bin.tar"
+  mkdir -p "$root"
+  git -C "$ROOT" archive --format=tar "$BASE_REF" bin > "$archive" \
+    || fail "old-bin shim: could not archive bin/ from $BASE_REF"
+  tar -xf "$archive" -C "$root" \
+    || fail "old-bin shim: could not extract bin/ from $BASE_REF"
+  rm -f "$archive"
   printf '%s\n' "$root"
 }
 
@@ -828,7 +790,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_treehouse "$fb" "$wt"
+  fm_fake_exit0 "$fb" treehouse
   printf '%s\n' "$fb"
 }
 
@@ -898,7 +860,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_treehouse "$fb" "$wt"
+  fm_fake_exit0 "$fb" treehouse
   printf '%s\n' "$fb"
 }
 
@@ -936,7 +898,7 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
   assert_contains "$out" "worktree=$wt" \
     "fm-spawn.sh did not resolve a symlinked-prefix project to its real worktree when the backend reports $first_reply cwd"
 
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
 }
 
 test_spawn_symlinked_project_prefix_avoids_false_refusal() {
@@ -1098,7 +1060,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux (the default) must not write backend= to meta (P1 compatibility contract)"
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: an explicit --backend tmux resolves silently and writes no backend= (missing means tmux)"
 }
 
@@ -1122,7 +1084,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully even with HERDR_ENV=1 set"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux must win over an ambient HERDR_ENV=1 auto-detect marker"
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: explicit --backend tmux wins over an ambient HERDR_ENV=1 auto-detect marker"
 }
 
@@ -1152,7 +1114,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   case "$out" in
     *NOTICE*) fail "auto-detecting tmux (even nested inside herdr) must stay silent, no NOTICE expected"$'\n'"$out" ;;
   esac
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 

@@ -19,8 +19,13 @@
 # container - a bordered composer box, where the harness draws its own prompt
 # glyph (e.g. claude's older `| > ... |`). On a bare, unstructured row it is a
 # dead-shell prompt and is NEVER "empty"; it classifies as `unknown` (not a safe
-# injection target). The AGENT prompt glyphs `❯` (claude), `›` (codex), and `→`
-# (cursor-agent) are a genuine empty agent composer either way, bordered or bare.
+# injection target). The AGENT prompt glyphs `❯` (claude), `›` (codex),
+# `→` (cursor-agent), and `⟩` (U+27E9, muse) are a genuine empty agent
+# composer either way, bordered or bare. Every agent glyph must be listed in
+# ALL THREE places below - the ghost-stripped-to-empty fallback, the bare-row
+# case, and the leading-glyph strip - because a glyph present in only some of
+# them classifies inconsistently depending on how its harness happens to
+# colour the row.
 #
 # GHOST/PLACEHOLDER TEXT is the other half of this owner (task
 # afk-herdr-false-pending): a harness fills an otherwise-empty composer with
@@ -80,6 +85,11 @@ fm_composer_strip_ansi() {
 #     no fleet harness uses it for ghost text, so it is kept (real text wins:
 #     under-stripping merely defers, which the max-defer alarm surfaces, while
 #     over-stripping would inject over real input).
+# Raising FM_COMPOSER_GHOST_LUMA_MAX is not free: muse draws its `⟩` prompt glyph
+# in truecolor 38;2;90;160;255, luminance ~149.9 (verified, muse 0.1.0-R708.1),
+# the tightest margin over the 128 default in the fleet. Above ~150 that glyph is
+# stripped as ghost text, which is why the bare-glyph fallback below must also
+# recognise every agent glyph from the UNSTRIPPED plain row.
 # The dim/faint and dark-foreground states are tracked together as "de-emphasis";
 # codes are processed left to right within a sequence, so "ESC[0;2m" reads as dim.
 # LC_ALL=C makes awk walk bytes, so multibyte glyphs (e.g. ❯) and de-emphasised
@@ -166,12 +176,12 @@ fm_composer_strip_ghost() {
 # "What can I do for you?" / "Ask anything...", cursor-agent "→ Plan, search,
 # build anything" / "→ Add a follow-up" (cursor draws the → glyph in-line, so
 # the anchored alternates carry it). Bare agent prompt glyphs: ❯ (claude),
-# › (codex), → (cursor-agent) — never the shell glyphs > $ % #, which stay
-# dead-shell-unsafe on a bare row.
+# › (codex), → (cursor-agent), and ⟩ (muse) - never the shell glyphs > $ % #,
+# which stay dead-shell-unsafe on a bare row.
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
 FM_COMPOSER_IDLE_RE_DEFAULT='^(Type a message\.\.\.|What can I do for you\?|Ask anything\.\.\.|→ Plan, search, build anything|→ Add a follow-up)$'
 # shellcheck disable=SC2034 # Read by callers (fm-tmux-lib.sh, backends/*.sh) after sourcing.
-FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→]'
+FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→⟩]'
 
 # fm_composer_classify_content: the single shared composer-content verdict.
 #   <bordered> 1 when <content> came from a genuine agent-composer container (a
@@ -198,13 +208,13 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   plain_content=${5:-$content}
   if [ "$bordered" != 1 ] && [ -z "$content" ] && [ -n "$plain_content" ]; then
     case "$plain_content" in
-      '❯'|'›'|'→') printf 'empty'; return 0 ;;
+      '❯'|'›'|'→'|'⟩') printf 'empty'; return 0 ;;
       *) printf 'unknown'; return 0 ;;
     esac
   fi
   # A bare prompt glyph on its own row.
   case "$content" in
-    '❯'|'›'|'→')
+    '❯'|'›'|'→'|'⟩')
       # Agent prompt glyph: a genuine empty agent composer, bordered or bare.
       printf 'empty'; return 0 ;;
     '>'|'$'|'%'|'#')
@@ -221,8 +231,8 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   fi
   # Strip a leading prompt glyph, then re-judge the remainder.
   case "$content" in
-    '❯ '*|'› '*|'→ '*|'> '*|'$ '*|'% '*|'# '*) content=${content#??} ;;
-    '❯'*|'›'*|'→'*|'>'*|'$'*|'%'*|'#'*) content=${content#?} ;;
+    '❯ '*|'› '*|'→ '*|'⟩ '*|'> '*|'$ '*|'% '*|'# '*) content=${content#??} ;;
+    '❯'*|'›'*|'→'*|'⟩'*|'>'*|'$'*|'%'*|'#'*) content=${content#?} ;;
   esac
   content="${content#"${content%%[![:space:]]*}"}"
   content="${content%"${content##*[![:space:]]}"}"

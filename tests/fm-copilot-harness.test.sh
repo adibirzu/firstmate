@@ -45,7 +45,7 @@ test_existing_launch_templates_untouched() {
 
 test_copilot_is_a_known_bare_adapter_name() {
   # copilot must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|cline|cursor-agent|copilot)" "$SPAWN" \
+  grep -Fq "|cline|cursor-agent|copilot" "$SPAWN" \
     || fail "fm-spawn: copilot not added to a known-harness allowlist"
   pass "fm-spawn: copilot is recognized as a known bare adapter name"
 }
@@ -54,7 +54,7 @@ test_copilot_model_and_effort_flags() {
   # copilot takes --model and maps effort to --reasoning-effort, accepting the
   # full shared low|medium|high|xhigh|max vocabulary (no tier omitted, unlike
   # cline/codex/grok).
-  grep -Fq "|cline|cursor-agent|copilot)" "$SPAWN" \
+  grep -Fq "|cline|cursor-agent|copilot" "$SPAWN" \
     || fail "fm-spawn: copilot not in the --model allowlist"
   grep -Fq "low|medium|high|xhigh|max) printf -- '--reasoning-effort %s '" "$SPAWN" \
     || fail "fm-spawn: copilot effort->--reasoning-effort mapping missing"

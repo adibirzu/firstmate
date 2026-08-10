@@ -488,6 +488,9 @@ fm_backend_cmux_normalize_key() {  # <key>
     Enter|enter) printf 'enter' ;;
     Escape|escape|Esc|esc) printf 'escape' ;;
     C-c|c-c|ctrl+c|Ctrl+c|Ctrl+C|ctrl-c) printf 'ctrl-c' ;;
+    # C-u clears a composer line. fm-send.sh's muse interrupt path needs it to
+    # drop the prompt muse restores into the composer after Escape.
+    C-u|c-u|ctrl+u|Ctrl+u|Ctrl+U|ctrl-u) printf 'ctrl-u' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -532,55 +535,64 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
 # explicit direction - this is the highest-risk piece of a new backend's
 # send-and-verify logic, and cmux's `read-screen` gives plain-text capture
 # with no cursor-row primitive and no ANSI style channel like herdr's newer
-# `pane read --format ansi` path. The cmux classifier intentionally remains
-# border-row based: locate the
-# composer row as the only captured line whose TRIMMED content both STARTS and
-# ENDS with the same border glyph (│, ┃, or a plain ASCII |), scanning forward
-# and keeping the LAST match so an earlier border-shaped line (scrollback, a
-# popup) never outranks the real bottom-anchored composer row. A bare
-# (unbordered) row starting with a verified AGENT prompt glyph (❯ claude,
-# › codex, → cursor-agent; the shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT) is
-# the second recognized shape, mirroring herdr's bare branch, because cline
-# and cursor-agent draw their live composer without side borders. Shell-style
-# glyphs > $ % # never promote a bare row, so a dead shell stays 'unknown'.
+# `pane read --format ansi` path. Locate the LAST bordered composer row when
+# one exists. Current Claude Code also renders a borderless composer as a bare
+# agent-prompt row bounded by horizontal rules, which is the only bare shape
+# accepted here because cmux cannot identify a cursor row.
 FM_BACKEND_CMUX_COMPOSER_LINES=${FM_BACKEND_CMUX_COMPOSER_LINES:-20}
 FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
 FM_BACKEND_CMUX_BARE_PROMPT_RE=${FM_BACKEND_CMUX_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
 
+fm_backend_cmux_horizontal_rule() {  # <trimmed-line>
+  local remaining=$1
+  remaining=${remaining//─/}
+  remaining=${remaining//[[:space:]]/}
+  [ -n "$1" ] && [ -z "$remaining" ]
+}
+
 fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending|unknown
-  local target=$1 expected_label=${2:-} cap line trimmed stripped="" found=0 bordered=0
+  local target=$1 expected_label=${2:-} cap line trimmed stripped="" bare="" bordered_index=-1 bare_index=-1 i
+  local -a rows=()
   cap=$(fm_backend_cmux_capture "$target" "$FM_BACKEND_CMUX_COMPOSER_LINES" "$expected_label") || { printf 'unknown'; return 0; }
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     [ -n "$trimmed" ] || continue
+    rows+=("$trimmed")
     case "$trimmed" in
       '│'*'│'|'┃'*'┃'|'|'*'|')
         stripped=$trimmed
-        bordered=1
-        found=1
-        ;;
-      *)
-        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_CMUX_BARE_PROMPT_RE"; then
-          stripped=$trimmed
-          bordered=0
-          found=1
-        fi
+        bordered_index=$((${#rows[@]} - 1))
         ;;
     esac
   done < <(printf '%s\n' "$cap")
-  [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  if [ "$bordered" -eq 1 ]; then
-    stripped=${stripped//│/}
-    stripped=${stripped//┃/}
-    stripped=${stripped//|/}
-    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-    stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  for ((i = 1; i + 1 < ${#rows[@]}; i++)); do
+    fm_backend_cmux_horizontal_rule "${rows[i - 1]}" || continue
+    fm_backend_cmux_horizontal_rule "${rows[i + 1]}" || continue
+    case "${rows[i]}" in
+      '❯'*|'›'*|'→'*|'⟩'*)
+        bare=${rows[i]}
+        bare_index=$i
+        ;;
+    esac
+  done
+  if [ "$bare_index" -gt "$bordered_index" ]; then
+    # cmux has no cursor-position primitive. The horizontal-rule container plus
+    # an agent-only prompt glyph is the structural proof for this bare row.
+    case "$bare" in
+      $'❯\302\240') bare="" ;;
+    esac
+    fm_composer_classify_content 0 "$bare" "$FM_BACKEND_CMUX_IDLE_RE"
+    return 0
   fi
-  # A row was found only by the bordered shape or a bare AGENT-glyph row, so
-  # delegate to the shared owner with the matching bordered flag. A bare
-  # dead-shell prompt matches neither shape and already returned 'unknown'.
-  fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_CMUX_IDLE_RE"
+  [ "$bordered_index" -ge 0 ] || { printf 'unknown'; return 0; }
+  stripped=${stripped//│/}
+  stripped=${stripped//┃/}
+  stripped=${stripped//|/}
+  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  # A bordered row is a genuine composer box.
+  fm_composer_classify_content 1 "$stripped" "$FM_BACKEND_CMUX_IDLE_RE"
 }
 
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,
