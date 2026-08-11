@@ -2260,7 +2260,8 @@ cleanup_firstmate_home_children() {
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token" \
-      "$sub_state/$child_id.muse-session" "$sub_state/$child_id.muse-session-current"
+      "$sub_state/$child_id.muse-session" "$sub_state/$child_id.muse-session-current" \
+      "$sub_state/$child_id.handoff-prompt"
   done
 }
 
@@ -2558,7 +2559,8 @@ rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.muse-session-current" \
   "$STATE/.$ID.open-decisions-cursor" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
-  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note"
+  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
+  "$STATE/$ID.handoff-prompt"
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

@@ -150,6 +150,16 @@ Each project's pool lands under `.fm-pools/<slug>` on the repo's own filesystem,
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 `fm-spawn.sh` also owns the base-freshness boundary for every fresh ship and scout: no worker starts until its clean task worktree matches the fetched tip of origin's resolved default branch, and any unsafe or unverifiable base stops the spawn.
 Its header owns the exact refusal mechanics, while `tests/fm-spawn-pool-base-freshen.test.sh` owns the portable regression coverage.
+When a live ship or scout must change worker runtime mid-task, `bin/fm-runtime-handoff.sh` is the supported path.
+It exits the current agent with that harness's verified exit command, keeps the existing treehouse lease and worktree, relaunches a verified target harness through `fm-spawn.sh --reuse-worktree`, rewrites only the runtime and endpoint fields in `state/<id>.meta`, and re-delivers the original brief plus a progress note without regenerating the brief.
+A handoff refuses rather than guessing when the worktree, endpoint ownership, or target harness cannot be reconciled.
+It never aborts or restarts a live no-mistakes run; the replacement agent is told to re-attach with `no-mistakes axi status`.
+Firstmate decides when to invoke handoff; there is no automatic migration daemon.
+Pane statusline quota fragments are a best-effort capacity signal via `bin/fm-statusline-quota-lib.sh`, read on demand through `bin/fm-statusline-quota.sh <target>`.
+Only the statusline region of the capture is read, so transcript text carrying the same shapes cannot vote.
+Unparseable means unknown, never exhausted, and a context-window reading never counts as exhaustion.
+`quota-axi` remains best-effort and is not the sole input.
+No target-selection policy is encoded either: the scripts refuse an unverified or unreconcilable target instead of ranking harnesses, and the operating rules for choosing one belong to the [`stuck-crewmate-recovery` skill](../.agents/skills/stuck-crewmate-recovery/SKILL.md).
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.

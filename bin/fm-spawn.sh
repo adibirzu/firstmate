@@ -17,6 +17,7 @@
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --reuse-worktree --harness <name> [--handoff-brief <path>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
@@ -32,6 +33,9 @@
 #   or herdr), refuses unless the endpoint's shell is sitting in the recorded
 #   worktree, and clears the previous harness's per-task wiring before arming
 #   the new incarnation.
+#   --reuse-worktree is a compatibility alias for the runtime-handoff script's
+#   stopped-endpoint relaunch path. It uses the same safety checks as
+#   --relaunch and accepts --handoff-brief as a launch-only prompt substitute.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -267,6 +271,7 @@ BACKEND_ARG=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+HANDOFF_BRIEF=
 HARNESS_SET=0
 PROVIDER_SET=0
 MODEL_SET=0
@@ -276,6 +281,7 @@ MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
+REUSE_WORKTREE=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -292,6 +298,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      handoff-brief) HANDOFF_BRIEF=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -301,6 +308,7 @@ for a in "$@"; do
     --scout) KIND=scout; KIND_SET=1 ;;
     --secondmate) KIND=secondmate; KIND_SET=1 ;;
     --relaunch) RELAUNCH=1 ;;
+    --reuse-worktree) RELAUNCH=1; REUSE_WORKTREE=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --provider) want_value=provider ;;
@@ -317,6 +325,8 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --handoff-brief) want_value=handoff-brief ;;
+    --handoff-brief=*) HANDOFF_BRIEF=${a#--handoff-brief=} ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -356,6 +366,12 @@ esac
 # task's own durable record below. Contradicting it on the command line is a
 # refusal rather than a silently-ignored flag.
 if [ "$RELAUNCH" -eq 1 ]; then
+  if [ "$REUSE_WORKTREE" -eq 1 ]; then
+    [ "$HARNESS_SET" -eq 1 ] || { echo "error: --reuse-worktree requires an explicit --harness" >&2; exit 1; }
+    [ -z "$HANDOFF_BRIEF" ] || [ -f "$HANDOFF_BRIEF" ] || { echo "error: --handoff-brief not found: $HANDOFF_BRIEF" >&2; exit 1; }
+  else
+    [ -z "$HANDOFF_BRIEF" ] || { echo "error: --handoff-brief requires --reuse-worktree" >&2; exit 1; }
+  fi
   [ "$BACKEND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded backend; --backend cannot override it" >&2; exit 1; }
   [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
   [ "$MODE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2; exit 1; }
@@ -1801,6 +1817,9 @@ else
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
+fi
+if [ -n "$HANDOFF_BRIEF" ]; then
+  BRIEF=$HANDOFF_BRIEF
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 
