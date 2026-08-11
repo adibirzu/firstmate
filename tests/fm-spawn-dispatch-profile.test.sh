@@ -59,7 +59,9 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  # Must come before the spawn path starts: fm-spawn executes treehouse to lease
+  # the worktree and reads the path off its stdout.
+  fm_fake_treehouse "$fakebin"
   make_spawn_pi_probe "$fakebin" pi
   make_spawn_pi_probe "$fakebin" pi-signed
   printf '%s\n' "$fakebin"

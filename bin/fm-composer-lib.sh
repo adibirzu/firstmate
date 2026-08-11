@@ -56,7 +56,7 @@
 #                still starts and ends with the family's rule glyph is
 #                tolerated, not ambiguity.
 #   bare       - an agent prompt glyph row with no border at all (claude `❯`,
-#                codex `›`, muse `⟩`). The agent glyph is itself the container
+#                codex `›`, cursor-agent `→`, muse `⟩`). The agent glyph is itself the container
 #                proof; a bare SHELL glyph (`>` `$` `%` `#`) never is.
 #   left-bar   - opencode: rows prefixed by a heavy left bar `┃` with no
 #                closing border, holding the idle hint, blank rows, and a
@@ -72,7 +72,7 @@
 # what a pane shows once its agent has exited to a plain login shell - is a
 # genuine empty agent composer ONLY inside a bordered container. On a bare row
 # it is a dead-shell prompt and classifies `unknown` (never a safe injection
-# target). The AGENT glyphs `❯` (claude), `›` (codex), and `⟩` (U+27E9, muse)
+# target). The AGENT glyphs `❯` (claude), `›` (codex), `→` (cursor-agent), and `⟩` (U+27E9, muse)
 # are a genuine empty agent composer either way. Both glyph sets are declared
 # exactly once below; every decision reaches them through the declarations.
 #
@@ -278,7 +278,7 @@ fm_composer_strip_ghost() {
 # a dead-shell prompt and must never read `empty`. Newline-separated and
 # consumed by `read` rather than word splitting, so `$`, `%`, and `#` stay
 # literal and no entry is ever exposed to pathname expansion.
-FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩')
+FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '→' '⟩')
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in
@@ -286,7 +286,8 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # bordered placeholder and opencode's left-bar hint (which continues with a
 # rotating quoted suggestion, hence the unanchored tail). FM_COMPOSER_IDLE_RE
 # overrides for an unverified harness; matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything\.\.\.'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything\.\.\.$|^What can I do for you\?$|^→ (Plan, search, build anything|Add a follow-up)$'
+FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -433,6 +434,7 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
     if [ "$styled" != 1 ]; then
       printf 'unknown'; return 0
     fi
+    printf 'empty'; return 0
   fi
   printf 'pending'; return 0
 }

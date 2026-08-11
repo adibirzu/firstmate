@@ -77,6 +77,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # every backend so the decision cannot drift.
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-composer-lib.sh"
+FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
 
 # Shared, backend-neutral normalized-transition shape and the single-owner
 # status->action policy table (bin/fm-transition-lib.sh). This adapter's event
