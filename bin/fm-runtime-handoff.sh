@@ -189,14 +189,10 @@ if [ -n "$PROJ_REAL" ] && [ "$WT_REAL" = "$PROJ_REAL" ]; then
   exit 1
 fi
 
-# Verified harness only: reuse spawn's launch_template gate by requiring a known name.
-case "$HARNESS" in
-  claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|agy) ;;
-  *)
-    echo "error: target harness '$HARNESS' is not a verified adapter; refuse rather than launching it" >&2
-    exit 1
-    ;;
-esac
+if ! fm_control_harness_supports_kind "$HARNESS" "$KIND"; then
+  echo "error: target harness '$HARNESS' is not a verified adapter for $KIND handoff; refuse rather than launching it" >&2
+  exit 1
+fi
 
 if [ -n "$PROGRESS_NOTE_FILE" ]; then
   [ -f "$PROGRESS_NOTE_FILE" ] || { echo "error: --progress-note-file not found: $PROGRESS_NOTE_FILE" >&2; exit 1; }

@@ -329,7 +329,7 @@ setup_case() {
 # Every refusal below runs the LIVE-endpoint shape through the bin farm, so the
 # stubbed fm-send.sh proves the destructive exit never happened.
 
-# Newly verified crewmate adapters must be accepted as runtime-handoff targets.
+# Verified crewmate adapters must be accepted as runtime-handoff targets.
 {
   setup_case accept-new-targets task-u2
   export FM_FAKE_WINDOW_PRESENT=1
@@ -344,7 +344,7 @@ for a in "$@"; do printf '%s\n' "$a" >> "$FM_FAKE_SPAWN_LOG"; done
 exit 0
 SH
   chmod +x "$farm/fm-spawn.sh"
-  for h in cline cursor-agent copilot agy; do
+  for h in cline cursor-agent copilot agy muse; do
     : > "$CASE_DIR/spawn-$h.log"
     set +e
     out=$(FM_ROOT_OVERRIDE="$ROOT" FM_FAKE_SPAWN_LOG="$CASE_DIR/spawn-$h.log" \
@@ -355,7 +355,7 @@ SH
     assert_contains "$(cat "$CASE_DIR/spawn-$h.log")" "$h" "spawn args should carry target harness $h"
   done
   [ -f "$CASE_WT/dirty.txt" ] || fail "handoff must not touch worktree contents"
-  pass "accepts newly verified handoff target adapters"
+  pass "accepts verified handoff target adapters"
 }
 
 # Handoff from the newly verified adapters must classify the live agent and send
