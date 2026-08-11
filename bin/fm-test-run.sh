@@ -926,7 +926,7 @@ families_for_changed_path() {
     bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-quota-axi-lib.sh)
       printf '%s\n' session-bootstrap
       ;;
-    bin/fm-account-*|bin/fm-accounts-*|bin/fm-fleet.sh|bin/fm-fleet-join.sh|\
+    bin/fm-account-*|bin/fm-accounts-*|bin/fm-home-boundary-lib.sh|bin/fm-fleet.sh|bin/fm-fleet-join.sh|\
     bin/fm-fleet-lib.sh|bin/fm-fleet-quota-lib.sh|bin/fm-fleet-wait.sh|\
     bin/fm-spawn-acct.sh|bin/quota-copilot-usage.sh|bin/quota-cursor-usage.sh|\
     bin/quota-sources/*|scripts/fleet-root-prereq.sh)
