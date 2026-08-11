@@ -27,6 +27,10 @@ command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v claude >/dev/null 2>&1 || { echo "skip: claude not found"; exit 0; }
 [ -x "$HERDR_LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $HERDR_LAB_HELPER"; exit 0; }
+if herdr agent start --help 2>/dev/null | grep -q -- '--pane <ID>'; then
+  echo "skip: installed Herdr agent start no longer exposes the persisted launch-argv creation path"
+  exit 0
+fi
 
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name fm-herdr-launch-argv) || fail "could not generate a lab session name"
 LAB_CWD=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-launch-argv.XXXXXX")
