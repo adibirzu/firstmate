@@ -287,6 +287,7 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # rotating quoted suggestion, hence the unanchored tail). FM_COMPOSER_IDLE_RE
 # overrides for an unverified harness; matching is case-insensitive.
 FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything\.\.\.$|^What can I do for you\?$|^→ (Plan, search, build anything|Add a follow-up)$'
+# shellcheck disable=SC2034 # Read by backend adapters that source this library.
 FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer

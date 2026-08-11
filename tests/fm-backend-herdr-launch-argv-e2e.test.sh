@@ -67,6 +67,7 @@ recorded_cwd() {  # <label>
 }
 
 marker_process_present() {
+  # shellcheck disable=SC2009 # Portable argv-substring probe for this E2E marker.
   ps -eo command | grep -Fq -- "--add-dir $MARKER"
 }
 

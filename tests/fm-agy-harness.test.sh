@@ -181,6 +181,7 @@ test_agy_not_recovery_graded_in_secondmate_sweep() {
   local sweep allowed rejected
   sweep=$(sed -n '/^secondmate_liveness_one()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
   [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_one not found"
+  # shellcheck disable=SC2016 # Literal source pattern under test.
   printf '%s\n' "$sweep" | grep -Fq 'fm_control_harness_state_recovery_grade "$harness"' \
     || fail "fm-bootstrap: secondmate sweep no longer delegates recovery-grade truth to fm-control-lib"
   # shellcheck source=bin/fm-control-lib.sh
