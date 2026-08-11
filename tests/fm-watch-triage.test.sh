@@ -1007,6 +1007,7 @@ test_live_agent_declared_pause_is_absorbed() {
   [ -e "$state/.paused-rechecked-$key" ] || { reap "$pid"; fail "the recheck marker was deleted, so the pause could never hold again"; }
   assert_not_contains "$(cat "$out")" "stale: $window" "a bare stale surfaced for a declared pause on a live agent"
   reap "$pid"
+  rm -f "$state/.watcher-down"
 
   # Second path, and the one that kept the escalation alive after the first was
   # fixed: the recheck marker AGES OUT past STALE_ESCALATE_SECS, so the branch

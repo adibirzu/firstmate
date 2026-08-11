@@ -286,7 +286,7 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # bordered placeholder and opencode's left-bar hint (which continues with a
 # rotating quoted suggestion, hence the unanchored tail). FM_COMPOSER_IDLE_RE
 # overrides for an unverified harness; matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything\.\.\.$|^What can I do for you\?$|^→ (Plan, search, build anything|Add a follow-up)$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything\.\.\..*$|^What can I do for you\?$|^→ (Plan, search, build anything|Add a follow-up)$'
 # shellcheck disable=SC2034 # Read by backend adapters that source this library.
 FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
@@ -402,7 +402,7 @@ fm_composer_idle_matches() {
 # trimmed with.
 fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [plain_content] [placeholder-position] [styled]
   local bordered=$1 idle_re=${3:-} idle_case=${4:-sensitive} content plain_content glyph=''
-  local placeholder_position=${6:-0} styled=${7:-1} idle_collision=0
+  local placeholder_position=${6:-0} styled=${7:-1} idle_collision=0 idle_collision_before=0
   content=$2
   fm_composer_normalize_trim_var content
   plain_content=${5:-$2}
@@ -421,7 +421,10 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
     return 0
   fi
   [ -n "$content" ] || { printf 'empty'; return 0; }
-  fm_composer_idle_matches "$content" "$idle_re" "$idle_case" && idle_collision=1
+  if fm_composer_idle_matches "$content" "$idle_re" "$idle_case"; then
+    idle_collision=1
+    idle_collision_before=1
+  fi
   if fm_composer_leading_prompt_glyph_var glyph "$content"; then
     content=${content#*"$glyph"}
   fi
@@ -429,13 +432,21 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   [ -n "$content" ] || { printf 'empty'; return 0; }
   fm_composer_idle_matches "$content" "$idle_re" "$idle_case" && idle_collision=1
   if [ "$idle_collision" = 1 ]; then
-    if [ "$placeholder_position" = 1 ] && [ "$bordered" = 1 ] && [ "$styled" != 1 ]; then
+    if [ "$styled" = 1 ] && [ "$placeholder_position" != 1 ]; then
+      if [ "$bordered" = 1 ] || [ "$idle_collision_before" = 1 ]; then
+        printf 'empty'; return 0
+      fi
+    fi
+    if [ "$styled" = 1 ] && [ "$placeholder_position" = 1 ]; then
+      printf 'pending'; return 0
+    fi
+    if [ "$styled" = 1 ] && [ "$bordered" != 1 ] && [ "$idle_collision_before" != 1 ]; then
+      printf 'pending'; return 0
+    fi
+    if [ "$placeholder_position" = 1 ] && [ "$bordered" = 1 ]; then
       printf 'empty'; return 0
     fi
-    if [ "$styled" != 1 ]; then
-      printf 'unknown'; return 0
-    fi
-    printf 'empty'; return 0
+    printf 'unknown'; return 0
   fi
   printf 'pending'; return 0
 }
