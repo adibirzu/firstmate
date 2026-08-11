@@ -154,6 +154,7 @@ test_agy_is_refused_as_a_secondmate_harness() {
   # HARNESS=agy for a secondmate must refuse before endpoint creation.
   grep -Fq 'secondmate_harness_unsupported' "$SPAWN" \
     || fail "fm-spawn: no secondmate crewmate-only refusal helper"
+  # shellcheck disable=SC2016 # The grep pattern intentionally matches literal source text.
   grep -Fq 'muse|cline|cursor-agent|copilot|agy) secondmate_harness_unsupported "$HARNESS"' "$SPAWN" \
     || fail "fm-spawn: post-resolution crewmate-only secondmate guard missing"
   # The bare-name parse arm must not silently accept agy either.

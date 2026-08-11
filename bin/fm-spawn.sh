@@ -2930,6 +2930,7 @@ if [ -n "$ACCOUNT_ENV_PREFIX" ]; then
   LAUNCH="$ACCOUNT_ENV_PREFIX $LAUNCH"
 fi
 if [ -n "$ACCOUNT_ARGV_WORDS" ]; then
+  # shellcheck disable=SC2016 # Match the literal launch-brief command word inside the assembled launch template.
   brief_word='"$('"$sq_opinput"' encode launch-brief < '"$sq_brief"')"'
   case "$LAUNCH" in
     *"$brief_word") LAUNCH=${LAUNCH%"$brief_word"}"$ACCOUNT_ARGV_WORDS $brief_word" ;;
