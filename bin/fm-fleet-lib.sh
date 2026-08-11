@@ -19,13 +19,15 @@
 #   locks/        flock targets (backlog.lock)
 #
 # Every mutating function takes the backlog lock and asserts the target is a
-# shared/own dir (never a foreign /home).
+# shared/own dir (never a foreign private home).
 
 # The quota/pace SURFACE layer is a separate leaf library (zero KB dependencies).
 # fm_fleet_register/fm_fleet_heartbeat below call fm_fleet_quota_now from it.
 # Resolved from THIS file's own directory: every consumer still sources only
 # bin/fm-fleet-lib.sh, so no caller's sourcing contract changes.
 _FM_FLEET_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-home-boundary-lib.sh
+. "$_FM_FLEET_LIB_DIR/fm-home-boundary-lib.sh"
 # shellcheck source=bin/fm-fleet-quota-lib.sh
 . "$_FM_FLEET_LIB_DIR/fm-fleet-quota-lib.sh"
 unset _FM_FLEET_LIB_DIR
@@ -153,22 +155,13 @@ fm_fleet_assert_usable() { # dir
 # test dir) and /opt/... shared dirs are allowed.
 fm_fleet_assert_shared() {
   local dir rp owner me; dir=$1
-  # `realpath -m` is GNU coreutils. Where it is missing or rejects -m the command
-  # substitution yields "", which matches no case below — the guard would fail
-  # OPEN and wave a foreign home through. Fall back to the absolutized path so the
-  # /home/<other> prefix is still caught.
-  rp=$(realpath -m "$dir" 2>/dev/null) || rp=""
-  [ -n "$rp" ] || case "$dir" in /*) rp=$dir ;; *) rp=$PWD/$dir ;; esac
+  rp=$(fm_home_boundary_resolve "$dir")
   me=$(id -un)
-  case "$rp" in
-    /home/*)
-      owner=${rp#/home/}; owner=${owner%%/*}
-      if [ "$owner" != "$me" ]; then
-        echo "fm-fleet: refusing to touch another operator's home: $rp" >&2
-        return 1
-      fi
-      ;;
-  esac
+  owner=$(fm_home_boundary_private_owner "$rp" || true)
+  if [ -n "$owner" ] && [ "$owner" != "$me" ]; then
+    echo "fm-fleet: refusing to touch another operator's home: $rp" >&2
+    return 1
+  fi
   return 0
 }
 

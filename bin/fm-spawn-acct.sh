@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # fm-spawn-acct.sh — multi-account wrapper around fm-spawn.sh.
 #
-# Adds a per-spawn --account axis by composing an account-isolated launch command
-# (fm_account_compose_launch) and handing it to fm-spawn's raw-launch escape hatch.
-# Isolation rides in the command string, so it survives the Herdr/tmux pane boundary;
-# no secret is placed on argv.
+# Adds a per-spawn --account axis by exporting account isolation for fm-spawn's
+# canonical launch template. Isolation rides in the generated pane command, so it
+# survives the Herdr/tmux pane boundary; no secret is placed on argv.
 #
 # Scope: config-dir accounts (claude/codex/pi/cline). api-key accounts
 # (grok/cursor) are refused here (a key would land on argv) — use
@@ -36,8 +35,11 @@ done
 [ -n "$ACCOUNT" ] || { echo "usage: fm-spawn-acct.sh <task-id> <project-dir> --account <name> [--model M] [--effort E] [flags...]" >&2; exit 1; }
 [ "${#POS[@]}" -ge 1 ] || { echo "error: task-id (and usually project-dir) required" >&2; exit 1; }
 
-LAUNCH=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT") || exit $?
+fm_account_prepare_supervised_spawn "$ACCOUNT" || exit $?
 
 FM_SPAWN_BIN="${FM_SPAWN_BIN:-$SCRIPT_DIR/fm-spawn.sh}"
-# fm-spawn signature: <task-id> <project-dir> [<harness>|<launch-command>] [flags...]
-exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" ${PASS[@]+"${PASS[@]}"}
+SPAWN_ARGS=("${POS[@]}" --harness "$FM_ACCOUNT_SUPERVISED_HARNESS")
+[ -z "$MODEL" ] || SPAWN_ARGS+=(--model "$MODEL")
+[ -z "$EFFORT" ] || SPAWN_ARGS+=(--effort "$EFFORT")
+SPAWN_ARGS+=("${PASS[@]}")
+exec "$FM_SPAWN_BIN" "${SPAWN_ARGS[@]}"

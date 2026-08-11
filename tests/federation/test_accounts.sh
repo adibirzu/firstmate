@@ -52,10 +52,16 @@ JSON
 fm_account_validate c >/dev/null 2>&1 && bad "wrong env-for-harness passed validate" || ok "wrong env-for-harness rejected"
 
 # 7. validate: foreign-home path refused (cross-uid safety)
+FOREIGN_USER="not-$(id -un)"
 cat > "$FM_ACCOUNTS_FILE" <<JSON
 { "f": {"provider":"anthropic","harness":"claude","isolation":"config-dir-env","env":"CLAUDE_CONFIG_DIR","config_dir":"/home/someoneelse/.claude"} }
 JSON
 fm_account_validate f >/dev/null 2>&1 && bad "foreign-home path passed validate" || ok "foreign-home path refused"
+
+cat > "$FM_ACCOUNTS_FILE" <<JSON
+{ "f": {"provider":"anthropic","harness":"claude","isolation":"config-dir-env","env":"CLAUDE_CONFIG_DIR","config_dir":"/Users/$FOREIGN_USER/.claude"} }
+JSON
+fm_account_validate f >/dev/null 2>&1 && bad "macOS foreign-home path passed validate" || ok "macOS foreign-home path refused"
 
 rm -rf "$TMP"
 echo "-----"; [ "$fails" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$fails FAILURE(S)"; exit 1; }

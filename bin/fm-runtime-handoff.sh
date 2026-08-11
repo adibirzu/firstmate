@@ -63,6 +63,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-control-lib.sh
+. "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 
@@ -189,7 +191,7 @@ fi
 
 # Verified harness only: reuse spawn's launch_template gate by requiring a known name.
 case "$HARNESS" in
-  claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
+  claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor-agent|copilot|agy) ;;
   *)
     echo "error: target harness '$HARNESS' is not a verified adapter; refuse rather than launching it" >&2
     exit 1
@@ -206,11 +208,8 @@ fi
 
 # Exit command facts from harness-adapters (do not invent adapters here).
 handoff_exit_spec() {  # <harness> -> prints "text:<cmd>" or "key:<key>"
-  case "$1" in
-    claude|opencode|grok|kimi) printf 'text:/exit\n' ;;
-    codex|pi|pi-signed) printf 'text:/quit\n' ;;
-    *) return 1 ;;
-  esac
+  fm_control_exit_spec "$1" || return 1
+  printf '\n'
 }
 
 # The recorded backend owns the recorded endpoint string: every ownership check
@@ -263,7 +262,11 @@ case "$STATE_NOW" in
       echo "error: meta for $ID has no harness= to select an exit command; refusing handoff while the endpoint is alive" >&2
       exit 1
     fi
-    EXIT_SPEC=$(handoff_exit_spec "$OLD_HARNESS") || {
+    EXIT_HARNESS=$(fm_control_harness_family "$OLD_HARNESS") || {
+      echo "error: no verified exit command for recorded harness '$OLD_HARNESS'; refuse rather than guess" >&2
+      exit 1
+    }
+    EXIT_SPEC=$(handoff_exit_spec "$EXIT_HARNESS") || {
       echo "error: no verified exit command for recorded harness '$OLD_HARNESS'; refuse rather than guess" >&2
       exit 1
     }

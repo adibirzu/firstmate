@@ -3,12 +3,11 @@
 #
 # Consumes fm-accounts-lib.sh. Two consumers, two mechanisms:
 #
-#   * fm-spawn-acct.sh (SUPERVISED paned spawns) -> fm_account_compose_launch
-#     Builds a launch command for fm-spawn's raw-launch escape hatch. Isolation
-#     rides IN the command string (env prefix, or --config flag) so it survives
-#     the tmux/Herdr pane boundary. config-dir methods only: an env PREFIX for a
-#     config dir is not a secret, but an api-key on argv WOULD be — so api-key
-#     accounts are refused here and routed to the exec shim.
+#   * fm-spawn-acct.sh (SUPERVISED paned spawns) -> fm_account_prepare_supervised_spawn
+#     Exports nonsecret account isolation for fm-spawn's canonical launch
+#     template. config-dir methods only: an env PREFIX for a config dir is not a
+#     secret, but an api-key on argv WOULD be — so api-key accounts are refused
+#     here and routed to the exec shim.
 #
 #   * fm-account-exec.sh / direct launches -> fm_account_apply_env
 #     Exports the isolation env in THIS process (incl. api-key read from key_file),
@@ -23,58 +22,31 @@ _fm_acct_lib() { # source fm-accounts-lib.sh once
   _FM_ACCT_LIB_LOADED=1
 }
 
-# Compose a launch command for fm-spawn's raw-launch escape hatch.
-# args: name [model] [effort]  -> echoes the launch command; nonzero on refusal.
-fm_account_shell_quote() {
-  local value=${1-} out="'"
-  while [ -n "$value" ]; do
-    case "$value" in
-      *"'"*)
-        out="${out}${value%%"'"*}'\\''"
-        value=${value#*"'"}
-        ;;
-      *)
-        out="${out}${value}'"
-        value=
-        ;;
-    esac
-  done
-  [ "$out" != "'" ] || out="''"
-  printf '%s' "$out"
-}
-
-fm_account_shell_word() {
-  local value=${1-}
-  case "$value" in
-    ''|*[!A-Za-z0-9_./:@%+=,-]*) fm_account_shell_quote "$value" ;;
-    *) printf '%s' "$value" ;;
-  esac
-}
-
-fm_account_compose_launch() { # name [model] [effort]
+fm_account_prepare_supervised_spawn() { # name
   _fm_acct_lib
-  local name=$1 model=${2:-} effort=${3:-}
-  local line harness iso env flag cdir kfile out
+  local name=$1 line harness iso env flag cdir kfile
+  unset FM_SPAWN_ACCOUNT_ENV_NAME FM_SPAWN_ACCOUNT_ENV_VALUE
+  unset FM_SPAWN_ACCOUNT_ARGV_FLAG FM_SPAWN_ACCOUNT_ARGV_VALUE
+  FM_ACCOUNT_SUPERVISED_HARNESS=
   fm_account_validate "$name" || return 1
   line=$(fm_account_resolve "$name")
   IFS=$'\t' read -r harness iso env flag cdir kfile <<<"$line"
   case "$iso" in
-    config-dir-env)  out="$env=$(fm_account_shell_word "$cdir") $harness" ;;
-    config-dir-flag) out="$harness $flag $(fm_account_shell_word "$cdir")" ;;
+    config-dir-env)
+      export FM_SPAWN_ACCOUNT_ENV_NAME=$env
+      export FM_SPAWN_ACCOUNT_ENV_VALUE=$cdir
+      ;;
+    config-dir-flag)
+      export FM_SPAWN_ACCOUNT_ARGV_FLAG=$flag
+      export FM_SPAWN_ACCOUNT_ARGV_VALUE=$cdir
+      ;;
     api-key-env)
       echo "fm-account: '$name' uses api-key isolation; a supervised spawn would put the key on argv. Use fm-account-exec.sh for a direct launch." >&2
       return 2 ;;
     *) echo "fm-account: $name unknown isolation '$iso'" >&2; return 1 ;;
   esac
-  [ -n "$model" ] && out="$out --model $(fm_account_shell_word "$model")"
-  if [ -n "$effort" ]; then
-    case "$harness" in
-      claude|codex|pi|cursor-agent) out="$out --effort $(fm_account_shell_word "$effort")" ;;
-      grok) out="$out --reasoning-effort $(fm_account_shell_word "$effort")" ;;
-      *) echo "fm-account: harness '$harness' has no known effort flag; ignoring --effort $effort" >&2 ;;
-    esac
-  fi
-  printf '%s\n' "$out"
+  # shellcheck disable=SC2034
+  FM_ACCOUNT_SUPERVISED_HARNESS=$harness
 }
 
 # Apply isolation to THIS process's environment (direct/exec launches).

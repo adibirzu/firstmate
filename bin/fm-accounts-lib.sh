@@ -19,6 +19,11 @@
 #                 "config_dir":"<path>"|null, "key_file":"<path>"|null,
 #                 "scopes":["..."] } }
 
+_FM_ACCOUNTS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-home-boundary-lib.sh
+. "$_FM_ACCOUNTS_LIB_DIR/fm-home-boundary-lib.sh"
+unset _FM_ACCOUNTS_LIB_DIR
+
 # Verified harness -> expected "<isolation>\t<env-or-flag>" (matrix source of truth).
 fm_account_expect() { # harness
   case "$1" in
@@ -41,18 +46,13 @@ fm_accounts_file() {
 fm_account_assert_safe_path() { # path
   local p rp owner me; p=${1:-}
   [ -n "$p" ] && [ "$p" != "-" ] || return 0
-  # `realpath -m` is GNU coreutils; where it is missing or rejects -m the result is
-  # "" and the case below matches nothing, i.e. the guard fails OPEN. Fall back to
-  # the absolutized path so a foreign-home prefix is still caught.
-  rp=$(realpath -m "$p" 2>/dev/null) || rp=""
-  [ -n "$rp" ] || case "$p" in /*) rp=$p ;; *) rp=$PWD/$p ;; esac
+  rp=$(fm_home_boundary_resolve "$p")
   me=$(id -un)
-  case "$rp" in
-    /home/*) owner=${rp#/home/}; owner=${owner%%/*}
-      if [ "$owner" != "$me" ]; then
-        echo "fm-accounts: refusing foreign-home path: $rp" >&2; return 1
-      fi ;;
-  esac
+  owner=$(fm_home_boundary_private_owner "$rp" || true)
+  if [ -n "$owner" ] && [ "$owner" != "$me" ]; then
+    echo "fm-accounts: refusing foreign-home path: $rp" >&2
+    return 1
+  fi
   return 0
 }
 

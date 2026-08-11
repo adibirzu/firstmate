@@ -150,14 +150,12 @@ test_agy_effort_never_emits_a_combination_agy_rejects() {
 # --- crewmate-only posture --------------------------------------------------
 
 test_agy_is_refused_as_a_secondmate_harness() {
-  # backends/tmux.sh carries no agy agent-process liveness pattern, so a live
-  # agy secondmate classifies `ambiguous` forever. Every non-raw path that can
-  # resolve HARNESS=agy for a secondmate must refuse before endpoint creation.
+  # agy has no primary supervision protocol. Every non-raw path that can resolve
+  # HARNESS=agy for a secondmate must refuse before endpoint creation.
   grep -Fq 'secondmate_harness_unsupported' "$SPAWN" \
     || fail "fm-spawn: no secondmate crewmate-only refusal helper"
-  # shellcheck disable=SC2016  # single quotes are deliberate: a literal needle string, not an expansion
-  grep -Fq 'if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then' "$SPAWN" \
-    || fail "fm-spawn: post-resolution agy secondmate guard missing (covers --harness and config/secondmate-harness)"
+  grep -Fq 'muse|cline|cursor-agent|copilot|agy) secondmate_harness_unsupported "$HARNESS"' "$SPAWN" \
+    || fail "fm-spawn: post-resolution crewmate-only secondmate guard missing"
   # The bare-name parse arm must not silently accept agy either.
   local sm_case
   # shellcheck disable=SC2016  # single quotes are deliberate: $KIND is literal awk pattern text
@@ -172,7 +170,7 @@ test_agy_is_refused_as_a_secondmate_harness() {
     || fail "fm-spawn: secondmate bare-adapter parse arm is missing or reshaped"
   printf '%s\n' "$sm_case" | grep -Eq "^ *''\|[^)]*\bagy\b" \
     && fail "fm-spawn: secondmate bare-adapter allowlist still carries agy"
-  printf '%s\n' "$sm_case" | grep -Fq 'secondmate_harness_unsupported agy' \
+  printf '%s\n' "$sm_case" | grep -Fq 'muse|cline|cursor-agent|copilot|agy)' \
     || fail "fm-spawn: bare 'agy' secondmate name is not explicitly refused"
   pass "fm-spawn: agy is refused as a secondmate harness on every non-raw path"
 }

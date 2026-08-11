@@ -21,10 +21,9 @@ owns that procedure. The CLI is `bin/fm-fleet.sh` (lib: `bin/fm-fleet-lib.sh`).
 
 Operators share **only** the fleet dir. **Never** read or write another operator's
 private home (`~/.claude`, credentials, their own firstmate home). Every
-mutating fleet function calls `fm_fleet_assert_shared`, which refuses any path
-resolving into a foreign `/home/<other>`. Credentials stay `0700`, read only by
-their owner's own processes. This replaces FirstMate's single-uid filesystem-copy
-propagation, which cannot work across uids.
+mutating fleet function calls `fm_fleet_assert_shared`, which refuses any path resolving into a foreign `/home/<other>` or `/Users/<other>`.
+Credentials stay `0700`, read only by their owner's own processes.
+This replaces FirstMate's single-uid filesystem-copy propagation, which cannot work across uids.
 
 ## Fleet dir resolution
 

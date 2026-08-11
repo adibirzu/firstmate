@@ -124,6 +124,8 @@ status_out=$("$FLEET_CLI" status); echo "$status_out" | grep -q 'operator' && ok
 # sourcing the lib and asserting a foreign home is refused
 ( . bin/fm-fleet-lib.sh; fm_fleet_assert_shared "/home/someoneelse/firstmate" ) 2>/dev/null \
   && bad "safety: foreign home NOT refused" || ok "safety: foreign home refused"
+( . bin/fm-fleet-lib.sh; fm_fleet_assert_shared "/Users/not-$(id -un)/firstmate" ) 2>/dev/null \
+  && bad "safety: macOS foreign home NOT refused" || ok "safety: macOS foreign home refused"
 ( . bin/fm-fleet-lib.sh; fm_fleet_assert_shared "/opt/agents/fleet" ) 2>/dev/null \
   && ok "safety: /opt shared dir allowed" || bad "safety: /opt wrongly refused"
 

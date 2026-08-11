@@ -134,7 +134,7 @@ Paths in `accounts.json` are used **literally** — `~` and `$HOME` are not expa
 Secrets never go in the file: api-key accounts name a `key_file` (a `0600` file in
 your own home) that is read at launch into the child's environment, never onto
 `argv`. `config_dir` and `key_file` must live under your own home; a path resolving
-into another user's `/home/<other>` is refused.
+into another user's `/home/<other>` or `/Users/<other>` is refused.
 
 > **Known limit:** `quota-axi` reports per *provider*, not per *account*, so two
 > Claude accounts show one shared number. Per-account discrimination works where

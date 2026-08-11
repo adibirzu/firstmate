@@ -426,7 +426,7 @@ Cline runs as an interactive TUI crewmate. Unlike Kimi, a positional prompt seed
 | Effort | Maps to `--thinking none|low|medium|high|xhigh` (no `max`; omit rather than pass an unsupported value). A live `--thinking high` launch showed `(high)` in the status bar. |
 | TTY | Even `cline config` refuses without a TTY; supervise only through a pty/pane, never a bare pipe. |
 
-Turn-end is observed from the pane, not a hook: the `esc to cancel` spinner clears and the composer returns to its idle placeholder. cline exposes `--hooks-dir` and a `hook` subcommand, which is the path for a future primary-session turn-end guard (only needed when firstmate ITSELF runs on cline); a cline CREWMATE needs no launch-side turn-end placeholder. cline is not wired for secondmate launches, so no `backends/tmux.sh` agent-process liveness entry is required yet.
+Turn-end is observed from the pane, not a hook: the `esc to cancel` spinner clears and the composer returns to its idle placeholder. cline exposes `--hooks-dir` and a `hook` subcommand, which is the path for a future primary-session turn-end guard (only needed when firstmate ITSELF runs on cline); a cline CREWMATE needs no launch-side turn-end placeholder. cline is not wired for secondmate launches.
 
 Full empirical capture evidence: [`docs/verification/cline-adapter.md`](../../../docs/verification/cline-adapter.md).
 
@@ -478,7 +478,7 @@ cline/cursor-agent.
 Turn-end is observed from the pane, not a hook: the `Working.*esc interrupt`
 spinner/footer clears and the composer returns to its bare `❯` idle glyph.
 copilot is not wired for secondmate launches, so no `backends/tmux.sh`
-agent-process liveness entry is required yet, matching cline/cursor-agent
+secondmate support is intentionally absent, matching cline/cursor-agent
 precedent. The folder-trust readiness gate (WI-4) is now wired, so a spawn
 into a genuinely fresh worktree at any path reaches a ready/working pane
 without human interaction, or fails loudly within the poll budget instead of
@@ -577,7 +577,7 @@ A `-i` / `--prompt-interactive` prompt seeds AND auto-runs the first turn once t
 | Skill invocation | Not separately verified beyond natural language; use natural language if the exact slash skill form is uncertain. |
 
 Turn-end is observed from the pane, not a hook: the `esc to cancel` footer clears and the composer returns to `? for shortcuts`.
-agy is not wired for secondmate launches, so it carries no `backends/tmux.sh` agent-process liveness entry; a live agy secondmate would classify `ambiguous` on every session start, which is why the combination is refused rather than left readable-in-name-only.
+agy is not wired for secondmate launches, so the combination is refused rather than left readable-in-name-only.
 `fm-spawn.sh` enforces that: a `--secondmate` spawn resolving to `agy` (bare name, `--harness=`, or the `config/secondmate-harness` chain) refuses before endpoint creation, and `fm-bootstrap.sh`'s secondmate liveness sweep does not treat agy's `dead`/`missing` readings as recovery-grade.
 
 Full empirical capture evidence: [`docs/verification/agy-adapter.md`](../../../docs/verification/agy-adapter.md).

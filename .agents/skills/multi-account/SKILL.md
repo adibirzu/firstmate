@@ -27,7 +27,7 @@ the matrix in `docs/fleet-addon.md` (enforced by `bin/fm-accounts-lib.sh`):
 api-key accounts store a `key_file` path (a `0600` file in the operator's OWN
 home). The key is read into the child's environment at launch — never onto the
 command line, never into a log, never into git. `config_dir`/`key_file` must live
-under the operator's own home (a foreign `/home/<other>` is refused).
+under the operator's own home (a foreign `/home/<other>` or `/Users/<other>` is refused).
 
 ## Procedure
 1. **Prereq (once, on-demand):** `bin/fm-accounts-prereq.sh` to check the CLIs are
@@ -40,8 +40,7 @@ under the operator's own home (a foreign `/home/<other>` is refused).
    isolation; ties → first registered; no quota data → first registered).
 4. **Supervised spawn (config-dir accounts):**
    `bin/fm-spawn-acct.sh <id> <dir> --account <name> [--model M] [--effort E]`.
-   It composes an isolated launch command and hands it to `fm-spawn`'s raw-launch
-   hatch (no `fm-spawn` edit; no secret on argv).
+   It passes the account's verified harness to `fm-spawn` and exports nonsecret isolation for the canonical launch template.
 5. **Direct isolated launch (api-key accounts, or non-supervised):**
    `bin/fm-account-exec.sh <name> <cli> [args]` — reads the key into the child's
    env, then execs.

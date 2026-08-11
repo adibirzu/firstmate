@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # --account axis test (Phase 4, Task 11). Run from ~/firstmate:
 #   bash tests/federation/test_spawn_account.sh
-# Exercises: launch-command composition for each config-dir isolation method,
-# model/effort folding, api-key refusal (no secret on argv), unknown-account
-# refusal, and the wrapper handing the composed command to fm-spawn (stubbed).
+# Exercises: supervised-spawn account isolation for each config-dir method,
+# api-key refusal (no secret on argv), unknown-account refusal, and the wrapper
+# handing canonical harness/model/effort args plus isolation env to fm-spawn.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
 FM_HOME="$(pwd)"; export FM_HOME
@@ -30,88 +30,95 @@ cat > "$FM_ACCOUNTS_FILE" <<JSON
 }
 JSON
 
-# 1. config-dir-env compose (env prefix, harness detected after it)
-c=$(fm_account_compose_launch claude-alt)
-[ "$c" = "CLAUDE_CONFIG_DIR=$CD claude" ] && ok "compose config-dir-env (claude)" || bad "compose claude (got '$c')"
+# 1. config-dir-env prepares a verified harness plus env isolation
+fm_account_prepare_supervised_spawn claude-alt >/dev/null 2>&1
+{ [ "$FM_ACCOUNT_SUPERVISED_HARNESS" = claude ] \
+  && [ "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" = CLAUDE_CONFIG_DIR ] \
+  && [ "${FM_SPAWN_ACCOUNT_ENV_VALUE:-}" = "$CD" ] \
+  && [ -z "${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}" ]; } \
+  && ok "prepare supervised config-dir-env (claude)" || bad "prepare claude env isolation"
 
-# 2. model+effort folding
-c=$(fm_account_compose_launch claude-alt opus high)
-[ "$c" = "CLAUDE_CONFIG_DIR=$CD claude --model opus --effort high" ] && ok "compose folds model+effort" || bad "compose model/effort (got '$c')"
+# 2. codex uses CODEX_HOME through the same canonical harness path
+fm_account_prepare_supervised_spawn codex-x >/dev/null 2>&1
+{ [ "$FM_ACCOUNT_SUPERVISED_HARNESS" = codex ] \
+  && [ "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" = CODEX_HOME ] \
+  && [ "${FM_SPAWN_ACCOUNT_ENV_VALUE:-}" = "$CD" ]; } \
+  && ok "prepare codex (CODEX_HOME)" || bad "prepare codex env isolation"
 
-# 3. codex uses CODEX_HOME
-c=$(fm_account_compose_launch codex-x)
-[ "$c" = "CODEX_HOME=$CD codex" ] && ok "compose codex (CODEX_HOME)" || bad "compose codex (got '$c')"
+# 3. config-dir-flag prepares an argv isolation pair, not a raw launch command
+fm_account_prepare_supervised_spawn cline-x >/dev/null 2>&1
+{ [ "$FM_ACCOUNT_SUPERVISED_HARNESS" = cline ] \
+  && [ "${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}" = --config ] \
+  && [ "${FM_SPAWN_ACCOUNT_ARGV_VALUE:-}" = "$CD" ] \
+  && [ -z "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" ]; } \
+  && ok "prepare config-dir-flag (cline)" || bad "prepare cline argv isolation"
 
-# 4. config-dir-flag compose (flag on argv, no env)
-c=$(fm_account_compose_launch cline-x)
-[ "$c" = "cline --config $CD" ] && ok "compose config-dir-flag (cline)" || bad "compose cline (got '$c')"
+# 4. config-dir-flag preserves paths with whitespace as one value
+fm_account_prepare_supervised_spawn cline-space >/dev/null 2>&1
+{ [ "$FM_ACCOUNT_SUPERVISED_HARNESS" = cline ] \
+  && [ "${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}" = --config ] \
+  && [ "${FM_SPAWN_ACCOUNT_ARGV_VALUE:-}" = "$CD_SPACE" ]; } \
+  && ok "prepare config-dir-flag path with spaces" || bad "prepare cline-space argv isolation"
 
-# 5. config-dir-flag quotes paths with whitespace
-c=$(fm_account_compose_launch cline-space)
-[ "$c" = "cline --config '$CD_SPACE'" ] && ok "compose quotes config-dir-flag paths" || bad "compose cline-space (got '$c')"
+# 5. api-key refusal (rc==2, no spawn isolation exported)
+fm_account_prepare_supervised_spawn grok-x >/dev/null 2>&1; rc=$?
+{ [ "$rc" -eq 2 ] \
+  && [ -z "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" ] \
+  && [ -z "${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}" ]; } \
+  && ok "api-key supervised spawn refused (no key on argv)" || bad "api-key refusal (rc=$rc)"
 
-# 6. composed launch is safe to hand to a shell
-CMDSTUB="$TMP/cmdstub"; mkdir -p "$CMDSTUB"
-cat > "$CMDSTUB/claude" <<'S'
-#!/usr/bin/env bash
-{
-  printf 'env=%s\n' "${CLAUDE_CONFIG_DIR:-}"
-  printf 'argc=%s\n' "$#"
-  for a in "$@"; do printf 'arg=%s\n' "$a"; done
-} > "$FM_CMD_OUT"
-S
-chmod +x "$CMDSTUB/claude"
-MODEL_WEIRD="sonnet; touch $TMP/pwned_model #"
-EFFORT_WEIRD="very high"
-c=$(fm_account_compose_launch claude-weird "$MODEL_WEIRD" "$EFFORT_WEIRD")
-FM_CMD_OUT="$TMP/cmd.out" PATH="$CMDSTUB:$PATH" bash -c "$c" >/dev/null 2>&1
-rc=$?
-{ [ "$rc" -eq 0 ] \
-  && [ ! -e "$TMP/pwned_dir" ] \
-  && [ ! -e "$TMP/pwned_model" ] \
-  && grep -qxF "env=$CD_WEIRD" "$TMP/cmd.out" \
-  && grep -qxF "arg=$MODEL_WEIRD" "$TMP/cmd.out" \
-  && grep -qxF "arg=$EFFORT_WEIRD" "$TMP/cmd.out"; } \
-  && ok "composed launch quotes shell-sensitive values" \
-  || bad "composed launch quoting (rc=$rc cmd='$c' out='$(cat "$TMP/cmd.out" 2>/dev/null)')"
+# 6. unknown account refused
+fm_account_prepare_supervised_spawn nope >/dev/null 2>&1 && bad "unknown account prepared" || ok "unknown account refused"
 
-# 7. api-key refusal (rc==2, nothing on stdout)
-out=$(fm_account_compose_launch grok-x 2>/dev/null); rc=$?
-{ [ "$rc" -eq 2 ] && [ -z "$out" ]; } && ok "api-key compose refused (no key on argv)" || bad "api-key refusal (rc=$rc out='$out')"
-
-# 8. unknown account refused
-fm_account_compose_launch nope >/dev/null 2>&1 && bad "unknown account composed" || ok "unknown account refused"
-
-# 9. wrapper hands composed command to fm-spawn (stub captures argv)
+# 7. wrapper hands canonical harness args to fm-spawn (stub captures argv/env)
 STUB="$TMP/spawn-stub.sh"
 cat > "$STUB" <<'S'
 #!/usr/bin/env bash
 : > "$FM_STUB_OUT"
-for a in "$@"; do printf '%s\n' "$a" >> "$FM_STUB_OUT"; done
+printf 'env_name=%s\n' "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" >> "$FM_STUB_OUT"
+printf 'env_value=%s\n' "${FM_SPAWN_ACCOUNT_ENV_VALUE:-}" >> "$FM_STUB_OUT"
+printf 'argv_flag=%s\n' "${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}" >> "$FM_STUB_OUT"
+printf 'argv_value=%s\n' "${FM_SPAWN_ACCOUNT_ARGV_VALUE:-}" >> "$FM_STUB_OUT"
+for a in "$@"; do printf 'arg=%s\n' "$a" >> "$FM_STUB_OUT"; done
 S
 chmod +x "$STUB"
 FM_STUB_OUT="$TMP/out.txt" FM_SPAWN_BIN="$STUB" \
   bash bin/fm-spawn-acct.sh T-1 /proj --account claude-alt --model opus >/dev/null 2>&1
-n=$(wc -l < "$TMP/out.txt")
-a1=$(sed -n '1p' "$TMP/out.txt"); a2=$(sed -n '2p' "$TMP/out.txt"); a3=$(sed -n '3p' "$TMP/out.txt")
-{ [ "$n" -eq 3 ] && [ "$a1" = "T-1" ] && [ "$a2" = "/proj" ] && [ "$a3" = "CLAUDE_CONFIG_DIR=$CD claude --model opus" ]; } \
-  && ok "wrapper passes (id, dir, composed-launch) to fm-spawn" || bad "wrapper passthrough (n=$n a1='$a1' a2='$a2' a3='$a3')"
+{ grep -qxF "env_name=CLAUDE_CONFIG_DIR" "$TMP/out.txt" \
+  && grep -qxF "env_value=$CD" "$TMP/out.txt" \
+  && grep -qxF "arg=T-1" "$TMP/out.txt" \
+  && grep -qxF "arg=/proj" "$TMP/out.txt" \
+  && grep -qxF "arg=--harness" "$TMP/out.txt" \
+  && grep -qxF "arg=claude" "$TMP/out.txt" \
+  && grep -qxF "arg=--model" "$TMP/out.txt" \
+  && grep -qxF "arg=opus" "$TMP/out.txt" \
+  && ! grep -q "arg=CLAUDE_CONFIG_DIR=" "$TMP/out.txt"; } \
+  && ok "wrapper passes canonical harness launch to fm-spawn" || bad "wrapper canonical passthrough ($(cat "$TMP/out.txt"))"
 
-# 10. wrapper refuses api-key account (fail-closed; stub NOT invoked)
+# 8. wrapper forwards config-dir-flag isolation without splitting spaces
+FM_STUB_OUT="$TMP/out-flag.txt" FM_SPAWN_BIN="$STUB" \
+  bash bin/fm-spawn-acct.sh T-3 /proj --account cline-space >/dev/null 2>&1
+{ grep -qxF "argv_flag=--config" "$TMP/out-flag.txt" \
+  && grep -qxF "argv_value=$CD_SPACE" "$TMP/out-flag.txt" \
+  && grep -qxF "arg=--harness" "$TMP/out-flag.txt" \
+  && grep -qxF "arg=cline" "$TMP/out-flag.txt"; } \
+  && ok "wrapper passes config-dir-flag isolation to fm-spawn" || bad "wrapper flag passthrough ($(cat "$TMP/out-flag.txt"))"
+
+# 9. wrapper refuses api-key account (fail-closed; stub NOT invoked)
 : > "$TMP/out2.txt"
 FM_STUB_OUT="$TMP/out2.txt" FM_SPAWN_BIN="$STUB" \
   bash bin/fm-spawn-acct.sh T-2 /proj --account grok-x >/dev/null 2>&1; rc=$?
 { [ "$rc" -ne 0 ] && [ ! -s "$TMP/out2.txt" ]; } && ok "wrapper fail-closed on api-key account" || bad "wrapper api-key (rc=$rc, stub-called=$( [ -s "$TMP/out2.txt" ] && echo yes || echo no ))"
 
-# 11. apply_env exports in the CALLER's shell (regression: must NOT be a subshell)
+# 10. apply_env exports in the CALLER's shell (regression: must NOT be a subshell)
 ( unset CLAUDE_CONFIG_DIR; fm_account_apply_env claude-alt && [ "$CLAUDE_CONFIG_DIR" = "$CD" ] ) \
   && ok "apply_env exports config-dir-env in caller shell" || bad "apply_env export (subshell regression)"
 
-# 12. config-dir-flag sets FM_ACCT_ARGV_SUFFIX (not stdout)
+# 11. config-dir-flag sets FM_ACCT_ARGV_SUFFIX (not stdout)
 ( fm_account_apply_env cline-x && [ "$FM_ACCT_ARGV_SUFFIX" = "--config $CD" ] ) \
   && ok "apply_env sets argv suffix for flag method" || bad "apply_env suffix"
 
-# 13. config-dir-flag direct launches keep the config dir as one argv
+# 12. config-dir-flag direct launches keep the config dir as one argv
 ( fm_account_apply_env cline-space \
   && [ "${#FM_ACCT_ARGV_SUFFIX_ARGS[@]}" -eq 2 ] \
   && [ "${FM_ACCT_ARGV_SUFFIX_ARGS[0]}" = "--config" ] \

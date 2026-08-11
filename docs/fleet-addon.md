@@ -103,9 +103,9 @@ Dispatch selection from these same signals is owned by
 names; this add-on only reads and renders what `quota-axi` reports.
 
 ### Cross-uid safety (non-negotiable)
-Every mutating fleet function calls `fm_fleet_assert_shared`, which refuses any
-path resolving into a foreign `/home/<other>`. Credentials stay `0700`, read only
-by their owner's own processes. See `.agents/skills/federation/SKILL.md`.
+Every mutating fleet function calls `fm_fleet_assert_shared`, which refuses any path resolving into a foreign `/home/<other>` or `/Users/<other>`.
+Credentials stay `0700`, read only by their owner's own processes.
+See `.agents/skills/federation/SKILL.md`.
 
 ### One privileged step (root, once)
 Run the reviewable, idempotent `scripts/fleet-root-prereq.sh` (walkthrough:
@@ -141,25 +141,21 @@ every registered account against it:
   }
 }
 ```
-`bin/fm-accounts-lib.sh` resolves + **validates** each account against the matrix
-(harness known, isolation matches the harness's method + env/flag, required
-fields present, and — reusing the federation guard — paths never in a foreign
-home). Copy `docs/examples/accounts.json` to start.
+`bin/fm-accounts-lib.sh` resolves + **validates** each account against the matrix (harness known, isolation matches the harness's method + env/flag, required fields present, and paths never in a foreign private home).
+Copy `docs/examples/accounts.json` to start.
 
 **Secrets never live in the registry.** api-key accounts store a `key_file` path
 (a `0600` file in the operator's own home); the key is read at launch into the
 child's environment — never onto argv, never into a log.
 
 ### The `--account` axis (`bin/fm-spawn-acct.sh`)
-Adds `--account <name>` through a wrapper that composes an account-isolated
-launch command and hands it to `fm-spawn`'s raw-launch escape hatch (which skips
-leading `ENV=val` tokens when detecting the harness):
+Adds `--account <name>` through a wrapper that resolves the account's verified harness and lets `fm-spawn` build the canonical launch template:
 
-- `config-dir-env`  → `CLAUDE_CONFIG_DIR=/path claude [--model … --effort …]`
-- `config-dir-flag` → `cline --config /path [--model …]`
+- `config-dir-env`  → prefixes the generated pane command, e.g. `CLAUDE_CONFIG_DIR=/path claude ...`.
+- `config-dir-flag` → inserts the flag before the generated brief argument, e.g. `cline --config /path ... "<brief>"`.
 
-The env prefix / flag rides **in the command string**, so isolation survives the
-Herdr/tmux pane boundary. Config-dir isolation puts **no secret on argv**.
+The env prefix / flag rides **in the generated pane command**, so isolation survives the Herdr/tmux pane boundary while preserving the brief, autonomy flags, and turn-end wiring from the canonical template.
+Config-dir isolation puts **no secret on argv**.
 
 api-key accounts are **refused** here (a key on argv would leak) → use
 `bin/fm-account-exec.sh <account> <cli> [args]` for a direct, non-supervised
@@ -260,8 +256,7 @@ bash tests/federation/test_account_quota.sh  # quota pick (isolate-then-query; t
   discrimination requires each account separately authed with creds quota-axi
   reads (verify on a real second account); codex quota (in `$CODEX_HOME/auth.json`)
   is expected to discriminate. `pi`/`cline` have no quota-axi coverage.
-- The raw-launch path bypasses `fm-spawn`'s per-harness model/effort mapping; the
-  wrapper folds `--model` and (for claude/codex/pi) `--effort` into the command.
+- Supervised account spawns keep `fm-spawn`'s per-harness model/effort mapping.
 
 ## Packaging options
 1. **Integrated FirstMate feature.** Keep the owner surfaces above together so the

@@ -149,11 +149,11 @@ SH
   printf '%s\n' "$farm"
 }
 
-# setup_case <name> <id>: home + project + worktree with a commit and dirty file.
+# setup_case <name> <id> [harness]: home + project + worktree with a commit and dirty file.
 # Sets CASE_DIR, CASE_HOME, CASE_PROJ, CASE_WT and exports FM_HOME + fake env
 # in the CALLING shell (must not be run under command substitution).
 setup_case() {
-  local name=$1 id=$2 fakebin
+  local name=$1 id=$2 harness=${3:-codex} fakebin
   CASE_DIR="$TMP_ROOT/$name"
   CASE_HOME="$CASE_DIR/home"
   CASE_PROJ="$CASE_DIR/project"
@@ -189,7 +189,7 @@ setup_case() {
     "endpoint_task_id=$id" \
     "worktree=$CASE_WT" \
     "project=$CASE_PROJ" \
-    "harness=codex" \
+    "harness=$harness" \
     "kind=ship" \
     "mode=no-mistakes" \
     "yolo=off" \
@@ -322,32 +322,82 @@ setup_case() {
   set -e
   [ "$rc" -ne 0 ] || fail "unverified harness should refuse"
   assert_contains "$out" "not a verified adapter" "unverified harness message"
-  [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must not touch worktree"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "handoff must not touch worktree contents"
   pass "refuses unverified target harness"
 }
 
 # Every refusal below runs the LIVE-endpoint shape through the bin farm, so the
 # stubbed fm-send.sh proves the destructive exit never happened.
 
-# A harness with no launch_template in fm-spawn.sh must be refused BEFORE the
-# exit, or the worker dies for a target that can never launch.
+# Newly verified crewmate adapters must be accepted as runtime-handoff targets.
 {
-  setup_case refuse-no-template task-u2
+  setup_case accept-new-targets task-u2
   export FM_FAKE_WINDOW_PRESENT=1
-  export FM_FAKE_PANE_CMD=codex
-  : > "$FM_FAKE_SEND_LOG"
+  export FM_FAKE_PANE_CMD=bash
   farm=$(make_bin_farm "$CASE_DIR")
-  for h in cline cursor-agent copilot; do
+  rm -f "$farm/fm-spawn.sh"
+  cat > "$farm/fm-spawn.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+: > "$FM_FAKE_SPAWN_LOG"
+for a in "$@"; do printf '%s\n' "$a" >> "$FM_FAKE_SPAWN_LOG"; done
+exit 0
+SH
+  chmod +x "$farm/fm-spawn.sh"
+  for h in cline cursor-agent copilot agy; do
+    : > "$CASE_DIR/spawn-$h.log"
     set +e
-    out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-u2 --harness "$h" 2>&1)
+    out=$(FM_ROOT_OVERRIDE="$ROOT" FM_FAKE_SPAWN_LOG="$CASE_DIR/spawn-$h.log" \
+      "$farm/fm-runtime-handoff.sh" task-u2 --harness "$h" --skip-exit 2>&1)
     rc=$?
     set -e
-    [ "$rc" -ne 0 ] || fail "harness '$h' has no launch template and must refuse"
-    assert_contains "$out" "not a verified adapter" "no-template harness message ($h)"
-    [ ! -s "$FM_FAKE_SEND_LOG" ] || fail "refusal for '$h' must not deliver an exit command"
+    [ "$rc" -eq 0 ] || fail "harness '$h' should be accepted as a handoff target: $out"
+    assert_contains "$(cat "$CASE_DIR/spawn-$h.log")" "$h" "spawn args should carry target harness $h"
   done
-  [ -f "$CASE_WT/dirty.txt" ] || fail "refusal must not touch worktree"
-  pass "refuses harnesses with no launch template before any exit"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "handoff must not touch worktree contents"
+  pass "accepts newly verified handoff target adapters"
+}
+
+# Handoff from the newly verified adapters must classify the live agent and send
+# that adapter's verified exit input before relaunching.
+{
+  farm=
+  for h in cline cursor-agent copilot agy; do
+    id="task-from-${h//-}"
+    recorded=$h
+    case "$h" in
+      cline) recorded=cline-cli ;;
+      cursor-agent) recorded=cursor-agent-cli ;;
+    esac
+    setup_case "from-$h" "$id" "$recorded"
+    export FM_FAKE_WINDOW_FILE="$CASE_DIR/window.present"
+    : > "$FM_FAKE_WINDOW_FILE"
+    export FM_FAKE_EXIT_MARKER="$CASE_DIR/exited"
+    export FM_FAKE_SEND_MARKS_EXIT="$FM_FAKE_EXIT_MARKER"
+    export FM_FAKE_PANE_CMD="$h"
+    : > "$FM_FAKE_SEND_LOG"
+    farm=$(make_bin_farm "$CASE_DIR")
+    rm -f "$farm/fm-spawn.sh"
+    cat > "$farm/fm-spawn.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+exit 0
+SH
+    chmod +x "$farm/fm-spawn.sh"
+    set +e
+    out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HANDOFF_EXIT_POLLS=5 FM_HANDOFF_EXIT_SLEEP=0 \
+      "$farm/fm-runtime-handoff.sh" "$id" --harness claude 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "handoff from '$h' should exit and relaunch: $out"
+    send_log=$(cat "$FM_FAKE_SEND_LOG")
+    case "$h" in
+      cline) assert_contains "$send_log" "$id --key C-c" "cline exit key delivered" ;;
+      cursor-agent) assert_contains "$send_log" "$id /quit" "cursor-agent exit command delivered" ;;
+      copilot|agy) assert_contains "$send_log" "$id /exit" "$h exit command delivered" ;;
+    esac
+  done
+  pass "sends verified exit input for newly verified source adapters"
 }
 
 # --- refusal: --provider is not part of the relaunch contract ---------------

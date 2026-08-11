@@ -108,7 +108,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|cline|cursor-agent|copilot|agy)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -1092,10 +1092,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   }
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    agy)
-      secondmate_harness_unsupported agy
+    muse|cline|cursor-agent|copilot|agy)
+      secondmate_harness_unsupported "${POS[1]}"
       ;;
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -1235,9 +1235,11 @@ launch_template() {
   esac
 }
 
+RAW_LAUNCH=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
+    RAW_LAUNCH=1
     HARNESS=""
     for word in $LAUNCH; do
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
@@ -1286,18 +1288,45 @@ case "$HARNESS" in
     ;;
 esac
 
-# muse is verified as a CREWMATE/SCOUT adapter only. A secondmate is a firstmate
-# instance, so it needs a primary supervision protocol; muse has none, and its
-# Claude-compatible hook dialect explicitly rejects the model-reawakening and
-# asyncRewake handlers that firstmate's primary turn-end supervision is built on
-# (muse 0.1.0-R708.1). Refusing here keeps that gap loud instead of standing up a
-# secondmate whose supervision cycle could never be armed.
-if [ "$KIND" = secondmate ] && [ "$HARNESS" = muse ]; then
-  echo "error: muse is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-fi
-if [ "$KIND" = secondmate ] && [ "$HARNESS" = agy ]; then
-  secondmate_harness_unsupported agy
+ACCOUNT_ENV_PREFIX=
+ACCOUNT_ARGV_WORDS=
+prepare_account_launch_isolation() {
+  local env_name=${FM_SPAWN_ACCOUNT_ENV_NAME:-}
+  local env_value=${FM_SPAWN_ACCOUNT_ENV_VALUE:-}
+  local argv_flag=${FM_SPAWN_ACCOUNT_ARGV_FLAG:-}
+  local argv_value=${FM_SPAWN_ACCOUNT_ARGV_VALUE:-}
+  ACCOUNT_ENV_PREFIX=
+  ACCOUNT_ARGV_WORDS=
+  [ -n "$env_name$env_value$argv_flag$argv_value" ] || return 0
+  [ "$RAW_LAUNCH" = 0 ] || { echo "error: account isolation requires a verified harness launch, not a raw launch command" >&2; return 1; }
+  if [ -n "$env_name$env_value" ]; then
+    [ -n "$env_name" ] && [ -n "$env_value" ] || { echo "error: incomplete account env isolation" >&2; return 1; }
+    case "$env_name" in ''|[0-9]*|*[!A-Za-z0-9_]*) echo "error: invalid account env name '$env_name'" >&2; return 1 ;; esac
+    case "$HARNESS:$env_name" in
+      claude:CLAUDE_CONFIG_DIR|codex:CODEX_HOME|pi:PI_CODING_AGENT_DIR|pi-signed:PI_CODING_AGENT_DIR) ;;
+      *) echo "error: account env '$env_name' is not valid for harness '$HARNESS'" >&2; return 1 ;;
+    esac
+    ACCOUNT_ENV_PREFIX="$env_name=$(shell_quote "$env_value")"
+  fi
+  if [ -n "$argv_flag$argv_value" ]; then
+    [ -n "$argv_flag" ] && [ -n "$argv_value" ] || { echo "error: incomplete account argv isolation" >&2; return 1; }
+    [ -z "$env_name$env_value" ] || { echo "error: account isolation cannot combine env and argv methods" >&2; return 1; }
+    case "$argv_flag" in --?*) ;; *) echo "error: invalid account argv flag '$argv_flag'" >&2; return 1 ;; esac
+    case "$argv_flag" in *[!A-Za-z0-9_-]*) echo "error: invalid account argv flag '$argv_flag'" >&2; return 1 ;; esac
+    case "$HARNESS:$argv_flag" in
+      cline:--config) ;;
+      *) echo "error: account argv flag '$argv_flag' is not valid for harness '$HARNESS'" >&2; return 1 ;;
+    esac
+    ACCOUNT_ARGV_WORDS="$argv_flag $(shell_quote "$argv_value")"
+  fi
+}
+
+prepare_account_launch_isolation || exit 1
+
+if [ "$KIND" = secondmate ]; then
+  case "$HARNESS" in
+    muse|cline|cursor-agent|copilot|agy) secondmate_harness_unsupported "$HARNESS" ;;
+  esac
 fi
 
 case "$HARNESS" in
@@ -2894,8 +2923,18 @@ esac
 # Forward firstmate's own resolved store onto the claude launch so the crewmate
 # uses the same credential/config firstmate is authenticated with. Only when set;
 # an unset value is the single-store default and needs no prefix.
-if [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+if [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ "${FM_SPAWN_ACCOUNT_ENV_NAME:-}" != CLAUDE_CONFIG_DIR ]; then
   LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
+fi
+if [ -n "$ACCOUNT_ENV_PREFIX" ]; then
+  LAUNCH="$ACCOUNT_ENV_PREFIX $LAUNCH"
+fi
+if [ -n "$ACCOUNT_ARGV_WORDS" ]; then
+  brief_word='"$('"$sq_opinput"' encode launch-brief < '"$sq_brief"')"'
+  case "$LAUNCH" in
+    *"$brief_word") LAUNCH=${LAUNCH%"$brief_word"}"$ACCOUNT_ARGV_WORDS $brief_word" ;;
+    *) LAUNCH="$LAUNCH $ACCOUNT_ARGV_WORDS" ;;
+  esac
 fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
