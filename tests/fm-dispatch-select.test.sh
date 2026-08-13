@@ -210,17 +210,40 @@ test_new_verified_adapters_with_providers_are_selectable() {
   home=$(make_home new-adapters)
   fakebin=$(make_fakebin new-adapters)
   quota="$home/quota.json"
-  write_quota "$quota" fresh 80 fresh 80
+  # cursor-agent is now native to the `cursor` provider quota-axi reports, so the
+  # fixture must carry cursor telemetry alongside claude/codex.
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"claude","state":{"status":"fresh","stale":false},"windows":[{"id":"all","percentRemaining":80}]},
+  {"provider":"codex","state":{"status":"fresh","stale":false},"windows":[{"id":"all","percentRemaining":80}]},
+  {"provider":"cursor","state":{"status":"fresh","stale":false},"windows":[{"id":"all","percentRemaining":80}]}
+]}
+JSON
 
+  # cline/copilot are BYO adapters with no subscription quota, so they borrow an
+  # explicit provider's credit identity; cursor-agent resolves natively to cursor.
   out=$(run_select "$home" "$fakebin" "$quota" state.json \
-    '[{"harness":"cline","provider":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"cursor-agent","provider":"codex","model":"claude-opus-4-8"},{"harness":"copilot","provider":"claude","model":"gpt-5.6","effort":"max"}]' 2>/dev/null)
+    '[{"harness":"cline","provider":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"cursor-agent"},{"harness":"copilot","provider":"claude","model":"gpt-5.6","effort":"max"}]' 2>/dev/null)
   harness=$(printf '%s\n' "$out" | jq -r .harness)
   provider=$(printf '%s\n' "$out" | jq -r .provider)
   case "$harness:$provider" in
-    cline:claude|cursor-agent:codex|copilot:claude) ;;
+    cline:claude|cursor-agent:cursor|copilot:claude) ;;
     *) fail "new verified adapter profile selected an unexpected concrete route: $out" ;;
   esac
-  pass "new verified adapters remain selectable with explicit provider identity"
+
+  # Credit-gating: with cursor exhausted (0% window, below the 20% reserve),
+  # cursor-agent must be excluded and dispatch redirects to a healthy provider.
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"codex","state":{"status":"fresh","stale":false},"windows":[{"id":"all","percentRemaining":80}]},
+  {"provider":"cursor","state":{"status":"fresh","stale":false},"windows":[{"id":"all","percentRemaining":0}]}
+]}
+JSON
+  out=$(run_select "$home" "$fakebin" "$quota" state2.json \
+    '[{"harness":"cursor-agent"},{"harness":"codex"}]' 2>/dev/null)
+  [ "$(printf '%s\n' "$out" | jq -r .provider)" = "codex" ] \
+    || fail "exhausted cursor should have redirected away from cursor-agent, got: $out"
+  pass "new verified adapters selectable; cursor-agent credit-routes on native cursor quota"
 }
 
 test_distribution_is_deterministic_balanced_and_array_order_independent
