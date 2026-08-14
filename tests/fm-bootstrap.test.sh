@@ -95,7 +95,7 @@ add_quota_axi() {
   cat > "$fakebin/quota-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_QUOTA_AXI_VERSION:-0.1.17}"
+  printf '%s\n' "${FM_FAKE_QUOTA_AXI_VERSION:-0.1.25}"
   exit 0
 fi
 exit 0
@@ -473,11 +473,11 @@ test_quota_axi_min_version() {
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
     esac
   done <<'ROWS'
-minimum quota-axi version is accepted^0.1.17^empty
-newer quota-axi patch is accepted^0.1.18^empty
+minimum quota-axi version is accepted^0.1.25^empty
+newer quota-axi patch is accepted^0.1.26^empty
 newer quota-axi minor is accepted^0.2.0^empty
 newer quota-axi major is accepted^1.0.0^empty
-the patch just below the floor reports an upgrade^0.1.16^missing
+the patch just below the floor reports an upgrade^0.1.24^missing
 much older quota-axi minor reports an upgrade^0.0.9^missing
 unparseable quota-axi version reports an upgrade^quota-axi development build^missing
 ROWS
@@ -1123,9 +1123,9 @@ unsupported grok max effort is flagged^{"rules":[{"when":"deep current work","us
 unsupported grok xhigh effort is flagged^{"rules":[{"when":"deep current work","use":{"harness":"grok","model":"grok-4","effort":"xhigh"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:xhigh
 pi max effort is accepted^{"rules":[{"when":"deep coding","use":{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
 pi-signed max effort is accepted^{"rules":[{"when":"signed coding","use":{"harness":"pi-signed","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
-new verified adapters are accepted^{"rules":[{"when":"cline work","use":{"harness":"cline","model":"anthropic/claude-sonnet-5","effort":"xhigh"}},{"when":"cursor work","use":{"harness":"cursor-agent","model":"claude-opus-4-8"}},{"when":"copilot work","use":{"harness":"copilot","model":"gpt-5.6","effort":"max"}}],"default":{"harness":"copilot"}}^empty^
+new verified adapters are accepted^{"rules":[{"when":"cline work","use":{"harness":"cline","model":"anthropic/claude-sonnet-5","effort":"xhigh"}},{"when":"cursor work","use":{"harness":"cursor","model":"claude-opus-4-8"}},{"when":"copilot work","use":{"harness":"copilot","model":"gpt-5.6","effort":"max"}}],"default":{"harness":"copilot"}}^empty^
 unsupported cline max effort is flagged^{"rules":[{"when":"cline work","use":{"harness":"cline","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cline:max
-unsupported cursor-agent effort is flagged^{"rules":[{"when":"cursor work","use":{"harness":"cursor-agent","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor-agent:high
+unsupported cursor effort is flagged^{"rules":[{"when":"cursor work","use":{"harness":"cursor","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor:high
 muse shared efforts are accepted^{"rules":[{"when":"muse low","use":{"harness":"muse","effort":"low"}},{"when":"muse medium","use":{"harness":"muse","effort":"medium"}},{"when":"muse high","use":{"harness":"muse","effort":"high"}},{"when":"muse xhigh","use":{"harness":"muse","effort":"xhigh"}},{"when":"muse max","use":{"harness":"muse","effort":"max"}}]}^empty^
 unsupported muse ultra effort is flagged^{"rules":[{"when":"muse ultra","use":{"harness":"muse","effort":"ultra"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: muse:ultra
 unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
@@ -1137,6 +1137,7 @@ unknown subscription setting is flagged^{"subscriptionRouting":{"reservePercent"
 out of range subscription setting is flagged^{"subscriptionRouting":{"reservePercent":100},"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting setting is out of range: reservePercent
 unsupported subscription provider is flagged^{"default":[{"harness":"pi","provider":"moonshot"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unsupported subscription provider: moonshot
 unsupported Kimi effort remains rejected at the subscription boundary^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
+cursor model profile is accepted^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high"}}]}^empty^
 array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}]}^empty^
 array use without select is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}]}]}^empty^
 one-element array use is accepted^{"rules":[{"when":"focused feature","use":[{"harness":"claude"}]}]}^empty^

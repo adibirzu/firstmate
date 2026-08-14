@@ -59,20 +59,20 @@ import { spawnSync } from 'node:child_process';
 
 // Routable providers must have a credit-identity in quota-axi so the selector
 // can test capacity and redirect. quota-axi reports claude, codex, grok AND
-// cursor (its `cursor` provider is the cursor-agent subscription). cline is
+// cursor (its `cursor` provider is the Cursor subscription). cline is
 // deliberately absent: it is BYO-API-key with no subscription window quota-axi
 // can read, so it stays spawn-only (a single non-array profile), never a
 // credit-routed candidate. Same for pi/opencode. copilot has telemetry too and
 // could be added the same way if wanted.
 const PROVIDERS = new Set(['claude', 'codex', 'grok', 'cursor']);
-const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cline', 'cursor-agent', 'copilot']);
+const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cline', 'cursor', 'copilot']);
 const NATIVE_PROVIDER = new Map([
   ['claude', 'claude'],
   ['codex', 'codex'],
   ['grok', 'grok'],
-  // The cursor-agent harness draws on the Cursor subscription, which quota-axi
+  // The cursor harness draws on the Cursor subscription, which quota-axi
   // reports under the provider name `cursor`.
-  ['cursor-agent', 'cursor'],
+  ['cursor', 'cursor'],
 ]);
 const DEFAULTS = Object.freeze({
   reservePercent: 20,

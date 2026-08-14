@@ -179,8 +179,12 @@ test_agy_is_refused_as_a_secondmate_harness() {
 
 test_agy_not_recovery_graded_in_secondmate_sweep() {
   local sweep
-  sweep=$(sed -n '/^secondmate_liveness_sweep()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
-  [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_sweep not found"
+  # The recovery-grade harness allowlist lives in secondmate_liveness_one (the
+  # per-meta body the sweep delegates to after upstream split the loop from the
+  # decision), so extract THAT function - extracting the outer sweep would scan a
+  # body that no longer carries the allowlist and give a false pass.
+  sweep=$(sed -n '/^secondmate_liveness_one()/,/^}/p' "$ROOT/bin/fm-bootstrap.sh")
+  [ -n "$sweep" ] || fail "fm-bootstrap: secondmate_liveness_one not found"
   if printf '%s\n' "$sweep" | grep -Eq '^ *claude\|.*\|agy\) *;;'; then
     fail "fm-bootstrap: agy must not be in the secondmate recovery-grade harness allowlist"
   fi
@@ -241,9 +245,9 @@ test_agy_env_marker_takes_precedence() {
 # --- busy signature (knowledge half) ----------------------------------------
 
 test_agy_busy_default_defined() {
-  [ -n "${FM_TMUX_AGY_BUSY_REGEX_DEFAULT:-}" ] \
-    || fail "FM_TMUX_AGY_BUSY_REGEX_DEFAULT is not defined"
-  pass "fm-tmux-lib: FM_TMUX_AGY_BUSY_REGEX_DEFAULT is defined"
+  [ -n "${FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT:-}" ] \
+    || fail "FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT is not defined"
+  pass "fm-composer-lib: FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT is defined"
 }
 
 test_agy_busy_line_matches() {

@@ -70,9 +70,9 @@ test_cline_detection_wired() {
 # --- busy signature (knowledge half) ----------------------------------------
 
 test_cline_busy_default_defined() {
-  [ -n "${FM_TMUX_CLINE_BUSY_REGEX_DEFAULT:-}" ] \
-    || fail "FM_TMUX_CLINE_BUSY_REGEX_DEFAULT is not defined"
-  pass "fm-tmux-lib: FM_TMUX_CLINE_BUSY_REGEX_DEFAULT is defined"
+  [ -n "${FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT:-}" ] \
+    || fail "FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT is not defined"
+  pass "fm-composer-lib: FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT is defined"
 }
 
 test_cline_busy_line_matches() {
@@ -101,13 +101,19 @@ test_cline_does_not_borrow_signatures() {
 
 test_cline_idle_placeholders_read_empty() {
   local p out
+  # cline's placeholder is bold/truecolor (NOT dim), so the shared ghost stripper
+  # keeps it; the classifier recognizes it as idle through the idle-RE on a PLAIN
+  # (styled=0) bordered capture at a proven placeholder position (position=1) -
+  # the same plain-box placeholder contract fm-composer-lib.test.sh pins in
+  # test_idle_placeholder_is_empty. The full 7-arg form is how the tmux/backend
+  # classifiers actually call in, so exercise that path here.
   for p in 'What can I do for you?' 'Ask anything...'; do
-    out=$(classify 1 "$p" "$CLINE_IDLE_RE" insensitive)
+    out=$(classify 1 "$p" "$CLINE_IDLE_RE" insensitive "$p" 1 0)
     [ "$out" = empty ] \
       || fail "cline idle placeholder '$p' must read empty (given idle-RE), got '$out'"
   done
   # After a leading agent glyph, still empty.
-  out=$(classify 1 "❯ Ask anything..." "$CLINE_IDLE_RE" insensitive)
+  out=$(classify 1 "❯ Ask anything..." "$CLINE_IDLE_RE" insensitive "❯ Ask anything..." 1 0)
   [ "$out" = empty ] || fail "'❯ Ask anything...' must read empty, got '$out'"
   pass "fm_composer_classify_content: cline idle placeholders read empty"
 }

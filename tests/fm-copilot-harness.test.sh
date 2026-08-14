@@ -38,14 +38,17 @@ test_existing_launch_templates_untouched() {
     || fail "claude launch template changed"
   grep -Fq "cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
     || fail "cline launch template changed"
-  grep -Fq 'cursor-agent --force __MODELFLAG__' "$SPAWN" \
-    || fail "cursor-agent launch template changed"
+  # The fork's cursor-agent adapter was migrated to upstream's `cursor` harness,
+  # which launches through the resolved __CURSORBIN__ with --trust --yolo; pin
+  # that actual migrated template line instead of the obsolete cursor-agent one.
+  grep -Fq '__CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' "$SPAWN" \
+    || fail "cursor launch template changed"
   pass "fm-spawn: pre-existing adapters' launch templates are untouched"
 }
 
 test_copilot_is_a_known_bare_adapter_name() {
   # copilot must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|cline|cursor-agent|copilot)" "$SPAWN" \
+  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
     || fail "fm-spawn: copilot not added to a known-harness allowlist"
   pass "fm-spawn: copilot is recognized as a known bare adapter name"
 }
@@ -54,7 +57,7 @@ test_copilot_model_and_effort_flags() {
   # copilot takes --model and maps effort to --reasoning-effort, accepting the
   # full shared low|medium|high|xhigh|max vocabulary (no tier omitted, unlike
   # cline/codex/grok).
-  grep -Fq "|cline|cursor-agent|copilot)" "$SPAWN" \
+  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
     || fail "fm-spawn: copilot not in the --model allowlist"
   grep -Fq "low|medium|high|xhigh|max) printf -- '--reasoning-effort %s '" "$SPAWN" \
     || fail "fm-spawn: copilot effort->--reasoning-effort mapping missing"
@@ -81,9 +84,9 @@ test_copilot_detection_wired() {
 # --- busy signature (knowledge half) ----------------------------------------
 
 test_copilot_busy_default_defined() {
-  [ -n "${FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT:-}" ] \
-    || fail "FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT is not defined"
-  pass "fm-tmux-lib: FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT is defined"
+  [ -n "${FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT:-}" ] \
+    || fail "FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT is not defined"
+  pass "fm-composer-lib: FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT is defined"
 }
 
 test_copilot_busy_line_matches() {
@@ -263,18 +266,18 @@ test_copilot_trust_gate_times_out_loudly() {
 
 test_copilot_trust_anchor_matches_shared_busy_default() {
   # Drift fence (T1): the busy literal is necessarily duplicated between
-  # fm-tmux-lib.sh's FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT and the gate helper
+  # fm-tmux-lib.sh's FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT and the gate helper
   # in fm-spawn.sh (fm-spawn.sh does not source fm-tmux-lib.sh). Pin the two
   # together so they cannot diverge silently across a copilot TUI update.
-  # FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT is already in scope (this file sources
+  # FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT is already in scope (this file sources
   # fm-tmux-lib.sh at the top).
   local extracted
   extracted=$(printf '%s' "$COPILOT_GATE_SOURCE" | grep -F "grep -Eq" \
     | sed -E "s/.*grep -Eq '([^|]*)\|.*/\1/")
   [ -n "$extracted" ] || fail "could not extract the duplicated busy literal from the gate source"
-  [ "$extracted" = "$FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT" ] \
-    || fail "duplicated busy literal in fm-spawn.sh ('$extracted') has drifted from FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT ('$FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT')"
-  pass "copilot trust gate: duplicated busy literal in fm-spawn.sh matches FM_TMUX_COPILOT_BUSY_REGEX_DEFAULT (drift fence)"
+  [ "$extracted" = "$FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT" ] \
+    || fail "duplicated busy literal in fm-spawn.sh ('$extracted') has drifted from FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT ('$FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT')"
+  pass "copilot trust gate: duplicated busy literal in fm-spawn.sh matches FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT (drift fence)"
 }
 
 test_copilot_past_trust_does_not_match_the_dialog() {
