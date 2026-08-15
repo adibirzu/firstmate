@@ -22,8 +22,8 @@ Do not add a daemon, opaque composite score, hard-coded model-specific policy, o
 ## Collect facts
 
 Establish model support and provider identity through the discovery surface owned by `harness-adapters` before selection.
-The verified native `claude`, `codex`, and `grok` adapters establish their same-named subscription provider without a redundant profile field.
-Every non-native adapter needs an explicit `provider` field when it enters subscription-aware selection, because model spelling never proves provider identity.
+An adapter that is native to a subscription provider establishes that same-named provider without a redundant profile field; `docs/configuration.md` owns which adapters those are.
+Every other adapter needs an explicit `provider` field when it enters subscription-aware selection, because model spelling never proves provider identity.
 For each candidate, preserve explicit `harness`, `model`, and `provider` where present, then account for:
 
 - task/profile fit and required reasoning class

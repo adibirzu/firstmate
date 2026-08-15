@@ -333,7 +333,7 @@ An omitted model or effort means the selected harness uses its own default for t
 Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
 An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.
 Read the current window ids from `quota-axi --json`, and the current model ids from `bin/fm-model-refresh.sh`, before writing either field.
-Native `claude`, `codex`, and `grok` profiles establish the same-named provider without a redundant field; when present, their provider must match the harness.
+Native `claude`, `codex`, `grok`, and `cursor` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, and `grok` a provider that is present must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
