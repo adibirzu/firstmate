@@ -223,6 +223,8 @@ That contradicts the earlier recorded observation that the live catalog carried 
 A listing establishes only that a model is offered.
 The probe above is what established that a listed model actually answers, and the two differ in practice, which is why probing exists as an opt-in flag rather than a default.
 An installed harness whose listing yields no recognizable id is reported as an error rather than an empty catalog, because a changed output format and an account with no models are indistinguishable from the ids alone; that is what `pi --list-models` produced here with no provider logged in.
+A listing command that exits non-zero is reported as an error on its exit status alone and its output is never parsed, so a usage or error message printed by a failing CLI cannot enter the catalog as a model id.
+The same rule governs a probe verdict: only a clean exit carrying output records `usable`, a clean exit carrying nothing records `unusable`, and a timeout or any other non-zero exit records `error` with the exit status kept in the reason, because a broken CLI and a rejected model cannot be told apart without parsing vendor output.
 
 ## Regression coverage
 
@@ -230,6 +232,7 @@ An installed harness whose listing yields no recognizable id is reported as an e
 It asserts that the script accepts no harness, model, or provider input, never calls `quota-axi`, exits alike for every probe result because it renders no verdict, invokes only the two fixed non-destructive argv forms with stdin closed, holds a real bound even when the configured bound is zero or malformed, and never echoes raw vendor output.
 `tests/fm-dispatch-select.test.sh` owns the selector's pricing contract, including the case where a declared window and the provider's worst window disagree and the case where a declared window is missing from the telemetry.
 `tests/fm-model-refresh.test.sh` drives the refresh tool against listing shims that reproduce the real output shapes, and covers absent-harness reporting, the new-since-last-run diff, the refusal of a run that checked nothing, and the guarantee that probing never runs without its flag.
+It also covers a listing command that exits non-zero while printing parseable-looking prose, the `--json` contract that stdout carries the catalog document alone, and a probe whose command fails recording `error` rather than a durable `unusable` claim.
 `tests/fm-spawn-dispatch-profile.test.sh` owns spawn's deterministic profile and harness refusals.
 `tests/fm-bootstrap.test.sh` owns the quota-axi version-floor diagnostic.
 `tests/fm-quota-array-dispatch-live-e2e.test.sh` drives the public Pi skill-loading interface against one fake `quota-axi --json` snapshot per case.

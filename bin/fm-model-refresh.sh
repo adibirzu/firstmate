@@ -26,7 +26,9 @@
 # a TTY-bound command, so they are reported as `no-listing` rather than guessed
 # at. Parsing is per harness rather than a single heuristic: an unrecognized
 # shape yields zero ids, which is reported as an `error`, so a changed output
-# format surfaces as a failure instead of a silently empty catalog.
+# format surfaces as a failure instead of a silently empty catalog. A listing
+# command that exits non-zero is an `error` too, and its output never reaches a
+# parser, so a usage or error message can never enter the catalog as a model id.
 #
 # PROBING IS OPT-IN AND NEVER RUNS BY DEFAULT. A listing says a model is
 # offered; only a real one-token prompt says it is usable, and those differ in
@@ -34,7 +36,11 @@
 # --probe, only for the harnesses whose non-interactive single-turn form is
 # verified, and only up to a bounded count that is refused rather than silently
 # truncated. A --probe naming a harness that is not installed is reported as
-# skipped, not as a failure.
+# skipped, not as a failure. Only positive evidence becomes a verdict: a clean
+# exit carrying output is `usable`, a clean exit carrying nothing is `unusable`,
+# and both a timeout and any other non-zero exit are `error` with the exit
+# status recorded, because a failed CLI cannot be told apart from a rejected
+# model without parsing vendor output.
 #
 # Usage:
 #   fm-model-refresh.sh [--catalog <path>] [--json]
@@ -46,7 +52,9 @@
 #   --catalog <path>   catalog file to read and rewrite; defaults to
 #                      $FM_HOME/data/model-catalog.json, and FM_HOME must be
 #                      explicit so a catalog can never land in another home
-#   --json             also print the written catalog to stdout
+#   --json             print the written catalog to stdout, which then carries
+#                      the catalog document alone; the run summary is a
+#                      diagnostic and always goes to stderr
 #   --probe <spec>     repeatable, opt-in. `<harness>` probes that harness's
 #                      models that are new in THIS run; `<harness>=<model>`
 #                      probes exactly that one id
@@ -282,22 +290,28 @@ while IFS='|' read -r harness binary mode args; do
     rc=0
     # shellcheck disable=SC2086
     fm_run_timed "$LIST_TIMEOUT" "$binary" $args </dev/null > "$WORK/$harness.raw" 2>/dev/null || rc=$?
-    strip_ansi < "$WORK/$harness.raw" > "$WORK/$harness.clean"
-    parse_listing "$mode" "$WORK/$harness.clean" "$ids_file"
     if [ "$rc" = 124 ]; then
       status=error
       reason="the listing command did not finish within ${LIST_TIMEOUT}s"
       ERRORED=$((ERRORED + 1))
-    elif [ ! -s "$ids_file" ]; then
+    elif [ "$rc" != 0 ]; then
       status=error
-      # Zero ids is deliberately not treated as an empty catalog: from the ids
-      # alone a changed output format and an account that genuinely offers no
-      # model are indistinguishable, and both need a human to look.
-      reason="the listing produced no recognizable model ids; read its output directly to tell a changed format from an account with no models"
+      reason="the listing command exited $rc; its output was not parsed, because a usage or error message must never become a model id"
       ERRORED=$((ERRORED + 1))
     else
-      status=listed
-      LISTED=$((LISTED + 1))
+      strip_ansi < "$WORK/$harness.raw" > "$WORK/$harness.clean"
+      parse_listing "$mode" "$WORK/$harness.clean" "$ids_file"
+      if [ ! -s "$ids_file" ]; then
+        status=error
+        # Zero ids is deliberately not treated as an empty catalog: from the ids
+        # alone a changed output format and an account that genuinely offers no
+        # model are indistinguishable, and both need a human to look.
+        reason="the listing produced no recognizable model ids; read its output directly to tell a changed format from an account with no models"
+        ERRORED=$((ERRORED + 1))
+      else
+        status=listed
+        LISTED=$((LISTED + 1))
+      fi
     fi
   fi
 
@@ -390,9 +404,10 @@ fi
 # one to touch. Cursor additionally needs `--trust` (its workspace-trust dialog
 # otherwise refuses a headless run outright) and is held to its read-only `ask`
 # mode, so the grant it needs to answer at all cannot become a write.
-probe_run() { # <harness> <model> -> prints usable|unusable|error
+probe_run() { # <harness> <model> -> prints <usable|unusable|error>|<reason>
   local harness=$1 model=$2 form binary flag sandbox rc=0
-  form=$(probe_form "$harness") || { printf 'error\n'; return 0; }
+  form=$(probe_form "$harness") \
+    || { printf 'error|no verified non-interactive single-turn form exists for this harness\n'; return 0; }
   binary=${form%%|*}
   flag=${form#*|}
   sandbox="$WORK/probe-cwd"
@@ -402,24 +417,31 @@ probe_run() { # <harness> <model> -> prints usable|unusable|error
     cursor) (cd "$sandbox" && fm_run_timed "$PROBE_TIMEOUT" "$binary" "$flag" --trust --mode ask --model "$model" hi </dev/null) > "$WORK/probe.out" 2>/dev/null || rc=$? ;;
     grok) (cd "$sandbox" && fm_run_timed "$PROBE_TIMEOUT" "$binary" "$flag" hi -m "$model" </dev/null) > "$WORK/probe.out" 2>/dev/null || rc=$? ;;
     agy) (cd "$sandbox" && fm_run_timed "$PROBE_TIMEOUT" "$binary" "$flag" hi --model "$model" </dev/null) > "$WORK/probe.out" 2>/dev/null || rc=$? ;;
-    *) printf 'error\n'; return 0 ;;
+    *) printf 'error|no verified non-interactive single-turn form exists for this harness\n'; return 0 ;;
   esac
   if [ "$rc" = 124 ]; then
-    printf 'error\n'
-  elif [ "$rc" != 0 ] || [ ! -s "$WORK/probe.out" ]; then
-    printf 'unusable\n'
+    printf 'error|the probe did not finish within %ss\n' "$PROBE_TIMEOUT"
+  elif [ "$rc" != 0 ]; then
+    printf 'error|the probe command exited %s, which cannot be told apart from a rejected model without parsing vendor output\n' "$rc"
+  elif [ ! -s "$WORK/probe.out" ]; then
+    printf 'unusable|the probe command exited 0 and produced no output\n'
   else
-    printf 'usable\n'
+    printf 'usable|\n'
   fi
 }
 
 while IFS=$'\t' read -r probe_harness probe_model; do
   [ -n "$probe_harness" ] || continue
-  verdict=$(probe_run "$probe_harness" "$probe_model")
-  note "probe harness=$probe_harness model=$probe_model result=$verdict"
-  jq --arg h "$probe_harness" --arg m "$probe_model" --arg v "$verdict" --arg at "$TODAY" '
+  probe_result=$(probe_run "$probe_harness" "$probe_model")
+  verdict=${probe_result%%|*}
+  probe_reason=${probe_result#*|}
+  note "probe harness=$probe_harness model=$probe_model result=$verdict${probe_reason:+ - $probe_reason}"
+  jq --arg h "$probe_harness" --arg m "$probe_model" --arg v "$verdict" \
+     --arg r "$probe_reason" --arg at "$TODAY" '
     map(if .harness == $h then
-          .models = [.models[]? | if .id == $m then .probe = {status: $v, checkedAt: $at} else . end]
+          .models = [.models[]? | if .id == $m then
+            .probe = {status: $v, reason: (if $r == "" then null else $r end), checkedAt: $at}
+          else . end]
         else . end)
   ' "$WORK/entries.json" > "$WORK/entries.next" && mv "$WORK/entries.next" "$WORK/entries.json"
 done < "$probe_targets_file"
@@ -434,15 +456,17 @@ mkdir -p "$(dirname "$CATALOG")" || die "could not create the catalog directory"
 cp "$WORK/catalog.json" "$CATALOG.tmp.$$" || die "could not stage the catalog" 1
 mv "$CATALOG.tmp.$$" "$CATALOG" || die "could not publish the catalog" 1
 
-printf '%s: catalog %s generated %s\n' "$SELF" "$CATALOG" "$STAMP"
-jq -r '.harnesses[]
-  | "harness=\(.harness) status=\(.status)"
-    + (if .status == "listed" then " models=\(.models | length) new=\(.new | length) removed=\(.removed | length)" else "" end)
-    + (if .status != "listed" and .reason != null then " - \(.reason)" else "" end)
-    + (if (.new | length) > 0 then "\n  new since last run: " + (.new | join(", ")) else "" end)
-    + (if (.removed | length) > 0 then "\n  gone since last run: " + (.removed | join(", ")) else "" end)
-  ' "$CATALOG"
-printf '%s: listed=%s absent=%s no-listing=%s error=%s\n' "$SELF" "$LISTED" "$ABSENT" "$NOLISTING" "$ERRORED"
+{
+  printf '%s: catalog %s generated %s\n' "$SELF" "$CATALOG" "$STAMP"
+  jq -r '.harnesses[]
+    | "harness=\(.harness) status=\(.status)"
+      + (if .status == "listed" then " models=\(.models | length) new=\(.new | length) removed=\(.removed | length)" else "" end)
+      + (if .status != "listed" and .reason != null then " - \(.reason)" else "" end)
+      + (if (.new | length) > 0 then "\n  new since last run: " + (.new | join(", ")) else "" end)
+      + (if (.removed | length) > 0 then "\n  gone since last run: " + (.removed | join(", ")) else "" end)
+    ' "$CATALOG"
+  printf '%s: listed=%s absent=%s no-listing=%s error=%s\n' "$SELF" "$LISTED" "$ABSENT" "$NOLISTING" "$ERRORED"
+} >&2
 
 if [ "$PRINT_JSON" = 1 ]; then
   cat "$CATALOG"

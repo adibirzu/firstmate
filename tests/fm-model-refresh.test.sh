@@ -61,6 +61,40 @@ write_cursor_shim() { # <fakebin> <log> <model>...
   write_shim "$fakebin/cursor-agent" "$log" --list-models "$fakebin/../cursor-listing.txt"
 }
 
+# A listing surface that fails outright while still printing to stdout. The two
+# lines it prints are exactly the shape the permissive `auto` parse would accept
+# as model ids, so this shim distinguishes "honoured the exit status" from
+# "parsed whatever came back".
+write_failing_listing_shim() { # <fakebin> <log>
+  local fakebin=$1 log=$2
+  cat > "$fakebin/pi" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+printf 'error:\nunauthenticated\n'
+exit 1
+SH
+  chmod +x "$fakebin/pi"
+}
+
+# Lists normally, but fails every one-shot prompt: a broken CLI, not a rejected
+# model, and the two are indistinguishable from the exit status alone.
+write_failing_probe_grok_shim() { # <fakebin> <log> <model>...
+  local fakebin=$1 log=$2
+  shift 2
+  write_listing "$fakebin/../grok-listing.txt" '  - ' '' "$@"
+  cat > "$fakebin/grok" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+if [ "\${1:-}" = "models" ]; then
+  cat "$fakebin/../grok-listing.txt"
+  exit 0
+fi
+printf 'transient upstream failure\n'
+exit 7
+SH
+  chmod +x "$fakebin/grok"
+}
+
 run_refresh() { # <fakebin> <harnesses> <catalog> [args...]
   local fakebin=$1 harnesses=$2 catalog=$3
   shift 3
@@ -173,9 +207,64 @@ test_a_probe_records_a_per_model_verdict() {
   pass "an explicit probe records a per-model verdict in the catalog"
 }
 
+test_a_failed_listing_is_an_error_and_its_output_never_becomes_a_model_id() {
+  local root fakebin catalog out
+  root=$(fm_test_tmproot fm-model-refresh-listing-rc) || fail "tmproot"
+  fakebin=$(fm_fakebin "$root")
+  catalog="$root/catalog.json"
+  write_grok_shim "$fakebin" "$root/grok.log" grok-4.6
+  write_failing_listing_shim "$fakebin" "$root/pi.log"
+
+  out=$(run_refresh "$fakebin" "grok pi" "$catalog" 2>&1) \
+    || fail "one live listing should still publish a catalog: $out"
+  assert_contains "$out" "harness=pi status=error" "a listing command that exits non-zero must be an error"
+  assert_contains "$out" "exited 1" "the error must name the exit status"
+  [ "$(jq -r '.harnesses[] | select(.harness == "pi") | .models | length' "$catalog")" = 0 ] \
+    || fail "a failed listing's output must never be recorded as model ids: $(jq -c '.harnesses[] | select(.harness == "pi")' "$catalog")"
+  assert_not_contains "$out" "unauthenticated" "a failed listing's prose must not be reported as a model id"
+  pass "a listing command's non-zero exit is honoured and its output is never parsed"
+}
+
+test_json_stdout_carries_the_catalog_document_alone() {
+  local root fakebin catalog stdout
+  root=$(fm_test_tmproot fm-model-refresh-json) || fail "tmproot"
+  fakebin=$(fm_fakebin "$root")
+  catalog="$root/catalog.json"
+  write_grok_shim "$fakebin" "$root/grok.log" grok-4.6
+
+  stdout=$(run_refresh "$fakebin" grok "$catalog" --json 2>/dev/null) || fail "--json run failed"
+  printf '%s' "$stdout" | jq -e . >/dev/null 2>&1 \
+    || fail "--json stdout must parse as one JSON document: $stdout"
+  [ "$(printf '%s' "$stdout" | jq -r '.harnesses[0].harness')" = grok ] \
+    || fail "--json stdout must be the written catalog"
+  pass "--json puts the catalog document alone on stdout"
+}
+
+test_a_failed_probe_command_is_an_error_not_an_unusable_verdict() {
+  local root fakebin catalog out
+  root=$(fm_test_tmproot fm-model-refresh-probe-rc) || fail "tmproot"
+  fakebin=$(fm_fakebin "$root")
+  catalog="$root/catalog.json"
+  write_failing_probe_grok_shim "$fakebin" "$root/grok.log" grok-4.6
+
+  out=$(run_refresh "$fakebin" grok "$catalog" --probe grok=grok-4.6 2>&1) \
+    || fail "a failed probe must not fail the run: $out"
+  assert_contains "$out" "result=error" "a probe whose command failed establishes nothing and must not read as unusable"
+  [ "$(jq -r '.harnesses[0].models[0].probe.status' "$catalog")" = error ] \
+    || fail "the catalog must record error, not a durable unusable claim"
+  case "$(jq -r '.harnesses[0].models[0].probe.reason' "$catalog")" in
+    *"exited 7"*) ;;
+    *) fail "the recorded reason must carry the probe's exit status: $(jq -r '.harnesses[0].models[0].probe.reason' "$catalog")" ;;
+  esac
+  pass "a probe whose command failed records error with its exit status, not unusable"
+}
+
 test_absent_harness_is_reported_and_a_pass_that_checked_nothing_is_refused
 test_new_models_are_named_against_the_previous_run
 test_probing_never_runs_without_its_flag_and_self_skips_an_absent_harness
 test_a_probe_records_a_per_model_verdict
+test_a_failed_listing_is_an_error_and_its_output_never_becomes_a_model_id
+test_json_stdout_carries_the_catalog_document_alone
+test_a_failed_probe_command_is_an_error_not_an_unusable_verdict
 
 echo "# all fm-model-refresh tests passed"
