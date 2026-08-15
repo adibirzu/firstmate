@@ -90,12 +90,19 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # `get --lease` prints the leased worktree path on stdout, exactly as the real
+  # treehouse does; firstmate reads that path rather than the pane's cwd, so a
+  # stub that stays silent reports "no usable worktree" and fails the spawn for
+  # a reason that has nothing to do with capacity.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 set -u
 if [ -n "${FM_FAKE_TREEHOUSE_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$FM_FAKE_TREEHOUSE_LOG"
 fi
+case "${1:-}" in
+  get) printf '%s\n' "${FM_FAKE_TREEHOUSE_WT:-}" ;;
+esac
 exit 0
 SH
   chmod +x "$fakebin/treehouse"
@@ -149,7 +156,8 @@ run_spawn() {
   env FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_TREEHOUSE_WT="$wt" \
+    TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' GROK_HOME="$home/grok-home" \
     FM_FAKE_TMUX_LOG="$home/tmux.log" FM_FAKE_TREEHOUSE_LOG="$home/treehouse.log" \
     PATH="$fakebin:$PATH" \
