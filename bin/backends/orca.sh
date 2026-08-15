@@ -262,54 +262,34 @@ fm_backend_orca_read_text_paged() {  # <terminal-id> <limit>
   printf '%s' "$text"
 }
 
-FM_BACKEND_ORCA_COMPOSER_LINES=${FM_BACKEND_ORCA_COMPOSER_LINES:-200}
-FM_BACKEND_ORCA_IDLE_RE=${FM_BACKEND_ORCA_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
-FM_BACKEND_ORCA_BARE_PROMPT_RE=${FM_BACKEND_ORCA_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
+# fm_backend_orca_composer_capture: the orca composer screen - one bounded
+# tail read of the live terminal. Deliberately NOT the old 200-line
+# backward-paged read: the composer is bottom-anchored, and paging back into
+# scrollback is what let a stale startup banner (codex's bordered
+# "permissions" box) compete with - and once outrank - the live composer.
+fm_backend_orca_composer_capture() {  # <terminal-id> [expected-label]
+  fm_backend_orca_capture "$1" "$FM_COMPOSER_CAPTURE_LINES"
+}
 
-# fm_backend_orca_composer_state: classify the composer's own row as
-# empty|pending|unknown. Real text stays pending, including a slash-command
-# popup that closed by filling an argument-hint placeholder into the composer;
-# that first Enter selected the popup item, it did not submit the command.
-# Two shapes are recognized, keeping the LAST match (mirroring herdr): a
-# side-bordered row, and a bare row starting with a verified AGENT prompt glyph
-# (❯ claude, › codex, → cursor-agent; the shared
-# FM_COMPOSER_BARE_PROMPT_RE_DEFAULT) because cline and cursor-agent draw their
-# live composer without side borders. Shell-style glyphs > $ % # never promote
-# a bare row, so a dead shell stays 'unknown'.
-fm_backend_orca_composer_state() {  # <terminal-id> -> empty|pending|unknown
-  local terminal=$1 cap line trimmed stripped="" found=0 bordered=0
-  cap=$(fm_backend_orca_read_text_paged "$terminal" "$FM_BACKEND_ORCA_COMPOSER_LINES") || { printf 'unknown'; return 0; }
-  while IFS= read -r line; do
-    trimmed="${line#"${line%%[![:space:]]*}"}"
-    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    [ -n "$trimmed" ] || continue
-    case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|')
-        stripped=$trimmed
-        bordered=1
-        found=1
-        ;;
-      *)
-        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_ORCA_BARE_PROMPT_RE"; then
-          stripped=$trimmed
-          bordered=0
-          found=1
-        fi
-        ;;
-    esac
-  done < <(printf '%s\n' "$cap")
-  [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  if [ "$bordered" -eq 1 ]; then
-    stripped=${stripped//│/}
-    stripped=${stripped//┃/}
-    stripped=${stripped//|/}
-    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-    stripped="${stripped%"${stripped##*[![:space:]]}"}"
-  fi
-  # A row was found only by the bordered shape or a bare AGENT-glyph row, so
-  # delegate to the shared owner with the matching bordered flag. A bare
-  # dead-shell prompt matches neither shape and already returned 'unknown'.
-  fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_ORCA_IDLE_RE"
+# fm_backend_orca_composer_caps: static capability facts, not logic (see the
+# capability model in bin/fm-composer-lib.sh). Orca's `terminal read` returns
+# plain text; whether it can emit ANSI is unverified (orca is not installed
+# on the verification machine), so styled stays 0 - the conservative
+# degradation - until a live capture proves otherwise.
+fm_backend_orca_composer_caps() {
+  printf 'styled=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
+}
+
+# fm_backend_orca_composer_state: thin adapter - capture plus capabilities in,
+# shared verdict out. Every shape (bordered boxes AND the borderless bare-glyph
+# row this adapter never learned, which left every claude/codex/pi/muse steer
+# unconfirmed) lives in bin/fm-composer-lib.sh.
+fm_backend_orca_composer_state() {  # <terminal-id> [expected-label] -> empty|pending|pending-unproven|unknown
+  local cap verdict
+  cap=$(fm_backend_orca_composer_capture "$1") || { printf 'unknown'; return 0; }
+  verdict=$(fm_composer_classify_screen "$(fm_backend_orca_composer_caps)" "$cap")
+  [ "$verdict" != need-identity ] || verdict=unknown
+  printf '%s' "$verdict"
 }
 
 fm_backend_orca_send_key() {  # <terminal-id> <key>

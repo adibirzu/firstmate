@@ -2773,6 +2773,22 @@ spawn_write_meta() {
   # the previous run's value. traceparent= is spawn-written too, so a stale
   # carrier would otherwise survive a handoff and mis-attribute the new run.
   drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects)='
+  # Prove the destination is writable BEFORE building the replacement. `mv` onto
+  # a DIRECTORY moves the temp file inside it and reports success, so without
+  # this the spawn would publish nothing, believe it had, and launch an agent
+  # with no durable record - invisible to supervision and to teardown. The probe
+  # appends nothing, so it creates the file on a fresh spawn and leaves an
+  # existing record byte-identical for the reuse filter below to read. Its
+  # stderr is deliberately not suppressed: the operating system's own reason
+  # ("Is a directory", "Permission denied") is the useful diagnostic here.
+  if ! : >> "$meta"; then
+    echo "error: could not open task record $meta for writing; refusing to publish task metadata" >&2
+    return 1
+  fi
+  if [ -L "$meta" ]; then
+    echo "error: task record $meta is a symlink; refusing to publish task metadata through it" >&2
+    return 1
+  fi
   tmp=$(mktemp "$STATE/.${ID}.meta.XXXXXX") || return 1
   if [ "$REUSE_WORKTREE" = 1 ] && [ -f "$meta" ]; then
     if ! { grep -Ev "$drop_re" "$meta" || true; } > "$tmp"; then
@@ -2824,7 +2840,7 @@ spawn_write_meta() {
       echo "projects=$SECONDMATE_PROJECTS"
     fi
   } >> "$tmp" || { rm -f "$tmp"; return 1; }
-  mv "$tmp" "$meta"
+  mv "$tmp" "$meta" || { rm -f "$tmp"; return 1; }
 }
 spawn_write_meta "$STATE/$ID.meta" || {
   echo "error: could not write meta for $ID" >&2
