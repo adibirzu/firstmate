@@ -313,13 +313,13 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "provider": "<claude|codex|grok, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
+        { "harness": "<adapter>", "provider": "<claude|codex|grok, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
   "default": [
-    { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>" }
+    { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>", "quotaWindow": "<optional quota window id>" }
   ]
 }
 ```
@@ -327,8 +327,12 @@ This section is the single owner of the canonical schema and its per-field seman
 Per rule, `when` and `use` are required.
 Both `use` and the optional top-level `default` accept either one profile object or a non-empty array of profile objects.
 The single-object form stays fully backward-compatible, and every profile needs `harness`.
-Profile `provider`, `model`, and `effort` fields and rule `why` are optional.
+Profile `provider`, `model`, `effort`, and `quotaWindow` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
+`quotaWindow` names the one `windows[].id` in that provider's `quota-axi --json` telemetry that this route actually draws on, so a provider whose pools are billed separately is priced on the pool it uses instead of on its worst pool.
+Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
+An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.
+Read the current window ids from `quota-axi --json`, and the current model ids from `bin/fm-model-refresh.sh`, before writing either field.
 Native `claude`, `codex`, and `grok` profiles establish the same-named provider without a redundant field; when present, their provider must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.

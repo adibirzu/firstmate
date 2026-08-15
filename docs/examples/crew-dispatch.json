@@ -16,6 +16,13 @@
       "why": "Use the cheapest fast profile when the task is narrow and low ambiguity."
     },
     {
+      "when": "The task should run on a Cursor-native model rather than a standalone vendor CLI.",
+      "use": [
+        { "harness": "cursor", "model": "cursor-grok-4.6-high", "quotaWindow": "auto_usage" }
+      ],
+      "why": "Cursor bills its included, auto, and API pools separately, so this route is priced on the pool it actually draws on instead of on whichever pool is emptiest. Confirm the window id against quota-axi --json before copying this."
+    },
+    {
       "when": "The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind.",
       "use": [
         { "harness": "claude", "provider": "claude", "model": "claude-sonnet-5", "effort": "high" },
