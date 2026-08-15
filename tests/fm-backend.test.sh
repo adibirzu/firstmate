@@ -144,7 +144,7 @@ resolve_permissive_tmux_kill_ref() {
 # shellcheck disable=SC2016
 SOURCED_LIB_SED='s#^[[:space:]]*\.[[:space:]]+"\$(SCRIPT_DIR|FM_ROOT|ROOT)[^"]*/([A-Za-z0-9._-]+\.sh)".*#\2#p'
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
-  local name=$1 root archive
+  local name=$1 root
   root="$TMP_ROOT/$name"
   bin="$root/bin"
   mkdir -p "$bin"

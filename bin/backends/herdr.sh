@@ -2724,18 +2724,24 @@ FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
 # Known ghost/placeholder composer text. Extend this if another
 # herdr-verified harness needs its own idle placeholder recognized.
 FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
-# Known bare (unbordered) prompt glyphs a composer row may start with: ❯
-# (claude) and › (codex) only. Generic shell-style glyphs > $ % # are still
-# recognized after a bordered composer row has already been structurally found.
-# Deliberately an alternation, not a `[...]` bracket expression: under a C/POSIX
-# locale (LC_CTYPE=C, the fleet default), grep's bracket expressions match
-# individual BYTES rather than whole multibyte characters, so `[❯›]` silently
-# decomposes into the shared leading UTF-8 byte (0xE2) and spuriously matches
-# ANY multibyte glyph in that range - including box-drawing corners like ╰,
-# misclassifying a bordered composer's bottom border row as the bare shape.
-# An alternation's branches are matched as whole literal byte sequences and
-# stay correct regardless of locale.
-FM_BACKEND_HERDR_BARE_PROMPT_RE=${FM_BACKEND_HERDR_BARE_PROMPT_RE:-'^(❯|›)'}
+# Known bare (unbordered) prompt glyphs a composer row may start with, bound to
+# the shared fleet set (bin/fm-composer-lib.sh: FM_COMPOSER_BARE_PROMPT_RE_DEFAULT)
+# exactly as cmux and orca bind it, so one owner keeps every backend's bare-row
+# promotion identical. Herdr previously hardcoded ❯ (claude) and › (codex) only,
+# which left cursor's → composer row unmatched: cursor rules its composer with ▄
+# and ▀ half blocks rather than side borders, so that row is only ever reachable
+# through this bare shape and classified `unknown` instead of `pending`.
+# Generic shell-style glyphs > $ % # are still recognized only after a bordered
+# composer row has already been structurally found.
+# The shared value is deliberately an alternation, not a `[...]` bracket
+# expression: under a C/POSIX locale (LC_CTYPE=C, the fleet default), grep's
+# bracket expressions match individual BYTES rather than whole multibyte
+# characters, so `[❯›]` silently decomposes into the shared leading UTF-8 byte
+# (0xE2) and spuriously matches ANY multibyte glyph in that range - including
+# box-drawing corners like ╰, misclassifying a bordered composer's bottom border
+# row as the bare shape. An alternation's branches are matched as whole literal
+# byte sequences and stay correct regardless of locale.
+FM_BACKEND_HERDR_BARE_PROMPT_RE=${FM_BACKEND_HERDR_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
 # Pi allows a multi-line composer between its horizontal separators. Bound the
 # structural candidate so two unrelated transcript rules with an arbitrarily
 # large region between them can never be promoted into a composer.

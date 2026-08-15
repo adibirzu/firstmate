@@ -337,6 +337,9 @@ FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT='Working.*esc interrupt'
 FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc to cancel'
 # Fork-only bare-prompt default (consumed by bin/backends/orca.sh + cmux.sh as the
 # fallback for their per-backend BARE_PROMPT_RE); upstream has no equivalent.
+# Unlike every sibling above, this constant has no reader inside this file: its
+# only consumers source it, so ShellCheck cannot see the use.
+# shellcheck disable=SC2034 # Read by sourcing callers (bin/backends/{orca,cmux}.sh).
 FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 fm_busy_lines_match() {  # [harness]
