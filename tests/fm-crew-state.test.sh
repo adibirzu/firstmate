@@ -668,6 +668,11 @@ test_terminal_passed() {
   local out; out=$(run_crew_state "$d" feat-d)
   assert_contains "$out" "state: done" "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
+  # Regression for the 2421 false-forge-claim bug: a passed pipeline run only
+  # establishes that the run's own steps completed, never anything about the
+  # PR's forge state, so the detail must not claim the PR is merged or closed.
+  assert_not_contains "$out" "merged" "passed run detail must not claim merged"
+  assert_not_contains "$out" "closed" "passed run detail must not claim closed"
   pass "terminal passed run is authoritative"
 }
 
