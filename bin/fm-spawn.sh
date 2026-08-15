@@ -796,7 +796,13 @@ spawn_herdr_presentation_order_lock_acquire() {
   lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session") || return 1
   HERDR_PRESENTATION_ORDER_LOCK="$lock_path"
   attempt=0
-  while [ "$attempt" -lt 50 ]; do
+  # Same overridable ceiling, same 50 default, as the teardown side's wait in
+  # bin/fm-teardown.sh: two spawns racing one herdr session can legitimately
+  # need longer than 5s when the holder is doing real herdr work on a loaded
+  # machine, and the loser then falls back flat even though serialization was
+  # working. Raising the ceiling only makes the waiter wait longer before
+  # giving up; it cannot turn a refusal into a wrong mutation.
+  while [ "$attempt" -lt "${FM_HERDR_PRESENTATION_LOCK_RETRIES:-50}" ]; do
     if fm_lock_try_acquire "$HERDR_PRESENTATION_ORDER_LOCK"; then
       HERDR_PRESENTATION_ORDER_LOCK_HELD=1
       return 0

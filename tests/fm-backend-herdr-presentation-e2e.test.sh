@@ -865,16 +865,23 @@ ABORT_B_WS=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/workspace")
 # The task pane is NOT removed with pane.close: the emptying-close plan proves a
 # lone idle shell and ends it, so Herdr removes the emptied workspace through its
 # own focus-preserving pane-death path (the raw explicit close steals focus to the
-# neighbour workspace - upstream #1328). That path emits no pane-close mutation at
-# all, so requiring one here could only ever pass on a Herdr lacking the death
-# path. What must hold is that each spawn completes its whole presentation
-# critical section - create, then its own seeded prune - before the other spawn
-# creates anything. That is exactly what the lock exists to guarantee.
+# neighbour workspace - upstream #1328).
+# That path still reaches Herdr as a pane close, so the task pane contributes its
+# own pane-close mutation on Herdr 0.7.4 rather than none at all.
+# It is excluded by exact pane id below for the same reason the focus assertion
+# that follows excludes it: it is a separate, expected cleanup category whose
+# focus excursion is restored by the tab-focus that trails it, not part of the
+# ordering this sequence measures.
+# What must hold is that each spawn completes its whole presentation critical
+# section - create, then its own seeded prune - before the other spawn creates
+# anything. That is exactly what the lock exists to guarantee, and counting the
+# task-pane close as a second prune measured cleanup volume instead of ordering.
 # assert_cleanup_focus_preserved below is what proves the task panes are gone.
-ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v aw="$ABORT_A_WS" -v bw="$ABORT_B_WS" '
+ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v aw="$ABORT_A_WS" -v bw="$ABORT_B_WS" -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
   $1 == "workspace-create" && $4 ~ /^└ abort-a · p:/ { print "create-a" }
   $1 == "workspace-create" && $4 ~ /^└ abort-b · p:/ { print "create-b" }
-  $1 == "pane-close" { ws = $4; sub(/:.*$/, "", ws)
+  $1 == "pane-close" && $4 != a && $4 != b {
+                       ws = $4; sub(/:.*$/, "", ws)
                        if (ws == aw) print "prune-a"; else if (ws == bw) print "prune-b" }
 ')
 case "$ABORT_SEQUENCE" in
