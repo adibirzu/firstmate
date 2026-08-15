@@ -23,6 +23,16 @@
 //   Stale, absent, malformed, or
 //   windowless telemetry makes that provider ineligible; it never falls back to
 //   an unmetered guess.
+// - A profile may declare the one quota window it is actually drawn from with
+//   an optional `quotaWindow` field naming a `windows[].id` in that provider's
+//   telemetry. The candidate is then priced on that window alone instead of the
+//   provider-wide minimum, because a provider whose separate pools are billed
+//   separately would otherwise be priced by its worst pool and refused while its
+//   own pool is healthy. A declared window that is absent from the live
+//   telemetry, or that carries no usable percentage, makes that candidate
+//   ineligible; it never falls back to a different, rosier window. No mapping
+//   from model name to pool is inferred: the pool is declared in config, where
+//   it is checkable and correctable, or it is not used at all.
 // - Kimi is deliberately unsupported by this selector: its 0.29.1 lifecycle
 //   exit could not be made deterministic after interrupt in the guarded Herdr
 //   lab. Explicit Kimi work remains outside automatic subscription dispatch.
@@ -35,6 +45,9 @@
 //   stable. Profiles within one provider rotate the same way.
 // - State updates are serialized by a private mkdir lock and published through
 //   rename. No task is selected when every candidate is unavailable.
+//
+// A profile priced on its own pool looks like this:
+//   { "harness": "cursor", "model": "cursor-grok-4.6-high", "quotaWindow": "auto_usage" }
 //
 // config/crew-dispatch.json may contain this optional settings object:
 //   "subscriptionRouting": {
@@ -245,6 +258,10 @@ function profileProvider(profile) {
   return profile.provider || NATIVE_PROVIDER.get(profile.harness) || null;
 }
 
+// The emitted profile stays launch-shaped: quotaWindow is a pricing declaration
+// consumed here, never a launch flag, so it is reported on stderr and kept out
+// of stdout. It still joins the identity below, so two candidates that share a
+// concrete route but declare different pools stay distinct entries.
 function cleanProfile(profile, provider) {
   return {
     harness: profile.harness,
@@ -268,7 +285,7 @@ function parseProfiles(input) {
   return value.map((raw) => {
     if (!raw || Array.isArray(raw) || typeof raw !== 'object') die('each dispatch profile must be an object');
     if (typeof raw.harness !== 'string' || !raw.harness) die('each dispatch profile needs a non-empty harness');
-    for (const field of ['provider', 'model', 'effort']) {
+    for (const field of ['provider', 'model', 'effort', 'quotaWindow']) {
       if (Object.hasOwn(raw, field) && (typeof raw[field] !== 'string' || !raw[field])) {
         die(`dispatch profile ${field} must be a non-empty string when present`);
       }
@@ -286,10 +303,11 @@ function parseProfiles(input) {
       die(`provider identity is unresolved or unsupported for harness ${raw.harness}`);
     }
     const profile = cleanProfile(raw, provider);
-    const identity = JSON.stringify({ ...profile, provider });
+    const quotaWindow = raw.quotaWindow || null;
+    const identity = JSON.stringify({ ...profile, provider, quotaWindow });
     if (seen.has(identity)) die('dispatch profile array contains a duplicate concrete profile');
     seen.add(identity);
-    return { profile, provider, identity, key: digest(identity) };
+    return { profile, provider, quotaWindow, identity, key: digest(identity) };
   });
 }
 
@@ -331,38 +349,75 @@ function readQuota(options) {
   }
 }
 
-function quotaCandidate(providerName, quota, now, settings) {
-  if (!quota.available) return { eligible: false, reason: quota.reason };
+// Provider-level readiness: everything that is true of a provider regardless of
+// which of its pools a candidate declares.
+function providerReadiness(providerName, quota, now, settings) {
+  if (!quota.available) return { ok: false, reason: quota.reason };
   const generated = Date.parse(quota.data.generatedAt || '');
   const age = Number.isFinite(generated) ? now - Math.floor(generated / 1000) : Number.POSITIVE_INFINITY;
   if (age < -60 || age > settings.telemetryMaxAgeSeconds) {
-    return { eligible: false, reason: 'quota telemetry stale or undated' };
+    return { ok: false, reason: 'quota telemetry stale or undated' };
   }
   const provider = quota.data.providers.find((item) => item?.provider === providerName);
-  if (!provider) return { eligible: false, reason: 'provider telemetry unavailable' };
+  if (!provider) return { ok: false, reason: 'provider telemetry unavailable' };
   if (provider.state?.status !== 'fresh' || provider.state?.stale === true) {
     const evidence = `${provider.state?.status || ''} ${provider.state?.error || ''}`;
-    return { eligible: false, reason: RATE_LIMIT_RE.test(evidence) ? 'provider quota/rate-limit evidence' : 'provider telemetry not fresh', cooldownEvidence: RATE_LIMIT_RE.test(evidence) };
+    const rateLimited = RATE_LIMIT_RE.test(evidence);
+    return {
+      ok: false,
+      reason: rateLimited ? 'provider quota/rate-limit evidence' : 'provider telemetry not fresh',
+      cooldownEvidence: rateLimited,
+    };
   }
-  const livePercentages = [];
+  return { ok: true, provider };
+}
+
+function usablePercent(value) {
+  return typeof value === 'number' && value >= 0 && value <= 100;
+}
+
+function reserveVerdict(headroom, basis, settings) {
+  if (headroom <= settings.reservePercent) {
+    return { eligible: false, reason: `${basis} headroom ${headroom}% is at or below ${settings.reservePercent}% reserve`, headroom };
+  }
+  return { eligible: true, reason: `fresh ${basis} headroom=${headroom}% reserve=${settings.reservePercent}%`, headroom };
+}
+
+// The conservative default: a provider is worth only its tightest reported live
+// figure, so no single healthy window can hide an exhausted one.
+function priceProviderWide(provider, settings) {
+  const values = [];
   for (const window of provider.windows || []) {
-    if (typeof window?.percentRemaining === 'number' && window.percentRemaining >= 0 && window.percentRemaining <= 100) {
-      livePercentages.push(window.percentRemaining);
-    }
+    if (usablePercent(window?.percentRemaining)) values.push(window.percentRemaining);
   }
-  if (!livePercentages.length) return { eligible: false, reason: 'provider telemetry has no usable live window percentage' };
-  const values = [...livePercentages];
+  if (!values.length) return { eligible: false, reason: 'provider telemetry has no usable live window percentage' };
   for (const availability of provider.quotaSemantics?.effectiveAvailability || []) {
-    if (availability?.status === 'known' && typeof availability.effectivePercentRemaining === 'number' && availability.effectivePercentRemaining >= 0 && availability.effectivePercentRemaining <= 100) {
+    if (availability?.status === 'known' && usablePercent(availability.effectivePercentRemaining)) {
       values.push(availability.effectivePercentRemaining);
     }
   }
-  if (!values.length) return { eligible: false, reason: 'provider telemetry has no usable live percentage' };
-  const headroom = Math.min(...values);
-  if (headroom <= settings.reservePercent) {
-    return { eligible: false, reason: `headroom ${headroom}% is at or below ${settings.reservePercent}% reserve`, headroom };
+  return reserveVerdict(Math.min(...values), 'quota', settings);
+}
+
+// The declared-pool path: price this candidate on exactly the window it says it
+// draws on, and refuse rather than substitute when that window is not there.
+function priceDeclaredWindow(provider, windowId, settings) {
+  const matched = (provider.windows || []).filter((window) => window?.id === windowId);
+  if (!matched.length) {
+    return { eligible: false, reason: `declared quota window ${windowId} is absent from provider telemetry` };
   }
-  return { eligible: true, reason: `fresh quota headroom=${headroom}% reserve=${settings.reservePercent}%`, headroom };
+  const values = matched.map((window) => window.percentRemaining).filter(usablePercent);
+  if (!values.length) {
+    return { eligible: false, reason: `declared quota window ${windowId} has no usable live percentage` };
+  }
+  return reserveVerdict(Math.min(...values), `window ${windowId}`, settings);
+}
+
+function quotaCandidate(readiness, windowId, settings) {
+  if (!readiness.ok) return { eligible: false, reason: readiness.reason };
+  return windowId
+    ? priceDeclaredWindow(readiness.provider, windowId, settings)
+    : priceProviderWide(readiness.provider, settings);
 }
 
 function cooldownActive(state, provider, now) {
@@ -409,10 +464,29 @@ function select(options, home, paths, settings, now, state) {
       log(`candidate provider=${provider} unavailable: cooldown until epoch ${cooldown.until}`);
       continue;
     }
-    const readiness = quotaCandidate(provider, quota, now, settings);
+    const readiness = providerReadiness(provider, quota, now, settings);
     if (readiness.cooldownEvidence) setCooldown(state, provider, 'quota-telemetry-evidence', now, settings.cooldownSeconds);
-    log(`candidate provider=${provider} ${readiness.eligible ? 'eligible' : 'unavailable'}: ${readiness.reason}`);
-    if (readiness.eligible) eligibleProviders.push({ provider, candidates: providerCandidates });
+    if (!readiness.ok) {
+      // A provider-level refusal is the same for every pool, so it is stated once.
+      log(`candidate provider=${provider} unavailable: ${readiness.reason}`);
+      continue;
+    }
+    // Pricing is per declared pool, so one provider can report several verdicts.
+    // Each distinct pool is priced and logged once, however many candidates
+    // share it.
+    const priced = new Map();
+    const eligible = [];
+    for (const candidate of providerCandidates) {
+      const pool = candidate.quotaWindow || '';
+      if (!priced.has(pool)) {
+        const verdict = quotaCandidate(readiness, candidate.quotaWindow, settings);
+        priced.set(pool, verdict);
+        const label = pool ? `provider=${provider} window=${pool}` : `provider=${provider}`;
+        log(`candidate ${label} ${verdict.eligible ? 'eligible' : 'unavailable'}: ${verdict.reason}`);
+      }
+      if (priced.get(pool).eligible) eligible.push(candidate);
+    }
+    if (eligible.length) eligibleProviders.push({ provider, candidates: eligible });
   }
   if (!eligibleProviders.length) {
     saveState(paths.stateFile, state);

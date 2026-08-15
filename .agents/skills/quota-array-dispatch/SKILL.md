@@ -22,8 +22,8 @@ Do not add a daemon, opaque composite score, hard-coded model-specific policy, o
 ## Collect facts
 
 Establish model support and provider identity through the discovery surface owned by `harness-adapters` before selection.
-The verified native `claude`, `codex`, and `grok` adapters establish their same-named subscription provider without a redundant profile field.
-Every non-native adapter needs an explicit `provider` field when it enters subscription-aware selection, because model spelling never proves provider identity.
+An adapter that is native to a subscription provider establishes that same-named provider without a redundant profile field; `docs/configuration.md` owns which adapters those are.
+Every other adapter needs an explicit `provider` field when it enters subscription-aware selection, because model spelling never proves provider identity.
 For each candidate, preserve explicit `harness`, `model`, and `provider` where present, then account for:
 
 - task/profile fit and required reasoning class
@@ -47,6 +47,8 @@ Never launch a vendor CLI yourself, and never probe a credential store the candi
 
 Providers exposed by quota-axi, including Claude, Codex, and Grok, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
 Stale, unavailable, malformed, or windowless telemetry makes that provider ineligible for a new dispatch.
+A provider whose pools are billed separately would be priced by its worst pool under that rule, so a profile may declare the one window it draws on with `quotaWindow`; `docs/configuration.md` owns that field's semantics.
+Confirm the declared window against the provider's live `quota-axi --json` windows before relying on it, because a declared window the telemetry does not carry blocks that candidate rather than repricing it.
 Kimi is excluded from subscription-aware selection because its 0.29.1 lifecycle exit was not deterministic after interrupt in the guarded Herdr lab.
 Do not pass a Kimi profile to the selector or substitute another Moonshot route.
 The exact defaults, bounds, state schema, failure exit, and test seams are owned by `bin/fm-dispatch-select.mjs --help` and the canonical config schema in `docs/configuration.md`.
@@ -60,6 +62,7 @@ Never use subscription state to silently replace that reasoning class.
 2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
 3. Read its sanitized per-provider diagnostics and selected JSON profile.
 4. Pass the selected `harness`, `provider`, `model`, and `effort` axes to `fm-spawn.sh`; it records `provider` as routing evidence without forwarding it to the harness CLI.
+   Its `--provider` accepts `claude`, `codex`, and `grok` only, so a selected profile whose provider is native to its harness and outside that set, such as `cursor`, is spawned without the redundant flag; the recorded harness still establishes that provider for a later `record-failure`.
 5. If it exits 3, stop and report that no candidate has current dispatch-capacity evidence rather than choosing manually around the reserve, cooldown, or telemetry refusal.
 6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
 7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.

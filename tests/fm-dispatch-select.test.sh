@@ -246,8 +246,106 @@ JSON
   pass "new verified adapters selectable; cursor credit-routes on native cursor quota"
 }
 
+# A provider whose pools are billed separately: its worst window is spent while
+# the pool a given route draws on is healthy. Priced provider-wide the whole
+# provider is refused; priced on its declared pool the healthy route survives.
+write_split_pool_quota() { # <file> <api-remaining> [stamp]
+  local file=$1 api=$2 stamp=${3:-$STAMP}
+  cat > "$file" <<JSON
+{"schemaVersion":3,"generatedAt":"$stamp","providers":[
+  {"provider":"cursor","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"included_usage","percentRemaining":84},
+              {"id":"auto_usage","percentRemaining":97},
+              {"id":"api_usage","percentRemaining":$api}],
+   "quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":$api}]}}
+]}
+JSON
+}
+
+test_a_declared_quota_window_is_priced_instead_of_the_provider_minimum() {
+  local home fakebin quota out rc
+  home=$(make_home declared-window)
+  fakebin=$(make_fakebin declared-window)
+  quota="$home/quota.json"
+  write_split_pool_quota "$quota" 0
+
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" undeclared.json \
+    '[{"harness":"cursor","model":"cursor-grok-4.6-high"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "an undeclared candidate must keep the conservative provider-wide minimum"
+  assert_contains "$out" "quota headroom 0% is at or below 20% reserve" \
+    "the provider-wide refusal must name the figure it priced on"
+
+  out=$(run_select "$home" "$fakebin" "$quota" declared.json \
+    '[{"harness":"cursor","model":"cursor-grok-4.6-high","quotaWindow":"auto_usage"}]' 2>"$home/declared.err")
+  [ "$(printf '%s\n' "$out" | jq -r .model)" = cursor-grok-4.6-high ] \
+    || fail "a candidate declaring a healthy pool was refused on another pool's figure: $out"
+  assert_contains "$(cat "$home/declared.err")" "window auto_usage headroom=97%" \
+    "the honoured window must be inspectable in the diagnostic"
+  [ "$(printf '%s\n' "$out" | jq -r '.quotaWindow // "none"')" = none ] \
+    || fail "quotaWindow is a pricing declaration and must not reach the launch profile: $out"
+
+  # The declaration reprices; it never exempts. The reserve still binds.
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" spent-pool.json \
+    '[{"harness":"cursor","quotaWindow":"api_usage"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "a declared window at zero must still be refused"
+  assert_contains "$out" "window api_usage headroom 0% is at or below 20% reserve" \
+    "the declared-window refusal must name the window it priced on"
+  pass "a declared quota window is priced instead of the provider-wide minimum"
+}
+
+test_a_declared_window_absent_from_telemetry_fails_closed() {
+  local home fakebin quota out rc
+  home=$(make_home missing-window)
+  fakebin=$(make_fakebin missing-window)
+  quota="$home/quota.json"
+  write_split_pool_quota "$quota" 0
+
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" missing.json \
+    '[{"harness":"cursor","quotaWindow":"renamed_usage"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "a declared window the telemetry does not carry must stop the dispatch"
+  assert_contains "$out" "declared quota window renamed_usage is absent from provider telemetry" \
+    "the missing-window refusal must name the window it could not find"
+  assert_not_contains "$out" "eligible" "a missing declared window must never be repriced on another figure"
+
+  # An unusable figure in the declared window is the same refusal, not a
+  # fallback to the healthy windows sitting beside it.
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"cursor","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"auto_usage"},{"id":"included_usage","percentRemaining":90}]}
+]}
+JSON
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" unusable.json \
+    '[{"harness":"cursor","quotaWindow":"auto_usage"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "a declared window with no usable percentage must stop the dispatch"
+  assert_contains "$out" "declared quota window auto_usage has no usable live percentage" \
+    "the unusable-window refusal was unclear"
+
+  # Everything upstream of pricing still applies to a declared window.
+  write_split_pool_quota "$quota" 97 1970-01-01T00:00:00.000Z
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" stale-declared.json \
+    '[{"harness":"cursor","quotaWindow":"auto_usage"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "a declaration must not bypass the staleness gate"
+  assert_contains "$out" "stale or undated" "stale telemetry must still refuse a declared window"
+
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" malformed.json \
+    '[{"harness":"cursor","quotaWindow":""}]' 2>&1) || rc=$?
+  expect_code 2 "$rc" "an empty quotaWindow must be a configuration error"
+  assert_contains "$out" "quotaWindow must be a non-empty string when present" \
+    "the malformed declaration error was unclear"
+  pass "a declared window missing from telemetry fails closed instead of repricing"
+}
+
 test_distribution_is_deterministic_balanced_and_array_order_independent
 test_stale_unavailable_and_reserve_thresholds_fail_closed
+test_a_declared_quota_window_is_priced_instead_of_the_provider_minimum
+test_a_declared_window_absent_from_telemetry_fails_closed
 test_verified_failure_creates_cooldown_and_failover
 test_invalid_profiles_and_settings_are_actionable
 test_existing_wrapper_and_grok_routes_remain_selectable

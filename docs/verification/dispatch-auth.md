@@ -168,10 +168,71 @@ These discriminator strings are un-owned vendor UI text.
 `bin/fm-vendor-auth-probe.sh` pins the verified version, reports `versionVerified=no` when the running CLI differs, and classifies any unrecognized first line as `indeterminate` rather than authenticated.
 Re-run the two commands above and update this section and the pinned version together when the vendor CLI changes.
 
+## A provider whose pools are billed separately
+
+Verified 2026-08-15 against quota-axi 0.1.28 schema 3 and Cursor Agent CLI 2026.08.11-e8db854.
+
+Cursor reports three separate windows, and the producer's own bounding rule says every one of them binds every model:
+
+```sh
+quota-axi --json | jq -c '.providers[] | select(.provider == "cursor")
+  | {windows: [.windows[] | {id, percentRemaining}],
+     rule: .quotaSemantics.description,
+     effective: .quotaSemantics.effectiveAvailability[0]}'
+```
+
+```json
+{
+  "windows": [
+    { "id": "included_usage", "percentRemaining": 84 },
+    { "id": "auto_usage", "percentRemaining": 97 },
+    { "id": "api_usage", "percentRemaining": 0 }
+  ],
+  "rule": "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  "effective": { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "limitingWindowIds": ["api_usage"] }
+}
+```
+
+A Cursor-native model answered normally in that exact state, so the stated joint bound is not what the account enforces for such a model:
+
+```sh
+cd "$(mktemp -d)" && cursor-agent -p --trust --mode ask --model cursor-grok-4.6-high hi
+```
+
+```text
+Hi — what can I help you with?
+```
+
+Two facts follow, and both are load-bearing for the `quotaWindow` field owned by `docs/configuration.md`:
+
+- Pricing a Cursor candidate on the provider-wide minimum refuses every Cursor route whenever the API pool is spent, including routes that demonstrably still work.
+- The producer's stated rule is therefore not sufficient evidence on its own, so no correct pool can be derived from it or from a model name; the pool the route draws on is declared in configuration, where an operator can check and correct it.
+
+This is an operator-declared override of a producer-stated bounding rule, resting on the probe above rather than on the telemetry.
+Re-establish it, and revisit any configured `quotaWindow`, whenever the vendor's billing split, quota-axi's Cursor semantics, or that probe's outcome changes.
+The declaration stays conservative in one direction on purpose: a declared window that the live telemetry does not carry blocks the candidate rather than falling back to a different window.
+
+## Harness model catalogs drift
+
+Verified 2026-08-15 with `bin/fm-model-refresh.sh`, which is the command that refreshes every model claim in `.agents/skills/harness-adapters/SKILL.md`.
+
+On that date `cursor-agent --list-models` returned 204 ids for this account on Cursor Agent CLI 2026.08.11-e8db854, including a full `cursor-grok-4.6-{low,medium,high,xhigh}` ladder with `-fast` variants.
+That contradicts the earlier recorded observation that the live catalog carried only `-high` Grok ids, which is the second time that list has drifted, so no remembered model family may be treated as current.
+`grok models` returned 2 ids on grok 1.0.4, and `agy models` returned 14 on agy 1.1.13.
+
+A listing establishes only that a model is offered.
+The probe above is what established that a listed model actually answers, and the two differ in practice, which is why probing exists as an opt-in flag rather than a default.
+An installed harness whose listing yields no recognizable id is reported as an error rather than an empty catalog, because a changed output format and an account with no models are indistinguishable from the ids alone; that is what `pi --list-models` produced here with no provider logged in.
+A listing command that exits non-zero is reported as an error on its exit status alone and its output is never parsed, so a usage or error message printed by a failing CLI cannot enter the catalog as a model id.
+The same rule governs a probe verdict: only a clean exit carrying output records `usable`, a clean exit carrying nothing records `unusable`, and a timeout or any other non-zero exit records `error` with the exit status kept in the reason, because a broken CLI and a rejected model cannot be told apart without parsing vendor output.
+
 ## Regression coverage
 
 `tests/fm-vendor-auth-probe.test.sh` drives the real script against a fake vendor CLI that records every invocation's argv and anything readable on stdin.
 It asserts that the script accepts no harness, model, or provider input, never calls `quota-axi`, exits alike for every probe result because it renders no verdict, invokes only the two fixed non-destructive argv forms with stdin closed, holds a real bound even when the configured bound is zero or malformed, and never echoes raw vendor output.
+`tests/fm-dispatch-select.test.sh` owns the selector's pricing contract, including the case where a declared window and the provider's worst window disagree and the case where a declared window is missing from the telemetry.
+`tests/fm-model-refresh.test.sh` drives the refresh tool against listing shims that reproduce the real output shapes, and covers absent-harness reporting, the new-since-last-run diff, the refusal of a run that checked nothing, and the guarantee that probing never runs without its flag.
+It also covers a listing command that exits non-zero while printing parseable-looking prose, the `--json` contract that stdout carries the catalog document alone, and a probe whose command fails recording `error` rather than a durable `unusable` claim.
 `tests/fm-spawn-dispatch-profile.test.sh` owns spawn's deterministic profile and harness refusals.
 `tests/fm-bootstrap.test.sh` owns the quota-axi version-floor diagnostic.
 `tests/fm-quota-array-dispatch-live-e2e.test.sh` drives the public Pi skill-loading interface against one fake `quota-axi --json` snapshot per case.
