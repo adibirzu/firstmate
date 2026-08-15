@@ -445,9 +445,15 @@ if [ "$HAVE_RUN" = 1 ]; then
     has_gate=0
     nm_has_gate && has_gate=1
 
+    # A detail string may state only what its own source establishes. An outcome
+    # is a pipeline fact: `passed` says the run's steps completed, nothing about
+    # the forge, and the task's recorded `pr=` is never consulted here. Claiming
+    # a merge firstmate cannot see is what would wrongly confirm landing and
+    # authorize teardown of an open PR's branch (tests/fm-crew-state.test.sh,
+    # test_terminal_passed).
     if [ -n "$outcome" ]; then
       case "$outcome" in
-        passed)        RUN_STATE="done"; RUN_DETAIL="run passed: PR merged/closed" ;;
+        passed)        RUN_STATE="done"; RUN_DETAIL="run passed: pipeline complete" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
         failed)        RUN_STATE=failed; RUN_DETAIL="run failed" ;;
         cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;
