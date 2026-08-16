@@ -1,0 +1,15 @@
+ok - real Herdr lab: an opted-out spawn retains the Stage 1 Herdr command sequence with zero ordering calls
+ok - real Herdr lab: a home that configured nothing falls back flat on below-floor herdr 0.7.4 with one naming warning
+ok - real Herdr lab: every projected create, task-tab create, seeded prune, and move preserves active workspace and tab
+warning: herdr presentation cleanup could not verify the exact pane; refusing focus-unsafe pane close
+ok - real Herdr lab: active seeded-tab pruning refuses the exact pane and preserves exact focus
+ok - real Herdr lab: bounded lock contention warns and falls back flat without projection or focus drift
+ok - real Herdr lab: concurrent primary workers form one stable contiguous block without active workspace/tab drift
+ok - real Herdr lab: forced workspace.move failure leaves a successful worker in default order with a warning and no cleanup
+not ok - concurrent post-create abort cleanup interleaved outside the presentation lock: create-b
+prune-b
+prune-b
+create-a
+prune-a
+prune-a
+BASE EXIT=1

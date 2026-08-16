@@ -1,0 +1,15 @@
+FM_TEST_BEGIN 2026-08-16T08:04:23Z tests/fm-backend-herdr-presentation-e2e.test.sh family=real-herdr-gated expected_gate_skip=herdr
+ok - real Herdr lab: an opted-out spawn retains the Stage 1 Herdr command sequence with zero ordering calls
+ok - real Herdr lab: a home that configured nothing falls back flat on below-floor herdr 0.7.4 with one naming warning
+ok - real Herdr lab: every projected create, task-tab create, seeded prune, and move preserves active workspace and tab
+warning: herdr presentation cleanup could not verify the exact pane; refusing focus-unsafe pane close
+ok - real Herdr lab: active seeded-tab pruning refuses the exact pane and preserves exact focus
+ok - real Herdr lab: bounded lock contention warns and falls back flat without projection or focus drift
+ok - real Herdr lab: concurrent primary workers form one stable contiguous block without active workspace/tab drift
+ok - real Herdr lab: forced workspace.move failure leaves a successful worker in default order with a warning and no cleanup
+ok - real Herdr lab: concurrent post-create abort cleanup stays serialized with exact focus restoration
+not ok - projected teardown changed active workspace/tab from w3/w3:t1 to w8/w8:t2
+FM_TEST_END 2026-08-16T08:09:52Z tests/fm-backend-herdr-presentation-e2e.test.sh exit=1 duration_ms=328152 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=328332
+FM_TEST_SUMMARY_FAMILY family=real-herdr-gated count=1 duration_ms=328152 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-backend-herdr-presentation-e2e.test.sh duration_ms=328152

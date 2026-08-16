@@ -1,0 +1,5 @@
+not ok - a same-harness relaunch should succeed
+error: ship spawns require --mode <no-mistakes|direct-PR|local-only>; resolve it at intake from the captain's instruction and the project's registered posture in data/projects.md
+error: the replacement agent for rl1 could not be launched on claude
+error: rl1's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-control-relaunch.9XN3vb/same-3874/wt: expected exit 0, got 1
+BASE EXIT=1

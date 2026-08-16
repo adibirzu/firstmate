@@ -1,0 +1,4 @@
+ok - muse is detected through any versioned muse-bin ancestor
+ok - muse detection does not claim unrelated muse-containing commands
+not ok - muse spawn from a marked backend should succeed: error: unknown harness 'muse'; pass a raw launch command to use an unverified adapter: expected exit 0, got 1
+BASE MUSE EXIT=1

@@ -1,0 +1,16 @@
+The command bin/fm-control.sh relaunch issues (bin/fm-control.sh:814):
+  $ fm-spawn.sh rl-demo --relaunch --harness claude
+
+### BEFORE (base 8b22be8)  -- --relaunch is not a known flag, so it lands in the positional list and PROJ becomes the literal string
+error: ship spawns require --mode <no-mistakes|direct-PR|local-only>; resolve it at intake from the captain's instruction and the project's registered posture in data/projects.md
+
+### AFTER (this change)    -- --relaunch is parsed as the lifecycle verb, so the spawn goes to the record-driven relaunch path
+error: --reuse-worktree needs an existing task record; no /tmp/fm-relaunch-cli.dRnh/state/rl-demo.meta
+
+### BEFORE, with the ship --mode requirement satisfied, the fall-through is explicit -- the flag is consumed as the PROJECT argument:
+  $ fm-spawn.sh rl-demo --relaunch --harness claude --mode direct-PR
+error: ship spawns require --yolo <on|off>; it is this task's routine approval authority, not a project lookup
+  $ fm-spawn.sh rl-demo --relaunch --harness claude --mode direct-PR --yolo off
+/tmp/fm-base-repro.Em95gT/bin/fm-spawn.sh: line 1556: cd: --: invalid option
+cd: usage: cd [-L|[-P [-e]]] [-@] [dir]
+  (PROJ is the literal string '--relaunch': the cd into the project path refuses it as an option)
