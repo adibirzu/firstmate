@@ -17,6 +17,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tmux-lib.sh"   # brings fm-composer-lib.sh + busy defaults/matcher
+# shellcheck source=tests/composer-fence.sh
+. "$ROOT/tests/composer-fence.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
@@ -129,17 +131,15 @@ test_cline_real_input_reads_pending() {
 # --- shared idle default covers cline (tmux + every backend) ----------------
 
 test_shared_idle_default_covers_cline() {
-  local p b bad=0 up
+  # Each verified cline placeholder must read empty through the classifier every
+  # adapter calls (tests/composer-fence.sh), under every backend's own declared
+  # capabilities - not merely match the shared default's bytes, which proves
+  # nothing about whether the classifier still consults it.
+  local p
   for p in 'What can I do for you?' 'Ask anything...'; do
-    printf '%s' "$p" | grep -qE "$FM_COMPOSER_IDLE_RE_DEFAULT" \
-      || fail "shared FM_COMPOSER_IDLE_RE_DEFAULT does not match cline placeholder '$p'"
+    fm_test_composer_reads_empty "$(fm_test_composer_bordered_row "$p")" \
+      "cline's idle placeholder '$p'"
   done
-  for b in herdr cmux orca; do
-    up=$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')
-    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*FM_COMPOSER_IDLE_RE_DEFAULT" \
-      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE does not use the shared default"; bad=1; }
-  done
-  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not use the shared idle default"
   pass "shared idle default covers cline placeholders and backs herdr/cmux/orca"
 }
 

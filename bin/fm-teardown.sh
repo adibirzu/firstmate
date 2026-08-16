@@ -96,9 +96,11 @@
 # removal so the operator can see what happened.
 #
 # Pre-teardown cleanup sequence (runs once every landed/discard-work safety
-# refusal above has already passed, and BEFORE any worktree return, branch
-# delete, or backend kill below - a still-active run or a leaked process may
-# own live work in that worktree):
+# refusal above has already passed, and BEFORE any worktree return or branch
+# delete below - a still-active run or a leaked process may own live work in
+# that worktree; Fix 2 alone runs after the herdr presentation exact-pane
+# close, which must see the pane's worktree-cwd process still alive to close
+# it focus-preservingly):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
 #     (awaiting_approval/fix_review/any awaiting_agent field), with no worker
@@ -2393,15 +2395,21 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
 fi
 
 # Every landed/discard-work refusal above has now passed (or --force skipped
-# them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
-# --force, and before ANY destructive step below - a still-parked run or a
-# leaked process can own live work in this exact worktree. Not for
-# kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
-# dedicated process-event and firstmate-home removal machinery further below,
-# not by task-worktree cleanup.
+# them). Fix 1 (see script header) runs here, unconditionally on --force, and
+# before ANY destructive step below - a still-parked run can own live work in
+# this exact worktree. Not for kind=secondmate: a secondmate home's own runtime
+# lifecycle is owned by the dedicated process-event and firstmate-home removal
+# machinery further below, not by task-worktree cleanup.
+# Fix 2 (reap_task_worktree_processes) runs AFTER the herdr presentation
+# exact-pane close below, not here: under the leased acquisition flow the
+# pane's own top-level process has cwd set to the worktree, so reaping first
+# kills it, Herdr's own last-pane cleanup removes the emptied projected
+# workspace and steals focus before the gate can see a live pane, and the
+# focus-preserving close plus its exact-tab restore are silently defeated
+# (the same ordering defect the presentation gate placement fixed for the
+# worktree return).
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
-  reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
 
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
@@ -2480,6 +2488,14 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "error: teardown aborted before the worktree return for $ID; retry once the lock holder finishes" >&2
     exit 1
   fi
+fi
+
+# Fix 2 (see script header): reap leaked descendant processes rooted under the
+# worktree/tasktmp. This runs after the herdr exact-pane close above (whose
+# focus-preserving plan and restore need the pane's worktree-cwd process still
+# alive) and before the destructive worktree return below.
+if [ "$KIND" != secondmate ]; then
+  reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.

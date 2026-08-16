@@ -21,6 +21,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tmux-lib.sh"   # brings fm-composer-lib.sh + busy defaults/matcher
+# shellcheck source=tests/composer-fence.sh
+. "$ROOT/tests/composer-fence.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
@@ -154,15 +156,14 @@ test_backend_idle_re_defaults_cover_copilot() {
   # the PRD's coverage check adapted to that finding: prove the bare ❯ glyph
   # stays classified through the shared, untouched fleet-wide defaults rather
   # than needing a per-backend addition.
-  printf '%s' '❯' | grep -qE "$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT" \
-    || fail "shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT does not match copilot's ❯ composer row"
-  local b bad=0 up
-  for b in herdr cmux orca; do
-    up=$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')
-    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*FM_COMPOSER_IDLE_RE_DEFAULT" \
-      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE does not use the shared default"; bad=1; }
-  done
-  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not use the shared idle default"
+  # The bare glyph is what copilot's composer actually draws, so drive it through
+  # the classifier every adapter calls (tests/composer-fence.sh) rather than
+  # matching a constant's bytes: a constant can hold the right regex while the
+  # classifier no longer consults it.
+  fm_test_composer_reads_empty "$(printf '%s\n' '❯ ')" \
+    "copilot's bare ❯ composer row"
+  fm_test_composer_reads_empty "$(fm_test_composer_bordered_row 'What can I do for you?')" \
+    "an idle placeholder"
   pass "copilot's bare-glyph composer is covered by the untouched shared fleet-wide defaults"
 }
 

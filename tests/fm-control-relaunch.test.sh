@@ -785,6 +785,53 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
   pass "fm-spawn --relaunch: with no explicit harness it reuses the task's recorded one, never the crew default"
 }
 
+# REGRESSION: bin/fm-control.sh spells this flag --relaunch. When fm-spawn.sh
+# was rewritten to accept only --reuse-worktree, --relaunch stopped being a
+# recognized option and fell through into the positional list, so PROJ became
+# the literal string "--relaunch" and every fm-control relaunch in the fleet
+# failed after the old agent had already been stopped - the worst moment to
+# fail, because the task is then running nothing at all.
+#
+# Asserting the flag is ACCEPTED is not enough: an unrecognized option that
+# lands in the positional list can still exit non-zero for an unrelated reason
+# and look like a refusal. This pins the observable consequence instead - the
+# task relaunches in its own recorded project and worktree, and nothing named
+# "--relaunch" is ever treated as a path.
+test_spawn_accepts_the_relaunch_flag_and_never_treats_it_as_a_path() {
+  local dir out
+  dir=$(new_case relaunchflag rl22)
+  add_ship_task "$dir" rl22 claude
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(run_spawn "$dir" rl22 --relaunch --harness claude)
+  assert_not_contains "$out" "--relaunch" \
+    "--relaunch leaked into a path or project argument instead of being parsed as a flag"
+  assert_contains "$out" "spawned rl22" "the relaunch did not report a successful launch"
+  [ "$(meta_field "$dir" rl22 project)" = "$dir/proj" ] \
+    || fail "relaunch recorded project '$(meta_field "$dir" rl22 project)' instead of the task's own project"
+  [ "$(meta_field "$dir" rl22 worktree)" = "$dir/wt" ] \
+    || fail "relaunch recorded worktree '$(meta_field "$dir" rl22 worktree)' instead of the task's own worktree"
+  pass "fm-spawn --relaunch: the flag bin/fm-control.sh passes is parsed, never taken as a project path"
+}
+
+# The delivery contract is the task's, not the caller's: bin/fm-control.sh
+# passes no --mode/--yolo on a relaunch precisely because a relaunch must not be
+# able to change them. A ship spawn requires both, so requiring them here too
+# made every fm-control relaunch refuse before it could preserve anything.
+test_spawn_relaunch_preserves_the_recorded_delivery_contract() {
+  local dir
+  dir=$(new_case relaunchmode rl23)
+  add_ship_task "$dir" rl23 claude
+  printf 'zsh' > "$dir/fake/command"
+
+  run_spawn "$dir" rl23 --relaunch --harness claude >/dev/null
+  [ "$(meta_field "$dir" rl23 mode)" = no-mistakes ] \
+    || fail "relaunch lost the recorded delivery mode, got '$(meta_field "$dir" rl23 mode)'"
+  [ "$(meta_field "$dir" rl23 yolo)" = off ] \
+    || fail "relaunch lost the recorded yolo posture, got '$(meta_field "$dir" rl23 yolo)'"
+  pass "fm-spawn --relaunch: the recorded delivery mode and yolo posture survive a relaunch"
+}
+
 # fm-spawn arms per-task wiring on harness PREFIXES, because a task launched
 # from a raw command records that command's basename rather than the exact
 # adapter name. Retirement must resolve the same way, or a task recorded as
@@ -1334,6 +1381,8 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
+test_spawn_accepts_the_relaunch_flag_and_never_treats_it_as_a_path
+test_spawn_relaunch_preserves_the_recorded_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
 test_cursor_session_binding_is_retired_on_a_harness_switch

@@ -335,8 +335,14 @@ FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖
 FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT='esc to cancel'
 FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT='Working.*esc interrupt'
 FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc to cancel'
-# Fork-only bare-prompt default (consumed by bin/backends/orca.sh + cmux.sh as the
-# fallback for their per-backend BARE_PROMPT_RE); upstream has no equivalent.
+# Fork-only bare-prompt default; upstream has no equivalent. This is the
+# published, fleet-wide list of glyphs a harness may use to draw an UNBORDERED
+# (bare) composer row: an adapter verification records a new harness's glyph
+# against this set, and the classifier's own promotion set
+# (FM_COMPOSER_AGENT_PROMPT_GLYPHS below) carries the same glyphs in the shape
+# it needs them. It is a constant this library publishes rather than one it
+# consumes, so ShellCheck sees no use for it here.
+# shellcheck disable=SC2034 # Published fleet-wide constant; no in-file reader by design.
 FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 fm_busy_lines_match() {  # [harness]

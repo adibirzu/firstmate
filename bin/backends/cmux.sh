@@ -529,61 +529,34 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
   printf '%s' "$out" | tail -n "$lines"
 }
 
-# fm_backend_cmux_composer_state: classify the composer's own row as
-# empty|pending|unknown. Adapted from the bordered-row branch of herdr's
-# structural classifier (fm_backend_herdr_composer_state) per the build task's
-# explicit direction - this is the highest-risk piece of a new backend's
-# send-and-verify logic, and cmux's `read-screen` gives plain-text capture
-# with no cursor-row primitive and no ANSI style channel like herdr's newer
-# `pane read --format ansi` path. The cmux classifier intentionally remains
-# border-row based: locate the
-# composer row as the only captured line whose TRIMMED content both STARTS and
-# ENDS with the same border glyph (│, ┃, or a plain ASCII |), scanning forward
-# and keeping the LAST match so an earlier border-shaped line (scrollback, a
-# popup) never outranks the real bottom-anchored composer row. A bare
-# (unbordered) row starting with a verified AGENT prompt glyph (❯ claude,
-# › codex, → cursor-agent; the shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT) is
-# the second recognized shape, mirroring herdr's bare branch, because cline
-# and cursor-agent draw their live composer without side borders. Shell-style
-# glyphs > $ % # never promote a bare row, so a dead shell stays 'unknown'.
-FM_BACKEND_CMUX_COMPOSER_LINES=${FM_BACKEND_CMUX_COMPOSER_LINES:-20}
-FM_BACKEND_CMUX_IDLE_RE=${FM_BACKEND_CMUX_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}
-FM_BACKEND_CMUX_BARE_PROMPT_RE=${FM_BACKEND_CMUX_BARE_PROMPT_RE:-$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT}
+# fm_backend_cmux_composer_capture: the cmux composer screen - a bounded
+# plain-text tail of the surface. cmux's `read-screen` is plain text by
+# construction (its --help: "Read terminal text from a surface as plain
+# text"), which is why the capability descriptor below declares styled=0: the
+# shared classifier then degrades a glyph row carrying trailing text to
+# `unknown` instead of misreading an idle suggestion as unsent input.
+fm_backend_cmux_composer_capture() {  # <target> [expected-label]
+  fm_backend_cmux_capture "$1" "$FM_COMPOSER_CAPTURE_LINES" "${2:-}"
+}
 
-fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending|unknown
-  local target=$1 expected_label=${2:-} cap line trimmed stripped="" found=0 bordered=0
-  cap=$(fm_backend_cmux_capture "$target" "$FM_BACKEND_CMUX_COMPOSER_LINES" "$expected_label") || { printf 'unknown'; return 0; }
-  while IFS= read -r line; do
-    trimmed="${line#"${line%%[![:space:]]*}"}"
-    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    [ -n "$trimmed" ] || continue
-    case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|')
-        stripped=$trimmed
-        bordered=1
-        found=1
-        ;;
-      *)
-        if printf '%s' "$trimmed" | grep -qE "$FM_BACKEND_CMUX_BARE_PROMPT_RE"; then
-          stripped=$trimmed
-          bordered=0
-          found=1
-        fi
-        ;;
-    esac
-  done < <(printf '%s\n' "$cap")
-  [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  if [ "$bordered" -eq 1 ]; then
-    stripped=${stripped//│/}
-    stripped=${stripped//┃/}
-    stripped=${stripped//|/}
-    stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-    stripped="${stripped%"${stripped##*[![:space:]]}"}"
-  fi
-  # A row was found only by the bordered shape or a bare AGENT-glyph row, so
-  # delegate to the shared owner with the matching bordered flag. A bare
-  # dead-shell prompt matches neither shape and already returned 'unknown'.
-  fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_CMUX_IDLE_RE"
+# fm_backend_cmux_composer_caps: static capability facts, not logic (see the
+# capability model in bin/fm-composer-lib.sh).
+fm_backend_cmux_composer_caps() {
+  printf 'styled=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
+}
+
+# fm_backend_cmux_composer_state: thin adapter - capture plus capabilities in,
+# shared verdict out. Every shape (including the borderless claude row this
+# adapter once carried its own NBSP workaround for) lives in
+# bin/fm-composer-lib.sh, so a new harness shape is taught there once and
+# never here. cmux has no identity probe, so the classifier's identity
+# sentinel resolves to unknown.
+fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending|pending-unproven|unknown
+  local cap verdict
+  cap=$(fm_backend_cmux_composer_capture "$1" "${2:-}") || { printf 'unknown'; return 0; }
+  verdict=$(fm_composer_classify_screen "$(fm_backend_cmux_composer_caps)" "$cap")
+  [ "$verdict" != need-identity ] || verdict=unknown
+  printf '%s' "$verdict"
 }
 
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,

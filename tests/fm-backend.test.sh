@@ -138,46 +138,21 @@ resolve_permissive_tmux_kill_ref() {
 # The teardown conformance case applies its explicitly historical tmux adapter
 # after this complete baseline has been materialized.
 
-# sed program that extracts `<lib>.sh` from a `. "$SCRIPT_DIR/<lib>.sh"` source
-# line. Single-quoted deliberately: the `\$` is a literal dollar inside the
-# regex, matching the text `$SCRIPT_DIR`, not a shell expansion.
-# shellcheck disable=SC2016
-SOURCED_LIB_SED='s#^[[:space:]]*\.[[:space:]]+"\$(SCRIPT_DIR|FM_ROOT|ROOT)[^"]*/([A-Za-z0-9._-]+\.sh)".*#\2#p'
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
-  local name=$1 root archive
+  local name=$1 root
   root="$TMP_ROOT/$name"
   bin="$root/bin"
-  mkdir -p "$bin"
-  for f in $OLD_BIN_UNCHANGED_SIBLINGS; do
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  for f in $OLD_BIN_OPTIONAL_SIBLINGS; do
-    [ -f "$ROOT/bin/$f" ] || continue
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  cp -R "$ROOT/bin/backends" "$bin/backends"
-  git -C "$ROOT" show "$BASE_REF:bin/backends/tmux.sh" > "$bin/backends/tmux.sh"
-  for f in $OLD_BIN_REFACTORED; do
-    git -C "$ROOT" show "$BASE_REF:bin/$f" > "$bin/$f"
-    chmod +x "$bin/$f"
-  done
-  # BACKSTOP: copy any sibling the assembled scripts source that the explicit
-  # lists above missed. Those lists are hand-maintained and rot whenever a
-  # script gains a dependency - OLD_BIN_UNCHANGED_SIBLINGS had already fallen
-  # behind fm-treehouse-lib.sh, so the old fm-teardown.sh died on a missing
-  # `source` and the suite reported "should succeed: expected exit 0, got 1".
-  # Additive only: it never overwrites a file already placed above, so the
-  # BASE_REF versions of the refactored scripts stay exactly as written.
-  local dep
-  for f in "$bin"/*.sh; do
-    [ -f "$f" ] || continue
-    while IFS= read -r dep; do
-      [ -n "$dep" ] || continue
-      [ -e "$bin/$dep" ] && continue
-      [ -f "$ROOT/bin/$dep" ] || continue
-      cp "$ROOT/bin/$dep" "$bin/$dep"
-    done < <(sed -nE "$SOURCED_LIB_SED" "$f")
-  done
+  mkdir -p "$root"
+  # Materialize BASE_REF's complete bin/ tree in one operation, exactly as the
+  # note above describes. The hand-maintained per-file lists this used to walk
+  # (OLD_BIN_UNCHANGED_SIBLINGS and friends) are gone: they rotted every time a
+  # script gained a dependency, and an incomplete shim makes the historical
+  # process abort on a missing `source` before it ever reaches the behavior
+  # under test - which reads as a behavior difference rather than a broken
+  # fixture. git archive preserves the executable bits, so entrypoints stay
+  # runnable without a chmod sweep.
+  git -C "$ROOT" archive "$BASE_REF" bin | tar -x -C "$root" || return 1
+  [ -d "$bin" ] || return 1
   printf '%s\n' "$root"
 }
 
