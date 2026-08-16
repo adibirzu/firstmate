@@ -1,0 +1,36 @@
+=== Upstream-sync merge drop-guard verification ===
+Merge commit: 2244566 (fm/fm-sync-fork-upstream)
+
+--- Merge topology (true merge, two parents) ---
+tree 31d842923a03523257ade7059cec56ac0db31304
+parent 70796575942b3e11609d384937a2e85784695563
+parent ef35d799a846d676c2fd30b1d1e3ed47b0fb2c22
+author Adrian Birzu <adibirzu@gmail.com> 1786880293 +0300
+committer Adrian Birzu <adibirzu@gmail.com> 1786880293 +0300
+
+
+merge-base(origin/main-side 7079657, upstream/main ef35d79) = f1a4af426d7199c1781bc91ccd143b8e1f732d10
+
+--- Upstream's 3 commits being merged ---
+ef35d79 fix(calm): keep Pi's export confirmation visible (#2461)
+196fb65 docs(skills): add remote-secondmate recovery hint for false-negative verdicts (#2456)
+7a3259e fix: keep the public promise reachable when work is routed to a second mate (#2457)
+
+--- CHECK 1: diff(fork parent 7079657 -> merge) vs diff(merge-base -> upstream ef35d79) ---
+PASS: content-identical (only blob hashes / hunk offsets differ) — merge adds exactly upstream's changes, nothing more, nothing less
+
+--- CHECK 2 (symmetric): diff(upstream parent ef35d79 -> merge) vs diff(merge-base -> fork 7079657) ---
+PASS: content-identical — merge preserves exactly the fork's ~137 commits of work relative to upstream
+
+--- CHECK 3: no files deleted vs either parent ---
+deleted vs fork parent   (7079657): 0
+deleted vs upstream parent (ef35d79): 0
+
+--- CHECK 4: PR #8 spawn/backend/relaunch files byte-identical to fork main parent ---
+UNCHANGED (blob a3ac7e9b345389ace14761e63998617b75534b3d): bin/fm-runtime-handoff.sh
+UNCHANGED (blob 7edffe4fc8d94c5b50dabb44e2cede14f07b25fd): bin/fm-spawn.sh
+UNCHANGED (blob 4929700d630e7e2da06f6075ea6d60fd86cc9303): bin/fm-dispatch-select.mjs
+UNCHANGED (blob 452d3cf26ee838ad84d5b002626a91bf4266bd8a): bin/fm-fleet.sh
+UNCHANGED (blob 1b75ce1e43cfa805aae6cc866072b225f2e8a478): bin/fm-backend.sh
+UNCHANGED (blob 299e2b8e07ca750a873c74cf6e6d25d90241cae1): bin/fm-spawn-acct.sh
+UNCHANGED (blob 81170da28e2bb7221556de9629a8e58313a8d165): bin/fm-account-exec.sh
