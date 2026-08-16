@@ -49,6 +49,9 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
+# Ship and scout scaffolds carry a shared graph-first context section: the
+# crewmate queries the DevViz code graph before broad file reads, and falls
+# back to normal targeted file reads when the graph surface is unreachable.
 # Ship tasks include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
@@ -299,6 +302,19 @@ EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
 
+# Graph-first context, defined once and included in both the scout and ship
+# scaffolds below (one-owner rule; firstmate-coding-guidelines): every crewmate
+# queries the DevViz code graph before broad file reads, and falls back to
+# normal file reads when the graph surface is unreachable (fail-soft, never a
+# blocker).
+IFS= read -r -d '' GRAPH_FIRST_SECTION <<'EOF' || true
+# Graph-first context
+Before reading files to understand this project, query the code graph first: call the `graph_first` MCP tool, or run `devviz graph-first "<question>"`, or POST to `http://127.0.0.1:8000/api/kag/graph-first`.
+It returns a bounded set of relevant files with freshness; use it to target your file reads, and never parse `data/graphs/*/graph.json` directly.
+If the graph-first surface is unreachable, proceed with normal targeted file reads - it is an accelerator, never a blocker.
+EOF
+GRAPH_FIRST_SECTION=${GRAPH_FIRST_SECTION%$'\n'}
+
 # Shared worker-safety rules, defined once and referenced by both the scout
 # and ship Rules sections below (one-owner rule; firstmate-coding-guidelines).
 RULE_NO_PROMPT="8. A decision above your authority is reported only through rule 6's status-file mechanism, then you stop.
@@ -320,6 +336,8 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
+
+$GRAPH_FIRST_SECTION
 
 # Rules
 1. Never push to any remote and never open a PR.
@@ -436,6 +454,8 @@ The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+
+$GRAPH_FIRST_SECTION
 
 # Rules
 $RULE1
