@@ -249,6 +249,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-control-lib.sh
+. "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-treehouse-lib.sh
@@ -274,6 +276,8 @@ YOLO=
 TRACEPARENT_ARG=
 HANDOFF_BRIEF=
 REUSE_WORKTREE=0
+RELAUNCH_STRICT=0
+KIND_SET=0
 HARNESS_SET=0
 PROVIDER_SET=0
 MODEL_SET=0
@@ -305,11 +309,18 @@ for a in "$@"; do
     continue
   fi
   case "$a" in
-    --scout) KIND=scout ;;
-    --secondmate) KIND=secondmate ;;
-    # --relaunch is the original spelling used by bin/fm-control.sh; both names
-    # select the same in-place relaunch of an existing task in its own worktree.
-    --reuse-worktree|--relaunch) REUSE_WORKTREE=1 ;;
+    --scout) KIND=scout; KIND_SET=1 ;;
+    --secondmate) KIND=secondmate; KIND_SET=1 ;;
+    # Two spellings of one in-place relaunch, with deliberately different
+    # strictness. --relaunch is bin/fm-control.sh's lifecycle verb: every
+    # identity axis (backend, kind, delivery posture, project) comes from the
+    # record and a contradicting flag refuses, because the control plane must
+    # not be able to change what the task IS while replacing its agent.
+    # --reuse-worktree is bin/fm-runtime-handoff.sh's entry point, where
+    # firstmate is deliberately choosing a new runtime for the same work and
+    # states the axes explicitly.
+    --reuse-worktree) REUSE_WORKTREE=1 ;;
+    --relaunch) REUSE_WORKTREE=1; RELAUNCH_STRICT=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --provider) want_value=provider ;;
@@ -430,6 +441,19 @@ spawn_remote_secondmate() {
   id=${POS[0]:-}
   fm_task_id_creation_valid "$id" || { echo "error: invalid task id" >&2; return 2; }
   mkdir -p "$STATE" || { echo "error: could not create parent state directory" >&2; return 1; }
+  # A remote secondmate is still a fresh task record in THIS home, so it takes
+  # the home's task-set lock before its own per-task lock, exactly as a local
+  # spawn does. The remote route is decided before the shared acquisition point
+  # further down, so the lock is taken here rather than there.
+  SPAWN_TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
+    echo "error: could not resolve the task-set lock for $STATE" >&2
+    return 1
+  }
+  if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
+    echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $id rather than racing it" >&2
+    return 1
+  fi
+  SPAWN_TASK_SET_LOCK_HELD=1
   SPAWN_TASK_LOCK="$STATE/.spawn-$id.lock"
   if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
     echo "error: another spawn is already creating task $id" >&2
@@ -655,6 +679,10 @@ spawn_remote_secondmate() {
     [ -z "$remote_recorded_traceparent" ] || echo "traceparent=$remote_recorded_traceparent"
   } > "$tmp"
   mv -f -- "$tmp" "$meta"
+  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_SET_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_SET_LOCK"
+  fi
   fm_lock_release "$remote_lock" || true
   fm_lock_release "$registry_lock" || true
   fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -744,6 +772,18 @@ HERDR_PRESENTATION_ORDER_LOCK=
 HERDR_PRESENTATION_ORDER_LOCK_HELD=0
 SPAWN_TASK_LOCK=
 SPAWN_TASK_LOCK_HELD=0
+SPAWN_TASK_SET_LOCK=
+SPAWN_TASK_SET_LOCK_HELD=0
+SPAWN_META_LOCK=
+SPAWN_META_LOCK_HELD=0
+SPAWN_CONTROL_LOCK=
+SPAWN_CONTROL_LOCK_HELD=0
+SPAWN_CONTROL_PARENT=0
+RELAUNCH_REPLACEMENT_PENDING=0
+RELAUNCH_REPLACEMENT_BUSY_GEN=
+RELAUNCH_REPLACEMENT_HARNESS=
+RELAUNCH_REPLACEMENT_STATE=
+RELAUNCH_REPLACEMENT_WT=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
@@ -839,6 +879,38 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
     fm_lock_release "$SPAWN_TASK_LOCK" || true
+  fi
+  # An aborted relaunch must not leave the REPLACEMENT's wiring armed: the task
+  # keeps running its previous incarnation's record, so a stray hook file or
+  # turn-end token from an agent that never started would answer for it.
+  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ]; then
+    RELAUNCH_REPLACEMENT_PENDING=0
+    if ! clear_relaunch_harness_wiring \
+        "$RELAUNCH_REPLACEMENT_HARNESS" \
+        "$RELAUNCH_REPLACEMENT_WT" \
+        "$RELAUNCH_REPLACEMENT_STATE" \
+        "$ID"; then
+      echo "warning: could not remove replacement wiring after aborted relaunch of $ID" >&2
+    fi
+    if [ -n "$RELAUNCH_REPLACEMENT_BUSY_GEN" ]; then
+      if ! "$FM_ROOT/bin/fm-busy-event.sh" retire \
+          "$RELAUNCH_REPLACEMENT_STATE" "$ID" \
+          --gen "$RELAUNCH_REPLACEMENT_BUSY_GEN"; then
+        echo "warning: could not retire replacement busy generation after aborted relaunch of $ID" >&2
+      fi
+    fi
+  fi
+  if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
+    SPAWN_META_LOCK_HELD=0
+    fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_SET_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
+  fi
+  if [ "$SPAWN_CONTROL_LOCK_HELD" = 1 ]; then
+    SPAWN_CONTROL_LOCK_HELD=0
+    fm_lock_release "$SPAWN_CONTROL_LOCK" || true
   fi
   if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
     CONFIG_INHERIT_LOCK_HELD=0
@@ -937,6 +1009,54 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # work that is already running. A batch re-execs this script per pair, so each
 # pair is admitted against the machine as the previous pair left it.
 fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  # A relaunch is one step of a lifecycle transaction, so it takes the task's
+  # control lock: two lifecycle actions on the same task must never interleave.
+  # bin/fm-control.sh already holds it when it drives the relaunch itself, and
+  # it is this process's parent, so that case adopts the lock rather than
+  # deadlocking against it. Any other holder is a concurrent lifecycle action
+  # and refuses.
+  SPAWN_CONTROL_LOCK="$STATE/.control-$ID.lock"
+  control_owner=$(cat "$SPAWN_CONTROL_LOCK/pid" 2>/dev/null || true)
+  if [ "$control_owner" = "$PPID" ] && fm_pid_alive "$control_owner"; then
+    SPAWN_CONTROL_PARENT=1
+  elif fm_lock_try_acquire "$SPAWN_CONTROL_LOCK"; then
+    SPAWN_CONTROL_LOCK_HELD=1
+  else
+    echo "error: another lifecycle action is already running for task $ID" >&2
+    exit 1
+  fi
+fi
+if [ "$REUSE_WORKTREE" -eq 0 ]; then
+  mkdir -p "$STATE" || {
+    echo "error: could not create parent state directory" >&2
+    exit 1
+  }
+  # A FRESH spawn changes which tasks this home has, so it must not interleave
+  # with a forced teardown that has already enumerated that set: a record
+  # published inside the enumerate-then-remove window is invisible to the
+  # teardown's per-task preflight but visible to its cleanup, and gets mutated
+  # while never lifecycle-locked (bin/fm-wake-lib.sh's fm_task_set_lock_path
+  # owns the evidence; bin/fm-teardown.sh holds the same lock from enumeration
+  # through cleanup). Taken before this task's own locks, matching the
+  # acquisition order documented there, and held through publication.
+  #
+  # A relaunch is exempt: it republishes a task that already exists, so it is
+  # already covered by that task's control lock, which the teardown preflight
+  # tests.
+  #
+  # Refusing rather than waiting is the fail-closed direction: the home may be
+  # moments from removal, so there is nothing worth waiting for.
+  SPAWN_TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
+    echo "error: could not resolve the task-set lock for $STATE" >&2
+    exit 1
+  }
+  if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
+    echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
+    exit 1
+  fi
+  SPAWN_TASK_SET_LOCK_HELD=1
+fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   echo "error: another spawn is already creating task $ID" >&2
@@ -948,32 +1068,43 @@ ARG3=
 FIRSTMATE_HOME=
 REUSE_META=
 REUSE_OLD_TARGET=
+REUSE_OLD_STATE=
 REUSE_PRESERVE_MODE=
 REUSE_PRESERVE_YOLO=
 REUSE_PRESERVE_HARNESS=
 
+if [ "$RELAUNCH_STRICT" = 1 ]; then
+  [ "$BACKEND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded backend; --backend cannot override it" >&2; exit 1; }
+  [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
+  [ "$MODE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2; exit 1; }
+  [ "$YOLO_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2; exit 1; }
+  [ "${#POS[@]}" -eq 1 ] || { echo "error: --relaunch takes the task id only; project and worktree come from state/$ID.meta" >&2; exit 1; }
+fi
 if [ "$REUSE_WORKTREE" = 1 ]; then
   if [ "${#POS[@]}" -ne 1 ]; then
     echo "error: --reuse-worktree takes only <task-id> (project and worktree come from state/$ID.meta)" >&2
     exit 1
   fi
   REUSE_META="$STATE/$ID.meta"
-  [ -f "$REUSE_META" ] || { echo "error: --reuse-worktree requires existing meta at $REUSE_META" >&2; exit 1; }
+  [ -f "$REUSE_META" ] || { echo "error: --reuse-worktree needs an existing task record; no $REUSE_META" >&2; exit 1; }
   [ ! -L "$REUSE_META" ] || { echo "error: meta for $ID is a symlink; refusing reuse-worktree" >&2; exit 1; }
   REUSE_KIND=$(fm_meta_get "$REUSE_META" kind)
   case "$REUSE_KIND" in
-    ship|scout) KIND=$REUSE_KIND ;;
-    secondmate)
-      echo "error: --reuse-worktree does not support kind=secondmate" >&2
-      exit 1
-      ;;
+    ship|scout|secondmate) KIND=$REUSE_KIND ;;
     *)
-      echo "error: --reuse-worktree requires kind=ship or kind=scout in meta (got '${REUSE_KIND:-}')" >&2
+      echo "error: --reuse-worktree requires kind=ship, kind=scout or kind=secondmate in meta (got '${REUSE_KIND:-}')" >&2
       exit 1
       ;;
   esac
   PROJ=$(fm_meta_get "$REUSE_META" project)
   WT_FROM_META=$(fm_meta_get "$REUSE_META" worktree)
+  # A secondmate has no project worktree: its "worktree" IS its isolated
+  # firstmate home, recorded as home=. Relaunching one is still an in-place
+  # replacement of the agent in that home, so it takes the same path.
+  if [ "$KIND" = secondmate ]; then
+    FIRSTMATE_HOME=$(fm_meta_get "$REUSE_META" home)
+    [ -n "$FIRSTMATE_HOME" ] || FIRSTMATE_HOME=$WT_FROM_META
+  fi
   REUSE_PRESERVE_MODE=$(fm_meta_get "$REUSE_META" mode)
   REUSE_PRESERVE_YOLO=$(fm_meta_get "$REUSE_META" yolo)
   # Adopt the recorded delivery posture here, the moment it is known, rather than
@@ -989,9 +1120,13 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
   # was already running, never on the crew default: the crew default is a
   # fleet-wide setting that may have changed since the task started, and
   # silently switching a live task's harness is not a relaunch.
-  if [ "$HARNESS_SET" -ne 1 ]; then
-    REUSE_PRESERVE_HARNESS=$(fm_meta_get "$REUSE_META" harness)
-    [ -z "$REUSE_PRESERVE_HARNESS" ] || { HARNESS_ARG=$REUSE_PRESERVE_HARNESS; HARNESS_SET=1; }
+  # Always read the recorded harness: it is both the fallback when none is
+  # named AND the harness whose per-task wiring must be retired before the
+  # replacement's is armed, which is needed even when the harness changes.
+  REUSE_PRESERVE_HARNESS=$(fm_meta_get "$REUSE_META" harness)
+  if [ "$HARNESS_SET" -ne 1 ] && [ -n "$REUSE_PRESERVE_HARNESS" ]; then
+    HARNESS_ARG=$REUSE_PRESERVE_HARNESS
+    HARNESS_SET=1
   fi
   [ -n "$PROJ" ] || { echo "error: meta for $ID is missing project=" >&2; exit 1; }
   [ -n "$WT_FROM_META" ] || { echo "error: meta for $ID is missing worktree=" >&2; exit 1; }
@@ -1007,14 +1142,20 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
   fi
   REUSE_OLD_TARGET=$(fm_backend_target_of_meta "$REUSE_META")
   if [ -n "$REUSE_OLD_TARGET" ]; then
-    case "$(fm_backend_agent_state "$BACKEND" "$REUSE_OLD_TARGET")" in
+    REUSE_OLD_STATE=$(fm_backend_agent_state "$BACKEND" "$REUSE_OLD_TARGET")
+    case "$REUSE_OLD_STATE" in
       dead|missing) ;;
+      # Naming the state that was actually read matters: an agent that is still
+      # alive and an endpoint that could not be classified need different
+      # answers from the operator, and only the first is fixed by exiting the
+      # agent. Both refuse: a relaunch adopts the endpoint, so anything short of
+      # a positively agent-free one risks two agents in one pane.
       alive)
-        echo "error: existing endpoint for $ID is still alive; exit the agent (or use fm-runtime-handoff) before --reuse-worktree" >&2
+        echo "error: task $ID's endpoint is still alive; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit, or use bin/fm-runtime-handoff.sh)" >&2
         exit 1
         ;;
       *)
-        echo "error: cannot reconcile existing endpoint ownership for $ID; refusing --reuse-worktree rather than guessing" >&2
+        echo "error: cannot reconcile existing endpoint ownership for $ID; it reads '${REUSE_OLD_STATE:-unknown}' and a relaunch requires a positively agent-free endpoint, so this refuses rather than guessing" >&2
         exit 1
         ;;
     esac
@@ -1983,6 +2124,18 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
 }
 
 W="fm-$ID"
+if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ]; then
+  # Adopt the recorded endpoint instead of creating one. This is what keeps a
+  # relaunch a REPLACEMENT rather than a second copy of the task: no new
+  # terminal, no second worktree, and every uncommitted change left exactly
+  # where the previous agent left it. Creating one here instead is not a
+  # cosmetic difference - the endpoint already exists, so the create refuses
+  # ("window ... already exists") and the relaunch fails after the previous
+  # agent has already been stopped, leaving the task running nothing at all.
+  T=$REUSE_OLD_TARGET
+  WT_TARGET=$T
+  SES=${T%%:*}
+else
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
@@ -2226,6 +2379,7 @@ EOF
     T="$ORCA_TERMINAL"
     ;;
 esac
+fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
     propagate_inheritable_config "$CONFIG" "$PROJ_ABS/config" \
@@ -2341,7 +2495,10 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
       sleep 1
     done
     if [ "$landed" -ne 1 ]; then
-      echo "error: pane did not enter the recorded worktree $WT within 60s; inspect window $T" >&2
+      # The endpoint is adopted, not created, so its shell may have drifted
+      # while the previous agent was running. Refuse rather than launch the
+      # replacement somewhere other than the copy that holds the work.
+      echo "error: task $ID's endpoint is in '${p:-unknown}', not its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
       exit 1
     fi
   else
@@ -2446,6 +2603,48 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+# Retire the previous incarnation's per-task harness wiring before the
+# replacement's is armed. Without this, a harness switch leaves the old
+# adapter's hook files and turn-end token registry entries behind, and even a
+# same-harness relaunch orphans the retired busy generation's token
+# (bin/fm-control-lib.sh owns where those artifacts live).
+clear_relaunch_harness_wiring() {
+  local harness=$1 wt=$2 state=$3 id=$4 token_path token auth_path path
+  # The wiring arms match on harness PREFIXES, because a task launched from a
+  # raw command records that command's basename rather than the exact adapter
+  # name. The retirement tables are keyed by the exact adapter, so the recorded
+  # value is resolved to its adapter first; otherwise a task recorded as, say,
+  # `grok-2` would have wiring armed and never retired. An unrecognized value
+  # resolves to no adapter, which is also the case in which no wiring was armed
+  # to begin with.
+  harness=$(fm_control_harness_family "$harness") || harness=
+  token_path=$(fm_control_harness_turnend_token_path "$harness" "$state" "$id") || return 1
+  token=
+  if [ -n "$token_path" ] && [ -f "$token_path" ]; then
+    IFS= read -r token < "$token_path" || [ -n "$token" ] || return 1
+  fi
+  auth_path=$(fm_control_harness_turnend_auth_path "$harness" "$token") || return 1
+  if [ -n "$auth_path" ]; then
+    rm -f -- "$auth_path" || return 1
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    rm -f -- "$path" || return 1
+  done <<EOF
+$(fm_control_harness_wiring_paths "$harness" "$wt" "$state" "$id")
+EOF
+}
+
+if [ "$REUSE_WORKTREE" = 1 ]; then
+  clear_relaunch_harness_wiring "$REUSE_PRESERVE_HARNESS" "$WT" "$STATE_REAL" "$ID" || {
+    echo "error: could not retire $REUSE_PRESERVE_HARNESS wiring for task $ID; refusing to arm the replacement" >&2
+    exit 1
+  }
+  RELAUNCH_REPLACEMENT_PENDING=1
+  RELAUNCH_REPLACEMENT_HARNESS=$HARNESS
+  RELAUNCH_REPLACEMENT_STATE=$STATE_REAL
+  RELAUNCH_REPLACEMENT_WT=$WT
+fi
 if [ "$KIND" != secondmate ]; then
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
@@ -2469,6 +2668,7 @@ if [ "$KIND" != secondmate ]; then
         echo "error: failed to arm the busy-state contract for $ID" >&2
         exit 1
       }
+      [ "$REUSE_WORKTREE" != 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
       ;;
     kimi*)
       # Standalone Kimi stays unknown until fm_busy_kimi_verified opens on a
@@ -2767,12 +2967,55 @@ META_WINDOW=$T
 # On --reuse-worktree, rewrite only spawn-owned endpoint/runtime keys and
 # preserve every other meta line (pr=, pr_head=, x_*, custom fields). A full
 # truncate would drop PR and X-mode identity mid-task.
+# spawn_record_traceparent replaces the task record's traceparent= line under
+# the same metadata lock every other writer takes. A bare `>>` append is not
+# safe here even though it only adds one line: a concurrent Relay publication
+# rewrites the whole record from a snapshot it read moments earlier, so an
+# append landing inside that window is dropped with no error anywhere. Rewriting
+# under the lock also drops a stale carrier rather than leaving two.
+spawn_record_traceparent() {
+  local meta="$STATE/$ID.meta" tmp status=0
+  SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+  SPAWN_META_LOCK_HELD=1
+  tmp="$STATE/.$ID.meta.trace.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "traceparent"' "$meta" > "$tmp" \
+     || ! printf 'traceparent=%s\n' "$SPAWN_TRACEPARENT" >> "$tmp" \
+     || ! mv -f "$tmp" "$meta"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  SPAWN_META_LOCK_HELD=0
+  fm_lock_release "$SPAWN_META_LOCK" || status=1
+  return "$status"
+}
+
+# spawn_write_meta serializes the whole read-modify-write against every other
+# metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,
+# ...), so a Relay reply publishing concurrently between the read and the write
+# would otherwise be silently dropped, and the spawn's own traceparent could be
+# lost the same way. The lock is the task's own metadata lock, the one every
+# other writer takes.
 spawn_write_meta() {
+  local meta=$1 status=0
+  SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+  SPAWN_META_LOCK_HELD=1
+  spawn_write_meta_locked "$meta" || status=1
+  SPAWN_META_LOCK_HELD=0
+  fm_lock_release "$SPAWN_META_LOCK" || status=1
+  return "$status"
+}
+
+spawn_write_meta_locked() {
   local meta=$1 tmp drop_re
   # Every key a spawn owns must be listed, or a --reuse-worktree relaunch keeps
   # the previous run's value. traceparent= is spawn-written too, so a stale
   # carrier would otherwise survive a handoff and mis-attribute the new run.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects)='
+  # control_relaunch_tx= is spawn-written on a control-parented relaunch and is
+  # how bin/fm-control.sh recognizes its own replacement publication.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # Prove the destination is writable BEFORE building the replacement. `mv` onto
   # a DIRECTORY moves the temp file inside it and reports success, so without
   # this the spawn would publish nothing, believe it had, and launch an agent
@@ -2812,6 +3055,12 @@ spawn_write_meta() {
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
+    # On a relaunch driven by bin/fm-control.sh, stamp that transaction's id.
+    # It is how the control plane tells "the replacement published its record"
+    # apart from "the launch failed", which decides whether it reports a
+    # running replacement or a stopped task.
+    [ "$SPAWN_CONTROL_PARENT" != 1 ] || [ -z "${FM_CONTROL_RELAUNCH_TX:-}" ] \
+      || echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
     # backend= is written only for a non-default (non-tmux) backend, so the
     # default path's meta stays byte-identical (absent backend= means tmux;
     # data/fm-backend-design-d7's P1 compatibility contract).
@@ -2846,6 +3095,16 @@ spawn_write_meta "$STATE/$ID.meta" || {
   echo "error: could not write meta for $ID" >&2
   exit 1
 }
+# The replacement's record is published, so it now owns this task: its wiring is
+# no longer "pending" and must not be torn down by a later abort path.
+RELAUNCH_REPLACEMENT_PENDING=0
+if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+  # The record is published, so this task is now part of the set a teardown
+  # enumerates and locks per task. The set lock is only needed across that
+  # publication.
+  SPAWN_TASK_SET_LOCK_HELD=0
+  fm_lock_release "$SPAWN_TASK_SET_LOCK"
+fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 # The task now exists in state/, so fm-teardown.sh owns returning its worktree.
 # Returning it from here after this point would pull the lease out from under a
@@ -2907,6 +3166,13 @@ if [ "$KIND" = secondmate ]; then
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
 fi
+# A relaunch reuses the previous agent's pane, so a carrier it exported is still
+# set in that shell. With trace context now disabled there is no new carrier to
+# overwrite it, and the replacement would silently inherit the retired run's
+# trace. Clear it explicitly as part of the launch.
+if [ -z "${SPAWN_TRACEPARENT:-}" ] && [ "$REUSE_WORKTREE" = 1 ]; then
+  LAUNCH="unset TRACEPARENT; $LAUNCH"
+fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
@@ -2916,7 +3182,7 @@ spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
 # entirely when trace context is off.
 if [ -n "${SPAWN_TRACEPARENT:-}" ]; then
   if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
-    if ! echo "traceparent=$SPAWN_TRACEPARENT" >> "$STATE/$ID.meta"; then
+    if ! spawn_record_traceparent; then
       LAUNCH="unset TRACEPARENT; $LAUNCH"
     fi
   else

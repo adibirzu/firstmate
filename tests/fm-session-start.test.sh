@@ -966,7 +966,11 @@ EOF
   context_line=$(printf '%s\n' "$out" | grep -n '^CONTEXT$' | head -1 | cut -d: -f1)
   fleet_line=$(printf '%s\n' "$out" | grep -n '^FLEET STATE$' | head -1 | cut -d: -f1)
   next_line=$(printf '%s\n' "$out" | grep -n '^NEXT STEP$' | head -1 | cut -d: -f1)
-  inventory_line=$(printf '%s\n' "$out" | grep -n '^--- task-a ---$' | head -1 | cut -d: -f1)
+  # The inventory header carries the task id, optionally followed by the
+  # readable crew name bin/fm-name.sh mints for it (AGENTS.md section 9). The
+  # id is what recovery keys on and is pinned here; the crew name is
+  # presentation and must not make this fixture brittle.
+  inventory_line=$(printf '%s\n' "$out" | grep -nE '^--- task-a( \(.+\))? ---$' | head -1 | cut -d: -f1)
 
   if [ -z "$lock_line" ] || [ -z "$boot_line" ] || [ -z "$wake_line" ] \
     || [ -z "$read_once_line" ] || [ -z "$context_line" ] || [ -z "$fleet_line" ] \

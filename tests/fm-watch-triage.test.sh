@@ -1097,6 +1097,13 @@ test_live_agent_declared_pause_is_absorbed() {
   # surfaced pause from first sight - first sight must still surface once, and
   # test_exited_pause_and_captain_held_use_bounded_cadence pins that.
   printf '%s\n' $(( $(date +%s) - 5000 )) > "$state/.paused-rechecked-$key"
+  # The first watcher above was reaped, which is exactly the condition that arms
+  # downtime recovery: the next watcher resurfaces once so nothing queued during
+  # the gap is lost. That is correct behaviour and has its own coverage, but it
+  # would end this run before it ever reaches the pause classification under
+  # test. Clear the recovery state the fixture itself manufactured, so this
+  # phase exercises the aged-recheck path rather than downtime recovery.
+  rm -f "$state/.watcher-down"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
