@@ -541,23 +541,26 @@ test_grok_omits_invalid_max_reasoning_effort() {
   pass "grok omits unsupported max reasoning effort"
 }
 
-test_grok_omits_invalid_xhigh_reasoning_effort() {
+test_grok_threads_xhigh_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-xhigh-z6b
   rec=$(make_spawn_case profile-grok-xhigh grok "$id")
   read_case_record "$rec"
 
-  # grok 0.2.99 rejects xhigh (accepted set is only low|medium|high).
+  # grok's reasoning-effort ceiling MOVED: 0.2.99 rejected xhigh, but 1.0.4
+  # accepts it (its refusal names `xhigh, high, medium, low`), so xhigh now
+  # passes through rather than silently downgrading the captain's
+  # strongest-reasoning ask. max is still rejected and stays omitted (previous
+  # test). The live drift guard is tests/fm-grok-signals-live-e2e.test.sh.
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model grok-4 --effort xhigh)
   status=$?
-  expect_code 0 "$status" "grok spawn with unsupported xhigh reasoning effort should omit the effort flag"
+  expect_code 0 "$status" "grok spawn with xhigh reasoning effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 xhigh
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "grok --always-approve --model 'grok-4' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
-    "grok launch did not preserve the model flag and typed brief when xhigh effort was omitted"
-  assert_not_contains "$launch" "--reasoning-effort" "grok launch must omit unsupported xhigh reasoning effort"
-  assert_not_contains "$launch" "--effort" "grok launch must not fall back to --effort for reasoning effort"
-  pass "grok omits unsupported xhigh reasoning effort"
+  assert_contains "$launch" "grok --always-approve --model 'grok-4' --reasoning-effort 'xhigh' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
+    "grok launch did not thread the model flag, xhigh reasoning effort, and typed brief"
+  assert_not_contains "$launch" "--effort" "grok launch must use --reasoning-effort, not --effort"
+  pass "grok threads xhigh reasoning effort with model and typed brief"
 }
 
 test_cursor_threads_model_workspace_and_omits_effort_axis() {
@@ -851,7 +854,7 @@ test_codex_threads_model_and_effort
 test_codex_omits_invalid_max_effort
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
-test_grok_omits_invalid_xhigh_reasoning_effort
+test_grok_threads_xhigh_reasoning_effort
 test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
