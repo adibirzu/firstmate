@@ -717,6 +717,35 @@ test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
   pass "fm-brief.sh: ship and scout briefs forbid interactive-prompt decisions and worker-side polling loops"
 }
 
+# Every ship and scout brief carries the graph-first context instruction: query
+# the DevViz code graph before broad file reads, with a fail-soft fallback to
+# normal file reads when the graph surface is unreachable.
+test_ship_and_scout_carry_graph_first_instruction() {
+  local home brief kind kind_brief
+  home="$TMP_ROOT/graph-first-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-ship some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-scout some-proj --scout >/dev/null 2>&1
+  for kind_brief in "ship:$home/data/brief-graph-ship/brief.md" "scout:$home/data/brief-graph-scout/brief.md"; do
+    kind=${kind_brief%%:*}
+    brief=${kind_brief#*:}
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "# Graph-first context" "$brief" \
+      "$kind brief missing the graph-first context section"
+    assert_grep "query the code graph first" "$brief" \
+      "$kind brief did not instruct querying the graph before reading files"
+    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+    assert_grep 'call the `graph_first` MCP tool, or run `devviz graph-first "<question>"`' "$brief" \
+      "$kind brief lost the concrete graph-first call surfaces"
+    assert_grep "never parse \`data/graphs/*/graph.json\` directly" "$brief" \
+      "$kind brief did not forbid parsing raw graph.json"
+    assert_grep "If the graph-first surface is unreachable, proceed with normal targeted file reads" "$brief" \
+      "$kind brief lost the fail-soft fallback - graph-first must never block work"
+  done
+  pass "fm-brief.sh: ship and scout briefs carry the fail-soft graph-first instruction"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -757,4 +786,5 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
+test_ship_and_scout_carry_graph_first_instruction
 test_scout_and_secondmate_scaffold
