@@ -156,13 +156,30 @@ test_backend_idle_re_defaults_cover_copilot() {
   # than needing a per-backend addition.
   printf '%s' '❯' | grep -qE "$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT" \
     || fail "shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT does not match copilot's ❯ composer row"
-  local b bad=0 up
-  for b in herdr cmux orca; do
-    up=$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')
-    grep -Eq "FM_BACKEND_${up}_IDLE_RE=.*FM_COMPOSER_IDLE_RE_DEFAULT" \
-      "$ROOT/bin/backends/$b.sh" || { echo "  backend $b IDLE_RE does not use the shared default"; bad=1; }
-  done
-  [ "$bad" -eq 0 ] || fail "one or more backend IDLE_RE defaults do not use the shared idle default"
+  local COMPOSER_BOX
+  COMPOSER_BOX=$(printf '%s\n%s\n%s\n' \
+    '╭──────────────────────────────╮' \
+    '│ What can I do for you?       │' \
+    '╰──────────────────────────────╯')
+  # Every backend now reaches its verdict through the one shared owner
+  # (bin/fm-composer-lib.sh, fm_composer_classify_screen), so a per-backend idle
+  # override no longer exists to grep for - and could not take effect if it did.
+  # What still needs a fence is the guarantee that fence was protecting: an idle
+  # placeholder must read as `empty` under EVERY backend's declared capabilities,
+  # so a new harness's placeholder is taught once in the shared default and every
+  # backend picks it up. Assert that through the classifier the adapters actually
+  # call, rather than against the bytes of their source.
+  # The plain (styled=0) capability shape every backend declares for a
+  # plain-text capture is the one this fence governs: there the idle default is
+  # what recognizes a placeholder. Under a styled capture it is the shared
+  # ghost-stripper that does, because an undimmed placeholder is genuinely
+  # indistinguishable from typed input; that path has its own coverage in
+  # tests/fm-composer-ghost.test.sh.
+  local caps verdict
+  caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=20')
+  verdict=$(fm_composer_classify_screen "$caps" "$COMPOSER_BOX")
+  [ "$verdict" = empty ] \
+    || fail "an idle placeholder read '$verdict' instead of empty through the shared classifier every backend delegates to"
   pass "copilot's bare-glyph composer is covered by the untouched shared fleet-wide defaults"
 }
 
