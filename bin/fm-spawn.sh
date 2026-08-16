@@ -1073,6 +1073,46 @@ REUSE_PRESERVE_MODE=
 REUSE_PRESERVE_YOLO=
 REUSE_PRESERVE_HARNESS=
 
+# spawn_adopt_endpoint_ids: restore $BACKEND's endpoint identity from the record
+# a relaunch is adopting. Every key listed here is one this spawn rewrites, so an
+# absent one cannot be recovered later: publishing an empty herdr_pane_id= or
+# cmux_surface_id= would leave a record that fm_backend_validate_task_endpoint
+# can no longer match, which is what teardown needs to close the endpoint down.
+# Refuse instead, while the task is still whole.
+spawn_adopt_endpoint_ids() {
+  local missing=
+  case "$BACKEND" in
+    herdr)
+      HERDR_SES=$(fm_meta_get "$REUSE_META" herdr_session)
+      HERDR_WORKSPACE_ID=$(fm_meta_get "$REUSE_META" herdr_workspace_id)
+      HERDR_TAB_ID=$(fm_meta_get "$REUSE_META" herdr_tab_id)
+      HERDR_PANE_ID=$(fm_meta_get "$REUSE_META" herdr_pane_id)
+      [ -n "$HERDR_SES" ] || missing="${missing:+$missing }herdr_session"
+      [ -n "$HERDR_WORKSPACE_ID" ] || missing="${missing:+$missing }herdr_workspace_id"
+      [ -n "$HERDR_TAB_ID" ] || missing="${missing:+$missing }herdr_tab_id"
+      [ -n "$HERDR_PANE_ID" ] || missing="${missing:+$missing }herdr_pane_id"
+      ;;
+    zellij)
+      ZELLIJ_SES=$(fm_meta_get "$REUSE_META" zellij_session)
+      ZELLIJ_TAB_ID=$(fm_meta_get "$REUSE_META" zellij_tab_id)
+      ZELLIJ_PANE_ID=$(fm_meta_get "$REUSE_META" zellij_pane_id)
+      [ -n "$ZELLIJ_SES" ] || missing="${missing:+$missing }zellij_session"
+      [ -n "$ZELLIJ_TAB_ID" ] || missing="${missing:+$missing }zellij_tab_id"
+      [ -n "$ZELLIJ_PANE_ID" ] || missing="${missing:+$missing }zellij_pane_id"
+      ;;
+    cmux)
+      CMUX_WORKSPACE_ID=$(fm_meta_get "$REUSE_META" cmux_workspace_id)
+      CMUX_SURFACE_ID=$(fm_meta_get "$REUSE_META" cmux_surface_id)
+      [ -n "$CMUX_WORKSPACE_ID" ] || missing="${missing:+$missing }cmux_workspace_id"
+      [ -n "$CMUX_SURFACE_ID" ] || missing="${missing:+$missing }cmux_surface_id"
+      ;;
+  esac
+  [ -z "$missing" ] || {
+    echo "error: task $ID's record is missing the $BACKEND endpoint identity a relaunch must adopt ($missing); refusing rather than publishing a record that can no longer name its own endpoint" >&2
+    return 1
+  }
+}
+
 if [ "$RELAUNCH_STRICT" = 1 ]; then
   [ "$BACKEND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded backend; --backend cannot override it" >&2; exit 1; }
   [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
@@ -1159,6 +1199,17 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
         exit 1
         ;;
     esac
+    # A relaunch ADOPTS this endpoint rather than creating one, so every field
+    # of its identity has to come from the record too - not just the window=
+    # handle above. The backend-specific ids are assigned only by the creation
+    # `case` further down, which the adoption branch deliberately skips, so
+    # without this the replacement's record would be rewritten from unbound
+    # variables under `set -u`, aborting the relaunch after the previous agent
+    # was already stopped and its wiring retired. Read them here, alongside the
+    # rest of the record and before anything destructive has happened, so a
+    # record that cannot name its own endpoint refuses while the task is still
+    # whole.
+    spawn_adopt_endpoint_ids || exit 1
   fi
   ARG3=
 elif [ "$KIND" = secondmate ]; then
@@ -3009,29 +3060,37 @@ spawn_write_meta() {
 }
 
 spawn_write_meta_locked() {
-  local meta=$1 tmp drop_re
+  local meta=$1 tmp drop_re meta_existed
   # Every key a spawn owns must be listed, or a --reuse-worktree relaunch keeps
   # the previous run's value. traceparent= is spawn-written too, so a stale
   # carrier would otherwise survive a handoff and mis-attribute the new run.
   # control_relaunch_tx= is spawn-written on a control-parented relaunch and is
   # how bin/fm-control.sh recognizes its own replacement publication.
   drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
-  # Prove the destination is writable BEFORE building the replacement. `mv` onto
-  # a DIRECTORY moves the temp file inside it and reports success, so without
-  # this the spawn would publish nothing, believe it had, and launch an agent
-  # with no durable record - invisible to supervision and to teardown. The probe
-  # appends nothing, so it creates the file on a fresh spawn and leaves an
-  # existing record byte-identical for the reuse filter below to read. Its
-  # stderr is deliberately not suppressed: the operating system's own reason
-  # ("Is a directory", "Permission denied") is the useful diagnostic here.
-  if ! : >> "$meta"; then
-    echo "error: could not open task record $meta for writing; refusing to publish task metadata" >&2
-    return 1
-  fi
+  # The symlink refusal comes first, because the probe below opens the path for
+  # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then
     echo "error: task record $meta is a symlink; refusing to publish task metadata through it" >&2
     return 1
   fi
+  # Prove the destination is writable BEFORE building the replacement. `mv` onto
+  # a DIRECTORY moves the temp file inside it and reports success, so without
+  # this the spawn would publish nothing, believe it had, and launch an agent
+  # with no durable record - invisible to supervision and to teardown. The probe
+  # appends nothing, so an existing record stays byte-identical for the reuse
+  # filter below to read. On a fresh spawn it would instead CREATE the record, so
+  # undo that immediately: a later failure here must leave no zero-byte record
+  # behind, which every field-reader would report as a malformed task rather than
+  # an absent one. Its stderr is deliberately not suppressed: the operating
+  # system's own reason ("Is a directory", "Permission denied") is the useful
+  # diagnostic here.
+  meta_existed=1
+  [ -e "$meta" ] || meta_existed=0
+  if ! : >> "$meta"; then
+    echo "error: could not open task record $meta for writing; refusing to publish task metadata" >&2
+    return 1
+  fi
+  [ "$meta_existed" = 1 ] || rm -f "$meta"
   tmp=$(mktemp "$STATE/.${ID}.meta.XXXXXX") || return 1
   if [ "$REUSE_WORKTREE" = 1 ] && [ -f "$meta" ]; then
     if ! { grep -Ev "$drop_re" "$meta" || true; } > "$tmp"; then

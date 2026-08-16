@@ -21,6 +21,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tmux-lib.sh"   # brings fm-composer-lib.sh + busy defaults/matcher
+# shellcheck source=tests/composer-fence.sh
+. "$ROOT/tests/composer-fence.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
@@ -154,32 +156,14 @@ test_backend_idle_re_defaults_cover_copilot() {
   # the PRD's coverage check adapted to that finding: prove the bare ❯ glyph
   # stays classified through the shared, untouched fleet-wide defaults rather
   # than needing a per-backend addition.
-  printf '%s' '❯' | grep -qE "$FM_COMPOSER_BARE_PROMPT_RE_DEFAULT" \
-    || fail "shared FM_COMPOSER_BARE_PROMPT_RE_DEFAULT does not match copilot's ❯ composer row"
-  local COMPOSER_BOX
-  COMPOSER_BOX=$(printf '%s\n%s\n%s\n' \
-    '╭──────────────────────────────╮' \
-    '│ What can I do for you?       │' \
-    '╰──────────────────────────────╯')
-  # Every backend now reaches its verdict through the one shared owner
-  # (bin/fm-composer-lib.sh, fm_composer_classify_screen), so a per-backend idle
-  # override no longer exists to grep for - and could not take effect if it did.
-  # What still needs a fence is the guarantee that fence was protecting: an idle
-  # placeholder must read as `empty` under EVERY backend's declared capabilities,
-  # so a new harness's placeholder is taught once in the shared default and every
-  # backend picks it up. Assert that through the classifier the adapters actually
-  # call, rather than against the bytes of their source.
-  # The plain (styled=0) capability shape every backend declares for a
-  # plain-text capture is the one this fence governs: there the idle default is
-  # what recognizes a placeholder. Under a styled capture it is the shared
-  # ghost-stripper that does, because an undimmed placeholder is genuinely
-  # indistinguishable from typed input; that path has its own coverage in
-  # tests/fm-composer-ghost.test.sh.
-  local caps verdict
-  caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=20')
-  verdict=$(fm_composer_classify_screen "$caps" "$COMPOSER_BOX")
-  [ "$verdict" = empty ] \
-    || fail "an idle placeholder read '$verdict' instead of empty through the shared classifier every backend delegates to"
+  # The bare glyph is what copilot's composer actually draws, so drive it through
+  # the classifier every adapter calls (tests/composer-fence.sh) rather than
+  # matching a constant's bytes: a constant can hold the right regex while the
+  # classifier no longer consults it.
+  fm_test_composer_reads_empty "$(printf '%s\n' '❯ ')" \
+    "copilot's bare ❯ composer row"
+  fm_test_composer_reads_empty "$(fm_test_composer_bordered_row 'What can I do for you?')" \
+    "an idle placeholder"
   pass "copilot's bare-glyph composer is covered by the untouched shared fleet-wide defaults"
 }
 

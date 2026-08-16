@@ -245,6 +245,9 @@ process.stdout.write(v);
 ' "$field"
 }
 
+# Retained as this adapter's only cursor-paged scrollback reader, for a caller
+# that needs history beyond one screen. It has NO caller today: the composer read
+# below is a bounded tail on purpose and must never fall back to paging.
 fm_backend_orca_read_text_paged() {  # <terminal-id> <limit>
   local terminal=$1 limit=${2:-200} out limited oldest cursor_out text older_text
   fm_backend_orca_tool_check || return 1
