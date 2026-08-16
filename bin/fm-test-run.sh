@@ -1028,6 +1028,13 @@ families_for_changed_path() {
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
+    bin/fm-statusline-quota.sh)
+      # The statusline entrypoint is a thin consumer of the parsing core in
+      # bin/fm-statusline-quota-lib.sh, and no suite names the entrypoint
+      # itself, so select the lib's consuming suites instead.
+      families_for_test_reference fm-statusline-quota-lib.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     bin/*)
       # A deleted script has no consuming suite left to select, the same rule
       # the fixture case above applies. Refusing on its absent mapping would

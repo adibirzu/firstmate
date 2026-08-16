@@ -199,8 +199,8 @@ than left implicit.
 
 - Bare agent glyph `❯` (U+276F) — byte-for-byte the **same codepoint** already
   registered as claude's glyph in the shared
-  `FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^[❯›→]'` (`bin/fm-composer-lib.sh`). No
-  new glyph, no code change needed for glyph promotion.
+  `FM_COMPOSER_BARE_PROMPT_RE_DEFAULT` set (`bin/fm-composer-lib.sh`, currently
+  `'^(❯|›|→|⟩)'`). No new glyph, no code change needed for glyph promotion.
 - **No idle placeholder text of any kind was observed, at any point.** The
   `capture-pane -e` (ANSI) read of the composer row is exactly `ESC[0m` + the
   glyph — no dim/faint SGR run, no truecolor run, nothing to strip. This holds
@@ -209,9 +209,9 @@ than left implicit.
   post-turn idle states are **identical**, which deviates from the PRD's working
   assumption (modeled on cline/cursor-agent, where the two differ).
 - **Ghost-stripper conclusion: not applicable.** There is no placeholder text to
-  strip, dim or otherwise, so the shared `FM_COMPOSER_IDLE_RE_DEFAULT` needs
-  **no new alternate** for copilot, and none of the three backend
-  `FM_BACKEND_*_IDLE_RE` overrides need touching. This is the opposite finding
+  strip, dim or otherwise, so the shared `FM_COMPOSER_IDLE_RE_DEFAULT` - the one
+  fleet-wide idle-placeholder owner every backend's composer read now consults -
+  needs **no new alternate** for copilot. This is the opposite finding
   from cline/cursor-agent, both of which needed a placeholder added.
 - Idle status bar / footer: `/ commands · ? help · tab next tab` plus a
   right-aligned current-model label (e.g. `GPT-5.6 Terra`). The model label is
