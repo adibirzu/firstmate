@@ -1,0 +1,57 @@
+
+=== operator's own cline settings BEFORE (cksum) and its recorded planActMode ===
+2948635118 84
+{"planActMode":"act","telemetrySetting":null}
+
+=== $ fm-spawn.sh cline-act-demo <project> cline --mode local-only --yolo off ===
+notice: cline-act-demo ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+spawned cline-act-demo harness=cline kind=ship mode=local-only yolo=off window=firstmate:fm-cline-act-demo worktree=/Users/adrianb/.treehouse/project-c6f6e2/1/project
+spawn exit=0
+
+=== firstmate-owned settings copy the launch redirects CLINE_GLOBAL_SETTINGS_PATH at ===
+{"autoUpdateEnabled":true,"telemetryOptOut":false,"planActMode":"act"}
+
+=== waiting for the real cline TUI to render its mode footer ===
+ kimi-k3 (medium) (0) $0.00                                  ○ Plan ● Act (Tab)
+
+=== $ fm-crew-state.sh cline-act-demo   (while the crewmate works) ===
+state: working · source: pane · harness busy (cline-session)
+
+=== waiting for the crewmate to actually IMPLEMENT (Act mode writes the file) ===
+NO FILE WRITTEN
+
+=== structural mode cline itself recorded for this pane's session ===
+
+=== $ fm-crew-state.sh cline-act-demo   (after the turn finishes) ===
+state: unknown · source: none · no current-state source available
+
+=== submitting a long second turn, then interrupting it through the control plane ===
+$ fm-crew-state.sh cline-act-demo
+state: working · source: pane · harness busy (cline-session)
+
+=== $ fm-control.sh cline-act-demo interrupt ===
+interrupt-delivered cline-act-demo harness=cline backend=tmux verified=agent-alive cancel=unconfirmed
+interrupt exit=0
+
+=== $ fm-crew-state.sh cline-act-demo   (after interrupt) ===
+state: unknown · source: none · no current-state source available
+--- pane composer row after interrupt ---
+❯ Ask anything...
+
+=== $ fm-control.sh cline-act-demo relaunch --note ... ===
+error: ship spawns require --mode <no-mistakes|direct-PR|local-only>; resolve it at intake from the captain's instruction and the project's registered posture in data/projects.md
+error: the replacement agent for cline-act-demo could not be launched on cline
+error: cline-act-demo's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at /Users/adrianb/.treehouse/project-c6f6e2/1/project
+relaunch exit=1
+
+=== $ fm-control.sh cline-act-demo exit ===
+already-stopped cline-act-demo harness=cline backend=tmux endpoint=firstmate:fm-cline-act-demo worktree=/Users/adrianb/.treehouse/project-c6f6e2/1/project
+exit verb exit=0
+--- pane command after exit ---
+zsh
+
+=== the operator's own ~/.cline settings after the whole run ===
+before=2948635118 84
+after =2948635118 84
+UNCHANGED (byte-identical)
+{"planActMode":"act"}

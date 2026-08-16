@@ -1,0 +1,24 @@
+
+=== relaunching the recorded worker command by hand (fm-control relaunch is broken pre-existing) ===
+$ CLINE_GLOBAL_SETTINGS_PATH=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-cline-cli-demo.Dr5yVj/home/state/cline-act-demo.cline-settings.json cline -i --tui --auto-approve true
+                                                                   kimi-k3 (medium) (0) $0.00                      ○ Plan ● Act (Tab)
+
+=== $ fm-crew-state.sh cline-act-demo   (idle worker, no turn in flight) ===
+state: unknown · source: none · no current-state source available
+
+=== submitting a long turn so exit has to interrupt a BUSY agent first ===
+$ fm-crew-state.sh cline-act-demo
+state: unknown · source: pane · harness state unavailable (unknown cline-session)
+
+=== $ fm-control.sh cline-act-demo exit   (against the live, busy agent) ===
+stopped cline-act-demo harness=cline backend=tmux endpoint=firstmate:fm-cline-act-demo worktree=/Users/adrianb/.treehouse/project-c6f6e2/1/project
+exit verb rc=0
+
+=== endpoint after exit: the worktree and its work are preserved, the agent is gone ===
+pane command: zsh
+worktree still holds the crewmate's work:
+ACT_PROOF.txt
+ACT-MODE-OK
+
+=== $ fm-crew-state.sh cline-act-demo   (after exit) ===
+state: unknown · source: pane · harness state unavailable (unknown cline-session)

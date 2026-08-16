@@ -1,0 +1,11 @@
+ok - cline 3.0.55: a persisted plan mode still governs the TUI start mode (the gap reproduces)
+ok - cline 3.0.55: cline's recorded exit key exits the real TUI cleanly
+ok - cline 3.0.55: the act-mode settings redirect starts the real TUI in act mode
+ok - cline 3.0.55: a live cline pane is positively attributed as a running agent
+ok - cline 3.0.55: the real cline pane binds to exactly one of its own session records
+ok - cline 3.0.55: the real session record structurally confirms the crewmate ran in act mode
+ok - cline 3.0.55: cline's real session record classifies busy in flight
+ok - cline 3.0.55: cline's recorded interrupt key cancels the turn without polluting the composer
+ok - cline 3.0.55: cline's real session record leaves busy once the turn is cancelled
+ok - cline 3.0.55: the operator's own cline settings are byte-identical after a forced-act run
+ALL PASS: fm-cline-signals-live-e2e (cline 3.0.55)

@@ -1,0 +1,6 @@
+ok - grok grok 1.0.4 (d846eb93d94d) [stable]: grok's accepted effort vocabulary is still low|medium|high|xhigh with no max
+ok - grok grok 1.0.4 (d846eb93d94d) [stable]: grok answers a real headless single turn at the highest effort firstmate passes
+ok - grok grok 1.0.4 (d846eb93d94d) [stable]: grok's no-pty failure is an OS device error and names no credential problem
+ok - grok grok 1.0.4 (d846eb93d94d) [stable]: quota-axi still resolves no grok quota window, so grok stays unpriceable
+ok - grok grok 1.0.4 (d846eb93d94d) [stable]: grok's native model listing surface still answers
+ALL PASS: fm-grok-signals-live-e2e (grok grok 1.0.4 (d846eb93d94d) [stable])

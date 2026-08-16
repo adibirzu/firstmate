@@ -1,0 +1,9 @@
+worktree: /Users/adrianb/.treehouse/project-c6f6e2/1/project
+total 16
+drwxr-xr-x@ 4 adrianb  staff  128 Aug 16 09:47 .
+drwxr-xr-x@ 3 adrianb  staff   96 Aug 16 09:47 ..
+-rw-r--r--@ 1 adrianb  staff  121 Aug 16 09:47 .git
+-rw-r--r--@ 1 adrianb  staff   12 Aug 16 09:47 ACT_PROOF.txt
+
+ACT_PROOF.txt (written by the firstmate-spawned cline crewmate):
+ACT-MODE-OK
