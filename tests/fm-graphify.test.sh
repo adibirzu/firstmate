@@ -55,6 +55,12 @@ case "$cmd" in
       mkdir -p "$path/graphify-out"
       printf '{"nodes":[]}\n' > "$path/graphify-out/graph.json"
     fi
+    if [ "${GRAPHIFY_LEAK_CACHE:-}" = 1 ] && [ -n "$path" ]; then
+      # Model graphify 0.9.43: every extract drops/updates an incremental-scan
+      # cache inside the target repo, ignoring --out.
+      mkdir -p "$path/graphify-out/cache"
+      printf 'scan\n' >> "$path/graphify-out/cache/stat-index.json"
+    fi
     if [ "${GRAPHIFY_MUTATE_TREE:-}" = 1 ] && [ -n "$path" ]; then
       printf 'changed during extract\n' >> "$path/README.md"
     fi
@@ -100,6 +106,7 @@ run_g() {
   shift 2
   FM_HOME="$home" PATH="$fakebin:$BASE_PATH" GRAPHIFY_LOG="${GRAPHIFY_LOG:-}" \
     GRAPHIFY_WRITE_IN_PROJECT="${GRAPHIFY_WRITE_IN_PROJECT:-}" \
+    GRAPHIFY_LEAK_CACHE="${GRAPHIFY_LEAK_CACHE:-}" \
     GRAPHIFY_MUTATE_TREE="${GRAPHIFY_MUTATE_TREE:-}" "$GRAPHIFY" "$@"
 }
 
@@ -326,21 +333,65 @@ test_distinct_repos_get_distinct_indexes() {
   pass "same-basename repos keep separate indexes"
 }
 
-test_in_project_write_falls_back() {
-  local home repo fakebin out rc
+test_in_project_write_is_cleaned_up() {
+  local home repo fakebin
   home="$TMP_ROOT/inproj-home"
   repo="$TMP_ROOT/inproj-repo"
   fakebin=$(fm_fakebin "$TMP_ROOT/inproj-bin")
   write_graphify_shim "$fakebin"
   mkdir -p "$home"
   fm_git_init_commit "$repo"
-  set +e
-  out=$(GRAPHIFY_WRITE_IN_PROJECT=1 run_g "$home" "$fakebin" query "$repo" "leak" 2>&1)
-  rc=$?
-  set -e
-  expect_code 2 "$rc" "in-project write"
-  assert_contains "$out" "GRAPHIFY_FALLBACK=source" "in-project write prints fallback"
-  pass "an in-project extract write is refused"
+  GRAPHIFY_WRITE_IN_PROJECT=1 run_g "$home" "$fakebin" query "$repo" "leak" >/dev/null \
+    || fail "query must succeed when extract also writes inside the project"
+  assert_absent "$repo/graphify-out" "an extract-created graphify-out must be removed from the project"
+  [ -z "$(git -C "$repo" status --porcelain)" ] \
+    || fail "the project tree must be clean after the leak is removed"
+  pass "an extract-created in-project graphify-out is cleaned up"
+}
+
+test_cache_leak_keeps_index_reusable() {
+  local home repo fakebin log
+  home="$TMP_ROOT/leak-home"
+  repo="$TMP_ROOT/leak-repo"
+  fakebin=$(fm_fakebin "$TMP_ROOT/leak-bin")
+  log="$TMP_ROOT/leak.log"
+  write_graphify_shim "$fakebin"
+  mkdir -p "$home"
+  fm_git_init_commit "$repo"
+  GRAPHIFY_LEAK_CACHE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "first" >/dev/null \
+    || fail "query must succeed despite the in-repo scan-cache leak"
+  assert_absent "$repo/graphify-out" "the leaked scan cache must be removed from the project"
+  printf '\nedit\n' >> "$repo/README.md"
+  GRAPHIFY_LEAK_CACHE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "after edit" >/dev/null \
+    || fail "the first query after an edit must rebuild, not fall back"
+  assert_absent "$repo/graphify-out" "a rebuild must not leave scan-cache litter in the project"
+  GRAPHIFY_LEAK_CACHE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "again" >/dev/null \
+    || fail "post-edit follow-up query failed"
+  [ "$(extract_count "$log")" = 2 ] \
+    || fail "the leak must not defeat index reuse; extracts=$(extract_count "$log")"
+  pass "a scan-cache leak is cleaned and the index stays reusable"
+}
+
+test_preexisting_graphify_out_kept_and_reused() {
+  local home repo fakebin log
+  home="$TMP_ROOT/preleak-home"
+  repo="$TMP_ROOT/preleak-repo"
+  fakebin=$(fm_fakebin "$TMP_ROOT/preleak-bin")
+  log="$TMP_ROOT/preleak.log"
+  write_graphify_shim "$fakebin"
+  mkdir -p "$home"
+  fm_git_init_commit "$repo"
+  mkdir -p "$repo/graphify-out/cache"
+  printf 'old scan\n' > "$repo/graphify-out/cache/stat-index.json"
+  GRAPHIFY_LEAK_CACHE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "first" >/dev/null \
+    || fail "query must succeed with a pre-existing graphify-out"
+  [ -e "$repo/graphify-out" ] \
+    || fail "a graphify-out that predates extract must not be deleted"
+  GRAPHIFY_LEAK_CACHE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "second" >/dev/null \
+    || fail "second query with pre-existing graphify-out failed"
+  [ "$(extract_count "$log")" = 1 ] \
+    || fail "graphify-out churn must not count as a tree change; extracts=$(extract_count "$log")"
+  pass "a pre-existing graphify-out is kept and does not defeat reuse"
 }
 
 test_default_budget_is_2000() {
@@ -368,6 +419,8 @@ test_head_change_rebuilds
 test_mid_extract_change_rebuilds_next_query
 test_missing_graph_json_rebuilds
 test_distinct_repos_get_distinct_indexes
-test_in_project_write_falls_back
+test_in_project_write_is_cleaned_up
+test_cache_leak_keeps_index_reusable
+test_preexisting_graphify_out_kept_and_reused
 test_default_budget_is_2000
 echo "ALL PASS: fm-graphify"

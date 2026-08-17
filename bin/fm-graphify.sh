@@ -27,19 +27,25 @@
 # Stamp file: $FM_HOME/data/graphify/<slug>-<id>/.fm-freshness
 #   source=<toplevel real path>
 #   rev=<git HEAD sha>
-#   dirty=<cksum of porcelain + git diff HEAD + hashes of untracked files>
+#   dirty=<cksum of porcelain + git diff HEAD + hashes of untracked files,
+#         all excluding graphify-out/: graphify's own in-repo scan cache must
+#         not count as a tree change>
 # A query rebuilds when graph.json is missing, or when the stamp is absent,
 # unreadable, from another source, or does not match the tree's current
 # revision and dirty-tree digest. The stamp is captured before extract runs,
 # so a tree change during a rebuild mismatches on the next query.
 # Rebuilds run `graphify extract <repo> --out <index-dir> --no-cluster
-# --code-only` so the graph is AST-only and needs no API key.
+# --code-only` so the graph is AST-only and needs no API key. graphify 0.9.43
+# still drops its incremental-scan cache at <repo>/graphify-out/cache/ on every
+# extract after a repo's first, ignoring --out; when extract creates
+# <repo>/graphify-out the helper deletes it so the project tree stays clean.
+# A graphify-out/ that existed before extract is left alone.
 #
 # Exit 0 on a successful build or query.
 # Exit 1 on usage errors.
 # Exit 2 when the caller must fall back to reading source: graphify missing,
-# not a git work tree, stamp unknown, extract/query failed, or extract wrote
-# inside the project. Those paths print GRAPHIFY_FALLBACK=source.
+# not a git work tree, stamp unknown, or extract/query failed. Those paths
+# print GRAPHIFY_FALLBACK=source.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,9 +116,9 @@ current_stamp() {
   esac
   dirty=$(
     {
-      git -C "$top" status --porcelain=v1
-      git -C "$top" diff HEAD
-      git -C "$top" ls-files --others --exclude-standard -z |
+      git -C "$top" status --porcelain=v1 -- . ':(exclude)graphify-out'
+      git -C "$top" diff HEAD -- . ':(exclude)graphify-out'
+      git -C "$top" ls-files --others --exclude-standard -z -- . ':(exclude)graphify-out' |
         sort -z |
         while IFS= read -r -d '' f; do
           cksum "$top/$f"
@@ -131,21 +137,17 @@ stamp_matches() {
   [ "$(cat "$file")" = "$expected" ]
 }
 
-extract_wrote_in_project() {
-  local top=$1 existed=$2
-  [ "$existed" = 0 ] && [ -e "$top/graphify-out" ]
-}
-
 rebuild_index() {
-  local top=$1 index=$2 stamp=$3 existed=0
+  local top=$1 index=$2 stamp=$3 existed=0 rc=0
   require_graphify
   [ -e "$top/graphify-out" ] && existed=1
   mkdir -p "$index"
-  if ! graphify extract "$top" --out "$index" --no-cluster --code-only; then
-    fallback "graphify extract failed for $top"
+  graphify extract "$top" --out "$index" --no-cluster --code-only || rc=$?
+  if [ "$existed" = 0 ] && [ -e "$top/graphify-out" ]; then
+    rm -rf "$top/graphify-out"
   fi
-  if extract_wrote_in_project "$top" "$existed"; then
-    fallback "graphify extract wrote inside the project; refusing that index"
+  if [ "$rc" -ne 0 ]; then
+    fallback "graphify extract failed for $top"
   fi
   if [ ! -f "$index/graphify-out/graph.json" ]; then
     fallback "graphify extract produced no graph.json under $index"
