@@ -1,0 +1,29 @@
+Failure sequence: real graphify 0.9.43 vs bin/fm-graphify.sh freshness contract
+Each step: FM_HOME=<fleet-home> bin/fm-graphify.sh query <project> "who calls beta"
+
+q1 fresh repo (full extract):
+rc=0 rebuilt=1 fallback=0 | project git status: []
+q2 no change (stamp match, must reuse):
+rc=0 rebuilt=0 fallback=0 | project git status: []
+q3 no change (stamp match, must reuse):
+rc=0 rebuilt=0 fallback=0 | project git status: []
+-- captain edits a file: echo '# c' >> src/mod.py --
+q4 after edit (rebuild -> incremental extract leaks graphify-out/cache/ INTO the project; helper guard refuses):
+rc=2 rebuilt=1 fallback=1 | project git status: [ M src/mod.py ?? graphify-out/ ]
+q5 no further change (leaked cache invalidates stamp -> rebuilds anyway):
+rc=0 rebuilt=1 fallback=0 | project git status: [ M src/mod.py ?? graphify-out/ ]
+q6 no further change (rebuilds again; index reuse permanently defeated):
+rc=0 rebuilt=1 fallback=0 | project git status: [ M src/mod.py ?? graphify-out/ ]
+
+leaked file inside the captain's project clone:
+/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//gf-fail-evidence.rrVmbZ/repo/graphify-out/cache/stat-index.json
+
+helper output at q4 (the one-time hard failure):
+fm-graphify: rebuilding index for /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-fail2.23Fwsy/repo (missing or stale)
+[graphify extract] incremental scan of /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-fail2.23Fwsy/repo
+[graphify extract] 1 code, 0 docs, 0 papers, 0 images changed; 0 unchanged; 0 deleted
+[graphify extract] AST extraction on 1 code files...
+[graphify extract] wrote /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-fail2.23Fwsy/fmhome/data/graphify/repo-2294740429/graphify-out/graph.json — 2 nodes, 1 edges (no clustering)
+fm-graphify: graphify extract wrote inside the project; refusing that index
+GRAPHIFY_FALLBACK=source
+q4-style rc=2

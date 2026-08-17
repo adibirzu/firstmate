@@ -1,0 +1,69 @@
+=== Live end-to-end: fm-graphify.sh with real graphify 0.9.43 ===
+target repo: /tmp/fm-graphify-live.kY58ma/demo-project   fleet home (index location): /tmp/fm-graphify-live.kY58ma/fleet-home
+
+--- [1] first query (cold: builds index outside the repo) ---
+$ fm-graphify.sh query /tmp/fm-graphify-live.kY58ma/demo-project 'which file owns spawnAgent' --budget 1500
+fm-graphify: rebuilding index for /private/tmp/fm-graphify-live.kY58ma/demo-project (missing or stale)
+[graphify extract] scanning /private/tmp/fm-graphify-live.kY58ma/demo-project
+[graphify extract] --code-only: skipping 1 non-code file(s) (1 docs, 0 papers, 0 images) — no LLM extraction
+[graphify extract] found 2 code, 0 docs, 0 papers, 0 images
+[graphify extract] AST extraction on 2 code files...
+[graphify extract] wrote /private/tmp/fm-graphify-live.kY58ma/fleet-home/data/graphify/demo-project-935367259/graphify-out/graph.json — 5 nodes, 6 edges (no clustering)
+Traversal: BFS depth=2 | Start: ['spawnAgent()'] | 5 nodes found
+
+NODE spawnAgent() [src=src/spawn.ts loc=L1 community=]
+NODE registry.ts [src=src/registry.ts loc=L1 community=]
+NODE register() [src=src/registry.ts loc=L3 community=]
+NODE spawn.ts [src=src/spawn.ts loc=L1 community=]
+NODE registry [src=src/registry.ts loc=L2 community=]
+EDGE registry.ts --imports [EXTRACTED context=import]--> spawnAgent() at=src/registry.ts:L1
+EDGE spawn.ts --contains [EXTRACTED]--> spawnAgent() at=src/spawn.ts:L1
+EDGE register() --calls [EXTRACTED context=call]--> spawnAgent() at=src/registry.ts:L4
+EDGE registry.ts --contains [EXTRACTED]--> registry at=src/registry.ts:L2
+EDGE registry.ts --imports_from [EXTRACTED context=import]--> spawn.ts at=src/registry.ts:L1
+EDGE registry.ts --contains [EXTRACTED]--> register() at=src/registry.ts:L3
+exit=0
+
+--- [2] edit the repo (round-1 failure trigger) ---
+$ echo '// edited' >> src/spawn.ts
+
+--- [3] query after edit: must REBUILD, not fall back (round-1 bug: exit 2 GRAPHIFY_FALLBACK=source) ---
+fm-graphify: rebuilding index for /private/tmp/fm-graphify-live.kY58ma/demo-project (missing or stale)
+[graphify extract] incremental scan of /private/tmp/fm-graphify-live.kY58ma/demo-project
+[graphify extract] --code-only: skipping 1 non-code file(s) (1 docs, 0 papers, 0 images) — no LLM extraction
+[graphify extract] 1 code, 0 docs, 0 papers, 0 images changed; 1 unchanged; 0 deleted
+[graphify extract] AST extraction on 1 code files...
+[graphify extract] wrote /private/tmp/fm-graphify-live.kY58ma/fleet-home/data/graphify/demo-project-935367259/graphify-out/graph.json — 5 nodes, 6 edges (no clustering)
+Traversal: BFS depth=2 | Start: ['spawnAgent()'] | 5 nodes found
+
+NODE spawnAgent() [src=src/spawn.ts loc=L1 community=]
+NODE registry.ts [src=src/registry.ts loc=L1 community=]
+NODE register() [src=src/registry.ts loc=L3 community=]
+NODE spawn.ts [src=src/spawn.ts loc=L1 community=]
+NODE registry [src=src/registry.ts loc=L2 community=]
+EDGE registry.ts --imports [EXTRACTED context=import]--> spawnAgent() at=src/registry.ts:L1
+EDGE register() --calls [EXTRACTED context=call]--> spawnAgent() at=src/registry.ts:L4
+EDGE spawn.ts --contains [EXTRACTED]--> spawnAgent() at=src/spawn.ts:L1
+EDGE registry.ts --contains [EXTRACTED]--> registry at=src/registry.ts:L2
+EDGE registry.ts --imports_from [EXTRACTED context=import]--> spawn.ts at=src/registry.ts:L1
+EDGE registry.ts --contains [EXTRACTED]--> register() at=src/registry.ts:L3
+exit=0
+
+--- [4] third query, no change: must REUSE index (round-1 bug: rebuilt forever) ---
+Traversal: BFS depth=2 | Start: ['registry'] | Context: import (heuristic) | 1 nodes found
+
+NODE registry [src=src/registry.ts loc=L2 community=]
+exit=0
+
+--- [5] fleet-only boundary: target repo must have no graphify litter ---
+$ ls /tmp/fm-graphify-live.kY58ma/demo-project
+README.md
+src
+$ git -C /tmp/fm-graphify-live.kY58ma/demo-project status --porcelain   (expect only the intentional src/spawn.ts edit)
+ M src/spawn.ts
+$ test -e /tmp/fm-graphify-live.kY58ma/demo-project/graphify-out && echo LEAKED || echo 'no graphify-out in target repo'
+no graphify-out in target repo
+
+--- [6] index lives outside the repo, under the fleet home ---
+<scratch>/fleet-home/data/graphify/demo-project-935367259/.fm-freshness
+<scratch>/fleet-home/data/graphify/demo-project-935367259/graphify-out/graph.json

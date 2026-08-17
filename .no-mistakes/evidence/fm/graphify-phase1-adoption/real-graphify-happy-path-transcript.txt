@@ -1,0 +1,43 @@
+$ graphify --version
+graphify 0.9.43
+
+$ FM_HOME=<fleet-home> bin/fm-graphify.sh query <project> "where is the spawn admission decision made"
+fm-graphify: rebuilding index for /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-evidence.aLG9mv/repo (missing or stale)
+[graphify extract] scanning /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-evidence.aLG9mv/repo
+[graphify extract] found 2 code, 0 docs, 0 papers, 0 images
+[graphify extract] AST extraction on 2 code files...
+[graphify extract] wrote /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-evidence.aLG9mv/fmhome/data/graphify/repo-4210024266/graphify-out/graph.json — 9 nodes, 11 edges (no clustering)
+Traversal: BFS depth=2 | Start: ['spawn_admission_decision()', 'Spawn admission: decides whether a new crewmate may launch.', 'spawn.py'] | 9 nodes found
+
+NODE spawn_admission_decision() [src=src/spawn.py loc=L6 community=]
+NODE Spawn admission: decides whether a new crewmate may launch. [src=src/spawn.py loc=L1 community=]
+NODE spawn.py [src=src/spawn.py loc=L1 community=]
+NODE machine_headroom() [src=src/capacity.py loc=L4 community=]
+NODE capacity.py [src=src/capacity.py loc=L1 community=]
+NODE launch_crewmate() [src=src/spawn.py loc=L11 community=]
+NODE Admit a spawn only when the machine has headroom. [src=src/spawn.py loc=L7 community=]
+NODE Memory-first machine capacity probes. [src=src/capacity.py loc=L1 community=]
+NODE Return free-memory fraction. [src=src/capacity.py loc=L5 community=]
+EDGE spawn.py --imports_from [EXTRACTED context=import]--> capacity.py at=src/spawn.py:L3
+EDGE spawn.py --contains [EXTRACTED]--> launch_crewmate() at=src/spawn.py:L11
+EDGE spawn.py --imports [EXTRACTED context=import]--> machine_headroom() at=src/spawn.py:L3
+EDGE launch_crewmate() --calls [EXTRACTED context=call]--> spawn_admission_decision() at=src/spawn.py:L12
+EDGE Admit a spawn only when the machine has headroom. --rationale_for [EXTRACTED]--> spawn_admission_decision() at=src/spawn.py:L7
+EDGE spawn_admission_decision() --calls [EXTRACTED context=call]--> machine_headroom() at=src/spawn.py:L8
+EDGE Memory-first machine capacity probes. --rationale_for [EXTRACTED]--> capacity.py at=src/capacity.py:L1
+EDGE Return free-memory fraction. --rationale_for [EXTRACTED]--> machine_headroom() at=src/capacity.py:L5
+EDGE capacity.py --contains [EXTRACTED]--> machine_headroom() at=src/capacity.py:L4
+EDGE spawn.py --contains [EXTRACTED]--> spawn_admission_decision() at=src/spawn.py:L6
+EDGE Spawn admission: decides whether a new crewmate may launch. --rationale_for [EXTRACTED]--> spawn.py at=src/spawn.py:L1
+
+$ git -C <project> status --porcelain   # fleet-only boundary: project untouched
+(empty = clean)
+
+$ find <fleet-home> -name graph.json -o -name .fm-freshness   # index + stamp outside the project
+<fleet-home-root>/fmhome/data/graphify/repo-4210024266/.fm-freshness
+<fleet-home-root>/fmhome/data/graphify/repo-4210024266/graphify-out/graph.json
+
+$ cat .fm-freshness
+source=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/gf-evidence.aLG9mv/repo
+rev=0bd1d904d5c7506df418a33f33f69f64b3752fd8
+dirty=4294967295
