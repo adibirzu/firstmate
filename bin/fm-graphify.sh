@@ -28,8 +28,10 @@
 #   source=<toplevel real path>
 #   rev=<git HEAD sha>
 #   dirty=<cksum of porcelain + git diff HEAD + hashes of untracked files>
-# A query rebuilds when the stamp is absent, unreadable, from another source,
-# or does not match the tree's current revision and dirty-tree digest.
+# A query rebuilds when graph.json is missing, or when the stamp is absent,
+# unreadable, from another source, or does not match the tree's current
+# revision and dirty-tree digest. The stamp is captured before extract runs,
+# so a tree change during a rebuild mismatches on the next query.
 # Rebuilds run `graphify extract <repo> --out <index-dir> --no-cluster
 # --code-only` so the graph is AST-only and needs no API key.
 #
@@ -135,7 +137,7 @@ extract_wrote_in_project() {
 }
 
 rebuild_index() {
-  local top=$1 index=$2 existed=0
+  local top=$1 index=$2 stamp=$3 existed=0
   require_graphify
   [ -e "$top/graphify-out" ] && existed=1
   mkdir -p "$index"
@@ -148,7 +150,7 @@ rebuild_index() {
   if [ ! -f "$index/graphify-out/graph.json" ]; then
     fallback "graphify extract produced no graph.json under $index"
   fi
-  current_stamp "$top" > "$index/.fm-freshness"
+  printf '%s\n' "$stamp" > "$index/.fm-freshness"
 }
 
 CMD=
@@ -227,14 +229,14 @@ INDEX=$(index_dir_for "$TOP")
 STAMP=$(current_stamp "$TOP")
 
 if [ "$CMD" = build ]; then
-  rebuild_index "$TOP" "$INDEX"
+  rebuild_index "$TOP" "$INDEX" "$STAMP"
   printf 'fm-graphify: built %s\n' "$INDEX/graphify-out/graph.json"
   exit 0
 fi
 
-if ! stamp_matches "$INDEX/.fm-freshness" "$STAMP"; then
+if [ ! -f "$INDEX/graphify-out/graph.json" ] || ! stamp_matches "$INDEX/.fm-freshness" "$STAMP"; then
   printf 'fm-graphify: rebuilding index for %s (missing or stale)\n' "$TOP" >&2
-  rebuild_index "$TOP" "$INDEX"
+  rebuild_index "$TOP" "$INDEX" "$STAMP"
 fi
 
 require_graphify

@@ -55,6 +55,9 @@ case "$cmd" in
       mkdir -p "$path/graphify-out"
       printf '{"nodes":[]}\n' > "$path/graphify-out/graph.json"
     fi
+    if [ "${GRAPHIFY_MUTATE_TREE:-}" = 1 ] && [ -n "$path" ]; then
+      printf 'changed during extract\n' >> "$path/README.md"
+    fi
     exit 0
     ;;
   query)
@@ -96,7 +99,8 @@ run_g() {
   local home=$1 fakebin=$2
   shift 2
   FM_HOME="$home" PATH="$fakebin:$BASE_PATH" GRAPHIFY_LOG="${GRAPHIFY_LOG:-}" \
-    GRAPHIFY_WRITE_IN_PROJECT="${GRAPHIFY_WRITE_IN_PROJECT:-}" "$GRAPHIFY" "$@"
+    GRAPHIFY_WRITE_IN_PROJECT="${GRAPHIFY_WRITE_IN_PROJECT:-}" \
+    GRAPHIFY_MUTATE_TREE="${GRAPHIFY_MUTATE_TREE:-}" "$GRAPHIFY" "$@"
 }
 
 extract_count() {
@@ -262,6 +266,45 @@ test_head_change_rebuilds() {
   pass "a new HEAD rebuilds before query"
 }
 
+test_mid_extract_change_rebuilds_next_query() {
+  local home repo fakebin log
+  home="$TMP_ROOT/race-home"
+  repo="$TMP_ROOT/race-repo"
+  fakebin=$(fm_fakebin "$TMP_ROOT/race-bin")
+  log="$TMP_ROOT/race.log"
+  write_graphify_shim "$fakebin"
+  mkdir -p "$home"
+  fm_git_init_commit "$repo"
+  GRAPHIFY_MUTATE_TREE=1 GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "during change" >/dev/null \
+    || fail "mid-extract-change query failed"
+  GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "after change" >/dev/null \
+    || fail "post-change query failed"
+  [ "$(extract_count "$log")" = 2 ] \
+    || fail "a tree change during extract must rebuild on the next query; extracts=$(extract_count "$log")"
+  pass "a tree change during extract rebuilds on the next query"
+}
+
+test_missing_graph_json_rebuilds() {
+  local home repo fakebin log
+  home="$TMP_ROOT/nograph-home"
+  repo="$TMP_ROOT/nograph-repo"
+  fakebin=$(fm_fakebin "$TMP_ROOT/nograph-bin")
+  log="$TMP_ROOT/nograph.log"
+  write_graphify_shim "$fakebin"
+  mkdir -p "$home"
+  fm_git_init_commit "$repo"
+  GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "before delete" >/dev/null \
+    || fail "pre-delete query failed"
+  find "$home/data/graphify" -name graph.json -delete
+  GRAPHIFY_LOG=$log run_g "$home" "$fakebin" query "$repo" "after delete" >/dev/null \
+    || fail "a deleted graph.json must rebuild instead of falling back"
+  [ "$(extract_count "$log")" = 2 ] \
+    || fail "a deleted graph.json should rebuild; extracts=$(extract_count "$log")"
+  find "$home/data/graphify" -name graph.json | grep -q . \
+    || fail "the rebuild must restore graph.json"
+  pass "a deleted graph.json self-heals with a rebuild"
+}
+
 test_distinct_repos_get_distinct_indexes() {
   local home one two fakebin log
   home="$TMP_ROOT/distinct-home"
@@ -322,6 +365,8 @@ test_query_builds_outside_repo_and_forwards_budget
 test_second_query_reuses_fresh_index
 test_dirty_tree_rebuilds
 test_head_change_rebuilds
+test_mid_extract_change_rebuilds_next_query
+test_missing_graph_json_rebuilds
 test_distinct_repos_get_distinct_indexes
 test_in_project_write_falls_back
 test_default_budget_is_2000
