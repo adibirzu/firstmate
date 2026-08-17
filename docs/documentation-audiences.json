@@ -105,6 +105,10 @@
     {
       "source": "docs/trace-context.md",
       "target": "docs/verification/trace-context.md"
+    },
+    {
+      "source": ".agents/skills/graphify-orientation/SKILL.md",
+      "target": "docs/graphify.md"
     }
   ],
   "surfaces": [
@@ -154,6 +158,10 @@
     },
     {
       "path": ".agents/skills/fmx-respond/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/graphify-orientation/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -299,6 +307,10 @@
     {
       "path": "docs/gitlab-merge-watch.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/graphify.md",
+      "audience": "operator-current"
     },
     {
       "path": "docs/herdr-backend.md",

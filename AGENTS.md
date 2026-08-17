@@ -543,6 +543,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 - `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
+- `graphify-orientation` - load before broadly exploring unfamiliar code, discovering relevant files, mapping ownership, or tracing cross-file relationships.
 - `multi-account` - load before launching a crewmate under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`) or selecting an account by quota headroom.
 
 ## 14. Relay

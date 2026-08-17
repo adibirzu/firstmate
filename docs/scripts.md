@@ -58,6 +58,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
 | `fm-berth.sh`            | Print opt-in per-project session-berth environments and lock status                  |
 | `fm-name.sh`             | Derive a stable readable crew name from a task id                                    |
+| `fm-graphify.sh`         | Build or query a fleet-only Graphify orientation index stored outside the project    |
 | `fm-treehouse-lib.sh`    | Shared per-project worktree-pool placement and the worktree/object-store same-filesystem invariant |
 | `fm-capacity.sh`         | Report live machine headroom and what a spawn attempted now would decide             |
 | `fm-capacity-lib.sh`     | Memory-first machine-capacity probes and the spawn-admission decision                |
