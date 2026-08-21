@@ -1,0 +1,78 @@
+==============================================================
+ fm-decision-hold compatibility shim over fm-captain-hold
+==============================================================
+
+--- 1. A pre-collapse brief still registers its decision through the old surface.
+$ fm-decision-hold.sh hold sample-route-review route --title ... --reason ... --repo sample
+legacy identity -> sample-route-review-decision-route
+captain-hold now owns it:
+  task:
+    id: sample-route-review-decision-route
+    title: Choose north or south
+    state: queued
+    blocked: no
+    blocked_by: none
+    held: yes
+    hold_reason: captain route choice pending
+    hold_kind: captain
+    hold_until: "-"
+    kind: task
+    repo: sample
+
+--- 2. Follow-up work is durably blocked by the captain-held task.
+  state: queued
+  blocked: yes
+  blocked_by: sample-route-review-decision-route
+
+--- 3. Fork gate kept: decline WILL NOT release routed work.
+$ fm-decision-hold.sh decline sample-route-review route --decision-file decline.txt
+  fm-decision-hold: captain hold sample-route-review-decision-route still blocks routed work (ship-route); use resolve to record that work
+  (exit 1 -- hold stays open, ship-route stays blocked)
+
+--- 4. Fork resolve order kept: record the captain's body, then unblock, then close.
+$ fm-decision-hold.sh resolve sample-route-review route --decision-file decide.txt --routed-to ship-route
+  answered: sample-route-review-decision-route
+  resolved: sample-route-review-decision-route -> ship-route
+
+  captain-held task after resolve:
+    task:
+      id: sample-route-review-decision-route
+      title: Choose north or south
+      state: done
+      blocked: no
+      blocked_by: none
+      held: no
+      hold_reason: captain route choice pending
+      hold_kind: captain
+      hold_until: "-"
+      kind: task
+      repo: sample
+      priority: "-"
+      created: "-"
+      closed: 2026-08-21
+      deps: none
+      links: none
+      body: "Resolution recorded by fm-decision-hold.\nDecision digest: ea6d979e6e3a5117bcb8cf3ddd3b570d41e1a864206109f3c4acc60bd76b91c7\nRouted identities: ship-route\nResolution mode: routed\n\nCaptain decision:\nTake the north route.\n\nRouted work:- ship-route"
+
+  routed work released:
+    state: queued
+    blocked: no
+    blocked_by: none
+
+--- 5. Idempotent replay of the same resolve is accepted (no drift).
+$ fm-decision-hold.sh resolve sample-route-review route --decision-file decide.txt --routed-to ship-route   # replay
+  answered: sample-route-review-decision-route
+  resolved: sample-route-review-decision-route -> ship-route
+
+--- 6. Fork gate kept: a spent identity cannot be reused for a new decision.
+$ fm-decision-hold.sh hold sample-route-review route --title 'A different question' ...   # same key again
+  fm-captain-hold: task sample-route-review-decision-route is already closed; a new captain call needs its own task
+  (exit 1)
+
+--- 7. A different key is still available, and drifted routes are refused.
+  new hold -> sample-route-review-decision-route-two
+$ fm-decision-hold.sh resolve sample-route-review route-two --decision-file decide.txt --routed-to ship-other   # not blocked by the hold
+  fm-decision-hold: routed task ship-other is not durably blocked by sample-route-review-decision-route-two
+  (exit 1)
+
+==============================================================

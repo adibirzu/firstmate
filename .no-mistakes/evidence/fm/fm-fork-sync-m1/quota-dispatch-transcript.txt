@@ -1,0 +1,68 @@
+==============================================================
+ Quota-aware crew dispatch — reconciled fork+upstream design
+ selector: bin/fm-dispatch-select.mjs   (real binary, fixture telemetry)
+==============================================================
+
+A. Healthy fleet: two subscriptions above reserve rotate (no starvation).
+  dispatch 1 -> {"harness":"codex","provider":"codex","model":"gpt"}
+  dispatch 2 -> {"harness":"claude","provider":"claude","model":"sonnet"}
+  dispatch 3 -> {"harness":"codex","provider":"codex","model":"gpt"}
+  dispatch 4 -> {"harness":"claude","provider":"claude","model":"sonnet"}
+
+--- B. Fork reservePercent (default 20): Cursor at 12% is held back, work redirects.
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"cursor"},{"harness":"codex"}]
+selected -> {"harness":"codex","provider":"codex"}
+diagnostic: fm-dispatch-select: candidate provider=cursor unavailable: quota headroom 12% is at or below 20% reserve
+diagnostic: fm-dispatch-select: candidate provider=codex eligible: fresh quota headroom=70% reserve=20%
+diagnostic: fm-dispatch-select: selection provider=codex basis=least-recent eligible subscription sequence=1
+exit=0
+
+--- C. Fork telemetryMaxAgeSeconds: stale telemetry fails CLOSED, never guesses unmetered.
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"claude"},{"harness":"codex"}]
+diagnostic: fm-dispatch-select: candidate provider=claude unavailable: quota telemetry stale or undated
+diagnostic: fm-dispatch-select: candidate provider=codex unavailable: quota telemetry stale or undated
+diagnostic: fm-dispatch-select: no subscription candidate has current dispatch capacity evidence
+exit=3
+
+--- D1. Fork per-profile quotaWindow: undeclared profile is priced on the WORST pool (3%) and refused.
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"cursor","model":"cursor-grok-4.6-high"}]
+diagnostic: fm-dispatch-select: candidate provider=cursor unavailable: quota headroom 3% is at or below 20% reserve
+diagnostic: fm-dispatch-select: no subscription candidate has current dispatch capacity evidence
+exit=3
+
+--- D2. Same telemetry, profile declares its own pool auto_usage -> dispatched on its healthy pool.
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"cursor","model":"cursor-grok-4.6-high","quotaWindow":"auto_usage"}]
+selected -> {"harness":"cursor","provider":"cursor","model":"cursor-grok-4.6-high"}
+diagnostic: fm-dispatch-select: candidate provider=cursor window=auto_usage eligible: fresh window auto_usage headroom=88% reserve=20%
+diagnostic: fm-dispatch-select: selection provider=cursor basis=least-recent eligible subscription sequence=1
+exit=0
+
+--- D3. Declared pool absent from telemetry -> fails closed, no fallback to a rosier window.
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"cursor","quotaWindow":"renamed_usage"}]
+diagnostic: fm-dispatch-select: candidate provider=cursor window=renamed_usage unavailable: declared quota window renamed_usage is absent from provider telemetry
+diagnostic: fm-dispatch-select: no subscription candidate has current dispatch capacity evidence
+exit=3
+
+--- E. Upstream spendPriority ranks the remaining eligible candidates: codex (40% but better spend priority) beats claude (80%).
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"claude","model":"sonnet"},{"harness":"codex","model":"gpt"}]
+selected -> {"harness":"codex","provider":"codex","model":"gpt"}
+diagnostic: fm-dispatch-select: candidate provider=claude eligible: fresh quota headroom=80% reserve=20%
+diagnostic: fm-dispatch-select: candidate provider=codex eligible: fresh quota headroom=40% reserve=20%
+diagnostic: fm-dispatch-select: selection provider=codex basis=spendPriority=-0.8333 sequence=1
+exit=0
+
+--- F. Fork cooldownSeconds: a VERIFIED rate-limit on a real task parks that provider.
+$ fm-dispatch-select.mjs record-failure --provider codex --task rate-task
+  fm-dispatch-select: provider=codex cooldown recorded until epoch 2800
+
+---    next dispatch after the cooldown is recorded
+$ fm-dispatch-select.mjs select --quota-json quota.json [{"harness":"claude"},{"harness":"codex"}]
+selected -> {"harness":"claude","provider":"claude"}
+diagnostic: fm-dispatch-select: candidate provider=claude eligible: fresh quota headroom=80% reserve=20%
+diagnostic: fm-dispatch-select: candidate provider=codex unavailable: cooldown until epoch 2800
+diagnostic: fm-dispatch-select: selection provider=claude basis=least-recent eligible subscription sequence=1
+exit=0
+$ fm-dispatch-select.mjs record-failure --provider codex --task ordinary-task  # no rate-limit evidence
+  refused: fm-dispatch-select: task status contains no rate-limit or quota-exhaustion evidence
+
+==============================================================
