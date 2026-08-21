@@ -73,7 +73,7 @@ FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
 # The resolution verb and durable-backlog-transfer verb that CLOSE a keyed
 # status decision opened by needs-decision or blocked. See status_open_decisions
 # below for the status-fold contract. The transfer verb is written only after
-# fm-decision-hold.sh has verified the corresponding captain-held backlog item.
+# fm-captain-hold.sh has verified the corresponding captain-held backlog item.
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
 
@@ -615,7 +615,7 @@ EOF
 
 # Print every decision key already CLOSED by a captain-held transfer in this
 # stream, one per line, first-seen order, de-duplicated. A key in this set has
-# SPENT its durable identity: fm-decision-hold.sh writes the transfer only after
+# SPENT its durable identity: fm-captain-hold.sh writes the transfer only after
 # binding that key to a verified backlog hold, so a LATER needs-decision or blocked
 # event carrying the same key is a DIFFERENT decision that the existing hold cannot
 # represent. Untagged events all carry the key "default", so this is the only

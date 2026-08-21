@@ -39,7 +39,10 @@
 // - Rate-limit or quota-exhaustion evidence creates a provider cooldown.
 //   `record-failure` verifies the evidence in the named task's status file and
 //   verifies that task's recorded routing provider before changing state.
-// - Eligible providers rotate by least-recent selection. Hash ordering breaks a
+// - Among eligible candidates, a known spendPriority from quota-axi is the
+//   quota-perspective ranker: the highest known scalar wins. When every
+//   remaining eligible candidate lacks a known scalar, or when known scalars
+//   tie, providers rotate by least-recent selection. Hash ordering breaks a
 //   never-used tie independently of candidate array order, then persisted
 //   last-use state gives exact round-robin behavior while the eligible set is
 //   stable. Profiles within one provider rotate the same way.
@@ -442,6 +445,30 @@ function selectLeastRecent(items, lastUsed, home, identity) {
   })[0];
 }
 
+function knownSpendPriority(provider, windowId) {
+  const scopes = provider?.quotaSemantics?.effectiveAvailability || [];
+  const matches = [];
+  for (const scope of scopes) {
+    const spend = scope?.selection?.status === 'known' ? scope.selection.spendPriority : null;
+    if (typeof spend !== 'number' || !Number.isFinite(spend)) continue;
+    const name = scope.scope || '';
+    const bounded = [...(scope.boundedBy || []), ...(scope.limitingWindowIds || [])];
+    if (windowId) {
+      if (name === windowId || bounded.includes(windowId)) {
+        matches.push({ spend, exact: name === windowId });
+      }
+    } else if (name === 'all_models' || name === 'all_products') {
+      matches.push({ spend, exact: true });
+    } else {
+      matches.push({ spend, exact: false });
+    }
+  }
+  if (!matches.length) return null;
+  const exact = matches.filter((item) => item.exact);
+  const pool = exact.length ? exact : matches;
+  return Math.min(...pool.map((item) => item.spend));
+}
+
 function inputText(options) {
   if (options.positional.length > 1) die('expected at most one JSON argument');
   if (options.positional.length === 1) return options.positional[0];
@@ -486,20 +513,52 @@ function select(options, home, paths, settings, now, state) {
       }
       if (priced.get(pool).eligible) eligible.push(candidate);
     }
-    if (eligible.length) eligibleProviders.push({ provider, candidates: eligible });
+    if (eligible.length) eligibleProviders.push({ provider, candidates: eligible, telemetry: readiness.provider });
   }
   if (!eligibleProviders.length) {
     saveState(paths.stateFile, state);
     die('no subscription candidate has current dispatch capacity evidence', 3);
   }
 
-  const providerGroup = selectLeastRecent(eligibleProviders, state.lastSelected, home, (item) => item.provider);
-  const candidate = selectLeastRecent(providerGroup.candidates, state.profileLastSelected, home, (item) => item.key);
+  const ranked = [];
+  for (const group of eligibleProviders) {
+    for (const candidate of group.candidates) {
+      ranked.push({
+        group,
+        candidate,
+        spend: knownSpendPriority(group.telemetry, candidate.quotaWindow),
+      });
+    }
+  }
+  const known = ranked.filter((item) => item.spend !== null);
+  let pool = ranked;
+  let basis = 'least-recent eligible subscription';
+  if (known.length) {
+    const best = Math.max(...known.map((item) => item.spend));
+    pool = known.filter((item) => item.spend === best);
+    basis = `spendPriority=${best}`;
+  }
+  const providerNames = [...new Set(pool.map((item) => item.group.provider))];
+  const providerGroup = selectLeastRecent(
+    eligibleProviders.filter((item) => providerNames.includes(item.provider)),
+    state.lastSelected,
+    home,
+    (item) => item.provider,
+  );
+  const providerPool = pool
+    .filter((item) => item.group.provider === providerGroup.provider)
+    .map((item) => item.candidate);
+  const candidate = selectLeastRecent(
+    providerPool.length ? providerPool : providerGroup.candidates,
+    state.profileLastSelected,
+    home,
+    (item) => item.key,
+  );
   state.sequence += 1;
   state.lastSelected[providerGroup.provider] = state.sequence;
   state.profileLastSelected[candidate.key] = state.sequence;
   saveState(paths.stateFile, state);
-  log(`selection provider=${providerGroup.provider} basis=least-recent eligible subscription sequence=${state.sequence}`);
+  log(`selection provider=${providerGroup.provider} basis=${basis} sequence=${state.sequence}`);
   process.stdout.write(`${JSON.stringify(candidate.profile)}\n`);
 }
 

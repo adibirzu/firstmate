@@ -373,10 +373,64 @@ JSON
   pass "a declared window missing from telemetry fails closed instead of repricing"
 }
 
+test_known_spendPriority_ranks_above_headroom() {
+  local home fakebin quota selected
+  home=$(make_home spend-priority)
+  fakebin=$(make_fakebin spend-priority)
+  quota="$home/quota.json"
+  cat > "$quota" <<JSON
+{"schemaVersion":5,"generatedAt":"$STAMP","providers":[
+  {"provider":"claude","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"all","percentRemaining":80}],
+   "quotaSemantics":{"status":"known","effectiveAvailability":[
+     {"scope":"all_models","status":"known","effectivePercentRemaining":80,
+      "selection":{"status":"known","spendPriority":-1.1111}}]}},
+  {"provider":"codex","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"all","percentRemaining":40}],
+   "quotaSemantics":{"status":"known","effectiveAvailability":[
+     {"scope":"all_models","status":"known","effectivePercentRemaining":40,
+      "selection":{"status":"known","spendPriority":-0.8333}}]}}
+]}
+JSON
+  selected=$(run_select "$home" "$fakebin" "$quota" spend.json \
+    '[{"harness":"claude","model":"sonnet"},{"harness":"codex","model":"gpt"}]' 2>/dev/null | jq -r .harness)
+  [ "$selected" = codex ] || fail "known spendPriority did not beat higher headroom: $selected"
+  pass "a known spendPriority ranks above raw headroom among eligible candidates"
+}
+
+test_tied_or_unknown_spendPriority_still_rotates() {
+  local home fakebin quota first second
+  home=$(make_home spend-priority-tie)
+  fakebin=$(make_fakebin spend-priority-tie)
+  quota="$home/quota.json"
+  cat > "$quota" <<JSON
+{"schemaVersion":5,"generatedAt":"$STAMP","providers":[
+  {"provider":"claude","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"all","percentRemaining":80}],
+   "quotaSemantics":{"status":"known","effectiveAvailability":[
+     {"scope":"all_models","status":"known","effectivePercentRemaining":80,
+      "selection":{"status":"known","spendPriority":0}}]}},
+  {"provider":"codex","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"all","percentRemaining":80}],
+   "quotaSemantics":{"status":"known","effectiveAvailability":[
+     {"scope":"all_models","status":"known","effectivePercentRemaining":80,
+      "selection":{"status":"known","spendPriority":0}}]}}
+]}
+JSON
+  first=$(run_select "$home" "$fakebin" "$quota" tie.json \
+    '[{"harness":"claude"},{"harness":"codex"}]' 2>/dev/null | jq -r .harness)
+  second=$(run_select "$home" "$fakebin" "$quota" tie.json \
+    '[{"harness":"claude"},{"harness":"codex"}]' 2>/dev/null | jq -r .harness)
+  [ "$first" != "$second" ] || fail "tied spendPriority did not rotate: $first then $second"
+  pass "tied known spendPriority still rotates by least-recent use"
+}
+
 test_distribution_is_deterministic_balanced_and_array_order_independent
 test_stale_unavailable_and_reserve_thresholds_fail_closed
 test_a_declared_quota_window_is_priced_instead_of_the_provider_minimum
 test_a_declared_window_absent_from_telemetry_fails_closed
+test_known_spendPriority_ranks_above_headroom
+test_tied_or_unknown_spendPriority_still_rotates
 test_verified_failure_creates_cooldown_and_failover
 test_invalid_profiles_and_settings_are_actionable
 test_existing_wrapper_and_grok_routes_remain_selectable

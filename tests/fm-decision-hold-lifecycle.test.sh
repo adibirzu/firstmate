@@ -642,8 +642,8 @@ test_declined_decision_closes_without_routed_work() {
     || fail "decline could not close a hold that routes no work"
   show=$(tasks_in "$home" show "$hold" --full)
   assert_contains "$show" "state: done" "declined hold did not close"
-  assert_contains "$show" "Resolution recorded by fm-decision-hold" "declined hold lost the decision record"
-  assert_contains "$show" "Resolution mode: declined" "declined hold did not record its close path"
+  assert_contains "$show" "Resolution recorded by fm-captain-hold" "declined hold lost the decision record"
+  assert_contains "$show" "Resolution mode: answered" "declined hold did not record its close path"
   assert_contains "$show" "Declined: do not run the sample half benchmark." \
     "declined hold did not record the captain decision text"
   run_decisions "$home" verify "$id" >/dev/null \
