@@ -21,6 +21,10 @@ Do not add a daemon, opaque composite score, hard-coded model-specific policy, o
 
 ## Collect facts
 
+Start each intake by running `quota-axi` once with no `--json`, and reuse that one default TOON snapshot for every candidate.
+Its `quota[]` row carries the `spendPriority`, `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt` this procedure judges on, and sparse `exhaustion[]` carries finite runway seconds only for `projected_exhaustion` and `exhausted_now`.
+Fall back to a single `quota-axi --json` call only when that snapshot is genuinely ambiguous for the decision or the installed build predates the `spendPriority` floor, then reuse that result and take no further quota snapshots.
+
 Establish model support and provider identity through the discovery surface owned by `harness-adapters` before selection.
 An adapter that is native to a subscription provider establishes that same-named provider without a redundant profile field; `docs/configuration.md` owns which adapters those are.
 Every other adapter needs an explicit `provider` field when it enters subscription-aware selection, because model spelling never proves provider identity.

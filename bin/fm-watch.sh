@@ -202,61 +202,19 @@ hash_pane() {
 # <tail40> is the same bounded capture already read for hashing and is consumed
 # by the contract's scoped rendered fallback paths.
 window_is_busy() {  # <window> <tail40>
-  local w=$1 tail40=$2 backend harness task meta verdict state lines
-  local bs key now native_max since
+  local w=$1 tail40=$2 backend harness task meta verdict state
   backend=$(window_backend "$w")
   harness=$(window_harness "$w")
-  if command -v window_to_task >/dev/null 2>&1; then
-    task=$(window_to_task "$w" "$STATE")
-  else
-    task=
-  fi
+  task=$(window_to_task "$w" "$STATE")
   meta="$STATE/$task.meta"
-  key=${w//:/_}; key=${key//\//_}; key=${key//./_}
 
-  if command -v fm_busy_classify >/dev/null 2>&1; then
-    if [ -n "$task" ] && [ -f "$meta" ]; then
-      verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE" "$tail40")
-    else
-      verdict=$(fm_busy_classify "$backend" "$w" "$harness" "${task:-unknown}" "$STATE" "$tail40")
-    fi
-    state=${verdict%% *}
-    [ "$state" = busy ]
-    return
+  if [ -n "$task" ] && [ -f "$meta" ]; then
+    verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE" "$tail40")
   else
-    bs=$(fm_backend_busy_state "$backend" "$w" 2>/dev/null)
+    verdict=$(fm_busy_classify "$backend" "$w" "$harness" "${task:-unknown}" "$STATE" "$tail40")
   fi
-
-  case "$bs" in
-    busy)
-      native_max=${FM_BUSY_NATIVE_MAX_SECONDS:-120}
-      case "$native_max" in ''|*[!0-9]*) native_max=120 ;; esac
-      now=${EPOCHSECONDS:-$(date +%s)}
-      since=$(cat "$STATE/.busy-since-$key" 2>/dev/null || true)
-      case "$since" in
-        ''|*[!0-9]*)
-          since=$now
-          printf '%s\n' "$since" > "$STATE/.busy-since-$key"
-          ;;
-      esac
-      if [ $((now - since)) -lt "$native_max" ]; then
-        return 0
-      fi
-      ;;
-    idle)
-      rm -f "$STATE/.busy-since-$key"
-      return 1
-      ;;
-    *)
-      rm -f "$STATE/.busy-since-$key"
-      ;;
-  esac
-  lines=$(printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12)
-  if command -v fm_busy_lines_match >/dev/null 2>&1; then
-    printf '%s' "$lines" | fm_busy_lines_match "$harness"
-  else
-    return 1
-  fi
+  state=${verdict%% *}
+  [ "$state" = busy ]
 }
 
 window_kind() {

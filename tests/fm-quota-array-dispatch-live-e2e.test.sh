@@ -232,7 +232,7 @@ write_fixture <<'JSON'
           "id": "weekly",
           "label": "week",
           "kind": "weekly",
-          "percentRemaining": 20,
+          "percentRemaining": 35,
           "resetsAt": "2030-01-03T19:12:00Z",
           "pace": { "status": "ahead", "reservePercentPoints": -20, "burnMultiple": 1.3333 }
         }
@@ -243,7 +243,7 @@ write_fixture <<'JSON'
           {
             "scope": "all_models",
             "status": "known",
-            "effectivePercentRemaining": 20,
+            "effectivePercentRemaining": 35,
             "boundedBy": ["weekly"],
             "limitingWindowIds": ["weekly"],
             "selection": { "status": "known", "spendPriority": -0.8333 },
@@ -263,12 +263,12 @@ write_fixture <<'JSON'
 }
 JSON
 run_case \
-  "higher spendPriority beats more headroom after the three gates" \
+  "higher spendPriority beats more headroom among candidates that cleared fail-closed capacity" \
   "SELECTED=codex" \
   "TOON" \
-  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. Both profiles have comparable required task fit and the same strongest reasoning class. The authoritative catalogs already prove Claude/Sonnet and Codex/GPT models supported in their stated provider families, and their selected authentication surfaces are usable. The likely task-completion horizon is two hours with established confidence. Both candidates have known runway that supports that horizon. Return exact lines FACT=claude|headroom=80|spendPriority=-1.1111|runway_seconds=241920 and FACT=codex|headroom=20|spendPriority=-0.8333|runway_seconds=90720 to preserve candidate accounting, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
+  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. Both profiles have comparable required task fit and the same strongest reasoning class. The authoritative catalogs already prove Claude/Sonnet and Codex/GPT models supported in their stated provider families, and their selected authentication surfaces are usable. The likely task-completion horizon is two hours with established confidence. Both candidates have known runway that supports that horizon, and both sit strictly above the configured reserve, so neither is refused on capacity. Return exact lines FACT=claude|headroom=80|spendPriority=-1.1111|runway_seconds=241920 and FACT=codex|headroom=35|spendPriority=-0.8333|runway_seconds=90720 to preserve candidate accounting, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
   "FACT=claude|headroom=80|spendPriority=-1.1111|runway_seconds=241920" \
-  "FACT=codex|headroom=20|spendPriority=-0.8333|runway_seconds=90720"
+  "FACT=codex|headroom=35|spendPriority=-0.8333|runway_seconds=90720"
 
 write_fixture <<'JSON'
 {
@@ -364,7 +364,7 @@ write_fixture <<'JSON'
           "id": "weekly",
           "label": "week",
           "kind": "weekly",
-          "percentRemaining": 5,
+          "percentRemaining": 40,
           "resetsAt": "2030-01-04T12:00:00Z",
           "pace": { "status": "ahead", "reservePercentPoints": -45, "burnMultiple": 1.9 }
         }
@@ -375,7 +375,7 @@ write_fixture <<'JSON'
           {
             "scope": "all_models",
             "status": "known",
-            "effectivePercentRemaining": 5,
+            "effectivePercentRemaining": 40,
             "boundedBy": ["weekly"],
             "limitingWindowIds": ["weekly"],
             "selection": { "status": "known", "spendPriority": -1.8 },
@@ -433,8 +433,8 @@ run_case \
   "required strongest reasoning class is not downgraded for quota" \
   "SELECTED=claude" \
   "TOON" \
-  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. The likely task-completion horizon is two hours with established confidence. Claude/Sonnet is catalog-supported with usable authentication and is the only profile that meets the task's required strongest reasoning class. Codex/GPT is catalog-supported with usable authentication but is a weaker reasoning class and cannot meet the requirement. Return exact lines FACT=claude|reasoning=required|headroom=5|spendPriority=-1.8|runway_seconds=15916 and FACT=codex|reasoning=weaker|headroom=80|spendPriority=-0.3921|runway_seconds=362880, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
-  "FACT=claude|reasoning=required|headroom=5|spendPriority=-1.8|runway_seconds=15916" \
+  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. The likely task-completion horizon is two hours with established confidence. Claude/Sonnet is catalog-supported with usable authentication and is the only profile that meets the task's required strongest reasoning class. Codex/GPT is catalog-supported with usable authentication but is a weaker reasoning class and cannot meet the requirement. Both sit strictly above the configured reserve, so neither is refused on capacity and the required class can proceed on its own quota. Return exact lines FACT=claude|reasoning=required|headroom=40|spendPriority=-1.8|runway_seconds=15916 and FACT=codex|reasoning=weaker|headroom=80|spendPriority=-0.3921|runway_seconds=362880, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
+  "FACT=claude|reasoning=required|headroom=40|spendPriority=-1.8|runway_seconds=15916" \
   "FACT=codex|reasoning=weaker|headroom=80|spendPriority=-0.3921|runway_seconds=362880"
 
 write_fixture <<'JSON'
@@ -450,7 +450,7 @@ write_fixture <<'JSON'
           "id": "five_hour",
           "label": "5-hour",
           "kind": "five_hour",
-          "percentRemaining": 20,
+          "percentRemaining": 45,
           "resetsAt": "2030-01-01T02:00:00Z",
           "pace": { "status": "ahead", "reservePercentPoints": -20, "burnMultiple": 1.3333 }
         }
@@ -461,7 +461,7 @@ write_fixture <<'JSON'
           {
             "scope": "all_models",
             "status": "known",
-            "effectivePercentRemaining": 20,
+            "effectivePercentRemaining": 45,
             "boundedBy": ["five_hour"],
             "limitingWindowIds": ["five_hour"],
             "selection": { "status": "known", "spendPriority": -0.8333 },
@@ -485,7 +485,7 @@ write_fixture <<'JSON'
           "id": "weekly",
           "label": "week",
           "kind": "weekly",
-          "percentRemaining": 5,
+          "percentRemaining": 30,
           "resetsAt": "2030-01-04T12:00:00Z",
           "pace": { "status": "ahead", "reservePercentPoints": -45, "burnMultiple": 1.9 }
         }
@@ -496,7 +496,7 @@ write_fixture <<'JSON'
           {
             "scope": "all_models",
             "status": "known",
-            "effectivePercentRemaining": 5,
+            "effectivePercentRemaining": 30,
             "boundedBy": ["weekly"],
             "limitingWindowIds": ["weekly"],
             "selection": { "status": "known", "spendPriority": -1.8 },
@@ -519,8 +519,8 @@ run_case \
   "runway versus completion horizon remains a hard gate over spendPriority" \
   "SELECTED=codex" \
   "TOON" \
-  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. Both profiles have comparable required task fit and the same strongest reasoning class. The authoritative catalogs already prove Claude/Sonnet and Codex/GPT models supported in their stated provider families, and their selected authentication surfaces are usable. The likely task-completion horizon is two hours with established confidence. Claude has known spendPriority of -0.8333 and runway of 2700 seconds. Codex has known spendPriority of -1.8 and runway of 15916 seconds. Return exact lines FACT=claude|spendPriority=-0.8333|runway_seconds=2700|supports_horizon=no and FACT=codex|spendPriority=-1.8|runway_seconds=15916|supports_horizon=yes to preserve candidate accounting, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
-  "FACT=claude|spendPriority=-0.8333|runway_seconds=2700|supports_horizon=no" \
-  "FACT=codex|spendPriority=-1.8|runway_seconds=15916|supports_horizon=yes"
+  "Resolve this matched dispatch profile array now. Load quota-array-dispatch and run quota-axi with no flags (default TOON) exactly once. Do not pass --json. Both profiles have comparable required task fit and the same strongest reasoning class. The authoritative catalogs already prove Claude/Sonnet and Codex/GPT models supported in their stated provider families, and their selected authentication surfaces are usable. The likely task-completion horizon is two hours with established confidence. Both sit strictly above the configured reserve, so neither is refused on capacity. Claude has known spendPriority of -0.8333 and runway of 2700 seconds. Codex has known spendPriority of -1.8 and runway of 15916 seconds. Return exact lines FACT=claude|headroom=45|spendPriority=-0.8333|runway_seconds=2700|supports_horizon=no and FACT=codex|headroom=30|spendPriority=-1.8|runway_seconds=15916|supports_horizon=yes to preserve candidate accounting, then an exact final line SELECTED=<claude|codex>. Do not use other vendor or model commands and do not modify files." \
+  "FACT=claude|headroom=45|spendPriority=-0.8333|runway_seconds=2700|supports_horizon=no" \
+  "FACT=codex|headroom=30|spendPriority=-1.8|runway_seconds=15916|supports_horizon=yes"
 
 echo "# all quota-array-dispatch live behavior tests passed"

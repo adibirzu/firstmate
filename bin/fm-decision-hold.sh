@@ -106,7 +106,7 @@ recorded_field() {
 
 command_resolve() {
   local origin=${1:-} key=${2:-} decision_file='' routed='' routed_csv id dep tmp answer_file show state blocked hold_show hold_body body
-  local resolution_recorded=0 legacy_replay=0 decision_text decision_digest recorded_digest recorded_routes
+  local resolution_recorded=0 legacy_replay=0 decision_text decision_digest legacy_digest recorded_digest recorded_routes
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   shift 2
   while [ "$#" -gt 0 ]; do
@@ -125,19 +125,36 @@ command_resolve() {
   routed_csv=$(printf '%s' "$routed" | tr ' ' ',')
   decision_text=$(cat "$decision_file")
   [ -n "$decision_text" ] || fail "decision file must not be empty"
-  decision_digest=$(sha256_text "$decision_text")
+  legacy_digest=$(sha256_text "$decision_text")
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-hold-resolve.XXXXXX") \
+    || fail "cannot stage the captain decision"
+  RESOLVE_TMP=$tmp
+  trap 'rm -f -- "${RESOLVE_TMP:-}"' EXIT
+  if ! { cat "$decision_file" && printf '\n\nRouted work:\n' \
+    && printf '%s\n' "$routed" | tr ' ' '\n' | sed 's/^/- /'; } > "$tmp"; then
+    fail "cannot stage the captain decision for $id"
+  fi
+  # captain-hold digests the bytes it is handed, so the shim's own record must
+  # digest the same staged answer text or an exact replay reads as drift.
+  decision_digest=$(sha256_text "$(cat "$tmp")")
   hold_show=$(task_show "$id") || fail "captain decision $id does not exist in the active home"
   hold_body=$(show_field "$hold_show" body)
   case "$hold_body" in
     *"Resolution recorded by fm-decision-hold."*"Routed identities: "*)
       recorded_digest=$(recorded_field "$hold_body" "Decision digest" || true)
       recorded_routes=$(recorded_field "$hold_body" "Routed identities" || true)
-      [ "$recorded_digest" = "$decision_digest" ] \
-        || fail "captain decision $id records a different captain decision"
+      # The staged digest covers the routed ids, so route drift is reported
+      # from the recorded route list rather than as decision drift.
       [ "$recorded_routes" = "$routed_csv" ] \
         || fail "captain decision $id records different routed work"
+      if [ "$recorded_digest" = "$decision_digest" ]; then
+        :
+      elif [ "$recorded_digest" = "$legacy_digest" ]; then
+        legacy_replay=1
+      else
+        fail "captain decision $id records a different captain decision"
+      fi
       resolution_recorded=1
-      legacy_replay=1
       ;;
     *"Resolution recorded by fm-captain-hold."*)
       resolution_recorded=1
@@ -152,13 +169,6 @@ command_resolve() {
     list_has_key "$blocked" "$id" || [ "$resolution_recorded" = 1 ] \
       || fail "routed task $dep is not durably blocked by $id"
   done
-  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-hold-resolve.XXXXXX") \
-    || fail "cannot stage the captain decision"
-  if ! { cat "$decision_file" && printf '\n\nRouted work:\n' \
-    && printf '%s\n' "$routed" | tr ' ' '\n' | sed 's/^/- /'; } > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot stage the captain decision for $id"
-  fi
   answer_file=$tmp
   [ "$legacy_replay" = 0 ] || answer_file=$decision_file
   if [ "$resolution_recorded" = 0 ]; then
@@ -168,7 +178,7 @@ command_resolve() {
       body="${body}- ${dep}"$'\n'
     done
     (cd "$FM_HOME" && tasks-axi update "$id" --body "$body" >/dev/null) \
-      || { rm -f -- "$tmp"; fail "could not record the captain decision on $id"; }
+      || fail "could not record the captain decision on $id"
     resolution_recorded=1
   fi
   # Unblock while the hold is still open. A partial routing failure must leave
@@ -177,14 +187,15 @@ command_resolve() {
     show=$(task_show "$dep") || fail "routed task $dep disappeared before routing"
     if list_has_key "$(normalized_blocked_by "$show")" "$id"; then
       (cd "$FM_HOME" && tasks-axi unblock "$dep" --by "$id" >/dev/null) \
-        || { rm -f -- "$tmp"; fail "could not route the recorded decision to $dep"; }
+        || fail "could not route the recorded decision to $dep"
     fi
   done
   if ! "$CAPTAIN_HOLD" answer "$id" --decision-file "$answer_file"; then
-    rm -f -- "$tmp"
     exit 1
   fi
   rm -f -- "$tmp"
+  RESOLVE_TMP=''
+  trap - EXIT
   printf 'resolved: %s -> %s\n' "$id" "$routed"
 }
 
