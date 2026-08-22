@@ -562,6 +562,71 @@ test_resolve_matches_quoted_blocked_by_edges() {
   pass "resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id"
 }
 
+# A first-try resolve that never hit a partial routing failure must still be
+# replayable: an identical retry is an idempotent no-op, and only genuine drift
+# in the decision text or the routed set is rejected.
+test_clean_resolve_replays_idempotently() {
+  local home origin hold show
+  home=$(make_home clean-resolve-replay)
+  origin=sample-clean-replay-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Clean replay review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create clean-replay origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# Clean replay review\n\nOne routed decision.\n' > "$home/data/$origin/report.md"
+
+  hold=$(run_decisions "$home" hold "$origin" route \
+    --title "Clean replay decision" --reason "captain replay pending" --repo sample) \
+    || fail "could not register clean-replay hold"
+  tasks_in "$home" add clean-replay-implementation "Clean replay implementation" --kind ship --repo sample >/dev/null \
+    || fail "could not create first clean-replay dependent"
+  tasks_in "$home" add clean-replay-followup "Clean replay followup" --kind ship --repo sample >/dev/null \
+    || fail "could not create second clean-replay dependent"
+  tasks_in "$home" block clean-replay-implementation --by "$hold" >/dev/null \
+    || fail "could not block first clean-replay dependent"
+  tasks_in "$home" block clean-replay-followup --by "$hold" >/dev/null \
+    || fail "could not block second clean-replay dependent"
+
+  printf 'Use route north for the sample system.\n' > "$home/clean-decision.txt"
+  if ! run_decisions "$home" resolve "$origin" route --decision-file "$home/clean-decision.txt" \
+    --routed-to clean-replay-implementation --routed-to clean-replay-followup \
+    > "$home/clean-first.out" 2> "$home/clean-first.err"; then
+    fail "first-try resolve failed: $(cat "$home/clean-first.err")"
+  fi
+  if ! run_decisions "$home" resolve "$origin" route --decision-file "$home/clean-decision.txt" \
+    --routed-to clean-replay-implementation --routed-to clean-replay-followup \
+    > "$home/clean-replay.out" 2> "$home/clean-replay.err"; then
+    fail "identical replay of a clean first-try resolve was rejected: $(cat "$home/clean-replay.err")"
+  fi
+
+  printf 'Use route south for the sample system.\n' > "$home/clean-drift.txt"
+  if run_decisions "$home" resolve "$origin" route --decision-file "$home/clean-drift.txt" \
+    --routed-to clean-replay-implementation --routed-to clean-replay-followup \
+    > "$home/clean-drift.out" 2> "$home/clean-drift.err"; then
+    fail "replay accepted a different captain decision"
+  fi
+  assert_grep "records a different captain decision" "$home/clean-drift.err" \
+    "decision drift must be reported as a different captain decision"
+  if run_decisions "$home" resolve "$origin" route --decision-file "$home/clean-decision.txt" \
+    --routed-to clean-replay-implementation \
+    > "$home/clean-routes.out" 2> "$home/clean-routes.err"; then
+    fail "replay accepted a different routed task set"
+  fi
+  assert_grep "records different routed work" "$home/clean-routes.err" \
+    "routed-set drift must be reported as different routed work"
+
+  show=$(tasks_in "$home" show "$hold" --full)
+  assert_contains "$show" "state: done" "clean replay did not leave the hold closed"
+  assert_contains "$show" "Resolution recorded by fm-decision-hold" "clean replay lost the decision record"
+  show=$(tasks_in "$home" show clean-replay-implementation --full)
+  assert_contains "$show" "blocked: no" "clean resolve did not release its first dependent"
+  show=$(tasks_in "$home" show clean-replay-followup --full)
+  assert_contains "$show" "blocked: no" "clean resolve did not release its second dependent"
+
+  pass "a clean first-try resolve replays idempotently and still rejects decision or route drift"
+}
+
 # An untagged needs-decision or blocked event carries the reserved key "default",
 # which the documented worker paths close: a bare resolved: event, an explicitly
 # keyed resolved [key=default] event, or a captain hold registered under "default".
@@ -642,8 +707,8 @@ test_declined_decision_closes_without_routed_work() {
     || fail "decline could not close a hold that routes no work"
   show=$(tasks_in "$home" show "$hold" --full)
   assert_contains "$show" "state: done" "declined hold did not close"
-  assert_contains "$show" "Resolution recorded by fm-decision-hold" "declined hold lost the decision record"
-  assert_contains "$show" "Resolution mode: declined" "declined hold did not record its close path"
+  assert_contains "$show" "Resolution recorded by fm-captain-hold" "declined hold lost the decision record"
+  assert_contains "$show" "Resolution mode: answered" "declined hold did not record its close path"
   assert_contains "$show" "Declined: do not run the sample half benchmark." \
     "declined hold did not record the captain decision text"
   run_decisions "$home" verify "$id" >/dev/null \
@@ -914,3 +979,4 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_clean_resolve_replays_idempotently
