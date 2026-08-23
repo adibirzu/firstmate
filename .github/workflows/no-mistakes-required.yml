@@ -32,6 +32,8 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -140,6 +142,40 @@ jobs:
             fi
             echo "Pipeline step attestation is valid: review, test, and document are completed."
             exit 0
+          fi
+          # The signed '## Pipeline' section only appears after the pipeline's
+          # own CI gate passes, but the pipeline rewrites the PR description
+          # (dropping the previous signature) as soon as it pushes. Hard-failing
+          # that transient unsigned body deadlocks the run: the pipeline's CI
+          # gate waits on this check, and this check waits on the body the
+          # pipeline cannot sign until its CI gate is green. No bounded poll
+          # above can cover that, so break the cycle with the one artifact the
+          # pipeline publishes BEFORE its CI gate: the evidence commit for this
+          # head branch on the orphan no-mistakes/evidence branch. When that
+          # in-flight marker exists, pass provisionally - the pipeline always
+          # finishes by signing the body, which fires an 'edited' run on the
+          # same head SHA that supersedes this verdict with full attestation
+          # validation. Any API failure leaves the probe negative, so an
+          # unreachable API still cannot pass an unsigned PR.
+          #
+          # Scope: the probe only runs for heads in THIS repository - the
+          # pipeline pushes branches here, so a fork PR can never be an
+          # in-flight pipeline, and gating on it stops a fork from spoofing
+          # the probe by reusing a previously-piped branch name. The evidence
+          # commit is published before the head commit exists and is unsigned,
+          # so binding to the head SHA or a commit signature is not possible;
+          # within this repo the probe is process enforcement, not an
+          # authorization boundary - anyone with write access could equally
+          # edit this workflow on their own branch, since pull_request runs
+          # use the workflow from the PR merge ref.
+          if [ "${PR_HEAD_SAME_REPO:-false}" = "true" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] && [ -n "${PR_HEAD_REF:-}" ] && command -v gh >/dev/null 2>&1; then
+            evidence_subjects=$(gh api "repos/${GH_REPO}/commits?sha=no-mistakes/evidence&per_page=50" \
+              --jq '[.[].commit.message | split("\n")[0]] | join("\n")' 2>/dev/null) || evidence_subjects=''
+            if printf '%s\n' "$evidence_subjects" | grep -qF -- "no-mistakes: evidence for ${PR_HEAD_REF} (run "; then
+              echo "PR #${PR_NUMBER} body (${origin}) is not signed yet, but a no-mistakes pipeline is in flight for '${PR_HEAD_REF}' (evidence commit found on no-mistakes/evidence)."
+              echo "Passing provisionally; the pipeline's final body edit re-runs this check with full attestation validation."
+              exit 0
+            fi
           fi
           {
             echo "::error::This PR was not raised through no-mistakes."
