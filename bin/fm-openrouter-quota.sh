@@ -16,21 +16,37 @@
 #   fm-openrouter-quota.sh --help
 #
 # `report` is the default command. It prints one JSON object on stdout.
-# Diagnostics are sanitized summaries on stderr. API bodies, quota payloads,
-# and the API key are never printed, logged, written to a file, or included in
-# an error message.
+# Diagnostics are sanitized summaries on stderr. API bodies and quota payloads
+# are never printed or logged. The API key is read from the environment and
+# handed to curl on standard input as the Authorization header; it is never
+# printed, logged, written to a file, passed on a command line, or included
+# in an error message.
 #
 # report:
 #   GET /api/v1/key for usage and any key spend cap, and GET /api/v1/models for
 #   ids and per-token USD pricing. A negative per-token price is OpenRouter's
 #   variable-pricing sentinel, not a cost, and is reported as pricing-missing
-#   rather than as a cheap paid model. Price-zero models are probed with one
-#   bounded chat-completions request so 404 (account privacy / no allowed
-#   providers), 403 (platform-restricted), and 429 (upstream rate limit) stay
-#   distinct. Paid models are not probed. A 429, including one recorded later
-#   by record-failure, marks that model id temporarily ineligible for
-#   cooldownSeconds; the cooldown is per model id, never per provider and
-#   never global, and expired entries are dropped on read.
+#   rather than as a cheap paid model. Per-million prices are rounded to six
+#   decimal places. Price-zero models are probed with one bounded
+#   chat-completions request so 404 (account privacy / no allowed providers),
+#   403 (platform-restricted), and 429 (upstream rate limit) stay distinct.
+#   Paid models are not probed. Probes are paced FM_OPENROUTER_PROBE_INTERVAL_SECONDS
+#   apart so one sweep stays under OpenRouter's 20 requests per minute
+#   free-model limit. A 429, including one recorded later by record-failure,
+#   marks that model id temporarily ineligible for cooldownSeconds; the
+#   cooldown is per model id, never per provider and never global, and expired
+#   entries are dropped on read. A 404 no-allowed-providers or 403
+#   platform-restricted verdict is a stable account fact: it is remembered in
+#   the state file and that model id is not probed again until `clear --model`
+#   drops it or the state file is removed. After the account privacy setting
+#   is widened, clear the affected ids so they are probed live again. When the
+#   number of free models to probe exceeds FM_OPENROUTER_PROBE_MAX the report
+#   is still emitted: the unprobed models are reported ineligible with reason
+#   probe-budget-exhausted, so nothing is guessed. Catalog ids outside
+#   [A-Za-z0-9._:/-] are skipped with a sanitized stderr line and are not in
+#   the output. Network work runs without the state lock; the lock is held only
+#   for the final load, prune, merge, and save of the state file, so a
+#   record-failure or clear that lands during a sweep still succeeds.
 #
 # record-failure:
 #   Persist a per-model cooldown from a live 429 observation. Unlike
@@ -38,7 +54,7 @@
 #   caller already observed the rate limit for this model id.
 #
 # clear:
-#   Drop the persisted cooldown for one model id.
+#   Drop the persisted cooldown and any remembered verdict for one model id.
 #
 # JSON fields on stdout (schemaVersion 1):
 #   key                     sanitized /api/v1/key data (usage, usage_daily,
@@ -50,8 +66,10 @@
 #   routing.eligiblePaidByCost  eligible paid model ids, cheapest first
 #
 # Paths:
-#   state/.openrouter-quota.json     persisted per-model cooldowns
-#   state/.openrouter-quota.json.lock  mkdir lock for serialized updates
+#   state/.openrouter-quota.json     persisted per-model cooldowns and
+#                                    remembered verdicts
+#   state/.openrouter-quota.json.lock  mkdir lock for serialized state updates;
+#                                    a lock whose owner pid is dead is reaped
 #
 # Environment:
 #   FM_HOME                         required and explicit
@@ -63,11 +81,14 @@
 #   FM_OPENROUTER_API_BASE          API origin (default https://openrouter.ai)
 #   FM_OPENROUTER_COOLDOWN_SECONDS  integer 60..86400 (default 1800)
 #   FM_OPENROUTER_PROBE_MAX         max free-model probes per report (default 64)
+#   FM_OPENROUTER_PROBE_INTERVAL_SECONDS  integer 0..60 seconds between live
+#                                   probes (default 3; 0 disables pacing)
 #   FM_OPENROUTER_TIMEOUT           per-request seconds (default 20)
 #
 # Test-only seams:
 #   --now fixes the current epoch second.
-#   FM_OPENROUTER_STATE_FILE and FM_OPENROUTER_API_BASE as above.
+#   FM_OPENROUTER_STATE_FILE, FM_OPENROUTER_API_BASE, and
+#   FM_OPENROUTER_PROBE_INTERVAL_SECONDS as above.
 #
 # Exit status: 0 on success, 2 on usage or missing-key errors, 3 when the API
 # rejects the key, the lock stays busy, or required telemetry is unusable.
@@ -77,13 +98,17 @@ SELF=fm-openrouter-quota
 DEFAULT_API_BASE=https://openrouter.ai
 DEFAULT_COOLDOWN=1800
 DEFAULT_PROBE_MAX=64
+DEFAULT_PROBE_INTERVAL=3
 DEFAULT_TIMEOUT=20
 COOLDOWN_MIN=60
 COOLDOWN_MAX=86400
+PROBE_INTERVAL_MAX=60
+LOCK_WAIT_SECONDS=5
 
 WORKDIR=
 LOCKDIR=
-AUTH_FILE=
+LOCK_HELD=0
+AUTH_KEY=
 
 usage() {
   sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
@@ -100,15 +125,11 @@ log() {
 }
 
 cleanup() {
-  if [ -n "$AUTH_FILE" ]; then
-    rm -f "$AUTH_FILE"
-  fi
+  AUTH_KEY=
   if [ -n "$WORKDIR" ]; then
     rm -rf "$WORKDIR"
   fi
-  if [ -n "$LOCKDIR" ] && [ -d "$LOCKDIR" ]; then
-    rm -rf "$LOCKDIR"
-  fi
+  release_lock
 }
 
 is_integer() {
@@ -151,6 +172,13 @@ probe_max() {
   printf '%s\n' "$raw"
 }
 
+probe_interval() {
+  local raw=${FM_OPENROUTER_PROBE_INTERVAL_SECONDS:-$DEFAULT_PROBE_INTERVAL}
+  is_integer "$raw" || die "FM_OPENROUTER_PROBE_INTERVAL_SECONDS must be an integer from 0 to $PROBE_INTERVAL_MAX"
+  [ "$raw" -le "$PROBE_INTERVAL_MAX" ] || die "FM_OPENROUTER_PROBE_INTERVAL_SECONDS must be an integer from 0 to $PROBE_INTERVAL_MAX"
+  printf '%s\n' "$raw"
+}
+
 request_timeout() {
   local raw=${FM_OPENROUTER_TIMEOUT:-$DEFAULT_TIMEOUT}
   is_integer "$raw" || die 'FM_OPENROUTER_TIMEOUT must be a positive integer'
@@ -175,6 +203,10 @@ model_id_ok() {
   esac
 }
 
+sanitize_for_log() {
+  printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-120
+}
+
 resolve_key() {
   local tokens=${OPENROUTER_API_KEY_TOKENS:-}
   local fallback=${OPENROUTER_API_KEY:-}
@@ -185,41 +217,60 @@ resolve_key() {
     *$'\n'*|*$'\r'*) die 'OPENROUTER_API_KEY has an unsafe shape' ;;
   esac
   if [ -n "$tokens" ]; then
-    printf '%s\n' "$tokens"
+    AUTH_KEY=$tokens
     return 0
   fi
   if [ -n "$fallback" ]; then
     log 'OPENROUTER_API_KEY_TOKENS is unset; using OPENROUTER_API_KEY as last-resort fallback'
-    printf '%s\n' "$fallback"
+    AUTH_KEY=$fallback
     return 0
   fi
   die 'OPENROUTER_API_KEY_TOKENS is unset'
 }
 
-write_auth_header() {
-  local key=$1
-  AUTH_FILE=$(umask 077; mktemp "${WORKDIR}/auth.XXXXXX") || die 'could not create an auth header file' 3
-  chmod 600 "$AUTH_FILE" 2>/dev/null || die 'could not restrict the auth header file' 3
-  printf 'Authorization: Bearer %s\n' "$key" > "$AUTH_FILE" || die 'could not write the auth header file' 3
+lock_owner_dead() {
+  local owner
+  owner=$(cat "$LOCKDIR/owner" 2>/dev/null | tr -d '[:space:]') || return 1
+  is_integer "$owner" || return 1
+  [ "$owner" -gt 1 ] || return 1
+  if kill -0 "$owner" 2>/dev/null; then
+    return 1
+  fi
+  if ps -p "$owner" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 acquire_lock() {
-  local deadline=$((SECONDS + 5))
+  local deadline=$((SECONDS + LOCK_WAIT_SECONDS))
   mkdir -p "$(dirname "$LOCKDIR")" || die "could not create $(dirname "$LOCKDIR")" 3
   while true; do
     if mkdir "$LOCKDIR" 2>/dev/null; then
+      LOCK_HELD=1
       printf '%s\n' "$$" > "$LOCKDIR/owner"
       return 0
     fi
     if [ "$SECONDS" -ge "$deadline" ]; then
-      die 'OpenRouter quota state lock remained busy for 5 seconds' 3
+      if lock_owner_dead; then
+        rm -rf "$LOCKDIR"
+        continue
+      fi
+      die "OpenRouter quota state lock remained busy for ${LOCK_WAIT_SECONDS} seconds" 3
     fi
     sleep 0.1 2>/dev/null || sleep 1
   done
 }
 
+release_lock() {
+  if [ "$LOCK_HELD" -eq 1 ] && [ -n "$LOCKDIR" ]; then
+    rm -rf "$LOCKDIR"
+    LOCK_HELD=0
+  fi
+}
+
 empty_state() {
-  printf '%s\n' '{"version":1,"cooldowns":{}}'
+  printf '%s\n' '{"version":1,"cooldowns":{},"verdicts":{}}'
 }
 
 load_state() {
@@ -228,9 +279,9 @@ load_state() {
     empty_state
     return 0
   fi
-  jq -e 'type=="object" and .version==1 and (.cooldowns|type=="object")' "$file" >/dev/null 2>&1 \
+  jq -e 'type=="object" and .version==1 and (.cooldowns|type=="object") and ((.verdicts // {})|type=="object")' "$file" >/dev/null 2>&1 \
     || die 'OpenRouter quota state has an unsupported or malformed schema' 3
-  jq -c '.' "$file"
+  jq -c '.verdicts //= {}' "$file"
 }
 
 save_state() {
@@ -254,11 +305,23 @@ cooldown_until() {
     '(.cooldowns[$id].until // 0) as $u | if ($u|type=="number") and ($u > $now) then ($u|tostring) else empty end'
 }
 
+remembered_verdict() {
+  local state=$1 id=$2
+  printf '%s' "$state" | jq -r --arg id "$id" \
+    '.verdicts[$id].class // empty | select(. == "allowed-providers-unavailable" or . == "platform-restricted")'
+}
+
 set_cooldown() {
-  local state=$1 id=$2 now=$3 seconds=$4 reason=$5 until
-  until=$((now + seconds))
-  printf '%s' "$state" | jq -c --arg id "$id" --argjson now "$now" --argjson until "$until" --arg reason "$reason" \
+  local state=$1 id=$2 now=$3 seconds=$4 reason=$5 until_epoch
+  until_epoch=$((now + seconds))
+  printf '%s' "$state" | jq -c --arg id "$id" --argjson now "$now" --argjson until "$until_epoch" --arg reason "$reason" \
     '.cooldowns[$id] = {until:$until, reason:$reason, recordedAt:$now}'
+}
+
+set_verdict() {
+  local state=$1 id=$2 now=$3 class=$4
+  printf '%s' "$state" | jq -c --arg id "$id" --argjson now "$now" --arg class "$class" \
+    '.verdicts[$id] = {class:$class, recordedAt:$now}'
 }
 
 http_exchange() {
@@ -267,17 +330,17 @@ http_exchange() {
   err_file="${WORKDIR}/curl.err"
   : > "$err_file"
   if [ "$method" = POST ]; then
-    code=$(curl -sS --max-time "$timeout" \
+    code=$(printf 'Authorization: Bearer %s\n' "$AUTH_KEY" | curl -sS --max-time "$timeout" \
       -o "$body_file" -w '%{http_code}' \
       -X POST \
-      -H "@${AUTH_FILE}" \
+      -H @- \
       -H 'Content-Type: application/json' \
       --data-binary "@${payload_file}" \
       "$url" 2>"$err_file") || rc=$?
   else
-    code=$(curl -sS --max-time "$timeout" \
+    code=$(printf 'Authorization: Bearer %s\n' "$AUTH_KEY" | curl -sS --max-time "$timeout" \
       -o "$body_file" -w '%{http_code}' \
-      -H "@${AUTH_FILE}" \
+      -H @- \
       "$url" 2>"$err_file") || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
@@ -306,13 +369,13 @@ classify_http_failure() {
 }
 
 reason_for_class() {
-  local class=$1 until=${2:-}
+  local class=$1 until_epoch=${2:-}
   case "$class" in
     allowed-providers-unavailable) printf '%s\n' 'account privacy gate: no allowed providers' ;;
     platform-restricted) printf '%s\n' 'platform-restricted' ;;
     rate-limited)
-      if [ -n "$until" ]; then
-        printf 'cooldown until epoch %s\n' "$until"
+      if [ -n "$until_epoch" ]; then
+        printf 'cooldown until epoch %s\n' "$until_epoch"
       else
         printf '%s\n' 'rate-limited'
       fi
@@ -323,6 +386,7 @@ reason_for_class() {
     live-ok) printf '%s\n' 'live completion succeeded' ;;
     priced-ok) printf '%s\n' 'priced and not in cooldown' ;;
     probe-request-failed) printf '%s\n' 'probe-request-failed' ;;
+    probe-budget-exhausted) printf '%s\n' 'probe-budget-exhausted' ;;
     *) printf '%s\n' "$class" ;;
   esac
 }
@@ -335,7 +399,6 @@ fetch_json() {
   case "$code" in
     200) ;;
     401)
-      log 'OpenRouter rejected the API key'
       die 'OpenRouter rejected the API key' 3
       ;;
     curl-*)
@@ -380,11 +443,36 @@ emit_model_json() {
     }'
 }
 
+record_observation() {
+  local file=$1 kind=$2 id=$3 class=$4
+  jq -nc --arg kind "$kind" --arg id "$id" --arg class "$class" '{kind:$kind, id:$id, class:$class}' >> "$file"
+}
+
+merge_observations_under_lock() {
+  local state_file=$1 now=$2 cooldown=$3 observations=$4
+  local state line kind id class
+  acquire_lock
+  state=$(load_state "$state_file")
+  state=$(prune_cooldowns "$state" "$now")
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    kind=$(printf '%s' "$line" | jq -r '.kind')
+    id=$(printf '%s' "$line" | jq -r '.id')
+    class=$(printf '%s' "$line" | jq -r '.class')
+    case "$kind" in
+      cooldown) state=$(set_cooldown "$state" "$id" "$now" "$cooldown" "$class") ;;
+      verdict) state=$(set_verdict "$state" "$id" "$now" "$class") ;;
+    esac
+  done < "$observations"
+  save_state "$state_file" "$state"
+  release_lock
+}
+
 cmd_report() {
   local now=$1 state_file=$2
-  local base timeout cooldown max_probes key body_key body_models body_probe
-  local state models_jsonl model_count free_count probe_count
-  local id prompt_m completion_m tier eligible reason class until code
+  local base timeout cooldown max_probes interval body_key body_models body_probe
+  local state models_jsonl observations model_count free_count probe_count remembered_count unprobed_count skipped_count
+  local id prompt_m completion_m tier reason class until_epoch code
   local cap_exhausted=0 limit_remaining
   local row is_free
 
@@ -395,15 +483,16 @@ cmd_report() {
   timeout=$(request_timeout)
   cooldown=$(cooldown_seconds)
   max_probes=$(probe_max)
-  key=$(resolve_key)
-  write_auth_header "$key"
-  key=
+  interval=$(probe_interval)
+  resolve_key
 
   body_key="${WORKDIR}/key.json"
   body_models="${WORKDIR}/models.json"
   body_probe="${WORKDIR}/probe-body.json"
   models_jsonl="${WORKDIR}/models.jsonl"
+  observations="${WORKDIR}/observations.jsonl"
   : > "$models_jsonl"
+  : > "$observations"
 
   fetch_json "${base}/api/v1/key" "$body_key" "$timeout" 'key'
   fetch_json "${base}/api/v1/models" "$body_models" "$timeout" 'models'
@@ -424,14 +513,21 @@ cmd_report() {
   model_count=0
   free_count=0
   probe_count=0
+  remembered_count=0
+  unprobed_count=0
+  skipped_count=0
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     id=$(printf '%s' "$row" | jq -r '.id // empty')
     [ -n "$id" ] || continue
-    model_id_ok "$id" || continue
+    if ! model_id_ok "$id"; then
+      skipped_count=$((skipped_count + 1))
+      log "model=$(sanitize_for_log "$id") skipped: unsupported id shape"
+      continue
+    fi
     model_count=$((model_count + 1))
-    prompt_m=$(printf '%s' "$row" | jq -r 'try ((.prompt | tonumber) as $n | if $n < 0 then empty else ($n * 1000000 | tostring) end) catch empty')
-    completion_m=$(printf '%s' "$row" | jq -r 'try ((.completion | tonumber) as $n | if $n < 0 then empty else ($n * 1000000 | tostring) end) catch empty')
+    prompt_m=$(printf '%s' "$row" | jq -r 'try ((.prompt | tonumber) as $n | if $n < 0 then empty else ((($n * 1000000 * 1000000) | round) / 1000000 | tostring) end) catch empty')
+    completion_m=$(printf '%s' "$row" | jq -r 'try ((.completion | tonumber) as $n | if $n < 0 then empty else ((($n * 1000000 * 1000000) | round) / 1000000 | tostring) end) catch empty')
     if [ -z "$prompt_m" ] || [ -z "$completion_m" ]; then
       emit_model_json "$id" paid '' '' false "$(reason_for_class pricing-missing)" >> "$models_jsonl"
       continue
@@ -444,10 +540,10 @@ cmd_report() {
       tier=paid
     fi
 
-    until=$(cooldown_until "$state" "$id" "$now")
-    if [ -n "$until" ]; then
-      log "model=${id} unavailable: cooldown until epoch ${until}"
-      emit_model_json "$id" "$tier" "$prompt_m" "$completion_m" false "$(reason_for_class rate-limited "$until")" >> "$models_jsonl"
+    until_epoch=$(cooldown_until "$state" "$id" "$now")
+    if [ -n "$until_epoch" ]; then
+      log "model=${id} unavailable: cooldown until epoch ${until_epoch}"
+      emit_model_json "$id" "$tier" "$prompt_m" "$completion_m" false "$(reason_for_class rate-limited "$until_epoch")" >> "$models_jsonl"
       continue
     fi
 
@@ -460,10 +556,26 @@ cmd_report() {
       continue
     fi
 
-    probe_count=$((probe_count + 1))
-    if [ "$probe_count" -gt "$max_probes" ]; then
-      die "free-model probe set exceeds FM_OPENROUTER_PROBE_MAX=${max_probes}" 3
+    class=$(remembered_verdict "$state" "$id")
+    if [ -n "$class" ]; then
+      remembered_count=$((remembered_count + 1))
+      reason=$(reason_for_class "$class")
+      log "model=${id} unavailable: ${reason} (remembered verdict)"
+      emit_model_json "$id" free "$prompt_m" "$completion_m" false "$reason" >> "$models_jsonl"
+      continue
     fi
+
+    if [ "$probe_count" -ge "$max_probes" ]; then
+      unprobed_count=$((unprobed_count + 1))
+      reason=$(reason_for_class probe-budget-exhausted)
+      log "model=${id} unprobed: ${reason} (FM_OPENROUTER_PROBE_MAX=${max_probes})"
+      emit_model_json "$id" free "$prompt_m" "$completion_m" false "$reason" >> "$models_jsonl"
+      continue
+    fi
+    if [ "$probe_count" -gt 0 ] && [ "$interval" -gt 0 ]; then
+      sleep "$interval"
+    fi
+    probe_count=$((probe_count + 1))
     code=$(probe_model "$id" "$timeout" "$base" "$body_probe")
     if [ "$code" = 200 ]; then
       log "model=${id} eligible: live completion succeeded"
@@ -472,15 +584,17 @@ cmd_report() {
     fi
     class=$(classify_http_failure "$code" "$body_probe")
     if [ "$class" = key-rejected ]; then
-      log 'OpenRouter rejected the API key'
       die 'OpenRouter rejected the API key' 3
     fi
     if [ "$class" = rate-limited ]; then
-      state=$(set_cooldown "$state" "$id" "$now" "$cooldown" rate-limited)
-      until=$((now + cooldown))
-      log "model=${id} unavailable: cooldown until epoch ${until}"
-      emit_model_json "$id" free "$prompt_m" "$completion_m" false "$(reason_for_class rate-limited "$until")" >> "$models_jsonl"
+      record_observation "$observations" cooldown "$id" rate-limited
+      until_epoch=$((now + cooldown))
+      log "model=${id} unavailable: cooldown until epoch ${until_epoch}"
+      emit_model_json "$id" free "$prompt_m" "$completion_m" false "$(reason_for_class rate-limited "$until_epoch")" >> "$models_jsonl"
       continue
+    fi
+    if [ "$class" = allowed-providers-unavailable ] || [ "$class" = platform-restricted ]; then
+      record_observation "$observations" verdict "$id" "$class"
     fi
     reason=$(reason_for_class "$class")
     log "model=${id} unavailable: ${reason}"
@@ -488,7 +602,7 @@ cmd_report() {
   done < <(jq -c '.data[] | select(.id != null) | {id, prompt: (.pricing.prompt // null), completion: (.pricing.completion // null)}' "$body_models")
 
   [ "$model_count" -gt 0 ] || die 'OpenRouter returned no models' 3
-  save_state "$state_file" "$state"
+  merge_observations_under_lock "$state_file" "$now" "$cooldown" "$observations"
 
   jq -n \
     --argjson generatedAt "$now" \
@@ -532,30 +646,34 @@ cmd_report() {
         )
       }
     }'
-  log "report models=${model_count} free=${free_count} probes=${probe_count}"
+  log "report models=${model_count} free=${free_count} probes=${probe_count} remembered=${remembered_count} unprobed=${unprobed_count} skipped=${skipped_count}"
 }
 
 cmd_record_failure() {
   local now=$1 state_file=$2 id=$3
-  local cooldown state until
+  local cooldown state until_epoch
   model_id_ok "$id" || die 'record-failure needs --model <id>'
   cooldown=$(cooldown_seconds)
+  acquire_lock
   state=$(load_state "$state_file")
   state=$(prune_cooldowns "$state" "$now")
   state=$(set_cooldown "$state" "$id" "$now" "$cooldown" rate-limited)
   save_state "$state_file" "$state"
-  until=$((now + cooldown))
-  log "model=${id} cooldown recorded until epoch ${until}"
+  release_lock
+  until_epoch=$((now + cooldown))
+  log "model=${id} cooldown recorded until epoch ${until_epoch}"
 }
 
 cmd_clear() {
   local now=$1 state_file=$2 id=$3
   local state
   model_id_ok "$id" || die 'clear needs --model <id>'
+  acquire_lock
   state=$(load_state "$state_file")
-  state=$(printf '%s' "$state" | jq -c --arg id "$id" 'del(.cooldowns[$id])')
+  state=$(printf '%s' "$state" | jq -c --arg id "$id" 'del(.cooldowns[$id]) | del(.verdicts[$id])')
   save_state "$state_file" "$state"
-  log "model=${id} cooldown cleared"
+  release_lock
+  log "model=${id} cooldown and remembered verdict cleared"
 }
 
 main() {
@@ -607,7 +725,6 @@ main() {
   trap 'cleanup; exit 130' INT
   trap 'cleanup; exit 143' TERM
 
-  acquire_lock
   case "$command" in
     report) cmd_report "$now" "$state_file" ;;
     record-failure)

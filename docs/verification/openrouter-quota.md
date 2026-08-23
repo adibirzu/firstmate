@@ -9,6 +9,8 @@ This page records live API facts that the reader must keep handling.
 Verified 2026-08-23 against `GET https://openrouter.ai/api/v1/key`, `GET https://openrouter.ai/api/v1/models`, and bounded `POST /api/v1/chat/completions` probes of price-zero models.
 The working credential was `OPENROUTER_API_KEY_TOKENS` in the process environment.
 Its value is redacted here and was not present in stdout or stderr.
+The reader hands that value to curl on standard input as the Authorization header and never writes it to a file; the stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves that no file under the reader's home or temp directory contains the key while a request is in flight or after the run.
+The same offline suite proves the behaviours that a single live capture cannot show: per-million prices rounded to six decimals, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model`, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, and a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten.
 
 ## Commands
 
@@ -40,6 +42,7 @@ bin/fm-openrouter-quota.sh report 2>openrouter-quota.err | jq '{
 
 The jq filter is documentation of the bounded evidence, not part of the reader.
 The reader itself prints the full model list on stdout.
+A sweep of N price-zero models that are not remembered or in cooldown issues N paced chat-completion probes, so at the default 3 second interval a first run over this catalog takes about one minute and later runs probe only the models without a remembered verdict.
 
 ## Sanitized stderr
 
@@ -69,7 +72,12 @@ fm-openrouter-quota: model=nvidia/nemotron-nano-9b-v2:free unavailable: account 
 fm-openrouter-quota: report models=410 free=22 probes=22
 ```
 
+The summary line of the current reader also carries `remembered=`, `unprobed=`, and `skipped=` counters; this capture shows the three counters that existed when it was taken.
+Models with a remembered 404 or 403 verdict are logged with the suffix `(remembered verdict)` and are not probed.
+
 ## Bounded stdout
+
+The two `paidSamples` figures `0.049999999999999996` and `0.16999999999999998` are the raw per-token products from this capture; the current reader rounds per-million prices to six decimals and publishes them as `0.05` and `0.17`.
 
 ```json
 {
@@ -250,6 +258,8 @@ fm-openrouter-quota: report models=410 free=22 probes=22
 - HTTP 403 platform restriction is skipped without a cooldown (`thinkingmachines/inkling:free` and `thinkingmachines/inkling-small:free`).
 - HTTP 429 is a per-model cooldown (`google/gemma-4-31b-it:free` and `google/gemma-4-26b-a4b-it:free` until epoch 1787495349, which is `now + 1800`).
 - Paid models are priced from the catalog and not probed: `openai/gpt-oss-20b` is $0.03/M prompt and $0.13/M completion.
+- Catalog per-token strings such as `0.00000005` and `0.00000017` multiply to binary float noise; the reader rounds per-million prices to six decimals so `google/gemma-3-12b-it` publishes as `0.05` prompt and `openai/gpt-oss-120b` as `0.17` completion.
 - A per-token price of `-1` is OpenRouter's variable-pricing sentinel (`openrouter/auto`) and must not sort as a cheap paid route.
 - `limit` null means this key has no spend cap.
-- Key material did not appear in stdout or stderr.
+- OpenRouter documents a 20 requests per minute limit on free models, which is why the reader paces probes 3 seconds apart by default and remembers the stable 404 and 403 verdicts instead of re-spending probes on them.
+- Key material did not appear in stdout or stderr, and the key is never written to a file.
