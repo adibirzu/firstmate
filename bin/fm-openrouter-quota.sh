@@ -11,7 +11,7 @@
 #
 # Usage:
 #   fm-openrouter-quota.sh report [--now <epoch>]
-#   fm-openrouter-quota.sh record-failure --model <id> [--now <epoch>]
+#   fm-openrouter-quota.sh record-failure --model <id> [--observed <429|404|403>] [--now <epoch>]
 #   fm-openrouter-quota.sh clear --model <id>
 #   fm-openrouter-quota.sh clear --all-verdicts
 #   fm-openrouter-quota.sh --help
@@ -31,7 +31,11 @@
 #   decimal places. Price-zero models are probed with one bounded
 #   chat-completions request so 404 (account privacy / no allowed providers),
 #   403 (platform-restricted), and 429 (upstream rate limit) stay distinct.
-#   Paid models are not probed. Probes are paced FM_OPENROUTER_PROBE_INTERVAL_SECONDS
+#   Paid models are not probed, so a paid row is never published as eligible:
+#   it carries only what is known, priced and not in cooldown with
+#   reachability unverified, and reachability is established on first real
+#   use through record-failure rather than by an upfront probe cost. Probes are
+#   paced FM_OPENROUTER_PROBE_INTERVAL_SECONDS
 #   apart so one sweep stays under OpenRouter's 20 requests per minute
 #   free-model limit; the default of 4 seconds is 15 requests per minute.
 #   A 429, including one recorded later by record-failure,
@@ -54,9 +58,13 @@
 #   record-failure or clear that lands during a sweep still succeeds.
 #
 # record-failure:
-#   Persist a per-model cooldown from a live 429 observation. Unlike
+#   Persist what a real launch observed for one model id, free or paid.
+#   --observed 429 (the default) records a per-model cooldown; --observed 404
+#   records the permanent no-allowed-providers verdict and --observed 403 the
+#   permanent platform-restricted verdict, so a paid model rejected on first
+#   use drops out of the unverified ordering until `clear` releases it. Unlike
 #   fm-dispatch-select.mjs, this does not inspect a task status file: the
-#   caller already observed the rate limit for this model id.
+#   caller already observed the outcome for this model id.
 #
 # clear:
 #   With --model <id>, drop the persisted cooldown and any remembered verdict
@@ -71,15 +79,21 @@
 #                           usage_weekly, usage_monthly, limit, limit_remaining,
 #                           is_free_tier)
 #   models[]                id, tier (free|paid), free, promptPerMillion,
-#                           completionPerMillion, eligible, reason
+#                           completionPerMillion, eligible, reason; eligible is
+#                           true only for a free model a live probe reached
 #   routing.eligibleFree    eligible free model ids (may be empty or one)
-#   routing.eligiblePaidByCost  eligible paid model ids, cheapest first
+#   routing.unverifiedPaidByCost  priced paid model ids that are not in cooldown
+#                           and carry no remembered verdict, cheapest first;
+#                           their reachability is unverified and is learned on
+#                           first use via record-failure
 #
 # Paths:
 #   state/.openrouter-quota.json     persisted per-model cooldowns and
 #                                    remembered verdicts
 #   state/.openrouter-quota.json.lock  mkdir lock for serialized state updates;
-#                                    a lock whose owner pid is dead is reaped
+#                                    a lock whose owner pid is dead, or that has
+#                                    no readable owner and is older than 60
+#                                    seconds, is reaped with a stderr line
 #
 # Environment:
 #   FM_HOME                         required and explicit
@@ -114,6 +128,7 @@ COOLDOWN_MIN=60
 COOLDOWN_MAX=86400
 PROBE_INTERVAL_MAX=60
 LOCK_WAIT_SECONDS=5
+LOCK_STALE_SECONDS=60
 
 WORKDIR=
 LOCKDIR=
@@ -238,11 +253,16 @@ resolve_key() {
   die 'OPENROUTER_API_KEY_TOKENS is unset'
 }
 
-lock_owner_dead() {
-  local owner
-  owner=$(cat "$LOCKDIR/owner" 2>/dev/null | tr -d '[:space:]') || return 1
-  is_integer "$owner" || return 1
-  [ "$owner" -gt 1 ] || return 1
+lock_is_stale() {
+  local owner mtime now_epoch
+  owner=$(cat "$LOCKDIR/owner" 2>/dev/null | tr -d '[:space:]') || owner=
+  if ! is_integer "$owner" || [ "$owner" -le 1 ]; then
+    mtime=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null) || return 1
+    is_integer "$mtime" || return 1
+    now_epoch=$(date +%s)
+    [ $((now_epoch - mtime)) -ge "$LOCK_STALE_SECONDS" ] && return 0
+    return 1
+  fi
   if kill -0 "$owner" 2>/dev/null; then
     return 1
   fi
@@ -262,8 +282,9 @@ acquire_lock() {
       return 0
     fi
     if [ "$SECONDS" -ge "$deadline" ]; then
-      if lock_owner_dead; then
+      if lock_is_stale; then
         rm -rf "$LOCKDIR"
+        log 'reaped a stale OpenRouter quota state lock'
         continue
       fi
       die "OpenRouter quota state lock remained busy for ${LOCK_WAIT_SECONDS} seconds" 3
@@ -394,7 +415,7 @@ reason_for_class() {
     pricing-missing) printf '%s\n' 'pricing-missing' ;;
     key-spend-cap-exhausted) printf '%s\n' 'key spend cap exhausted' ;;
     live-ok) printf '%s\n' 'live completion succeeded' ;;
-    priced-ok) printf '%s\n' 'priced and not in cooldown' ;;
+    paid-unverified) printf '%s\n' 'priced and not in cooldown; reachability unverified' ;;
     probe-request-failed) printf '%s\n' 'probe-request-failed' ;;
     probe-budget-exhausted) printf '%s\n' 'probe-budget-exhausted' ;;
     *) printf '%s\n' "$class" ;;
@@ -552,21 +573,21 @@ cmd_report() {
       continue
     fi
 
-    if [ "$tier" = paid ]; then
-      if [ "$cap_exhausted" -eq 1 ]; then
-        emit_model_json "$id" paid "$prompt_m" "$completion_m" false "$(reason_for_class key-spend-cap-exhausted)" >> "$models_jsonl"
-        continue
-      fi
-      emit_model_json "$id" paid "$prompt_m" "$completion_m" true "$(reason_for_class priced-ok)" >> "$models_jsonl"
-      continue
-    fi
-
     class=$(remembered_verdict "$state" "$id")
     if [ -n "$class" ]; then
       remembered_count=$((remembered_count + 1))
       reason=$(reason_for_class "$class")
       log "model=${id} unavailable: ${reason} (remembered verdict)"
-      emit_model_json "$id" free "$prompt_m" "$completion_m" false "$reason" >> "$models_jsonl"
+      emit_model_json "$id" "$tier" "$prompt_m" "$completion_m" false "$reason" >> "$models_jsonl"
+      continue
+    fi
+
+    if [ "$tier" = paid ]; then
+      if [ "$cap_exhausted" -eq 1 ]; then
+        emit_model_json "$id" paid "$prompt_m" "$completion_m" false "$(reason_for_class key-spend-cap-exhausted)" >> "$models_jsonl"
+        continue
+      fi
+      emit_model_json "$id" paid "$prompt_m" "$completion_m" false "$(reason_for_class paid-unverified)" >> "$models_jsonl"
       continue
     fi
 
@@ -611,6 +632,7 @@ cmd_report() {
 
   jq -n \
     --argjson generatedAt "$now" \
+    --arg unverified "$(reason_for_class paid-unverified)" \
     --argjson key "$(jq -c '{
         usage: .data.usage,
         usage_daily: .data.usage_daily,
@@ -630,7 +652,7 @@ cmd_report() {
         | sort_by(
             [
               (if .eligible and .tier == "free" then 0
-               elif .eligible and .tier == "paid" then 1
+               elif .tier == "paid" and .reason == $unverified then 1
                elif .tier == "free" then 2
                else 3 end),
               ((.promptPerMillion // 0) + (.completionPerMillion // 0)),
@@ -640,9 +662,9 @@ cmd_report() {
       ),
       routing: {
         eligibleFree: [$models[] | select(.eligible and .tier == "free") | .id],
-        eligiblePaidByCost: (
+        unverifiedPaidByCost: (
           [$models[] | select(
-              .eligible and .tier == "paid"
+              .tier == "paid" and .reason == $unverified
               and (.promptPerMillion != null) and (.completionPerMillion != null)
               and .promptPerMillion >= 0 and .completionPerMillion >= 0
             )]
@@ -655,18 +677,32 @@ cmd_report() {
 }
 
 cmd_record_failure() {
-  local now=$1 state_file=$2 id=$3
-  local cooldown state until_epoch
+  local now=$1 state_file=$2 id=$3 observed=$4
+  local cooldown state until_epoch class
   model_id_ok "$id" || die 'record-failure needs --model <id>'
+  case "$observed" in
+    429) class=rate-limited ;;
+    404) class=allowed-providers-unavailable ;;
+    403) class=platform-restricted ;;
+    *) die 'record-failure --observed must be 429, 404, or 403' ;;
+  esac
   cooldown=$(cooldown_seconds)
   acquire_lock
   state=$(load_state "$state_file")
   state=$(prune_cooldowns "$state" "$now")
-  state=$(set_cooldown "$state" "$id" "$now" "$cooldown" rate-limited)
+  if [ "$class" = rate-limited ]; then
+    state=$(set_cooldown "$state" "$id" "$now" "$cooldown" rate-limited)
+  else
+    state=$(set_verdict "$state" "$id" "$now" "$class")
+  fi
   save_state "$state_file" "$state"
   release_lock
-  until_epoch=$((now + cooldown))
-  log "model=${id} cooldown recorded until epoch ${until_epoch}"
+  if [ "$class" = rate-limited ]; then
+    until_epoch=$((now + cooldown))
+    log "model=${id} cooldown recorded until epoch ${until_epoch}"
+  else
+    log "model=${id} permanent verdict recorded: $(reason_for_class "$class")"
+  fi
 }
 
 cmd_clear() {
@@ -694,7 +730,7 @@ cmd_clear_all_verdicts() {
 }
 
 main() {
-  local command=report now_raw='' now='' model='' all_verdicts=0 home state_dir state_file
+  local command=report now_raw='' now='' model='' observed=429 observed_set=0 all_verdicts=0 home state_dir state_file
   while [ $# -gt 0 ]; do
     case "$1" in
       --help|-h)
@@ -713,6 +749,12 @@ main() {
       --model)
         [ $# -ge 2 ] || die '--model requires a value'
         model=$2
+        shift 2
+        ;;
+      --observed)
+        [ $# -ge 2 ] || die '--observed requires a value'
+        observed=$2
+        observed_set=1
         shift 2
         ;;
       --all-verdicts)
@@ -738,6 +780,9 @@ main() {
   if [ -n "$model" ] && [ "$command" = report ]; then
     die '--model is only valid with record-failure or clear, not report'
   fi
+  if [ "$observed_set" -eq 1 ] && [ "$command" != record-failure ]; then
+    die '--observed is only valid with record-failure'
+  fi
 
   command -v jq >/dev/null 2>&1 || die 'jq is required' 3
   now=$(parse_now "$now_raw")
@@ -756,7 +801,7 @@ main() {
     report) cmd_report "$now" "$state_file" ;;
     record-failure)
       [ -n "$model" ] || die 'record-failure needs --model <id>'
-      cmd_record_failure "$now" "$state_file" "$model"
+      cmd_record_failure "$now" "$state_file" "$model" "$observed"
       ;;
     clear)
       if [ "$all_verdicts" -eq 1 ]; then

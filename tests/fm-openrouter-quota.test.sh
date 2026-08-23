@@ -195,13 +195,20 @@ test_healthy_free_model_is_eligible_and_paid_prices_parse() {
     '.models[] | select(.id=="cohere/north-mini-code:free") | .eligible==true and .tier=="free" and .promptPerMillion==0' \
     >/dev/null || fail "healthy free model was not eligible at price zero: $out"
   printf '%s\n' "$out" | jq -e \
-    '.models[] | select(.id=="openai/gpt-oss-20b") | .eligible==true and .tier=="paid" and .promptPerMillion==0.03 and .completionPerMillion==0.13' \
-    >/dev/null || fail "paid gpt-oss-20b per-million prices did not parse: $out"
+    '.models[] | select(.id=="openai/gpt-oss-20b") | .eligible==false and .tier=="paid" and .reason=="priced and not in cooldown; reachability unverified" and .promptPerMillion==0.03 and .completionPerMillion==0.13' \
+    >/dev/null || fail "paid gpt-oss-20b was not published as priced-but-unverified: $out"
   printf '%s\n' "$out" | jq -e \
-    '.models[] | select(.id=="openai/gpt-oss-120b") | .eligible==true and .promptPerMillion==0.037 and .completionPerMillion==0.17' \
+    '.models[] | select(.id=="openai/gpt-oss-120b") | .eligible==false and .promptPerMillion==0.037 and .completionPerMillion==0.17' \
     >/dev/null || fail "paid gpt-oss-120b per-million prices did not parse: $out"
-  [ "$(printf '%s\n' "$out" | jq -r '.routing.eligiblePaidByCost[0]')" = 'openai/gpt-oss-20b' ] \
-    || fail "cheapest paid model was not first in eligiblePaidByCost: $out"
+  printf '%s\n' "$out" | jq -e '[.models[] | select(.tier=="paid" and .eligible)] | length == 0' >/dev/null \
+    || fail "a paid row was published with a verified-eligible claim: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="cohere/north-mini-code:free") | .eligible==true and .reason=="live completion succeeded"' \
+    >/dev/null || fail "the probed free model lost its verified eligibility: $out"
+  printf '%s\n' "$out" | jq -e 'has("routing") and (.routing | has("eligiblePaidByCost") | not)' >/dev/null \
+    || fail "the false-claim eligiblePaidByCost field is still published: $out"
+  [ "$(printf '%s\n' "$out" | jq -r '.routing.unverifiedPaidByCost[0]')" = 'openai/gpt-oss-20b' ] \
+    || fail "cheapest paid model was not first in unverifiedPaidByCost: $out"
   printf '%s\n' "$out" | jq -e \
     '.models[] | select(.id=="openrouter/auto") | .eligible==false and .promptPerMillion==null' \
     >/dev/null || fail "negative sentinel pricing was treated as a cheap paid route: $out"
@@ -504,6 +511,101 @@ test_clear_all_verdicts_reprobes_and_keeps_cooldowns() {
   pass "clear --all-verdicts re-probes remembered models and keeps live cooldowns"
 }
 
+test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short() {
+  local home fakebin out err rc=0
+  home=$(make_home paid-verdict)
+  fakebin=$(make_fake_curl "$home")
+  err="$home/report.err"
+
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'openai/gpt-oss-20b' --observed 500 --now "$NOW" 2>&1) || rc=$?
+  expect_code 2 "$rc" "an unknown --observed value must be refused"
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear --model 'openai/gpt-oss-20b' --observed 404 2>&1) || rc=$?
+  expect_code 2 "$rc" "--observed outside record-failure must be refused"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'openai/gpt-oss-20b' --now "$NOW" 2>"$err" \
+    || fail "rate-limit record-failure on a paid id failed: $(cat "$err")"
+  assert_contains "$(cat "$err")" "cooldown recorded until epoch 2800" "paid rate-limit did not record a cooldown"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'openai/gpt-oss-120b' --observed 404 --now "$NOW" 2>"$err" \
+    || fail "404 record-failure on a paid id failed: $(cat "$err")"
+  assert_contains "$(cat "$err")" "permanent verdict recorded: account privacy gate: no allowed providers" "paid 404 was not recorded as a permanent verdict"
+  assert_not_contains "$(cat "$err")" "cooldown recorded" "paid 404 was recorded as a cooldown"
+
+  rc=0
+  out=$(run_reader "$home" "$fakebin" report --now 1001 2>"$err") || rc=$?
+  expect_code 0 "$rc" "report after paid record-failure must succeed"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-20b") | .eligible==false and .reason=="cooldown until epoch 2800"' \
+    >/dev/null || fail "paid rate-limit cooldown was not applied: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-120b") | .eligible==false and .reason=="account privacy gate: no allowed providers"' \
+    >/dev/null || fail "paid permanent verdict was not applied: $out"
+  printf '%s\n' "$out" | jq -e '.routing.unverifiedPaidByCost | index("openai/gpt-oss-20b") == null and index("openai/gpt-oss-120b") == null' >/dev/null \
+    || fail "rejected paid ids were still offered in unverifiedPaidByCost: $out"
+
+  rc=0
+  out=$(run_reader "$home" "$fakebin" report --now 9000 2>"$err") || rc=$?
+  expect_code 0 "$rc" "later report must succeed"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-20b") | .reason=="priced and not in cooldown; reachability unverified"' \
+    >/dev/null || fail "paid rate-limit cooldown did not expire: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-120b") | .reason=="account privacy gate: no allowed providers"' \
+    >/dev/null || fail "paid permanent verdict expired like a cooldown: $out"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'openai/gpt-oss-20b' --now 9000 2>"$err" \
+    || fail "second rate-limit record-failure failed: $(cat "$err")"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear --all-verdicts 2>"$err" || fail "clear --all-verdicts failed: $(cat "$err")"
+  rc=0
+  out=$(run_reader "$home" "$fakebin" report --now 9001 2>"$err") || rc=$?
+  expect_code 0 "$rc" "report after bulk clear must succeed"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-120b") | .reason=="priced and not in cooldown; reachability unverified"' \
+    >/dev/null || fail "clear --all-verdicts did not release the paid permanent verdict: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="openai/gpt-oss-20b") | .reason=="cooldown until epoch 10800"' \
+    >/dev/null || fail "clear --all-verdicts wiped a live paid cooldown: $out"
+  pass "paid record-failure: 404 is a permanent verdict, 429 is a short cooldown, bulk clear keeps cooldowns"
+}
+
+test_ownerless_lock_is_reaped_only_when_stale() {
+  local stale_home fresh_home stale_lock fresh_lock rc=0
+  stale_home=$(make_home lock-stale)
+  fresh_home=$(make_home lock-fresh)
+  stale_lock="$stale_home/state/.openrouter-quota.json.lock"
+  fresh_lock="$fresh_home/state/.openrouter-quota.json.lock"
+  mkdir -p "$stale_lock" "$fresh_lock"
+  touch -t 200001010000 "$stale_lock"
+  (
+    FM_HOME="$stale_home" FM_STATE_OVERRIDE="$stale_home/state" PATH="$BASE_PATH" \
+      "$READER" record-failure --model 'google/gemma-4-31b-it:free' --now "$NOW" \
+      >"$stale_home/out" 2>"$stale_home/err"
+    printf '%s\n' "$?" > "$stale_home/rc"
+  ) &
+  (
+    FM_HOME="$fresh_home" FM_STATE_OVERRIDE="$fresh_home/state" PATH="$BASE_PATH" \
+      "$READER" record-failure --model 'google/gemma-4-31b-it:free' --now "$NOW" \
+      >"$fresh_home/out" 2>"$fresh_home/err"
+    printf '%s\n' "$?" > "$fresh_home/rc"
+  ) &
+  wait
+  expect_code 0 "$(cat "$stale_home/rc")" "an ownerless lock older than 60 seconds must be reaped: $(cat "$stale_home/err")"
+  assert_contains "$(cat "$stale_home/err")" "reaped a stale OpenRouter quota state lock" "stale reap was not logged"
+  assert_contains "$(cat "$stale_home/err")" "cooldown recorded until epoch 2800" "record-failure after the stale reap did not record"
+  [ ! -d "$stale_lock" ] || fail "the stale lock was left behind"
+  expect_code 3 "$(cat "$fresh_home/rc")" "a fresh ownerless lock must stay busy"
+  [ -d "$fresh_lock" ] || fail "a fresh ownerless lock was deleted"
+  rm -rf "$fresh_lock"
+  pass "an ownerless lock is reaped only once it is older than 60 seconds"
+}
+
 test_flags_are_refused_outside_their_command() {
   local home fakebin out rc=0
   home=$(make_home flag-guard)
@@ -538,7 +640,7 @@ test_probe_budget_keeps_partial_report() {
     >/dev/null || fail "unprobed free models were not reported as probe-budget-exhausted: $out"
   printf '%s\n' "$out" | jq -e '.routing.eligibleFree == []' >/dev/null \
     || fail "an unprobed model was guessed eligible: $out"
-  printf '%s\n' "$out" | jq -e '.routing.eligiblePaidByCost[0]=="openai/gpt-oss-20b"' >/dev/null \
+  printf '%s\n' "$out" | jq -e '.routing.unverifiedPaidByCost[0]=="openai/gpt-oss-20b"' >/dev/null \
     || fail "paid fallback was dropped from the partial report: $out"
   assert_contains "$(cat "$err")" "probe-budget-exhausted" "truncation was not logged"
 
@@ -579,9 +681,9 @@ test_tilde_alias_is_priced_by_tier_and_sorted_cheapest_first() {
   expect_code 0 "$rc" "report with tilde aliases must succeed"
   assert_not_contains "$(cat "$err")" "~example/alias-latest skipped" "tilde alias was still skipped"
   printf '%s\n' "$out" | jq -e \
-    '.models[] | select(.id=="~example/alias-latest") | .tier=="paid" and .free==false and .eligible==true and .promptPerMillion==0.01 and .completionPerMillion==0.02 and .reason=="priced and not in cooldown"' \
+    '.models[] | select(.id=="~example/alias-latest") | .tier=="paid" and .free==false and .eligible==false and .promptPerMillion==0.01 and .completionPerMillion==0.02 and .reason=="priced and not in cooldown; reachability unverified"' \
     >/dev/null || fail "tilde paid alias was not priced as an ordinary paid row: $out"
-  [ "$(printf '%s\n' "$out" | jq -r '.routing.eligiblePaidByCost[0]')" = '~example/alias-latest' ] \
+  [ "$(printf '%s\n' "$out" | jq -r '.routing.unverifiedPaidByCost[0]')" = '~example/alias-latest' ] \
     || fail "cheapest eligible paid id was not first, a floor or threshold is interfering: $out"
   grep -F 'model=~example/alias-latest ' "$home/curl.log" >/dev/null \
     && fail "a paid tilde alias was probed: $(cat "$home/curl.log")"
@@ -631,6 +733,8 @@ test_record_failure_during_sweep_succeeds_and_is_merged
 test_busy_lock_is_kept_and_dead_owner_lock_is_reaped
 test_permanent_verdicts_are_remembered_and_cleared
 test_clear_all_verdicts_reprobes_and_keeps_cooldowns
+test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short
+test_ownerless_lock_is_reaped_only_when_stale
 test_flags_are_refused_outside_their_command
 test_probe_budget_keeps_partial_report
 test_probes_are_paced
