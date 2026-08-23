@@ -1,0 +1,11 @@
+commit: 74298c2bd1e952c16daa90845954137f78824ea1
+harness: timing-harness.sh - hung-successor scenario (Pi + OpenCode). Fake arm hangs on every re-arm, retry limit 2 => 3 hung arms, each waited for ready_ms, before the typed fallback wake. Wall time therefore tracks ~3 x ready_ms.
+ok - Pi hung successor falls back to one typed actionable wake
+TIMING test_pi_hung_successor_falls_back_to_typed_wake      ready_ms=250   wall=1.58s
+ok - OpenCode hung successor falls back to one typed actionable wake
+TIMING test_opencode_hung_successor_falls_back_to_typed_wake ready_ms=250   wall=1.93s
+ok - Pi hung successor falls back to one typed actionable wake
+TIMING test_pi_hung_successor_falls_back_to_typed_wake      ready_ms=2000  wall=6.97s
+ok - OpenCode hung successor falls back to one typed actionable wake
+TIMING test_opencode_hung_successor_falls_back_to_typed_wake ready_ms=2000  wall=6.92s
+exit=0
