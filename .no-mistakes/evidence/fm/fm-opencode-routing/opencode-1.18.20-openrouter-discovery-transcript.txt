@@ -1,0 +1,38 @@
+# Live reproduction of docs/verification/runtime-backends.md#opencode — run 2026-08-24 from PR 15 test phase
+# (commands are the ones recorded in the doc; API key sourced from ~/.claude/.env and never printed)
+
+$ /opt/homebrew/bin/opencode --version
+1.18.20
+
+$ env -u OPENROUTER_API_KEY opencode models
+opencode/big-pickle
+opencode/hy3-free
+opencode/mimo-v2.5-free
+opencode/muse-spark-1.2-contributor-free
+opencode/nemotron-3-ultra-free
+opencode/nemotron-3.5-lightning-free
+opencode/x-preview-f-free
+
+$ env -u OPENROUTER_API_KEY opencode models | grep -c "^openrouter/"
+0
+
+$ env -u OPENROUTER_API_KEY opencode models | grep -c "^opencode/"
+7
+
+$ OPENROUTER_API_KEY="$OPENROUTER_API_KEY" opencode models | grep -c "^openrouter/"
+360
+
+$ OPENROUTER_API_KEY="$OPENROUTER_API_KEY" opencode models | grep -E "^opencode/|north-mini-code:free$|openai/gpt-oss-20b$|openai/gpt-oss-120b$"
+opencode/big-pickle
+opencode/hy3-free
+opencode/mimo-v2.5-free
+opencode/muse-spark-1.2-contributor-free
+opencode/nemotron-3-ultra-free
+opencode/nemotron-3.5-lightning-free
+opencode/x-preview-f-free
+openrouter/cohere/north-mini-code:free
+openrouter/openai/gpt-oss-120b
+openrouter/openai/gpt-oss-20b
+
+$ ls -la ~/.local/share/opencode/auth.json   # discovery must not write a credential to disk
+ls: /Users/adrianb/.local/share/opencode/auth.json: No such file or directory

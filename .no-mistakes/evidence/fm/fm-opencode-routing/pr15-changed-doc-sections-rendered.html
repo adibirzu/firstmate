@@ -1,0 +1,57 @@
+<!doctype html><html><head><meta charset="utf-8"><title>PR 15 — rendered changed documentation sections</title>
+<style>body{max-width:900px;margin:2rem auto;padding:0 1rem;font:15px/1.6 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1f2328;background:#fff}
+pre{background:#f6f8fa;padding:12px;border-radius:6px;overflow:auto;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:#f6f8fa;padding:1px 4px;border-radius:4px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}pre code{background:none;padding:0}
+h1{font-size:1.5em;border-bottom:1px solid #d1d9e0;padding-bottom:.3em}h2{font-size:1.2em;margin-top:2em;color:#57606a}h3{font-size:1.15em}
+table{border-collapse:collapse}td,th{border:1px solid #d1d9e0;padding:4px 10px}blockquote{border-left:4px solid #d1d9e0;color:#57606a;margin:0;padding:0 1em}
+hr{border:0;border-top:1px solid #d1d9e0;margin:2em 0}a{color:#0969da}</style></head><body>
+<h1>PR 15 — the two changed documentation sections, rendered as a reader sees them</h1>
+<blockquote>
+<p>Branch <code>fm/fm-opencode-routing</code> @ <code>d1e947c</code> · net diff vs base <code>3c544d6</code> = exactly <code>docs/verification/runtime-backends.md</code> + <code>.agents/skills/harness-adapters/SKILL.md</code></p>
+</blockquote>
+<hr>
+<h2>File 1 · <code>docs/verification/runtime-backends.md</code> — new section (lines 176–194)</h2>
+<h3>OpenCode</h3>
+<p>OpenCode was verified on 2026-08-23 at <code>/opt/homebrew/bin/opencode</code>, installed through Homebrew, with version 1.18.20.</p>
+<pre><code class="language-sh">/opt/homebrew/bin/opencode --version
+opencode models
+env -u OPENROUTER_API_KEY opencode models
+OPENROUTER_API_KEY=&quot;$OPENROUTER_API_KEY&quot; opencode models
+</code></pre>
+<p>The default <code>opencode models</code> output listed seven free OpenCode models, including <code>opencode/big-pickle</code>.
+With <code>OPENROUTER_API_KEY</code> available in the process environment, the same discovery command additionally listed 360 <code>openrouter/&lt;model&gt;</code> entries, including <code>openrouter/cohere/north-mini-code:free</code>, <code>openrouter/openai/gpt-oss-20b</code>, and <code>openrouter/openai/gpt-oss-120b</code>.
+With that variable absent, it listed no OpenRouter entries.
+This proves that OpenCode reads the environment variable for provider discovery without <code>auth login</code> or a credential written to disk.</p>
+<p>A supervised smoke scout completed its brief, all four requested steps, report write, and <code>done:</code> status append through the OpenCode adapter using <code>opencode/big-pickle</code>.
+That smoke did not exercise an OpenRouter-backed worker launch.
+It remains unverified whether a command-scoped <code>OPENROUTER_API_KEY</code> reaches a worker through the long-lived backend daemon, which is the same credential-propagation hazard documented for Muse.</p>
+<hr>
+<h2>File 2 · <code>.agents/skills/harness-adapters/SKILL.md</code> — refreshed heading + 2 added lines (lines 251–264)</h2>
+<h3>opencode (VERIFIED 2026-06-11, v1.15.7-1.18.20; 1.18.4 busy-queue re-verified 2026-07-20; 1.18.20 OpenRouter discovery re-verified 2026-08-23)</h3>
+<table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Busy state</td>
+<td>The Firstmate-owned plugin&#39;s semantic <code>session.status</code>: <code>busy</code> and <code>retry</code> are active, <code>idle</code> is inactive, latched to the worker&#39;s own session.</td>
+</tr>
+<tr>
+<td>Exit command</td>
+<td><code>/exit</code></td>
+</tr>
+<tr>
+<td>Interrupt</td>
+<td>double Escape; known flaky while a long shell command runs, so use <code>bin/fm-control.sh &lt;task-id&gt; relaunch</code> for a wedged pane</td>
+</tr>
+</tbody></table>
+<p>No trust dialog.
+Opencode can auto-upgrade itself in the background and the running TUI can exit mid-task, observed live from 1.15.7 to 1.17.3.
+If a pane shows the exit banner, relaunch with <code>--continue</code> to resume the session.
+<code>--prompt</code> does not auto-submit alongside <code>--continue</code>, so send the next instruction via <code>fm-send</code> once the TUI is up.
+With <code>OPENROUTER_API_KEY</code> in its process environment, <code>opencode models</code> discovers OpenRouter model identifiers without <code>auth login</code> or a credential written to disk.
+The current count and the unverified long-lived-daemon credential-propagation path are owned by <a href="../../../docs/verification/runtime-backends.md#opencode">Runtime backend verification</a>.</p>
+</body></html>
