@@ -2470,18 +2470,27 @@ test_window_marker_keys_are_injective_and_ignore_legacy_state() {
 # away-mode daemon, which can run under different bash generations (interactive
 # PATH vs launchd's /bin/bash 3.2 on macOS). A non-ASCII endpoint must produce
 # the identical key everywhere, matching the independent od byte oracle.
+# One probe script, fed on stdin to whichever bash generation is under test,
+# so every interpreter derives the key from identical lib code.
+marker_key_under_bash() {  # <bash> <window>
+  "$1" -s "$ROOT" "$2" <<'EOF'
+. "$1/bin/fm-marker-lib.sh"
+fm_window_marker_key "$2"
+EOF
+}
+
 test_window_marker_key_is_stable_across_bash_generations() {
   local window expected key sys_bash sys_key
   window=$(printf 's:caf\303\251')
   expected=$(watch_marker_key "$window")
-  key=$(bash -c '. "$0/bin/fm-marker-lib.sh"; fm_window_marker_key "$1"' "$ROOT" "$window")
+  key=$(marker_key_under_bash bash "$window")
   [ "$key" = "$expected" ] \
     || fail "non-ASCII endpoint key diverged from the byte oracle under bash $BASH_VERSION: got '$key', want '$expected'"
   for sys_bash in /bin/bash /usr/bin/bash; do
     [ -x "$sys_bash" ] || continue
-    sys_key=$("$sys_bash" -c '. "$0/bin/fm-marker-lib.sh"; fm_window_marker_key "$1"' "$ROOT" "$window")
+    sys_key=$(marker_key_under_bash "$sys_bash" "$window")
     [ "$sys_key" = "$expected" ] \
-      || fail "non-ASCII endpoint key diverged under $sys_bash ($("$sys_bash" -c 'printf %s "$BASH_VERSION"')): got '$sys_key', want '$expected'"
+      || fail "non-ASCII endpoint key diverged under $sys_bash ($("$sys_bash" --version | sed 1q)): got '$sys_key', want '$expected'"
   done
   pass "a non-ASCII endpoint keeps one persistent marker key across bash generations"
 }
