@@ -10,6 +10,12 @@
 # The default (no explicit-path) path also runs bin/fm-lint-workflows.sh so a
 # malformed GitHub workflow, including a self-broken ci.yml, fails locally
 # before merge instead of only failing to run as CI.
+# The same default path runs the OpenRouter key guard: it fails when any
+# git-tracked file (working-tree content, via `git ls-files`) contains a real
+# OpenRouter key literal, the sk-or-v1- prefix followed by key material, so a
+# pasted key is blocked by CI and by the no-mistakes pre-push lane. The
+# deliberately fake sk-or-test- fixture prefix never matches. Findings name
+# only path and line number; the matched text is never printed.
 #
 # With no explicit paths, the file set depends on context:
 #   - In CI (GITHUB_ACTIONS=true or CI=true), on the main branch, or when no
@@ -100,7 +106,7 @@ if [ "${1:-}" = "--required-version" ]; then
 fi
 
 fm_lint_usage() {
-  sed -n '2,42{s/^# \{0,1\}//;p;}' "$SELF"
+  sed -n '2,48{s/^# \{0,1\}//;p;}' "$SELF"
 }
 
 # Default no-args lint also validates GitHub workflows. Explicit paths stay a
@@ -108,6 +114,49 @@ fm_lint_usage() {
 fm_lint_run_workflows() {
   [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
   "$SELF_DIR/fm-lint-workflows.sh"
+}
+
+# Default no-args lint also refuses to pass while any git-tracked file carries
+# a real OpenRouter key literal: the sk-or-v1- prefix followed by key material.
+# The fake sk-or-test- fixture prefix never matches. Only path and line number
+# are reported, never the matched text. Failing to enumerate tracked files is a
+# hard failure, so the guard never silently degrades to "nothing found".
+OPENROUTER_KEY_PATTERN='sk-or-v1-[A-Za-z0-9_-]{20,}'
+fm_lint_run_key_guard() {
+  [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
+  local tracked path line found=0
+  tracked=$(mktemp "${TMPDIR:-/tmp}/fm-lint-tracked.XXXXXX") || return 2
+  if ! git ls-files -z > "$tracked" 2>/dev/null; then
+    rm -f "$tracked"
+    printf 'fm-lint.sh: could not enumerate tracked files; the OpenRouter key guard cannot run.\n' >&2
+    return 2
+  fi
+  while IFS= read -r -d '' path; do
+    [ -f "$path" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf 'fm-lint.sh: OpenRouter key literal (sk-or-v1-) in tracked file %s:%s; remove it before push.\n' \
+        "$path" "$line" >&2
+      found=1
+    done < <(grep -I -n -E -e "$OPENROUTER_KEY_PATTERN" -- "$path" 2>/dev/null | cut -d: -f1)
+  done < "$tracked"
+  rm -f "$tracked"
+  [ "$found" -eq 0 ] || return 1
+  printf 'fm-lint.sh: no OpenRouter key literal in tracked files\n'
+  return 0
+}
+
+# Both default-lane gates always run, so a key literal and a broken workflow are
+# each reported in one pass; the first nonzero status is the result.
+fm_lint_run_default_gates() {
+  local rc=0
+  fm_lint_run_key_guard || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    fm_lint_run_workflows || rc=$?
+  else
+    fm_lint_run_workflows || true
+  fi
+  return "$rc"
 }
 
 JOBS=${FM_LINT_JOBS:-2}
@@ -251,7 +300,7 @@ fi
 if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   printf 'fm-lint.sh: no changed lint targets\n'
   overall_rc=0
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_default_gates || overall_rc=$?
   exit "$overall_rc"
 fi
 
@@ -553,9 +602,9 @@ EOF
 fi
 
 if [ "$overall_rc" -eq 0 ]; then
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_default_gates || overall_rc=$?
 else
-  fm_lint_run_workflows || true
+  fm_lint_run_default_gates || true
 fi
 
 exit "$overall_rc"

@@ -409,6 +409,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/openrouter-quota.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/process-event-sources.md",
       "audience": "maintainer-verification"
     },

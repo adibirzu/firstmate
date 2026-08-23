@@ -31,6 +31,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`), scout, secondmate-charter, and Herdr-lab briefs   |
 | `fm-dispatch-select.mjs` | Fail-closed subscription readiness, reserve, cooldown, spendPriority ranking, and deterministic crew-profile rotation |
+| `fm-openrouter-quota.sh` | Live OpenRouter key usage, model pricing, free-model eligibility, and per-model rate-limit cooldown |
 | `fm-model-refresh.sh`    | Record each installed harness's own model listing in a dated catalog, name what is new since the previous run, and probe usability only behind `--probe` |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
