@@ -2,8 +2,8 @@
 name: quota-array-dispatch
 description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
-  array through subscription-aware routing, provider identity, capacity evidence,
-  reserve, cooldown, and deterministic rotation boundaries.
+  array through subscription-aware routing: fail-closed capacity, spendPriority
+  ranking, reserve, cooldown, telemetry age, and deterministic rotation.
   Load when a dispatch rule or default resolves to more than one profile candidate.
 user-invocable: false
 metadata:
@@ -13,13 +13,17 @@ metadata:
 # quota-array-dispatch
 
 This skill is the single owner of the judgment boundary around subscription-aware profile-array selection.
-`bin/fm-dispatch-select.mjs` owns the exact telemetry, reserve, cooldown, state, and deterministic rotation mechanics.
+`bin/fm-dispatch-select.mjs` owns the exact telemetry, reserve, cooldown, spendPriority ranking, state, and deterministic rotation mechanics.
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
-`quota-axi` remains data-only and never recommends a route.
+`quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends, selects, ranks, or infers a route.
 Do not add a daemon, opaque composite score, hard-coded model-specific policy, or producer-side route recommendation.
 
 ## Collect facts
+
+Start each intake by running `quota-axi` once with no `--json`, and reuse that one default TOON snapshot for every candidate.
+Its `quota[]` row carries the `spendPriority`, `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt` this procedure judges on, and sparse `exhaustion[]` carries finite runway seconds only for `projected_exhaustion` and `exhausted_now`.
+Fall back to a single `quota-axi --json` call only when that snapshot is genuinely ambiguous for the decision or the installed build predates the `spendPriority` floor, then reuse that result and take no further quota snapshots.
 
 Establish model support and provider identity through the discovery surface owned by `harness-adapters` before selection.
 An adapter that is native to a subscription provider establishes that same-named provider without a redundant profile field; `docs/configuration.md` owns which adapters those are.
@@ -34,29 +38,47 @@ For each candidate, preserve explicit `harness`, `model`, and `provider` where p
 Do not pass a weaker reasoning class merely because it has more quota.
 Do not pass a candidate whose provider relationship or current model support remains unresolved.
 
+Confirm the catalog lists the candidate's model and record the provider family it reports.
+A model the catalog does not list is concrete contradictory evidence: block that candidate and quote the catalog result.
+Malformed configuration is an actionable error, not a candidate to rank around.
+
 ## Authentication is scoped to the selected surface
 
 A candidate authenticates through its own tuple's surface; another harness's CLI can never gate it, and `harness=pi` with `model=xai/grok-*` is Pi using xAI rather than the standalone Grok CLI.
 `quota-axi auth --json` lists each provider's credential sources independently, so read the one source the candidate actually uses rather than collapsing a provider to a single status.
+A provider can carry a healthy source beside a missing or expired one; the unused source's state is not the candidate's state.
+A Pi-hosted family may authenticate through the vendor's own store with no `pi:`-prefixed source at all, which is normal and never evidence against the candidate.
 When a credential's local classification is the only thing standing between a candidate and a block, get ground truth before blocking.
 `bin/fm-vendor-auth-probe.sh` is the only approved vendor-credential probe; its `--help` owns the registered probes and mechanics.
 It takes no harness, model, or provider and returns a fact, not a route: only `authenticated` and `unauthenticated` are ground truth, while `indeterminate`, `timeout`, and `unavailable` establish nothing and must never be read as either outcome.
 Never launch a vendor CLI yourself, and never probe a credential store the candidate does not use.
+Grok prepaid `credits` are unrelated to paid-window headroom; never read them as exhaustion.
 
-## Subscription evidence
+## Fail-closed capacity, then spendPriority
 
-Providers exposed by quota-axi, including Claude, Codex, and Grok, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
+The selector is the mechanical owner of dispatch capacity and of ranking among remaining eligible candidates.
+It does not replace reasoning-class fit: keep only candidates that meet the required reasoning class before passing the set, and never use `spendPriority` or remaining quota to silently replace that class.
+When every remaining candidate is tight, dispatch inside the strongest-reasoning class if one of those candidates can proceed, or stop and report that the strongest-class choice cannot proceed rather than downgrading it to spend or conserve quota.
+
+Providers exposed by quota-axi, including Claude, Codex, Grok, and Cursor, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
 Stale, unavailable, malformed, or windowless telemetry makes that provider ineligible for a new dispatch.
 A provider whose pools are billed separately would be priced by its worst pool under that rule, so a profile may declare the one window it draws on with `quotaWindow`; `docs/configuration.md` owns that field's semantics.
-Confirm the declared window against the provider's live `quota-axi --json` windows before relying on it, because a declared window the telemetry does not carry blocks that candidate rather than repricing it.
+Confirm the declared window against the provider's live telemetry before relying on it, because a declared window the telemetry does not carry blocks that candidate rather than repricing it.
 Kimi is excluded from subscription-aware selection because its 0.29.1 lifecycle exit was not deterministic after interrupt in the guarded Herdr lab.
 Do not pass a Kimi profile to the selector or substitute another Moonshot route.
+
+When quota-axi's default TOON (floor owned by `bin/fm-quota-axi-lib.sh`) publishes a known `spendPriority`, that scalar is the quota-perspective ranker among candidates that already passed fail-closed capacity and reasoning-class fit.
+A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
+Never treat absent, `unknown`, or unmeasurable `spendPriority` as zero or as healthy, and never recompute it from headroom, pace, reserve, or window-id lists.
+Drop a candidate whose known runway will not last until the inspectable likely-completion horizon before passing the set, even when it has the highest `spendPriority`; `through_reset` passes because the window reaches its refill without exhausting, and unknown runway stays eligible with that uncertainty disclosed.
+When every remaining eligible candidate lacks a known `spendPriority`, or when known scalars tie, the selector distributes by persisted least-recent use and breaks an initial never-used tie with a home-stable hash independent of candidate array order.
+Do not replace that choice with static array order, harness-name order, randomness, or an unexplained "best quota" label.
+
 The exact defaults, bounds, state schema, failure exit, and test seams are owned by `bin/fm-dispatch-select.mjs --help` and the canonical config schema in `docs/configuration.md`.
 
 ## Selection order
 
 Apply only among candidates satisfying required fit and strongest reasoning class.
-Never use subscription state to silently replace that reasoning class.
 
 1. Reduce the matched rule or default to comparable candidates after model/provider discovery.
 2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
@@ -67,6 +89,6 @@ Never use subscription state to silently replace that reasoning class.
 6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
 7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.
 
-The selector accounts for every provider in sanitized diagnostics, rejects duplicate profiles, distributes eligible subscriptions by persisted least-recent use, and breaks an initial never-used tie with a home-stable hash independent of candidate array order.
-Do not replace that stateful choice with static array order, harness-name order, randomness, or an unexplained "best quota" label.
+The selector accounts for every provider in sanitized diagnostics and rejects duplicate profiles.
 Another harness CLI cannot block the selected tuple's authentication check.
+A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
