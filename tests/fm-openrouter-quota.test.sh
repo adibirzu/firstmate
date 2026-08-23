@@ -459,6 +459,51 @@ test_permanent_verdicts_are_remembered_and_cleared() {
   pass "404 and 403 verdicts are remembered across runs and clear re-probes them"
 }
 
+test_clear_all_verdicts_reprobes_and_keeps_cooldowns() {
+  local home fakebin out err rc=0
+  home=$(make_home clear-all)
+  fakebin=$(make_fake_curl "$home")
+  err="$home/report.err"
+  out=$(run_reader "$home" "$fakebin" report --now "$NOW" 2>"$err") || rc=$?
+  expect_code 0 "$rc" "seed report must succeed"
+
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear 2>&1) || rc=$?
+  expect_code 2 "$rc" "clear without a target must be a usage error"
+  assert_contains "$out" "--all-verdicts" "clear usage error did not name the bulk flag"
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear --all-verdicts --model 'meta/llama-3.2-3b-instruct:free' 2>&1) || rc=$?
+  expect_code 2 "$rc" "clear with both targets must be a usage error"
+
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear --all-verdicts 2>&1) || rc=$?
+  expect_code 0 "$rc" "clear --all-verdicts must succeed: $out"
+  assert_contains "$out" "remembered verdicts cleared: 2" "bulk clear did not report the dropped verdicts"
+  assert_contains "$out" "cooldowns kept" "bulk clear did not say cooldowns are kept"
+
+  rc=0
+  out=$(FAKE_CURL_LOG="$home/curl.log" FAKE_GEMMA_CODE=200 \
+    FAKE_LLAMA_CODE=200 FAKE_LLAMA_BODY='{"choices":[{"message":{"content":"ok"}}]}' \
+    run_reader "$home" "$fakebin" report --now 1001 2>"$err") || rc=$?
+  expect_code 0 "$rc" "report after bulk clear must succeed"
+  grep -F 'model=meta/llama-3.2-3b-instruct:free ' "$home/curl.log" >/dev/null \
+    || fail "404 model was not re-probed after clear --all-verdicts: $(cat "$home/curl.log")"
+  grep -F 'model=openai/gpt-oss-20b:free ' "$home/curl.log" >/dev/null \
+    || fail "403 model was not re-probed after clear --all-verdicts: $(cat "$home/curl.log")"
+  grep -F 'model=google/gemma-4-31b-it:free ' "$home/curl.log" >/dev/null \
+    && fail "a live cooldown was wiped by clear --all-verdicts: $(cat "$home/curl.log")"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="google/gemma-4-31b-it:free") | .eligible==false and .reason=="cooldown until epoch 2800"' \
+    >/dev/null || fail "the 429 cooldown did not survive clear --all-verdicts: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="meta/llama-3.2-3b-instruct:free") | .eligible==true' \
+    >/dev/null || fail "a widened privacy setting was not picked up after clear --all-verdicts: $out"
+  pass "clear --all-verdicts re-probes remembered models and keeps live cooldowns"
+}
+
 test_probe_budget_keeps_partial_report() {
   local home fakebin out err rc=0
   home=$(make_home budget)
@@ -541,6 +586,7 @@ test_key_never_reaches_disk_and_reaches_curl_on_stdin
 test_record_failure_during_sweep_succeeds_and_is_merged
 test_busy_lock_is_kept_and_dead_owner_lock_is_reaped
 test_permanent_verdicts_are_remembered_and_cleared
+test_clear_all_verdicts_reprobes_and_keeps_cooldowns
 test_probe_budget_keeps_partial_report
 test_probes_are_paced
 test_unsupported_model_id_is_logged_not_silent

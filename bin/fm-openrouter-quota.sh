@@ -13,6 +13,7 @@
 #   fm-openrouter-quota.sh report [--now <epoch>]
 #   fm-openrouter-quota.sh record-failure --model <id> [--now <epoch>]
 #   fm-openrouter-quota.sh clear --model <id>
+#   fm-openrouter-quota.sh clear --all-verdicts
 #   fm-openrouter-quota.sh --help
 #
 # `report` is the default command. It prints one JSON object on stdout.
@@ -32,14 +33,17 @@
 #   403 (platform-restricted), and 429 (upstream rate limit) stay distinct.
 #   Paid models are not probed. Probes are paced FM_OPENROUTER_PROBE_INTERVAL_SECONDS
 #   apart so one sweep stays under OpenRouter's 20 requests per minute
-#   free-model limit. A 429, including one recorded later by record-failure,
+#   free-model limit; the default of 4 seconds is 15 requests per minute.
+#   A 429, including one recorded later by record-failure,
 #   marks that model id temporarily ineligible for cooldownSeconds; the
 #   cooldown is per model id, never per provider and never global, and expired
 #   entries are dropped on read. A 404 no-allowed-providers or 403
 #   platform-restricted verdict is a stable account fact: it is remembered in
-#   the state file and that model id is not probed again until `clear --model`
-#   drops it or the state file is removed. After the account privacy setting
-#   is widened, clear the affected ids so they are probed live again. When the
+#   the state file and that model id is not probed again until
+#   `clear --model <id>` drops it or `clear --all-verdicts` drops every
+#   remembered verdict. After changing the OpenRouter privacy or
+#   allowed-provider settings, run `clear --all-verdicts` so every remembered
+#   model is probed live again; that command keeps live 429 cooldowns. When the
 #   number of free models to probe exceeds FM_OPENROUTER_PROBE_MAX the report
 #   is still emitted: the unprobed models are reported ineligible with reason
 #   probe-budget-exhausted, so nothing is guessed. Catalog ids outside
@@ -54,7 +58,12 @@
 #   caller already observed the rate limit for this model id.
 #
 # clear:
-#   Drop the persisted cooldown and any remembered verdict for one model id.
+#   With --model <id>, drop the persisted cooldown and any remembered verdict
+#   for that one model id. With --all-verdicts, drop every remembered 404 and
+#   403 verdict while keeping live 429 cooldowns, so the next report probes
+#   those models live again. Run `clear --all-verdicts` after changing the
+#   OpenRouter privacy or allowed-provider settings; until then the remembered
+#   verdicts keep those models unprobed and ineligible.
 #
 # JSON fields on stdout (schemaVersion 1):
 #   key                     sanitized /api/v1/key data (usage, usage_daily,
@@ -82,7 +91,7 @@
 #   FM_OPENROUTER_COOLDOWN_SECONDS  integer 60..86400 (default 1800)
 #   FM_OPENROUTER_PROBE_MAX         max free-model probes per report (default 64)
 #   FM_OPENROUTER_PROBE_INTERVAL_SECONDS  integer 0..60 seconds between live
-#                                   probes (default 3; 0 disables pacing)
+#                                   probes (default 4; 0 disables pacing)
 #   FM_OPENROUTER_TIMEOUT           per-request seconds (default 20)
 #
 # Test-only seams:
@@ -98,7 +107,7 @@ SELF=fm-openrouter-quota
 DEFAULT_API_BASE=https://openrouter.ai
 DEFAULT_COOLDOWN=1800
 DEFAULT_PROBE_MAX=64
-DEFAULT_PROBE_INTERVAL=3
+DEFAULT_PROBE_INTERVAL=4
 DEFAULT_TIMEOUT=20
 COOLDOWN_MIN=60
 COOLDOWN_MAX=86400
@@ -450,20 +459,15 @@ record_observation() {
 
 merge_observations_under_lock() {
   local state_file=$1 now=$2 cooldown=$3 observations=$4
-  local state line kind id class
+  local state
   acquire_lock
   state=$(load_state "$state_file")
-  state=$(prune_cooldowns "$state" "$now")
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    kind=$(printf '%s' "$line" | jq -r '.kind')
-    id=$(printf '%s' "$line" | jq -r '.id')
-    class=$(printf '%s' "$line" | jq -r '.class')
-    case "$kind" in
-      cooldown) state=$(set_cooldown "$state" "$id" "$now" "$cooldown" "$class") ;;
-      verdict) state=$(set_verdict "$state" "$id" "$now" "$class") ;;
-    esac
-  done < "$observations"
+  state=$(printf '%s' "$state" | jq -c --slurpfile obs "$observations" --argjson now "$now" --argjson cd "$cooldown" '
+    .cooldowns |= with_entries(select(.value.until|type=="number" and . > $now))
+    | reduce $obs[] as $o (.;
+        if $o.kind == "cooldown" then .cooldowns[$o.id] = {until: ($now + $cd), reason: $o.class, recordedAt: $now}
+        elif $o.kind == "verdict" then .verdicts[$o.id] = {class: $o.class, recordedAt: $now}
+        else . end)')
   save_state "$state_file" "$state"
   release_lock
 }
@@ -676,8 +680,20 @@ cmd_clear() {
   log "model=${id} cooldown and remembered verdict cleared"
 }
 
+cmd_clear_all_verdicts() {
+  local now=$1 state_file=$2
+  local state count
+  acquire_lock
+  state=$(load_state "$state_file")
+  count=$(printf '%s' "$state" | jq -r '.verdicts | length')
+  state=$(printf '%s' "$state" | jq -c '.verdicts = {}')
+  save_state "$state_file" "$state"
+  release_lock
+  log "remembered verdicts cleared: ${count}; live cooldowns kept"
+}
+
 main() {
-  local command=report now_raw='' now='' model='' home state_dir state_file
+  local command=report now_raw='' now='' model='' all_verdicts=0 home state_dir state_file
   while [ $# -gt 0 ]; do
     case "$1" in
       --help|-h)
@@ -697,6 +713,10 @@ main() {
         [ $# -ge 2 ] || die '--model requires a value'
         model=$2
         shift 2
+        ;;
+      --all-verdicts)
+        all_verdicts=1
+        shift
         ;;
       --)
         shift
@@ -732,8 +752,13 @@ main() {
       cmd_record_failure "$now" "$state_file" "$model"
       ;;
     clear)
-      [ -n "$model" ] || die 'clear needs --model <id>'
-      cmd_clear "$now" "$state_file" "$model"
+      if [ "$all_verdicts" -eq 1 ]; then
+        [ -z "$model" ] || die 'clear takes either --model <id> or --all-verdicts, not both'
+        cmd_clear_all_verdicts "$now" "$state_file"
+      else
+        [ -n "$model" ] || die 'clear needs --model <id> or --all-verdicts'
+        cmd_clear "$now" "$state_file" "$model"
+      fi
       ;;
     *) die "unknown command $command" ;;
   esac
