@@ -145,6 +145,26 @@ The current classifier matrix and its refresh guard are recorded in [Composer cl
 Kimi pointer delivery and OpenCode 1.18.4 busy-queue behavior remain pinned by `tests/fm-kimi-harness.test.sh`, `tests/fm-tmux-submit-busy.test.sh`, and `tests/fm-composer-lib.test.sh`.
 Herdr's Claude idle-native submit confirmation is pinned by `tests/fm-backend-herdr.test.sh` and refreshed by `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh`.
 
+## OpenCode
+
+OpenCode was verified on 2026-08-23 at `/opt/homebrew/bin/opencode`, installed through Homebrew, with version 1.18.20.
+
+```sh
+/opt/homebrew/bin/opencode --version
+opencode models
+env -u OPENROUTER_API_KEY opencode models
+OPENROUTER_API_KEY="$OPENROUTER_API_KEY" opencode models
+```
+
+The default `opencode models` output listed seven free OpenCode models, including `opencode/big-pickle`.
+With `OPENROUTER_API_KEY` available in the process environment, the same discovery command additionally listed 360 `openrouter/<model>` entries, including `openrouter/cohere/north-mini-code:free`, `openrouter/openai/gpt-oss-20b`, and `openrouter/openai/gpt-oss-120b`.
+With that variable absent, it listed no OpenRouter entries.
+This proves that OpenCode reads the environment variable for provider discovery without `auth login` or a credential written to disk.
+
+A supervised smoke scout completed its brief, all four requested steps, report write, and `done:` status append through the OpenCode adapter using `opencode/big-pickle`.
+That smoke did not exercise an OpenRouter-backed worker launch.
+It remains unverified whether a command-scoped `OPENROUTER_API_KEY` reaches a worker through the long-lived backend daemon, which is the same credential-propagation hazard documented for Muse.
+
 ### Cleanup endpoint identity
 
 The cleanup identity boundary was validated on 2026-07-28 with tmux 3.6a and metadata fixtures for every supported backend.
