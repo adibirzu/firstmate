@@ -639,7 +639,10 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
   }
 fi
-REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
+REBUILDING_SESSION_PID=
+if fm_session_lock_prepare_acquisition_identity 2>/dev/null; then
+  REBUILDING_SESSION_PID=$FM_SESSION_LOCK_OWNER_PID
+fi
 print_agents_refresh_if_required "$REBUILDING_SESSION_PID"
 
 if [ "$READ_ONLY" -eq 0 ]; then

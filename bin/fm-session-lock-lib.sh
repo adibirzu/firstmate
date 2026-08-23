@@ -184,3 +184,181 @@ $pids
 EOF
   return 1
 }
+
+# True when this run's verified harness is Claude.
+#
+# A Claude worker pool can be reparented away from the session it serves, so
+# its ancestry is not by itself a session identity. Every other currently
+# verified harness has one contiguous harness pid and retains the established
+# ancestry contract above.
+fm_harness_ancestry_is_claude() {
+  fm_harness_ancestry_pids >/dev/null || return 1
+  [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ]
+}
+
+# Set the identity a NEW session lock must record.
+#
+# Claude Code supplies both a stable session id and the served session pid.
+# Require both, and require that pid to be a live verified harness, before a
+# new Claude lock may be written. This deliberately does not guess from a
+# reparented worker-pool ancestry. Other supported harnesses expose their
+# session through their one verified ancestry pid, which remains their stable
+# lock identity.
+FM_SESSION_LOCK_OWNER_KIND=
+FM_SESSION_LOCK_OWNER_PID=
+FM_SESSION_LOCK_OWNER_SESSION=
+fm_session_lock_prepare_acquisition_identity() {
+  local ancestry_pid session_id session_pid
+  FM_SESSION_LOCK_OWNER_KIND=
+  FM_SESSION_LOCK_OWNER_PID=
+  FM_SESSION_LOCK_OWNER_SESSION=
+  ancestry_pid=$(fm_harness_ancestry_pid) || return 1
+  if fm_harness_ancestry_is_claude && [ "${CLAUDECODE:-}" = 1 ]; then
+    session_id=${CLAUDE_CODE_SESSION_ID:-}
+    session_pid=${CLAUDE_PID:-}
+    case "$session_id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+    case "$session_pid" in ''|*[!0-9]*) return 1 ;; esac
+    fm_harness_pid_alive "$session_pid" || return 1
+    FM_SESSION_LOCK_OWNER_KIND=claude
+    FM_SESSION_LOCK_OWNER_PID=$session_pid
+    FM_SESSION_LOCK_OWNER_SESSION=$session_id
+    return 0
+  fi
+  FM_SESSION_LOCK_OWNER_KIND=ancestry
+  FM_SESSION_LOCK_OWNER_PID=$ancestry_pid
+  FM_SESSION_LOCK_OWNER_SESSION=$ancestry_pid
+}
+
+# Print the adjacent new-format binding path for state dir $1.
+# state/.lock remains a bare pid for its existing readers.
+fm_session_lock_record_path() {  # <state-dir>
+  printf '%s/.lock.session\n' "$1"
+}
+
+# Read one exact new-format lock binding into FM_SESSION_LOCK_RECORD_*.
+# A missing binding is legacy. A malformed binding is never legacy, because a
+# failed or tampered new-format record must not regain the compatibility path.
+FM_SESSION_LOCK_RECORD_KIND=
+FM_SESSION_LOCK_RECORD_PID=
+FM_SESSION_LOCK_RECORD_SESSION=
+fm_session_lock_read_record() {  # <state-dir>
+  local state=$1 path first second third fourth extra
+  FM_SESSION_LOCK_RECORD_KIND=
+  FM_SESSION_LOCK_RECORD_PID=
+  FM_SESSION_LOCK_RECORD_SESSION=
+  path=$(fm_session_lock_record_path "$state")
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  {
+    IFS= read -r first
+    IFS= read -r second
+    IFS= read -r third
+    IFS= read -r fourth
+    IFS= read -r extra || true
+  } < "$path" || return 1
+  [ "$first" = 'format=1' ] || return 1
+  case "$second" in kind=claude|kind=ancestry) ;; *) return 1 ;; esac
+  case "$third" in pid=*) FM_SESSION_LOCK_RECORD_PID=${third#pid=} ;; *) return 1 ;; esac
+  case "$fourth" in session=*) FM_SESSION_LOCK_RECORD_SESSION=${fourth#session=} ;; *) return 1 ;; esac
+  [ -z "$extra" ] || return 1
+  case "$FM_SESSION_LOCK_RECORD_PID" in ''|*[!0-9]*) return 1 ;; esac
+  case "$FM_SESSION_LOCK_RECORD_SESSION" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  FM_SESSION_LOCK_RECORD_KIND=${second#kind=}
+}
+
+# Write the complete new lock format under fm-lock.sh's acquisition claim.
+# The record publishes first, so readers fail closed while the raw pid moves;
+# it is removed again if the raw lock cannot be replaced. A new acquisition
+# therefore never leaves only a pid-only lock behind.
+fm_session_lock_write_new_format() {  # <state-dir>
+  local state=$1 path lock tmp_record tmp_lock previous=
+  [ -n "$FM_SESSION_LOCK_OWNER_KIND" ] || return 1
+  [ -n "$FM_SESSION_LOCK_OWNER_PID" ] || return 1
+  [ -n "$FM_SESSION_LOCK_OWNER_SESSION" ] || return 1
+  path=$(fm_session_lock_record_path "$state")
+  lock="$state/.lock"
+  tmp_record=$(mktemp "$state/.lock.session.XXXXXX" 2>/dev/null) || return 1
+  tmp_lock=$(mktemp "$state/.lock.new.XXXXXX" 2>/dev/null) || {
+    command rm -f -- "$tmp_record" 2>/dev/null
+    return 1
+  }
+  if ! {
+    printf 'format=1\nkind=%s\npid=%s\nsession=%s\n' \
+      "$FM_SESSION_LOCK_OWNER_KIND" "$FM_SESSION_LOCK_OWNER_PID" "$FM_SESSION_LOCK_OWNER_SESSION" > "$tmp_record"
+    printf '%s\n' "$FM_SESSION_LOCK_OWNER_PID" > "$tmp_lock"
+  }; then
+    command rm -f -- "$tmp_record" "$tmp_lock" 2>/dev/null
+    return 1
+  fi
+  if [ -f "$path" ] && [ ! -L "$path" ]; then
+    previous=$(mktemp "$state/.lock.session.previous.XXXXXX" 2>/dev/null) || {
+      command rm -f -- "$tmp_record" "$tmp_lock" 2>/dev/null
+      return 1
+    }
+    if ! cp "$path" "$previous" 2>/dev/null; then
+      command rm -f -- "$tmp_record" "$tmp_lock" "$previous" 2>/dev/null
+      return 1
+    fi
+  fi
+  if ! mv -f "$tmp_record" "$path" 2>/dev/null; then
+    command rm -f -- "$tmp_record" "$tmp_lock" "$previous" 2>/dev/null
+    return 1
+  fi
+  if ! mv -f "$tmp_lock" "$lock" 2>/dev/null; then
+    if [ -n "$previous" ]; then
+      mv -f "$previous" "$path" 2>/dev/null || true
+    else
+      command rm -f -- "$path" 2>/dev/null
+    fi
+    command rm -f -- "$tmp_lock" "$previous" 2>/dev/null
+    return 1
+  fi
+  command rm -f -- "$previous" 2>/dev/null || true
+}
+
+# Record every temporary legacy acceptance durably. Logging failure rejects the
+# acceptance rather than silently extending the migration exception.
+fm_session_lock_log_legacy_acceptance() {  # <state-dir> <pid>
+  local state=$1 pid=$2 home
+  home=$(cd "$state/.." 2>/dev/null && pwd -P) || home=$state
+  printf 'legacy session lock accepted: home=%s pid=%s\n' "$home" "$pid" \
+    >> "$state/.lock.legacy.log" 2>/dev/null
+}
+
+# True only when state dir $1's existing PID-only lock is temporarily accepted
+# for the current session. Remove this compatibility path once all live homes
+# have turned over to new-format locks. It exists solely to avoid wedging a
+# live home whose old lock names the shared Claude pool daemon during migration.
+fm_session_lock_owned_by_legacy_compatibility() {  # <state-dir>
+  local state=$1 lock_pid path ancestry_pid
+  fm_session_lock_prepare_acquisition_identity || return 1
+  path=$(fm_session_lock_record_path "$state")
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
+  ancestry_pid=$(fm_harness_ancestry_pid) || return 1
+  if [ "$lock_pid" != "$FM_SESSION_LOCK_OWNER_PID" ] && [ "$lock_pid" != "$ancestry_pid" ]; then
+    return 1
+  fi
+  fm_harness_pid_alive "$lock_pid" || return 1
+  fm_session_lock_log_legacy_acceptance "$state" "$lock_pid"
+}
+
+# True when the current session owns state dir $1's lock. New-format records
+# prove Claude ownership with the session identity that survives worker-pool
+# reparenting. A PID-only record reaches only the temporary, logged migration
+# path above and can never be used to create a new lock.
+fm_session_lock_owned_by_current_session() {  # <state-dir>
+  local state=$1 lock_pid
+  state=$1
+  if fm_session_lock_read_record "$state"; then
+    fm_session_lock_prepare_acquisition_identity || return 1
+    lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+    [ "$lock_pid" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
+    fm_harness_pid_alive "$lock_pid" || return 1
+    [ "$FM_SESSION_LOCK_OWNER_KIND" = "$FM_SESSION_LOCK_RECORD_KIND" ] || return 1
+    [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
+    [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ]
+    return
+  fi
+  fm_session_lock_owned_by_legacy_compatibility "$state"
+}

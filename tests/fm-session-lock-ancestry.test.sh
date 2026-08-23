@@ -266,6 +266,9 @@ if [ "${FM_FIXTURE_ORPHAN_HERE:-0}" = 1 ]; then
   done
 fi
 printf '%s\n' "$$" > "$FM_HOME/state/session-pid"
+export CLAUDECODE=1
+export CLAUDE_CODE_SESSION_ID=fixture-session
+export CLAUDE_PID=$$
 printf '%s\n' "$$" > "$FM_HOME/state/.lock"
 "$FM_HOME/bin/fm-claude-stop-autoarm.sh" </dev/null > "$FM_HOME/state/hook.out" 2>&1
 printf '%s\n' "$?" > "$FM_HOME/state/hook.rc"
