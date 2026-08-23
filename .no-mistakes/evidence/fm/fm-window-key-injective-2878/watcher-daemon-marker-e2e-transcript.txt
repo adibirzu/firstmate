@@ -1,0 +1,35 @@
+### state dir BEFORE watcher poll (legacy pre-upgrade marker seeded; all four windows collided on it)
+.count-s_a_b
+.hash-s_a_b
+
+### state dir AFTER one real bin/fm-watch.sh poll cycle
+.count-s_a_b
+.count-v2-733a612e62
+.count-v2-733a612f62
+.count-v2-733a613a62
+.count-v2-733a615f62
+.hash-s_a_b
+.hash-v2-733a612e62
+.hash-v2-733a612f62
+.hash-v2-733a613a62
+.hash-v2-733a615f62
+
+### window -> marker key (watcher v2 owner) and decoded bytes
+s:a.b  -> v2-733a612e62          (hex decodes to: s:a.b)
+s:a_b  -> v2-733a615f62          (hex decodes to: s:a_b)
+s:a/b  -> v2-733a612f62          (hex decodes to: s:a/b)
+s:a:b  -> v2-733a613a62          (hex decodes to: s:a:b)
+
+### legacy marker untouched: .hash-s_a_b='legacy hash' .count-s_a_b=41
+
+### away-mode daemon (bin/fm-supervise-daemon.sh) clear_pause_tracking on 's:a.b' removes the SAME watcher marker names
+before daemon clear:
+.paused-v2-733a612e62
+.stale-v2-733a612e62
+.wedge-escalations-v2-733a612e62
+after daemon clear:
+other endpoints' .hash markers still present:
+.hash-v2-733a612e62
+.hash-v2-733a612f62
+.hash-v2-733a613a62
+.hash-v2-733a615f62

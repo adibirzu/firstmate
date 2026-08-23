@@ -1,0 +1,6 @@
+ok - colliding endpoint spellings receive distinct filename-safe markers and ignore ambiguous legacy state
+ok - a non-ASCII endpoint keeps one persistent marker key across bash generations
+ok - a resumed secondmate clears pause and stale tracking before stale exemption
+ok - unchanged stale hashes reclassify when a crew enters or leaves pause
+ok - a pane becoming active again resets the consecutive wedge-escalation counter
+ok - a stale pane sitting on a terminal status is surfaced (queue + exit)

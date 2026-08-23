@@ -1,0 +1,14 @@
+== tests/fm-teardown.test.sh :: test_herdr_teardown_clears_escalation_marker ==
+ok - herdr teardown removes pane-owned escalation dedupe state
+== tests/fm-wake-queue.test.sh :: test_not_working_stale_enqueue_before_suppressor
+test_stale_enqueue_before_suppressor ==
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 77418.1787522511.jsTdYc
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - a not-provably-working stale wake is queued before its suppressor is advanced
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 82211.1787522513.AO7OZm
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - stale wake is queued before suppressor state is advanced
+== tests/fm-supervision-events.test.sh (flat script, run whole file; marker-related lines) ==
+ok - handle_push_transition: a blocked crew enqueues a stale wake naming its window and wakes the supervisor
+ok - handle_push_transition: enqueue failure cannot commit the Herdr dedupe marker
+exit=0 total_ok=7 not_ok=0 took=1s

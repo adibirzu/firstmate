@@ -1,0 +1,12 @@
+### new test tests/fm-watch-triage.test.sh::test_window_marker_keys_are_injective_and_ignore_legacy_state
+### run against bin/ at BASE commit 3c544d6 (pre-fix). Expected: not ok
+not ok - watcher did not persist the derived marker key v2-733a612e62
+exit=1
+
+### legacy key derivation at base (tr ':/.' '___'): all four endpoints collapse to one name
+s:a.b  -> s_a_b
+s:a_b  -> s_a_b
+s:a/b  -> s_a_b
+s:a:b  -> s_a_b
+
+### bin/ restored to target 92979eb; same test re-run: ok - colliding endpoint spellings receive distinct filename-safe markers and ignore ambiguous legacy state (exit=0)

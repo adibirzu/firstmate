@@ -1,0 +1,10 @@
+### encoder timing: 2,000 realistic endpoint encodes (bash 5.3.9(1)-release, arm64)
+pure-Bash fm_window_marker_key : 0.43s
+od+tr equivalent               : 6.59s
+
+### both encoders agree on every one of the 2,000 endpoints:
+mismatches=0
+
+### /bin/bash 3.2 (launchd daemon generation) produces the identical key for a non-ASCII + special-char endpoint
+bash      5.3.9    v2-733a636166c3a92f782e793a7a
+/bin/bash 3.2.57   v2-733a636166c3a92f782e793a7a
