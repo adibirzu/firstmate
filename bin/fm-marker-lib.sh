@@ -9,4 +9,18 @@
 _FM_MARKER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-operational-input.sh
 . "$_FM_MARKER_LIB_DIR/fm-operational-input.sh"
+
+# Persistent watcher-marker identity is shared with the away-mode daemon, which
+# clears watcher pause and stale state. Encode each endpoint byte so the key is
+# injective, filename-safe, and independent of other recorded endpoints.
+fm_window_marker_key() {  # <window>
+  local LC_ALL=C value=$1 i byte hex
+  printf 'v2-'
+  for ((i = 0; i < ${#value}; i++)); do
+    printf -v byte '%d' "'${value:i:1}"
+    printf -v hex '%02x' "$byte"
+    printf '%s' "$hex"
+  done
+}
+
 unset _FM_MARKER_LIB_DIR
