@@ -260,7 +260,7 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
 
 The reader does not probe paid models, so no paid row is ever published as `eligible`; each carries `priced and not in cooldown; reachability unverified`, which a consumer can tell apart from a free row's `live completion succeeded` without guessing.
 `routing.unverifiedPaidByCost` is therefore a cheapest-first ordering of priced, non-cooldown paid models with no remembered verdict, not a list dispatch can spend on today.
-Reachability is established on first real use: when a launch on one of these ids is rejected, `record-failure --model <id> --observed 404 --body <response-body-file>` records the permanent no-allowed-providers verdict when that body carries the privacy gate (a 404 with any other body is only a short cooldown), `--observed 403` records the permanent platform-restricted verdict, and `--observed 429` records the short cooldown, so the ordering corrects itself through use instead of costing a probe per paid model on every run.
+Reachability is established on first real use: the launch path records what it observed with `record-failure`, whose `--observed` and `--body` classification the script header owns, so the ordering corrects itself through use instead of costing a probe per paid model on every run.
 The head of the ordering on this account is unreachable, as the probe below shows.
 Each entry of the ordering was probed in price order with one bounded chat completion until one succeeded.
 
