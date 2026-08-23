@@ -156,13 +156,6 @@ prime_turnend_seen() {  # <file>
   printf '%s' "$(seen_sig "$f")" > "$(dirname "$f")/.seen-$base"
 }
 
-# The watcher persists this public marker-name format, so fixtures that seed or
-# inspect marker files use its externally observable v2 representation.
-watch_marker_key() {  # <window>
-  printf 'v2-'
-  printf '%s' "$1" | LC_ALL=C od -An -tx1 | tr -d ' \n'
-}
-
 record_pi_busy() {  # <state-dir> <id>
   local state=$1 id=$2 gen
   gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
@@ -1244,9 +1237,7 @@ test_secondmate_unpause_clears_pause_tracking() {
   printf 'window=%s\nkind=secondmate\n' "$window" > "$state/secondmate-resumed.meta"
   printf 'working: upstream landed\n' > "$statusf"
   printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-secondmate-resumed_status"
-  key=${window//:/_}
-  key=${key//\//_}
-  key=${key//./_}
+  key=$(watch_marker_key "$window")
   : > "$state/.paused-$key"
   : > "$state/.paused-rechecked-$key"
   : > "$state/.paused-resurfaced-$key"
@@ -2475,6 +2466,26 @@ test_window_marker_keys_are_injective_and_ignore_legacy_state() {
   pass "colliding endpoint spellings receive distinct filename-safe markers and ignore ambiguous legacy state"
 }
 
+# The marker key is persistent state shared between the watcher and the
+# away-mode daemon, which can run under different bash generations (interactive
+# PATH vs launchd's /bin/bash 3.2 on macOS). A non-ASCII endpoint must produce
+# the identical key everywhere, matching the independent od byte oracle.
+test_window_marker_key_is_stable_across_bash_generations() {
+  local window expected key sys_bash sys_key
+  window=$(printf 's:caf\303\251')
+  expected=$(watch_marker_key "$window")
+  key=$(bash -c '. "$0/bin/fm-marker-lib.sh"; fm_window_marker_key "$1"' "$ROOT" "$window")
+  [ "$key" = "$expected" ] \
+    || fail "non-ASCII endpoint key diverged from the byte oracle under bash $BASH_VERSION: got '$key', want '$expected'"
+  for sys_bash in /bin/bash /usr/bin/bash; do
+    [ -x "$sys_bash" ] || continue
+    sys_key=$("$sys_bash" -c '. "$0/bin/fm-marker-lib.sh"; fm_window_marker_key "$1"' "$ROOT" "$window")
+    [ "$sys_key" = "$expected" ] \
+      || fail "non-ASCII endpoint key diverged under $sys_bash ($("$sys_bash" -c 'printf %s "$BASH_VERSION"')): got '$sys_key', want '$expected'"
+  done
+  pass "a non-ASCII endpoint keeps one persistent marker key across bash generations"
+}
+
 install_marker_mv_fault() {  # <dir>
   local dir=$1
   REAL_MV=$(command -v mv)
@@ -2808,6 +2819,7 @@ test_procevent_captured_result_surfaces_proactively
 test_procevent_unacknowledged_result_redrains_until_handled
 test_procevent_marker_keys_are_injective
 test_window_marker_keys_are_injective_and_ignore_legacy_state
+test_window_marker_key_is_stable_across_bash_generations
 test_procevent_surface_serializes_with_drain
 test_procevent_surface_crash_boundaries
 test_procevent_marker_failure_exits_and_replays

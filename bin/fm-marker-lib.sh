@@ -18,7 +18,7 @@ fm_window_marker_key() {  # <window>
   printf 'v2-'
   for ((i = 0; i < ${#value}; i++)); do
     printf -v byte '%d' "'${value:i:1}"
-    printf -v hex '%02x' "$byte"
+    printf -v hex '%02x' "$((byte & 0xff))"
     printf '%s' "$hex"
   done
 }
