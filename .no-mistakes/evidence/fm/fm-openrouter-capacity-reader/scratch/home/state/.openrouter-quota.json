@@ -1,0 +1,1 @@
+{"version":1,"cooldowns":{"google/gemma-4-31b-it:free":{"until":4602,"reason":"rate-limited","recordedAt":2802}},"verdicts":{"meta/llama-3.2-3b-instruct:free":{"class":"allowed-providers-unavailable","recordedAt":1000},"openai/gpt-oss-20b:free":{"class":"platform-restricted","recordedAt":1000}}}

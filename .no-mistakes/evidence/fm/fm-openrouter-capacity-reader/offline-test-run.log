@@ -1,0 +1,26 @@
+FM_TEST_BEGIN 2026-08-23T16:15:03Z tests/fm-openrouter-quota.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - missing OpenRouter key fails closed without guessing
+ok - healthy free model is eligible and paid prices become per-million figures
+ok - per-million prices are rounded before they are published
+ok - 404 allowed-providers skip is recorded and is not a cooldown
+ok - 403 platform-restricted skip is recorded and is not a cooldown
+ok - 429 per-model cooldown is set, skipped on read, and expires
+ok - record-failure and clear own the per-model cooldown
+ok - the API key reaches curl on stdin and never touches disk
+ok - a record-failure during a sweep succeeds and is merged, not overwritten
+ok - a busy lock is never deleted and a dead owner's lock is reaped
+ok - 404 and 403 verdicts are remembered across runs and clear re-probes them
+ok - clear --all-verdicts re-probes remembered models and keeps live cooldowns
+ok - paid record-failure: gate 404 is permanent, plain 404 and 429 are short cooldowns, bulk clear keeps cooldowns
+ok - an ownerless lock is reaped only once it is older than 60 seconds
+ok - --all-verdicts and --model are refused outside the commands that use them
+ok - hitting the probe budget keeps the partial report and names the unprobed models
+ok - live probes are paced by the configured interval
+ok - tilde aliases are ordinary rows: tier from price, paid sorted cheapest-first, free probed
+ok - an unsupported catalog id is logged instead of vanishing
+ok - a rejected key is reported once without key material
+# all fm-openrouter-quota tests passed
+FM_TEST_END 2026-08-23T16:15:26Z tests/fm-openrouter-quota.test.sh exit=0 duration_ms=23366 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=23438
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=23366 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-openrouter-quota.test.sh duration_ms=23366

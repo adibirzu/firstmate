@@ -1,0 +1,313 @@
+### Live end-to-end run against https://openrouter.ai on 2026-08-23T16:18:59Z
+### Key sourced from env (OPENROUTER_API_KEY_TOKENS); value redacted everywhere.
+
+$ export FM_HOME=<isolated-dir>; export OPENROUTER_API_KEY_TOKENS=<redacted>
+$ bin/fm-openrouter-quota.sh report 2>live.err > live-full.json
+exit=0 elapsed_seconds=101
+
+--- stderr (sanitized diagnostics, verbatim) ---
+fm-openrouter-quota: model=stealth/ox-alpha unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=dots-studio/dots-3-note-preview:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=liquid/lfm-2.5-2.6b:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-3.5-lightning:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=thinkingmachines/inkling-small:free unavailable: platform-restricted
+fm-openrouter-quota: model=poolside/laguna-s-2.1:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=thinkingmachines/inkling:free unavailable: platform-restricted
+fm-openrouter-quota: model=poolside/laguna-xs-2.1:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: model=z-ai/glm-5.2:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-3.5-content-safety:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-3-ultra-550b-a55b:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free eligible: live completion succeeded
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787503638
+fm-openrouter-quota: model=google/lyria-3-pro-preview unavailable: http-502
+fm-openrouter-quota: model=google/lyria-3-clip-preview unavailable: http-502
+fm-openrouter-quota: model=nvidia/nemotron-3-super-120b-a12b:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=openrouter/free eligible: live completion succeeded
+fm-openrouter-quota: model=nvidia/nemotron-3-nano-30b-a3b:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-nano-12b-v2-vl:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=nvidia/nemotron-nano-9b-v2:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: report models=422 free=22 probes=22 remembered=0 unprobed=0 skipped=0
+
+--- bounded stdout: jq summary of live-full.json ---
+{
+  "schemaVersion": 1,
+  "generatedAt": 1787501838,
+  "key": {
+    "usage": 0.00003453,
+    "usage_daily": 0.00003453,
+    "usage_weekly": 0.00003453,
+    "usage_monthly": 0.00003453,
+    "limit": null,
+    "limit_remaining": null,
+    "is_free_tier": false
+  },
+  "modelCount": 422,
+  "freeCount": 22,
+  "routing": {
+    "eligibleFree": [
+      "cohere/north-mini-code:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "openrouter/free"
+    ],
+    "unverifiedPaidByCost": [
+      "inclusionai/ling-2.6-flash",
+      "mistralai/mistral-nemo",
+      "inclusionai/ling-3.0-flash",
+      "sao10k/l3-lunaris-8b",
+      "gryphe/mythomax-l2-13b"
+    ]
+  },
+  "free": [
+    {
+      "id": "cohere/north-mini-code:free",
+      "eligible": true,
+      "reason": "live completion succeeded"
+    },
+    {
+      "id": "google/gemma-4-26b-a4b-it:free",
+      "eligible": true,
+      "reason": "live completion succeeded"
+    },
+    {
+      "id": "openrouter/free",
+      "eligible": true,
+      "reason": "live completion succeeded"
+    },
+    {
+      "id": "dots-studio/dots-3-note-preview:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "eligible": false,
+      "reason": "cooldown until epoch 1787503638"
+    },
+    {
+      "id": "google/lyria-3-clip-preview",
+      "eligible": false,
+      "reason": "http-502"
+    },
+    {
+      "id": "google/lyria-3-pro-preview",
+      "eligible": false,
+      "reason": "http-502"
+    },
+    {
+      "id": "liquid/lfm-2.5-2.6b:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "nvidia/nemotron-nano-9b-v2:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "poolside/laguna-s-2.1:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "poolside/laguna-xs-2.1:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "stealth/ox-alpha",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "thinkingmachines/inkling-small:free",
+      "eligible": false,
+      "reason": "platform-restricted"
+    },
+    {
+      "id": "thinkingmachines/inkling:free",
+      "eligible": false,
+      "reason": "platform-restricted"
+    },
+    {
+      "id": "z-ai/glm-5.2:free",
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    }
+  ],
+  "paidSamples": [
+    {
+      "id": "openai/gpt-oss-20b",
+      "tier": "paid",
+      "eligible": false,
+      "promptPerMillion": 0.03,
+      "completionPerMillion": 0.13,
+      "reason": "priced and not in cooldown; reachability unverified"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "tier": "paid",
+      "eligible": false,
+      "promptPerMillion": 0.037,
+      "completionPerMillion": 0.17,
+      "reason": "priced and not in cooldown; reachability unverified"
+    },
+    {
+      "id": "openrouter/auto",
+      "tier": "paid",
+      "eligible": false,
+      "promptPerMillion": null,
+      "completionPerMillion": null,
+      "reason": "pricing-missing"
+    }
+  ],
+  "pricingMissingCount": 5,
+  "eligiblePaidCount": 0
+}
+
+--- persisted state file (state/.openrouter-quota.json), keys only ---
+{
+  "version": 1,
+  "cooldowns": [
+    "google/gemma-4-31b-it:free"
+  ],
+  "verdicts": [
+    {
+      "id": "stealth/ox-alpha",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "dots-studio/dots-3-note-preview:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "liquid/lfm-2.5-2.6b:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "thinkingmachines/inkling-small:free",
+      "class": "platform-restricted"
+    },
+    {
+      "id": "poolside/laguna-s-2.1:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "thinkingmachines/inkling:free",
+      "class": "platform-restricted"
+    },
+    {
+      "id": "poolside/laguna-xs-2.1:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "z-ai/glm-5.2:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+      "class": "allowed-providers-unavailable"
+    },
+    {
+      "id": "nvidia/nemotron-nano-9b-v2:free",
+      "class": "allowed-providers-unavailable"
+    }
+  ]
+}
+
+--- key-leak checks (counts of the live key value in outputs; all must be 0) ---
+stdout: 0
+stderr: 0
+files under FM_HOME containing key: 0
+leftover fm-openrouter-quota temp dirs: 0
+
+### Second live run in the same FM_HOME: remembered 404/403 verdicts are not re-probed
+$ bin/fm-openrouter-quota.sh report 2>live-2.err > live-full-2.json
+exit=0 elapsed_seconds=30
+--- stderr ---
+fm-openrouter-quota: model=stealth/ox-alpha unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=dots-studio/dots-3-note-preview:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=liquid/lfm-2.5-2.6b:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-3.5-lightning:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=thinkingmachines/inkling-small:free unavailable: platform-restricted (remembered verdict)
+fm-openrouter-quota: model=poolside/laguna-s-2.1:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=thinkingmachines/inkling:free unavailable: platform-restricted (remembered verdict)
+fm-openrouter-quota: model=poolside/laguna-xs-2.1:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: model=z-ai/glm-5.2:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-3.5-content-safety:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-3-ultra-550b-a55b:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free unavailable: cooldown until epoch 1787503739
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787503638
+fm-openrouter-quota: model=google/lyria-3-pro-preview unavailable: http-502
+fm-openrouter-quota: model=google/lyria-3-clip-preview unavailable: http-502
+fm-openrouter-quota: model=nvidia/nemotron-3-super-120b-a12b:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=openrouter/free eligible: live completion succeeded
+fm-openrouter-quota: model=nvidia/nemotron-3-nano-30b-a3b:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-nano-12b-v2-vl:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=nvidia/nemotron-nano-9b-v2:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: report models=422 free=22 probes=5 remembered=16 unprobed=0 skipped=0
+--- routing ---
+{"eligibleFree":["cohere/north-mini-code:free","openrouter/free"],"unverifiedPaidByCost":["inclusionai/ling-2.6-flash","mistralai/mistral-nemo","inclusionai/ling-3.0-flash"]}
+key in stdout/stderr: 0/0

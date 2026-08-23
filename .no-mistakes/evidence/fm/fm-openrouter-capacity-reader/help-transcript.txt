@@ -1,0 +1,124 @@
+$ bin/fm-openrouter-quota.sh --help
+fm-openrouter-quota.sh - firstmate-side OpenRouter capacity reader.
+
+quota-axi cannot price OpenRouter and is not modified by this script. This
+reader queries OpenRouter's own API and emits a machine-readable JSON view
+that later dispatch can route on: live free-model eligibility first, then
+cheap-paid fallback. Eligibility is read live from the API and is never a
+hardcoded model list, so a later privacy-setting change is picked up with no
+code change. The reader stays useful when exactly one free model is eligible
+and does not require a pool of free models to function.
+
+Usage:
+  fm-openrouter-quota.sh report [--now <epoch>]
+  fm-openrouter-quota.sh record-failure --model <id> [--observed <429|404|403>] [--body <file>] [--now <epoch>]
+  fm-openrouter-quota.sh clear --model <id>
+  fm-openrouter-quota.sh clear --all-verdicts
+  fm-openrouter-quota.sh --help
+
+`report` is the default command. It prints one JSON object on stdout.
+Diagnostics are sanitized summaries on stderr. API bodies and quota payloads
+are never printed or logged. The API key is read from the environment and
+handed to curl on standard input as the Authorization header; it is never
+printed, logged, written to a file, passed on a command line, or included
+in an error message.
+
+report:
+  GET /api/v1/key for usage and any key spend cap, and GET /api/v1/models for
+  ids and per-token USD pricing. A negative per-token price is OpenRouter's
+  variable-pricing sentinel, not a cost, and is reported as pricing-missing
+  rather than as a cheap paid model. Per-million prices are rounded to six
+  decimal places. Price-zero models are probed with one bounded
+  chat-completions request so 404 (account privacy / no allowed providers),
+  403 (platform-restricted), and 429 (upstream rate limit) stay distinct.
+  Paid models are not probed, so a paid row is never published as eligible:
+  it carries only what is known, priced and not in cooldown with
+  reachability unverified, and reachability is established on first real
+  use through record-failure rather than by an upfront probe cost. Probes are
+  paced FM_OPENROUTER_PROBE_INTERVAL_SECONDS
+  apart so one sweep stays under OpenRouter's 20 requests per minute
+  free-model limit; the default of 4 seconds is 15 requests per minute.
+  A 429, including one recorded later by record-failure,
+  marks that model id temporarily ineligible for cooldownSeconds; the
+  cooldown is per model id, never per provider and never global, and expired
+  entries are dropped on read. A 404 no-allowed-providers or 403
+  platform-restricted verdict is a stable account fact: it is remembered in
+  the state file and that model id is not probed again until
+  `clear --model <id>` drops it or `clear --all-verdicts` drops every
+  remembered verdict. After changing the OpenRouter privacy or
+  allowed-provider settings, run `clear --all-verdicts` so every remembered
+  model is probed live again; that command keeps live 429 cooldowns. When the
+  number of free models to probe exceeds FM_OPENROUTER_PROBE_MAX the report
+  is still emitted: the unprobed models are reported ineligible with reason
+  probe-budget-exhausted, so nothing is guessed. Catalog ids outside
+  [A-Za-z0-9._:/~-] are skipped with a sanitized stderr line and are not in
+  the output; OpenRouter's ~vendor/model-latest aliases are ordinary rows.
+  Network work runs without the state lock; the lock is held only
+  for the final load, prune, merge, and save of the state file, so a
+  record-failure or clear that lands during a sweep still succeeds.
+
+record-failure:
+  Persist what a real launch observed for one model id, free or paid. The
+  observation is classified by the same body-aware classifier the report
+  sweep uses, so the two paths cannot disagree: --observed 429 (the default)
+  records a per-model cooldown; --observed 403 records the permanent
+  platform-restricted verdict; --observed 404 records the permanent
+  no-allowed-providers verdict only when --body <file> names the response
+  body the caller received and that body contains "No allowed providers",
+  and any other 404 (a retired, delisted, or mistyped id) is transient and
+  records only a cooldown, never a permanent verdict. A paid model rejected
+  on first use therefore drops out of the unverified ordering until `clear`
+  releases it. The body file is read for classification only and is never
+  printed. Unlike fm-dispatch-select.mjs, this does not inspect a task status
+  file: the caller already observed the outcome for this model id.
+
+clear:
+  With --model <id>, drop the persisted cooldown and any remembered verdict
+  for that one model id. With --all-verdicts, drop every remembered 404 and
+  403 verdict while keeping live 429 cooldowns, so the next report probes
+  those models live again. Run `clear --all-verdicts` after changing the
+  OpenRouter privacy or allowed-provider settings; until then the remembered
+  verdicts keep those models unprobed and ineligible.
+
+JSON fields on stdout (schemaVersion 1):
+  key                     sanitized /api/v1/key data (usage, usage_daily,
+                          usage_weekly, usage_monthly, limit, limit_remaining,
+                          is_free_tier)
+  models[]                id, tier (free|paid), free, promptPerMillion,
+                          completionPerMillion, eligible, reason; eligible is
+                          true only for a free model a live probe reached
+  routing.eligibleFree    eligible free model ids (may be empty or one)
+  routing.unverifiedPaidByCost  priced paid model ids that are not in cooldown
+                          and carry no remembered verdict, cheapest first;
+                          their reachability is unverified and is learned on
+                          first use via record-failure
+
+Paths:
+  state/.openrouter-quota.json     persisted per-model cooldowns and
+                                   remembered verdicts
+  state/.openrouter-quota.json.lock  mkdir lock for serialized state updates;
+                                   a lock whose owner pid is dead, or that has
+                                   no readable owner and is older than 60
+                                   seconds, is reaped with a stderr line
+
+Environment:
+  FM_HOME                         required and explicit
+  OPENROUTER_API_KEY_TOKENS       required working key; never printed
+  OPENROUTER_API_KEY              last-resort fallback only, with an explicit
+                                  stderr reason line; never a silent default
+  FM_STATE_OVERRIDE               optional state directory
+  FM_OPENROUTER_STATE_FILE        optional state-file override
+  FM_OPENROUTER_API_BASE          API origin (default https://openrouter.ai)
+  FM_OPENROUTER_COOLDOWN_SECONDS  integer 60..86400 (default 1800)
+  FM_OPENROUTER_PROBE_MAX         max free-model probes per report (default 64)
+  FM_OPENROUTER_PROBE_INTERVAL_SECONDS  integer 0..60 seconds between live
+                                  probes (default 4; 0 disables pacing)
+  FM_OPENROUTER_TIMEOUT           per-request seconds (default 20)
+
+Test-only seams:
+  --now fixes the current epoch second.
+  FM_OPENROUTER_STATE_FILE, FM_OPENROUTER_API_BASE, and
+  FM_OPENROUTER_PROBE_INTERVAL_SECONDS as above.
+
+Exit status: 0 on success, 2 on usage or missing-key errors, 3 when the API
+rejects the key, the lock stays busy, or required telemetry is unusable.

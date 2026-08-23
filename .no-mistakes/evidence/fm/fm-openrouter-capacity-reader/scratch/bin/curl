@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Offline stub of curl used only to produce a reviewer-visible transcript.
+ofile="" url="" data=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) ofile=$2; shift 2 ;;
+    --data-binary) data=$(cat -- "${2#@}"); shift 2 ;;
+    -H) [ "$2" = "@-" ] && cat >/dev/null; shift 2 ;;
+    --max-time|-w|-X) shift 2 ;;
+    http*) url=$1; shift ;;
+    *) shift ;;
+  esac
+done
+model=""
+[ -n "$data" ] && model=$(printf '%s' "$data" | jq -r '.model // empty')
+case "$url" in
+  */api/v1/key)
+    code=200
+    body='{"data":{"label":"redacted","usage":0.42,"usage_daily":0.01,"usage_weekly":0.1,"usage_monthly":0.42,"limit":null,"limit_remaining":null,"is_free_tier":false}}'
+    ;;
+  */api/v1/models)
+    code=200
+    body='{"data":[
+   {"id":"meta/llama-3.2-3b-instruct:free","pricing":{"prompt":"0","completion":"0"}},
+   {"id":"openai/gpt-oss-20b:free","pricing":{"prompt":"0","completion":"0"}},
+   {"id":"google/gemma-4-31b-it:free","pricing":{"prompt":"0","completion":"0"}},
+   {"id":"cohere/north-mini-code:free","pricing":{"prompt":"0","completion":"0"}},
+   {"id":"openai/gpt-oss-20b","pricing":{"prompt":"0.00000003","completion":"0.00000013"}},
+   {"id":"openai/gpt-oss-120b","pricing":{"prompt":"0.000000037","completion":"0.00000017"}},
+   {"id":"openrouter/auto","pricing":{"prompt":"-1","completion":"-1"}}]}'
+    ;;
+  */api/v1/chat/completions)
+    case "$model" in
+      cohere/north-mini-code:free) code=200; body='{"choices":[{"message":{"content":"ok"}}]}' ;;
+      meta/llama-3.2-3b-instruct:free) code=404; body='{"error":{"message":"No allowed providers are available for the selected model"}}' ;;
+      openai/gpt-oss-20b:free) code=403; body='{"error":{"message":"only available on agent platforms"}}' ;;
+      google/gemma-4-31b-it:free) code=${STUB_GEMMA_CODE:-429}; body='{"error":{"message":"Provider returned error"}}' ;;
+      *) code=599; body='{}' ;;
+    esac
+    ;;
+  *) code=599; body='{}' ;;
+esac
+[ -n "$ofile" ] && printf '%s' "$body" > "$ofile"
+printf '%s' "$code"

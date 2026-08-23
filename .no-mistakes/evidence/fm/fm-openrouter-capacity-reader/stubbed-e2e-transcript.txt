@@ -1,0 +1,157 @@
+### Stubbed HTTP (offline) end-to-end transcript: key is a dummy value, curl is a stub on PATH
+
+$ fm-openrouter-quota.sh report --now 1000   # stub catalog: 1 healthy free model, one 404 privacy gate, one 403, one 429, 2 paid, 1 variable-priced
+{
+  "schemaVersion": 1,
+  "generatedAt": 1000,
+  "key": {
+    "usage": 0.42,
+    "usage_daily": 0.01,
+    "usage_weekly": 0.1,
+    "usage_monthly": 0.42,
+    "limit": null,
+    "limit_remaining": null,
+    "is_free_tier": false
+  },
+  "models": [
+    {
+      "id": "cohere/north-mini-code:free",
+      "tier": "free",
+      "free": true,
+      "promptPerMillion": 0,
+      "completionPerMillion": 0,
+      "eligible": true,
+      "reason": "live completion succeeded"
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "tier": "paid",
+      "free": false,
+      "promptPerMillion": 0.03,
+      "completionPerMillion": 0.13,
+      "eligible": false,
+      "reason": "priced and not in cooldown; reachability unverified"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "tier": "paid",
+      "free": false,
+      "promptPerMillion": 0.037,
+      "completionPerMillion": 0.17,
+      "eligible": false,
+      "reason": "priced and not in cooldown; reachability unverified"
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "tier": "free",
+      "free": true,
+      "promptPerMillion": 0,
+      "completionPerMillion": 0,
+      "eligible": false,
+      "reason": "cooldown until epoch 2800"
+    },
+    {
+      "id": "meta/llama-3.2-3b-instruct:free",
+      "tier": "free",
+      "free": true,
+      "promptPerMillion": 0,
+      "completionPerMillion": 0,
+      "eligible": false,
+      "reason": "account privacy gate: no allowed providers"
+    },
+    {
+      "id": "openai/gpt-oss-20b:free",
+      "tier": "free",
+      "free": true,
+      "promptPerMillion": 0,
+      "completionPerMillion": 0,
+      "eligible": false,
+      "reason": "platform-restricted"
+    },
+    {
+      "id": "openrouter/auto",
+      "tier": "paid",
+      "free": false,
+      "promptPerMillion": null,
+      "completionPerMillion": null,
+      "eligible": false,
+      "reason": "pricing-missing"
+    }
+  ],
+  "routing": {
+    "eligibleFree": [
+      "cohere/north-mini-code:free"
+    ],
+    "unverifiedPaidByCost": [
+      "openai/gpt-oss-20b",
+      "openai/gpt-oss-120b"
+    ]
+  }
+}
+exit=0
+--- stderr (sanitized diagnostics) ---
+fm-openrouter-quota: model=meta/llama-3.2-3b-instruct:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=openai/gpt-oss-20b:free unavailable: platform-restricted
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 2800
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: report models=7 free=4 probes=4 remembered=0 unprobed=0 skipped=0
+
+$ cat state/.openrouter-quota.json   # persisted per-model state (429 cooldown + remembered 404/403 verdicts)
+{
+  "version": 1,
+  "cooldowns": {
+    "google/gemma-4-31b-it:free": {
+      "until": 2800,
+      "reason": "rate-limited",
+      "recordedAt": 1000
+    }
+  },
+  "verdicts": {
+    "meta/llama-3.2-3b-instruct:free": {
+      "class": "allowed-providers-unavailable",
+      "recordedAt": 1000
+    },
+    "openai/gpt-oss-20b:free": {
+      "class": "platform-restricted",
+      "recordedAt": 1000
+    }
+  }
+}
+
+$ fm-openrouter-quota.sh report --now 1001   # upstream gemma would now answer 200, but its cooldown is live: not re-probed, still ineligible
+{"eligibleFree":["cohere/north-mini-code:free"],"unverifiedPaidByCost":["openai/gpt-oss-20b","openai/gpt-oss-120b"]}
+{"id":"google/gemma-4-31b-it:free","tier":"free","free":true,"promptPerMillion":0,"completionPerMillion":0,"eligible":false,"reason":"cooldown until epoch 2800"}
+exit=0
+fm-openrouter-quota: model=meta/llama-3.2-3b-instruct:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=openai/gpt-oss-20b:free unavailable: platform-restricted (remembered verdict)
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 2800
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: report models=7 free=4 probes=1 remembered=2 unprobed=0 skipped=0
+
+$ fm-openrouter-quota.sh report --now 2800   # cooldown expired on read: probed live again and eligible
+{"eligibleFree":["google/gemma-4-31b-it:free","cohere/north-mini-code:free"],"unverifiedPaidByCost":["openai/gpt-oss-20b","openai/gpt-oss-120b"]}
+{"id":"google/gemma-4-31b-it:free","tier":"free","free":true,"promptPerMillion":0,"completionPerMillion":0,"eligible":true,"reason":"live completion succeeded"}
+exit=0
+fm-openrouter-quota: model=meta/llama-3.2-3b-instruct:free unavailable: account privacy gate: no allowed providers (remembered verdict)
+fm-openrouter-quota: model=openai/gpt-oss-20b:free unavailable: platform-restricted (remembered verdict)
+fm-openrouter-quota: model=google/gemma-4-31b-it:free eligible: live completion succeeded
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: report models=7 free=4 probes=2 remembered=2 unprobed=0 skipped=0
+
+$ fm-openrouter-quota.sh record-failure --model cohere/north-mini-code:free --observed 429 --now 2801   # dispatch observed a real 429 on launch
+fm-openrouter-quota: model=cohere/north-mini-code:free cooldown recorded until epoch 4601
+exit=0
+
+$ fm-openrouter-quota.sh report --now 2802 | jq .routing   # only free model cooling down: eligibleFree empty, cheap-paid ordering remains for fallback
+{"eligibleFree":[],"unverifiedPaidByCost":["openai/gpt-oss-20b","openai/gpt-oss-120b"]}
+
+$ fm-openrouter-quota.sh clear --model cohere/north-mini-code:free
+fm-openrouter-quota: model=cohere/north-mini-code:free cooldown and remembered verdict cleared
+exit=0
+
+$ fm-openrouter-quota.sh report --now 2803 | jq .routing
+{"eligibleFree":["cohere/north-mini-code:free"],"unverifiedPaidByCost":["openai/gpt-oss-20b","openai/gpt-oss-120b"]}
+
+$ env -u OPENROUTER_API_KEY_TOKENS -u OPENROUTER_API_KEY fm-openrouter-quota.sh report   # missing key fails closed
+fm-openrouter-quota: OPENROUTER_API_KEY_TOKENS is unset
+exit=2

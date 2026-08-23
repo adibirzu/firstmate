@@ -1,0 +1,5 @@
+fm-openrouter-quota: model=meta/llama-3.2-3b-instruct:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=openai/gpt-oss-20b:free unavailable: platform-restricted
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 2800
+fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
+fm-openrouter-quota: report models=7 free=4 probes=4 remembered=0 unprobed=0 skipped=0
