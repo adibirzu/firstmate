@@ -11,7 +11,7 @@
 #
 # Usage:
 #   fm-openrouter-quota.sh report [--now <epoch>]
-#   fm-openrouter-quota.sh record-failure --model <id> [--observed <429|404|403>] [--now <epoch>]
+#   fm-openrouter-quota.sh record-failure --model <id> [--observed <429|404|403>] [--body <file>] [--now <epoch>]
 #   fm-openrouter-quota.sh clear --model <id>
 #   fm-openrouter-quota.sh clear --all-verdicts
 #   fm-openrouter-quota.sh --help
@@ -58,13 +58,19 @@
 #   record-failure or clear that lands during a sweep still succeeds.
 #
 # record-failure:
-#   Persist what a real launch observed for one model id, free or paid.
-#   --observed 429 (the default) records a per-model cooldown; --observed 404
-#   records the permanent no-allowed-providers verdict and --observed 403 the
-#   permanent platform-restricted verdict, so a paid model rejected on first
-#   use drops out of the unverified ordering until `clear` releases it. Unlike
-#   fm-dispatch-select.mjs, this does not inspect a task status file: the
-#   caller already observed the outcome for this model id.
+#   Persist what a real launch observed for one model id, free or paid. The
+#   observation is classified by the same body-aware classifier the report
+#   sweep uses, so the two paths cannot disagree: --observed 429 (the default)
+#   records a per-model cooldown; --observed 403 records the permanent
+#   platform-restricted verdict; --observed 404 records the permanent
+#   no-allowed-providers verdict only when --body <file> names the response
+#   body the caller received and that body contains "No allowed providers",
+#   and any other 404 (a retired, delisted, or mistyped id) is transient and
+#   records only a cooldown, never a permanent verdict. A paid model rejected
+#   on first use therefore drops out of the unverified ordering until `clear`
+#   releases it. The body file is read for classification only and is never
+#   printed. Unlike fm-dispatch-select.mjs, this does not inspect a task status
+#   file: the caller already observed the outcome for this model id.
 #
 # clear:
 #   With --model <id>, drop the persisted cooldown and any remembered verdict
@@ -257,7 +263,7 @@ lock_is_stale() {
   local owner mtime now_epoch
   owner=$(cat "$LOCKDIR/owner" 2>/dev/null | tr -d '[:space:]') || owner=
   if ! is_integer "$owner" || [ "$owner" -le 1 ]; then
-    mtime=$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null) || return 1
+    mtime=$(stat -c %Y "$LOCKDIR" 2>/dev/null) || mtime=$(stat -f %m "$LOCKDIR" 2>/dev/null) || return 1
     is_integer "$mtime" || return 1
     now_epoch=$(date +%s)
     [ $((now_epoch - mtime)) -ge "$LOCK_STALE_SECONDS" ] && return 0
@@ -677,32 +683,43 @@ cmd_report() {
 }
 
 cmd_record_failure() {
-  local now=$1 state_file=$2 id=$3 observed=$4
+  local now=$1 state_file=$2 id=$3 observed=$4 body_file=$5
   local cooldown state until_epoch class
   model_id_ok "$id" || die 'record-failure needs --model <id>'
   case "$observed" in
-    429) class=rate-limited ;;
-    404) class=allowed-providers-unavailable ;;
-    403) class=platform-restricted ;;
+    429|404|403) ;;
     *) die 'record-failure --observed must be 429, 404, or 403' ;;
   esac
+  [ -n "$body_file" ] || body_file=/dev/null
+  [ -r "$body_file" ] || die '--body must name a readable response body file'
+  class=$(classify_http_failure "$observed" "$body_file")
   cooldown=$(cooldown_seconds)
   acquire_lock
   state=$(load_state "$state_file")
   state=$(prune_cooldowns "$state" "$now")
-  if [ "$class" = rate-limited ]; then
-    state=$(set_cooldown "$state" "$id" "$now" "$cooldown" rate-limited)
-  else
-    state=$(set_verdict "$state" "$id" "$now" "$class")
-  fi
+  case "$class" in
+    allowed-providers-unavailable|platform-restricted)
+      state=$(set_verdict "$state" "$id" "$now" "$class")
+      ;;
+    *)
+      state=$(set_cooldown "$state" "$id" "$now" "$cooldown" "$class")
+      ;;
+  esac
   save_state "$state_file" "$state"
   release_lock
-  if [ "$class" = rate-limited ]; then
-    until_epoch=$((now + cooldown))
-    log "model=${id} cooldown recorded until epoch ${until_epoch}"
-  else
-    log "model=${id} permanent verdict recorded: $(reason_for_class "$class")"
-  fi
+  case "$class" in
+    allowed-providers-unavailable|platform-restricted)
+      log "model=${id} permanent verdict recorded: $(reason_for_class "$class")"
+      ;;
+    rate-limited)
+      until_epoch=$((now + cooldown))
+      log "model=${id} cooldown recorded until epoch ${until_epoch}"
+      ;;
+    *)
+      until_epoch=$((now + cooldown))
+      log "model=${id} transient ${class} recorded as cooldown until epoch ${until_epoch}"
+      ;;
+  esac
 }
 
 cmd_clear() {
@@ -730,7 +747,7 @@ cmd_clear_all_verdicts() {
 }
 
 main() {
-  local command=report now_raw='' now='' model='' observed=429 observed_set=0 all_verdicts=0 home state_dir state_file
+  local command=report now_raw='' now='' model='' observed=429 observed_set=0 body_file='' all_verdicts=0 home state_dir state_file
   while [ $# -gt 0 ]; do
     case "$1" in
       --help|-h)
@@ -755,6 +772,11 @@ main() {
         [ $# -ge 2 ] || die '--observed requires a value'
         observed=$2
         observed_set=1
+        shift 2
+        ;;
+      --body)
+        [ $# -ge 2 ] || die '--body requires a value'
+        body_file=$2
         shift 2
         ;;
       --all-verdicts)
@@ -783,6 +805,9 @@ main() {
   if [ "$observed_set" -eq 1 ] && [ "$command" != record-failure ]; then
     die '--observed is only valid with record-failure'
   fi
+  if [ -n "$body_file" ] && [ "$command" != record-failure ]; then
+    die '--body is only valid with record-failure'
+  fi
 
   command -v jq >/dev/null 2>&1 || die 'jq is required' 3
   now=$(parse_now "$now_raw")
@@ -801,7 +826,7 @@ main() {
     report) cmd_report "$now" "$state_file" ;;
     record-failure)
       [ -n "$model" ] || die 'record-failure needs --model <id>'
-      cmd_record_failure "$now" "$state_file" "$model" "$observed"
+      cmd_record_failure "$now" "$state_file" "$model" "$observed" "$body_file"
       ;;
     clear)
       if [ "$all_verdicts" -eq 1 ]; then

@@ -10,7 +10,7 @@ Verified 2026-08-23 against `GET https://openrouter.ai/api/v1/key`, `GET https:/
 The working credential was `OPENROUTER_API_KEY_TOKENS` in the process environment.
 Its value is redacted here and was not present in stdout, stderr, the state file, or any file under the isolated home after the run.
 The reader handed that value to curl on standard input as the Authorization header (`-H @-`); the live completion below proves OpenRouter accepted requests authenticated that way.
-The stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves the behaviours a single live capture cannot show: no file under the reader's home or temp directory ever contains the key, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten, `~vendor/model-latest` aliases priced as ordinary rows with tier taken from price, a paid row never published as eligible, and `record-failure --observed 404` on a paid id recording a permanent verdict where `--observed 429` records a short cooldown.
+The stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves the behaviours a single live capture cannot show: no file under the reader's home or temp directory ever contains the key, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten, `~vendor/model-latest` aliases priced as ordinary rows with tier taken from price, a paid row never published as eligible, and `record-failure --observed 404 --body <file>` on a paid id recording a permanent verdict only when the body carries the privacy gate, where a plain 404 and `--observed 429` record a short cooldown.
 
 ## Commands
 
@@ -260,7 +260,7 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
 
 The reader does not probe paid models, so no paid row is ever published as `eligible`; each carries `priced and not in cooldown; reachability unverified`, which a consumer can tell apart from a free row's `live completion succeeded` without guessing.
 `routing.unverifiedPaidByCost` is therefore a cheapest-first ordering of priced, non-cooldown paid models with no remembered verdict, not a list dispatch can spend on today.
-Reachability is established on first real use: when a launch on one of these ids is rejected, `record-failure --model <id> --observed 404` (or `403`) records a permanent verdict that removes it from the ordering, and `--observed 429` records the short cooldown, so the ordering corrects itself through use instead of costing a probe per paid model on every run.
+Reachability is established on first real use: when a launch on one of these ids is rejected, `record-failure --model <id> --observed 404 --body <response-body-file>` records the permanent no-allowed-providers verdict when that body carries the privacy gate (a 404 with any other body is only a short cooldown), `--observed 403` records the permanent platform-restricted verdict, and `--observed 429` records the short cooldown, so the ordering corrects itself through use instead of costing a probe per paid model on every run.
 The head of the ordering on this account is unreachable, as the probe below shows.
 Each entry of the ordering was probed in price order with one bounded chat completion until one succeeded.
 
@@ -292,7 +292,7 @@ model=ibm-granite/granite-4.1-8b perMillion=0.05/0.1 http=404 no-allowed-provide
 model=openai/gpt-oss-20b perMillion=0.03/0.13 http=200
 ```
 
-The thirteen cheapest entries, from `inclusionai/ling-2.6-flash` at $0.01/M prompt upward, all returned HTTP 404 `No allowed providers` and are not usable by dispatch until the allowed-providers setting admits their providers; recording each with `record-failure --model <id> --observed 404` removes it from the ordering for good.
+The thirteen cheapest entries, from `inclusionai/ling-2.6-flash` at $0.01/M prompt upward, all returned HTTP 404 `No allowed providers` and are not usable by dispatch until the allowed-providers setting admits their providers; recording each with `record-failure --model <id> --observed 404 --body <that-response-body>` removes it from the ordering for good.
 The cheapest paid model that actually completes on this account is `openai/gpt-oss-20b` at $0.03/M prompt and $0.13/M completion, the fourteenth entry of the ordering.
 
 ## Load-bearing facts

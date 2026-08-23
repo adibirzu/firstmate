@@ -530,11 +530,30 @@ test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short() {
     "$READER" record-failure --model 'openai/gpt-oss-20b' --now "$NOW" 2>"$err" \
     || fail "rate-limit record-failure on a paid id failed: $(cat "$err")"
   assert_contains "$(cat "$err")" "cooldown recorded until epoch 2800" "paid rate-limit did not record a cooldown"
+  printf '%s' '{"error":{"message":"No allowed providers are available for the selected model"}}' > "$home/gate-body.json"
+  printf '%s' '{"error":{"message":"No endpoints found for example/retired-model"}}' > "$home/plain-body.json"
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
-    "$READER" record-failure --model 'openai/gpt-oss-120b' --observed 404 --now "$NOW" 2>"$err" \
+    "$READER" record-failure --model 'openai/gpt-oss-120b' --observed 404 --body "$home/gate-body.json" --now "$NOW" 2>"$err" \
     || fail "404 record-failure on a paid id failed: $(cat "$err")"
-  assert_contains "$(cat "$err")" "permanent verdict recorded: account privacy gate: no allowed providers" "paid 404 was not recorded as a permanent verdict"
-  assert_not_contains "$(cat "$err")" "cooldown recorded" "paid 404 was recorded as a cooldown"
+  assert_contains "$(cat "$err")" "permanent verdict recorded: account privacy gate: no allowed providers" "paid gate 404 was not recorded as a permanent verdict"
+  assert_not_contains "$(cat "$err")" "cooldown" "paid gate 404 was recorded as a cooldown"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'google/gemma-3-12b-it' --observed 404 --body "$home/plain-body.json" --now "$NOW" 2>"$err" \
+    || fail "plain 404 record-failure failed: $(cat "$err")"
+  assert_contains "$(cat "$err")" "transient http-404 recorded as cooldown until epoch 2800" "plain 404 was not recorded as a transient cooldown"
+  assert_not_contains "$(cat "$err")" "permanent verdict" "plain 404 was recorded as a permanent verdict"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model '~example/alias-latest' --observed 404 --now "$NOW" 2>"$err" \
+    || fail "bodyless 404 record-failure failed: $(cat "$err")"
+  assert_contains "$(cat "$err")" "transient http-404 recorded as cooldown" "bodyless 404 was not treated as transient"
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'openai/gpt-oss-120b' --observed 404 --body "$home/missing.json" --now "$NOW" 2>&1) || rc=$?
+  expect_code 2 "$rc" "an unreadable --body file must be refused"
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" clear --model 'openai/gpt-oss-120b' --body "$home/gate-body.json" 2>&1) || rc=$?
+  expect_code 2 "$rc" "--body outside record-failure must be refused"
 
   rc=0
   out=$(run_reader "$home" "$fakebin" report --now 1001 2>"$err") || rc=$?
@@ -545,7 +564,10 @@ test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short() {
   printf '%s\n' "$out" | jq -e \
     '.models[] | select(.id=="openai/gpt-oss-120b") | .eligible==false and .reason=="account privacy gate: no allowed providers"' \
     >/dev/null || fail "paid permanent verdict was not applied: $out"
-  printf '%s\n' "$out" | jq -e '.routing.unverifiedPaidByCost | index("openai/gpt-oss-20b") == null and index("openai/gpt-oss-120b") == null' >/dev/null \
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="google/gemma-3-12b-it") | .eligible==false and .reason=="cooldown until epoch 2800"' \
+    >/dev/null || fail "plain 404 did not become a short cooldown: $out"
+  printf '%s\n' "$out" | jq -e '.routing.unverifiedPaidByCost | index("openai/gpt-oss-20b") == null and index("openai/gpt-oss-120b") == null and index("google/gemma-3-12b-it") == null' >/dev/null \
     || fail "rejected paid ids were still offered in unverifiedPaidByCost: $out"
 
   rc=0
@@ -557,6 +579,9 @@ test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short() {
   printf '%s\n' "$out" | jq -e \
     '.models[] | select(.id=="openai/gpt-oss-120b") | .reason=="account privacy gate: no allowed providers"' \
     >/dev/null || fail "paid permanent verdict expired like a cooldown: $out"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="google/gemma-3-12b-it") | .reason=="priced and not in cooldown; reachability unverified"' \
+    >/dev/null || fail "plain 404 cooldown did not expire, it persisted like a permanent verdict: $out"
 
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
     "$READER" record-failure --model 'openai/gpt-oss-20b' --now 9000 2>"$err" \
@@ -572,7 +597,7 @@ test_paid_record_failure_verdict_is_permanent_and_rate_limit_is_short() {
   printf '%s\n' "$out" | jq -e \
     '.models[] | select(.id=="openai/gpt-oss-20b") | .reason=="cooldown until epoch 10800"' \
     >/dev/null || fail "clear --all-verdicts wiped a live paid cooldown: $out"
-  pass "paid record-failure: 404 is a permanent verdict, 429 is a short cooldown, bulk clear keeps cooldowns"
+  pass "paid record-failure: gate 404 is permanent, plain 404 and 429 are short cooldowns, bulk clear keeps cooldowns"
 }
 
 test_ownerless_lock_is_reaped_only_when_stale() {
