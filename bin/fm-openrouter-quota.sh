@@ -47,8 +47,9 @@
 #   number of free models to probe exceeds FM_OPENROUTER_PROBE_MAX the report
 #   is still emitted: the unprobed models are reported ineligible with reason
 #   probe-budget-exhausted, so nothing is guessed. Catalog ids outside
-#   [A-Za-z0-9._:/-] are skipped with a sanitized stderr line and are not in
-#   the output. Network work runs without the state lock; the lock is held only
+#   [A-Za-z0-9._:/~-] are skipped with a sanitized stderr line and are not in
+#   the output; OpenRouter's ~vendor/model-latest aliases are ordinary rows.
+#   Network work runs without the state lock; the lock is held only
 #   for the final load, prune, merge, and save of the state file, so a
 #   record-failure or clear that lands during a sweep still succeeds.
 #
@@ -204,10 +205,10 @@ api_base() {
 model_id_ok() {
   local id=$1
   case "$id" in
-    ''|*[!A-Za-z0-9._:/-]*|[-._:/*]|/*) return 1 ;;
+    ''|*[!A-Za-z0-9._:/~-]*|[-._:/~*]|/*) return 1 ;;
   esac
   case "$id" in
-    [A-Za-z0-9]*) return 0 ;;
+    [A-Za-z0-9]*|~[A-Za-z0-9]*) return 0 ;;
     *) return 1 ;;
   esac
 }

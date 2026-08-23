@@ -10,7 +10,7 @@ Verified 2026-08-23 against `GET https://openrouter.ai/api/v1/key`, `GET https:/
 The working credential was `OPENROUTER_API_KEY_TOKENS` in the process environment.
 Its value is redacted here and was not present in stdout, stderr, the state file, or any file under the isolated home after the run.
 The reader handed that value to curl on standard input as the Authorization header (`-H @-`); the two live completions below prove OpenRouter accepted requests authenticated that way.
-The stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves the behaviours a single live capture cannot show: no file under the reader's home or temp directory ever contains the key, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, and a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten.
+The stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves the behaviours a single live capture cannot show: no file under the reader's home or temp directory ever contains the key, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten, and `~vendor/model-latest` aliases priced as ordinary rows with tier taken from price.
 
 ## Commands
 
@@ -21,7 +21,8 @@ The key is supplied only as an environment variable.
 export FM_HOME=$(mktemp -d /tmp/fm-openrouter-quota-verify.XXXXXX)
 export OPENROUTER_API_KEY_TOKENS='<redacted>'
 mkdir -p "$FM_HOME/state"
-bin/fm-openrouter-quota.sh report 2>openrouter-quota.err | jq '{
+bin/fm-openrouter-quota.sh report 2>openrouter-quota.err > full.json
+jq '{
   schemaVersion,
   generatedAt,
   key,
@@ -29,15 +30,15 @@ bin/fm-openrouter-quota.sh report 2>openrouter-quota.err | jq '{
   freeCount: ([.models[] | select(.tier=="free")] | length),
   routing: {
     eligibleFree: .routing.eligibleFree,
-    cheapestPricedPaid: .routing.eligiblePaidByCost[:3]
+    cheapestByCatalogPrice: .routing.eligiblePaidByCost[:3]
   },
   free: [.models[] | select(.tier=="free") | {id, eligible, reason}],
   paidSamples: [
     .models[]
-    | select(.id=="openai/gpt-oss-20b" or .id=="openai/gpt-oss-120b" or .id=="google/gemma-3-12b-it" or .id=="openrouter/auto")
+    | select(.id=="openai/gpt-oss-20b" or .id=="openai/gpt-oss-120b" or .id=="google/gemma-3-12b-it" or .id=="openrouter/auto" or .id=="~anthropic/claude-haiku-latest")
     | {id, eligible, promptPerMillion, completionPerMillion, reason}
   ]
-}'
+}' full.json
 ```
 
 The jq filter is documentation of the bounded evidence, not part of the reader.
@@ -49,40 +50,28 @@ After changing the OpenRouter privacy or allowed-provider settings, run `bin/fm-
 
 ```text
 fm-openrouter-quota: model=stealth/ox-alpha unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=~z-ai/glm-latest skipped: unsupported id shape
 fm-openrouter-quota: model=dots-studio/dots-3-note-preview:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=liquid/lfm-2.5-2.6b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3.5-lightning:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=~deepseek/deepseek-v4-flash-latest skipped: unsupported id shape
 fm-openrouter-quota: model=thinkingmachines/inkling-small:free unavailable: platform-restricted
 fm-openrouter-quota: model=poolside/laguna-s-2.1:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=thinkingmachines/inkling:free unavailable: platform-restricted
-fm-openrouter-quota: model=~x-ai/grok-latest skipped: unsupported id shape
 fm-openrouter-quota: model=poolside/laguna-xs-2.1:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
 fm-openrouter-quota: model=z-ai/glm-5.2:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=~anthropic/claude-fable-latest skipped: unsupported id shape
 fm-openrouter-quota: model=nvidia/nemotron-3.5-content-safety:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3-ultra-550b-a55b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=~anthropic/claude-haiku-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~openai/gpt-mini-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~google/gemini-pro-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~moonshotai/kimi-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~google/gemini-flash-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~anthropic/claude-sonnet-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~openai/gpt-latest skipped: unsupported id shape
-fm-openrouter-quota: model=~anthropic/claude-opus-latest skipped: unsupported id shape
-fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free eligible: live completion succeeded
-fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787499238
+fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free unavailable: cooldown until epoch 1787500169
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787500169
 fm-openrouter-quota: model=google/lyria-3-pro-preview unavailable: http-502
 fm-openrouter-quota: model=google/lyria-3-clip-preview unavailable: http-502
 fm-openrouter-quota: model=nvidia/nemotron-3-super-120b-a12b:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=openrouter/free unavailable: cooldown until epoch 1787499238
+fm-openrouter-quota: model=openrouter/free eligible: live completion succeeded
 fm-openrouter-quota: model=nvidia/nemotron-3-nano-30b-a3b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-nano-12b-v2-vl:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-nano-9b-v2:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: report models=410 free=22 probes=22 remembered=0 unprobed=0 skipped=12
+fm-openrouter-quota: report models=422 free=22 probes=22 remembered=0 unprobed=0 skipped=0
 ```
 
 The summary line reads `report models= free= probes= remembered= unprobed= skipped=`; this run started from an empty state file, so nothing was remembered yet and every price-zero model was probed.
@@ -93,7 +82,7 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
 ```json
 {
   "schemaVersion": 1,
-  "generatedAt": 1787497438,
+  "generatedAt": 1787498369,
   "key": {
     "usage": 0.00002952,
     "usage_daily": 0.00002952,
@@ -103,14 +92,14 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
     "limit_remaining": null,
     "is_free_tier": false
   },
-  "modelCount": 410,
+  "modelCount": 422,
   "freeCount": 22,
   "routing": {
     "eligibleFree": [
       "cohere/north-mini-code:free",
-      "google/gemma-4-26b-a4b-it:free"
+      "openrouter/free"
     ],
-    "cheapestPricedPaid": [
+    "cheapestByCatalogPrice": [
       "inclusionai/ling-2.6-flash",
       "mistralai/mistral-nemo",
       "inclusionai/ling-3.0-flash"
@@ -123,7 +112,7 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
       "reason": "live completion succeeded"
     },
     {
-      "id": "google/gemma-4-26b-a4b-it:free",
+      "id": "openrouter/free",
       "eligible": true,
       "reason": "live completion succeeded"
     },
@@ -133,9 +122,14 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
       "reason": "account privacy gate: no allowed providers"
     },
     {
+      "id": "google/gemma-4-26b-a4b-it:free",
+      "eligible": false,
+      "reason": "cooldown until epoch 1787500169"
+    },
+    {
       "id": "google/gemma-4-31b-it:free",
       "eligible": false,
-      "reason": "cooldown until epoch 1787499238"
+      "reason": "cooldown until epoch 1787500169"
     },
     {
       "id": "google/lyria-3-clip-preview",
@@ -193,11 +187,6 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
       "reason": "account privacy gate: no allowed providers"
     },
     {
-      "id": "openrouter/free",
-      "eligible": false,
-      "reason": "cooldown until epoch 1787499238"
-    },
-    {
       "id": "poolside/laguna-s-2.1:free",
       "eligible": false,
       "reason": "account privacy gate: no allowed providers"
@@ -251,6 +240,13 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
       "reason": "priced and not in cooldown"
     },
     {
+      "id": "~anthropic/claude-haiku-latest",
+      "eligible": true,
+      "promptPerMillion": 1,
+      "completionPerMillion": 5,
+      "reason": "priced and not in cooldown"
+    },
+    {
       "id": "openrouter/auto",
       "eligible": false,
       "promptPerMillion": null,
@@ -261,16 +257,54 @@ Models with a remembered 404 or 403 verdict are logged with the suffix `(remembe
 }
 ```
 
+## Paid floor on this account
+
+The reader does not probe paid models: a paid row is `eligible` when it is priced and not in cooldown, and `routing.eligiblePaidByCost` is that set in catalog price order.
+The cheapest entries of that list are served only by providers this account's allowed-providers setting does not permit, so the catalog floor is not reachable on this account.
+To find the operative floor, each entry of `routing.eligiblePaidByCost` was probed in order with one bounded chat completion until one succeeded.
+
+```sh
+for m in $(jq -r '.routing.eligiblePaidByCost[:40][]' full.json); do
+  printf 'Authorization: Bearer %s\n' "$OPENROUTER_API_KEY_TOKENS" \
+    | curl -sS --max-time 20 -o probe-body.json -w '%{http_code}' -X POST -H @- \
+        -H 'Content-Type: application/json' \
+        --data-binary "$(jq -nc --arg id "$m" '{model:$id, messages:[{role:"user", content:"ok"}], max_tokens:1}')" \
+        https://openrouter.ai/api/v1/chat/completions
+  # stop at the first 200; a 404 body containing "No allowed providers" is the account privacy gate
+done
+```
+
+```text
+model=inclusionai/ling-2.6-flash perMillion=0.01/0.03 http=404 no-allowed-providers
+model=mistralai/mistral-nemo perMillion=0.019/0.03 http=404 no-allowed-providers
+model=inclusionai/ling-3.0-flash perMillion=0.021/0.063 http=404 no-allowed-providers
+model=sao10k/l3-lunaris-8b perMillion=0.04/0.05 http=404 no-allowed-providers
+model=gryphe/mythomax-l2-13b perMillion=0.06/0.06 http=404 no-allowed-providers
+model=nex-agi/nex-n2-mini perMillion=0.025/0.1 http=404 no-allowed-providers
+model=ibm-granite/granite-4.0-h-micro perMillion=0.017/0.112 http=404 no-allowed-providers
+model=meta-llama/llama-3.1-8b-instruct perMillion=0.05/0.08 http=404 no-allowed-providers
+model=mistralai/mistral-small-24b-instruct-2501 perMillion=0.05/0.08 http=404 no-allowed-providers
+model=deepseek/deepseek-v4-flash perMillion=0.04886/0.09772 http=404 no-allowed-providers
+model=upstage/solar-pro4 perMillion=0.03/0.12 http=404 no-allowed-providers
+model=google/gemma-3-4b-it perMillion=0.05/0.1 http=404 no-allowed-providers
+model=ibm-granite/granite-4.1-8b perMillion=0.05/0.1 http=404 no-allowed-providers
+model=openai/gpt-oss-20b perMillion=0.03/0.13 http=200
+```
+
+The operative paid floor on this account is `openai/gpt-oss-20b` at $0.03/M prompt and $0.13/M completion, the fourteenth entry of `routing.eligiblePaidByCost`.
+The thirteen cheaper entries, from `inclusionai/ling-2.6-flash` at $0.01/M prompt upward, all returned HTTP 404 `No allowed providers` and are not usable by dispatch until the allowed-providers setting admits their providers.
+
 ## Load-bearing facts
 
-- The catalog is live: this run listed 410 models and probed 22 price-zero models, not a hardcoded allow-list.
-- The catalog also carries 12 `~`-prefixed alias ids such as `~anthropic/claude-sonnet-latest`; their shape is outside `[A-Za-z0-9._:/-]`, so the reader names each on stderr as `skipped: unsupported id shape` and leaves them out of the output instead of dropping them silently.
-- Exactly the models that returned a real completion were eligible free routes: `cohere/north-mini-code:free` and `google/gemma-4-26b-a4b-it:free`.
+- The catalog is live: this run listed 422 models and probed 22 price-zero models, not a hardcoded allow-list.
+- The catalog carries 12 `~vendor/model-latest` aliases such as `~anthropic/claude-haiku-latest`; they are ordinary paid rows priced from the catalog ($1/M prompt and $5/M completion for that one) and are not probed.
+- Exactly the models that returned a real completion were eligible free routes: `cohere/north-mini-code:free` and `openrouter/free`.
 - HTTP 404 bodies containing `No allowed providers` are a stable account privacy gate and are skipped without a cooldown.
 - HTTP 403 platform restriction is skipped without a cooldown (`thinkingmachines/inkling:free` and `thinkingmachines/inkling-small:free`).
-- HTTP 429 is a per-model cooldown (`google/gemma-4-31b-it:free` and `openrouter/free` until epoch 1787499238, which is `generatedAt + 1800`).
+- HTTP 429 is a per-model cooldown (`google/gemma-4-26b-a4b-it:free` and `google/gemma-4-31b-it:free` until epoch 1787500169, which is `generatedAt + 1800`).
 - HTTP 502 from an upstream is reported for that run only (`google/lyria-3-pro-preview` and `google/lyria-3-clip-preview`) and is neither a cooldown nor a remembered verdict.
-- Paid models are priced from the catalog and not probed: `openai/gpt-oss-20b` is $0.03/M prompt and $0.13/M completion.
+- Tier comes from price alone: a row is `free` when both per-token prices are zero and `paid` otherwise, and `routing.eligiblePaidByCost` is ordered by prompt plus completion price with no floor or threshold.
+- The cheapest priced paid row in the catalog (`inclusionai/ling-2.6-flash`, $0.01/M prompt and $0.03/M completion) is not reachable on this account because its providers are outside the allowed-providers setting; the cheapest paid model that actually completes is `openai/gpt-oss-20b` at $0.03/M prompt and $0.13/M completion.
 - Per-million prices are rounded to six decimals, so `google/gemma-3-12b-it` publishes as `0.05` prompt and `openai/gpt-oss-120b` as `0.17` completion with no binary float noise.
 - A per-token price of `-1` is OpenRouter's variable-pricing sentinel (`openrouter/auto`) and must not sort as a cheap paid route.
 - `limit` null means this key has no spend cap.

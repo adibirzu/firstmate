@@ -568,6 +568,31 @@ test_probes_are_paced() {
   pass "live probes are paced by the configured interval"
 }
 
+test_tilde_alias_is_priced_by_tier_and_sorted_cheapest_first() {
+  local home fakebin out err rc=0
+  home=$(make_home tilde-alias)
+  fakebin=$(make_fake_curl "$home")
+  err="$home/report.err"
+  out=$(FAKE_CURL_LOG="$home/curl.log" \
+    FAKE_MODELS_BODY_OVERRIDE="$(fixture_models | jq -c '.data += [{"id":"~example/alias-latest","pricing":{"prompt":"0.00000001","completion":"0.00000002"}},{"id":"~example/free-alias-latest","pricing":{"prompt":"0","completion":"0"}}]')" \
+    run_reader "$home" "$fakebin" report --now "$NOW" 2>"$err") || rc=$?
+  expect_code 0 "$rc" "report with tilde aliases must succeed"
+  assert_not_contains "$(cat "$err")" "~example/alias-latest skipped" "tilde alias was still skipped"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="~example/alias-latest") | .tier=="paid" and .free==false and .eligible==true and .promptPerMillion==0.01 and .completionPerMillion==0.02 and .reason=="priced and not in cooldown"' \
+    >/dev/null || fail "tilde paid alias was not priced as an ordinary paid row: $out"
+  [ "$(printf '%s\n' "$out" | jq -r '.routing.eligiblePaidByCost[0]')" = '~example/alias-latest' ] \
+    || fail "cheapest eligible paid id was not first, a floor or threshold is interfering: $out"
+  grep -F 'model=~example/alias-latest ' "$home/curl.log" >/dev/null \
+    && fail "a paid tilde alias was probed: $(cat "$home/curl.log")"
+  printf '%s\n' "$out" | jq -e \
+    '.models[] | select(.id=="~example/free-alias-latest") | .tier=="free" and .free==true' \
+    >/dev/null || fail "price-zero tilde alias was not classed free by price: $out"
+  grep -F 'model=~example/free-alias-latest ' "$home/curl.log" >/dev/null \
+    || fail "price-zero tilde alias was not probed live: $(cat "$home/curl.log")"
+  pass "tilde aliases are ordinary rows: tier from price, paid sorted cheapest-first, free probed"
+}
+
 test_unsupported_model_id_is_logged_not_silent() {
   local home fakebin out err rc=0
   home=$(make_home bad-id)
@@ -609,6 +634,7 @@ test_clear_all_verdicts_reprobes_and_keeps_cooldowns
 test_flags_are_refused_outside_their_command
 test_probe_budget_keeps_partial_report
 test_probes_are_paced
+test_tilde_alias_is_priced_by_tier_and_sorted_cheapest_first
 test_unsupported_model_id_is_logged_not_silent
 test_rejected_key_is_reported_once
 
