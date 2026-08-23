@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
-# fm-marker-lib.sh - compatibility entry point for from-firstmate routing.
+# fm-marker-lib.sh - single owner of the persistent per-window watcher marker
+# key (fm_window_marker_key), and the compatibility entry point for
+# from-firstmate routing.
+#
+# fm_window_marker_key is the one key scheme behind every per-window watcher
+# marker family under state/ (.hash-, .count-, .stale-, .stale-since-,
+# .paused-*, .wedge-escalations-) and the herdr adapter's .herdr-escalated-
+# dedupe marker. bin/fm-watch.sh, bin/fm-supervise-daemon.sh, and
+# bin/backends/herdr.sh all source it here so a marker one writer records is
+# the marker another writer clears. Pinned by tests/fm-watch-triage.test.sh
+# (test_window_marker_keys_are_injective_and_ignore_legacy_state) and
+# tests/fm-backend-herdr.test.sh (test_escalation_marker_keys_like_watcher).
 #
 # bin/fm-operational-input.sh owns current operational-input construction,
 # parsing, marker bytes, and the established from-firstmate compatibility
