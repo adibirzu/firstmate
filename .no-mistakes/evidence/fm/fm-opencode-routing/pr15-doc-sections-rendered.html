@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PR 15 — documentation sections as a reader sees them</title>
+<style>
+body{max-width:860px;margin:2rem auto;font:15px/1.6 -apple-system,"Segoe UI",sans-serif;color:#1f2328;padding:0 1rem}
+pre{background:#f6f8fa;padding:12px;border-radius:6px;overflow:auto;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:#f6f8fa;padding:1px 4px;border-radius:4px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+h1{border-bottom:1px solid #d1d9e0;padding-bottom:.3em;font-size:1.5em}
+h2{font-size:1.2em;margin-top:2em}
+.file{color:#57606a;font-size:.85em;margin-bottom:-0.5em}
+.note{background:#fff8c5;border:1px solid #d4a72c66;border-radius:6px;padding:8px 12px;font-size:.9em}
+a{color:#0969da;text-decoration:none}
+</style>
+</head>
+<body>
+<p class="note">Rendered view of the two documentation sections PR 15 nets down to (branch <code>fm/fm-opencode-routing</code>, commit <code>2383a10</code>). Hand-rendered from the committed markdown for reviewer visibility; the live-command transcript proving each recorded fact is in <code>opencode-1.18.20-verification-transcript.txt</code>.</p>
+
+<p class="file">docs/verification/runtime-backends.md (new section)</p>
+<h1 id="opencode">OpenCode</h1>
+<p>OpenCode was verified on 2026-08-23 at <code>/opt/homebrew/bin/opencode</code>, installed through Homebrew, with version 1.18.20.</p>
+<pre>/opt/homebrew/bin/opencode --version
+opencode models
+env -u OPENROUTER_API_KEY opencode models
+OPENROUTER_API_KEY="$OPENROUTER_API_KEY" opencode models</pre>
+<p>The default <code>opencode models</code> output listed seven free OpenCode models, including <code>opencode/big-pickle</code>.<br>
+With <code>OPENROUTER_API_KEY</code> available in the process environment, the same discovery command additionally listed 360 <code>openrouter/&lt;model&gt;</code> entries, including <code>openrouter/cohere/north-mini-code:free</code>, <code>openrouter/openai/gpt-oss-20b</code>, and <code>openrouter/openai/gpt-oss-120b</code>.<br>
+With that variable absent, it listed no OpenRouter entries.<br>
+This proves that OpenCode reads the environment variable for provider discovery without <code>auth login</code> or a credential written to disk.</p>
+<p>A supervised smoke scout completed its brief, all four requested steps, report write, and <code>done:</code> status append through the OpenCode adapter using <code>opencode/big-pickle</code>.<br>
+That smoke did not exercise an OpenRouter-backed worker launch.<br>
+It remains unverified whether a command-scoped <code>OPENROUTER_API_KEY</code> reaches a worker through the long-lived backend daemon, which is the same credential-propagation hazard documented for Muse.</p>
+
+<p class="file">.agents/skills/harness-adapters/SKILL.md (refreshed heading + added cross-reference)</p>
+<h2>opencode (VERIFIED 2026-06-11, v1.15.7-1.18.20; 1.18.4 busy-queue re-verified 2026-07-20)</h2>
+<p>…existing facts table and auto-upgrade guidance unchanged…</p>
+<p>With <code>OPENROUTER_API_KEY</code> in its process environment, <code>opencode models</code> discovers OpenRouter model identifiers without <code>auth login</code> or a credential written to disk.<br>
+The current count and the unverified long-lived-daemon credential-propagation path are owned by <a href="#opencode">Runtime backend verification</a> (<code>../../../docs/verification/runtime-backends.md#opencode</code> — path and anchor verified to resolve).</p>
+</body>
+</html>

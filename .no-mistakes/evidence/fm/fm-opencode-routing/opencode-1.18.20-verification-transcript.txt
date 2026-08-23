@@ -1,0 +1,23 @@
+# OpenCode 1.18.20 documented-fact verification transcript
+# Re-running the exact commands recorded in docs/verification/runtime-backends.md#opencode
+
+$ /opt/homebrew/bin/opencode --version
+1.18.20
+
+$ env -u OPENROUTER_API_KEY opencode models   # (openrouter entry count + default models)
+openrouter/ entries: 0
+opencode/ entries:
+opencode/big-pickle
+opencode/hy3-free
+opencode/mimo-v2.5-free
+opencode/muse-spark-1.2-contributor-free
+opencode/nemotron-3-ultra-free
+opencode/nemotron-3.5-lightning-free
+opencode/x-preview-f-free
+
+$ OPENROUTER_API_KEY=*** opencode models   # (key sourced from ~/.claude/.env, value redacted)
+openrouter/ entries: 360
+sample entries named in the doc:
+openrouter/cohere/north-mini-code:free
+openrouter/openai/gpt-oss-120b
+openrouter/openai/gpt-oss-20b
