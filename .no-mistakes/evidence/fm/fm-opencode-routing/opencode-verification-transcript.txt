@@ -1,0 +1,34 @@
+# OpenCode verification facts re-checked live on this machine (2026-08-23)
+
+$ /opt/homebrew/bin/opencode --version
+1.18.20
+
+$ ls -l /opt/homebrew/bin/opencode
+lrwxr-xr-x@ 1 adrianb  admin  39 Aug 23 22:47 /opt/homebrew/bin/opencode -> ../Cellar/opencode/1.18.20/bin/opencode
+
+$ env -u OPENROUTER_API_KEY opencode models   # counts
+opencode/ entries:   7
+openrouter/ entries: 0
+  opencode/big-pickle
+  opencode/hy3-free
+  opencode/mimo-v2.5-free
+  opencode/muse-spark-1.2-contributor-free
+  opencode/nemotron-3-ultra-free
+  opencode/nemotron-3.5-lightning-free
+  opencode/x-preview-f-free
+
+$ OPENROUTER_API_KEY=<from ~/.claude/.env> opencode models   # counts
+opencode/ entries:   7
+openrouter/ entries: 360
+named models present:
+  openrouter/cohere/north-mini-code:free
+  openrouter/openai/gpt-oss-120b
+  openrouter/openai/gpt-oss-20b
+
+credential-on-disk check: ~/.local/share/opencode/auth.json -> does not exist (no credential written to disk, no auth login)
+
+cross-reference check: .agents/skills/harness-adapters/SKILL.md -> ../../../docs/verification/runtime-backends.md#opencode
+  target file exists; heading: 176:## OpenCode
+
+$ bin/fm-doc-audience-check.sh
+fm-doc-audience-check: ok surfaces=85 local_links=271
