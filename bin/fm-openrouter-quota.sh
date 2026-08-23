@@ -731,6 +731,12 @@ main() {
     esac
   done
   [ $# -eq 0 ] || die "unexpected argument $1"
+  if [ "$all_verdicts" -eq 1 ] && [ "$command" != clear ]; then
+    die '--all-verdicts is only valid with clear: run clear --all-verdicts'
+  fi
+  if [ -n "$model" ] && [ "$command" = report ]; then
+    die '--model is only valid with record-failure or clear, not report'
+  fi
 
   command -v jq >/dev/null 2>&1 || die 'jq is required' 3
   now=$(parse_now "$now_raw")

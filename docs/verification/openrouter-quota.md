@@ -8,10 +8,9 @@ This page records live API facts that the reader must keep handling.
 
 Verified 2026-08-23 against `GET https://openrouter.ai/api/v1/key`, `GET https://openrouter.ai/api/v1/models`, and bounded `POST /api/v1/chat/completions` probes of price-zero models.
 The working credential was `OPENROUTER_API_KEY_TOKENS` in the process environment.
-Its value is redacted here and was not present in stdout or stderr.
-The reader hands that value to curl on standard input as the Authorization header and never writes it to a file; the stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves that no file under the reader's home or temp directory contains the key while a request is in flight or after the run.
-The same offline suite proves the behaviours that a single live capture cannot show: per-million prices rounded to six decimals, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, and a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten.
-The captured stdout and stderr blocks below were produced by the reader revision that passed the Authorization header through a temporary file; the stdin transport that replaced it has not yet been captured live and the blocks are kept because they are the only live evidence on record.
+Its value is redacted here and was not present in stdout, stderr, the state file, or any file under the isolated home after the run.
+The reader handed that value to curl on standard input as the Authorization header (`-H @-`); the two live completions below prove OpenRouter accepted requests authenticated that way.
+The stubbed-HTTP test `tests/fm-openrouter-quota.test.sh` proves the behaviours a single live capture cannot show: no file under the reader's home or temp directory ever contains the key, probes paced by `FM_OPENROUTER_PROBE_INTERVAL_SECONDS`, 404 and 403 verdicts remembered across runs until `clear --model <id>` or `clear --all-verdicts`, `clear --all-verdicts` keeping live 429 cooldowns, unprobed models past `FM_OPENROUTER_PROBE_MAX` reported as `probe-budget-exhausted` in a kept partial report, and a `record-failure` that lands during a sweep succeeding and being merged rather than overwritten.
 
 ## Commands
 
@@ -19,7 +18,7 @@ An isolated `FM_HOME` is required so cooldown state cannot land in another home.
 The key is supplied only as an environment variable.
 
 ```sh
-export FM_HOME=/tmp/fm-openrouter-quota-verify
+export FM_HOME=$(mktemp -d /tmp/fm-openrouter-quota-verify.XXXXXX)
 export OPENROUTER_API_KEY_TOKENS='<redacted>'
 mkdir -p "$FM_HOME/state"
 bin/fm-openrouter-quota.sh report 2>openrouter-quota.err | jq '{
@@ -50,41 +49,51 @@ After changing the OpenRouter privacy or allowed-provider settings, run `bin/fm-
 
 ```text
 fm-openrouter-quota: model=stealth/ox-alpha unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=~z-ai/glm-latest skipped: unsupported id shape
 fm-openrouter-quota: model=dots-studio/dots-3-note-preview:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=liquid/lfm-2.5-2.6b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3.5-lightning:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=~deepseek/deepseek-v4-flash-latest skipped: unsupported id shape
 fm-openrouter-quota: model=thinkingmachines/inkling-small:free unavailable: platform-restricted
 fm-openrouter-quota: model=poolside/laguna-s-2.1:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=thinkingmachines/inkling:free unavailable: platform-restricted
+fm-openrouter-quota: model=~x-ai/grok-latest skipped: unsupported id shape
 fm-openrouter-quota: model=poolside/laguna-xs-2.1:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=cohere/north-mini-code:free eligible: live completion succeeded
 fm-openrouter-quota: model=z-ai/glm-5.2:free unavailable: account privacy gate: no allowed providers
+fm-openrouter-quota: model=~anthropic/claude-fable-latest skipped: unsupported id shape
 fm-openrouter-quota: model=nvidia/nemotron-3.5-content-safety:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3-ultra-550b-a55b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free unavailable: cooldown until epoch 1787495349
-fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787495349
+fm-openrouter-quota: model=~anthropic/claude-haiku-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~openai/gpt-mini-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~google/gemini-pro-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~moonshotai/kimi-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~google/gemini-flash-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~anthropic/claude-sonnet-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~openai/gpt-latest skipped: unsupported id shape
+fm-openrouter-quota: model=~anthropic/claude-opus-latest skipped: unsupported id shape
+fm-openrouter-quota: model=google/gemma-4-26b-a4b-it:free eligible: live completion succeeded
+fm-openrouter-quota: model=google/gemma-4-31b-it:free unavailable: cooldown until epoch 1787499238
 fm-openrouter-quota: model=google/lyria-3-pro-preview unavailable: http-502
 fm-openrouter-quota: model=google/lyria-3-clip-preview unavailable: http-502
 fm-openrouter-quota: model=nvidia/nemotron-3-super-120b-a12b:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: model=openrouter/free eligible: live completion succeeded
+fm-openrouter-quota: model=openrouter/free unavailable: cooldown until epoch 1787499238
 fm-openrouter-quota: model=nvidia/nemotron-3-nano-30b-a3b:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-nano-12b-v2-vl:free unavailable: account privacy gate: no allowed providers
 fm-openrouter-quota: model=nvidia/nemotron-nano-9b-v2:free unavailable: account privacy gate: no allowed providers
-fm-openrouter-quota: report models=410 free=22 probes=22
+fm-openrouter-quota: report models=410 free=22 probes=22 remembered=0 unprobed=0 skipped=12
 ```
 
-The summary line of the current reader reads `report models= free= probes= remembered= unprobed= skipped=`.
+The summary line reads `report models= free= probes= remembered= unprobed= skipped=`; this run started from an empty state file, so nothing was remembered yet and every price-zero model was probed.
 Models with a remembered 404 or 403 verdict are logged with the suffix `(remembered verdict)` and are not probed.
 
 ## Bounded stdout
 
-The current reader publishes the two `paidSamples` figures `0.049999999999999996` and `0.16999999999999998` as `0.05` and `0.17`, because per-million prices are rounded to six decimals.
-
 ```json
 {
   "schemaVersion": 1,
-  "generatedAt": 1787493549,
+  "generatedAt": 1787497438,
   "key": {
     "usage": 0.00002952,
     "usage_daily": 0.00002952,
@@ -99,7 +108,7 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
   "routing": {
     "eligibleFree": [
       "cohere/north-mini-code:free",
-      "openrouter/free"
+      "google/gemma-4-26b-a4b-it:free"
     ],
     "cheapestPricedPaid": [
       "inclusionai/ling-2.6-flash",
@@ -114,7 +123,7 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
       "reason": "live completion succeeded"
     },
     {
-      "id": "openrouter/free",
+      "id": "google/gemma-4-26b-a4b-it:free",
       "eligible": true,
       "reason": "live completion succeeded"
     },
@@ -124,14 +133,9 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
       "reason": "account privacy gate: no allowed providers"
     },
     {
-      "id": "google/gemma-4-26b-a4b-it:free",
-      "eligible": false,
-      "reason": "cooldown until epoch 1787495349"
-    },
-    {
       "id": "google/gemma-4-31b-it:free",
       "eligible": false,
-      "reason": "cooldown until epoch 1787495349"
+      "reason": "cooldown until epoch 1787499238"
     },
     {
       "id": "google/lyria-3-clip-preview",
@@ -189,6 +193,11 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
       "reason": "account privacy gate: no allowed providers"
     },
     {
+      "id": "openrouter/free",
+      "eligible": false,
+      "reason": "cooldown until epoch 1787499238"
+    },
+    {
       "id": "poolside/laguna-s-2.1:free",
       "eligible": false,
       "reason": "account privacy gate: no allowed providers"
@@ -230,7 +239,7 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
     {
       "id": "google/gemma-3-12b-it",
       "eligible": true,
-      "promptPerMillion": 0.049999999999999996,
+      "promptPerMillion": 0.05,
       "completionPerMillion": 0.15,
       "reason": "priced and not in cooldown"
     },
@@ -238,7 +247,7 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
       "id": "openai/gpt-oss-120b",
       "eligible": true,
       "promptPerMillion": 0.037,
-      "completionPerMillion": 0.16999999999999998,
+      "completionPerMillion": 0.17,
       "reason": "priced and not in cooldown"
     },
     {
@@ -255,13 +264,15 @@ The current reader publishes the two `paidSamples` figures `0.049999999999999996
 ## Load-bearing facts
 
 - The catalog is live: this run listed 410 models and probed 22 price-zero models, not a hardcoded allow-list.
-- Exactly the models that returned a real completion were eligible free routes: `cohere/north-mini-code:free` and `openrouter/free`.
+- The catalog also carries 12 `~`-prefixed alias ids such as `~anthropic/claude-sonnet-latest`; their shape is outside `[A-Za-z0-9._:/-]`, so the reader names each on stderr as `skipped: unsupported id shape` and leaves them out of the output instead of dropping them silently.
+- Exactly the models that returned a real completion were eligible free routes: `cohere/north-mini-code:free` and `google/gemma-4-26b-a4b-it:free`.
 - HTTP 404 bodies containing `No allowed providers` are a stable account privacy gate and are skipped without a cooldown.
 - HTTP 403 platform restriction is skipped without a cooldown (`thinkingmachines/inkling:free` and `thinkingmachines/inkling-small:free`).
-- HTTP 429 is a per-model cooldown (`google/gemma-4-31b-it:free` and `google/gemma-4-26b-a4b-it:free` until epoch 1787495349, which is `now + 1800`).
+- HTTP 429 is a per-model cooldown (`google/gemma-4-31b-it:free` and `openrouter/free` until epoch 1787499238, which is `generatedAt + 1800`).
+- HTTP 502 from an upstream is reported for that run only (`google/lyria-3-pro-preview` and `google/lyria-3-clip-preview`) and is neither a cooldown nor a remembered verdict.
 - Paid models are priced from the catalog and not probed: `openai/gpt-oss-20b` is $0.03/M prompt and $0.13/M completion.
-- Catalog per-token strings such as `0.00000005` and `0.00000017` multiply to binary float noise; the reader rounds per-million prices to six decimals so `google/gemma-3-12b-it` publishes as `0.05` prompt and `openai/gpt-oss-120b` as `0.17` completion.
+- Per-million prices are rounded to six decimals, so `google/gemma-3-12b-it` publishes as `0.05` prompt and `openai/gpt-oss-120b` as `0.17` completion with no binary float noise.
 - A per-token price of `-1` is OpenRouter's variable-pricing sentinel (`openrouter/auto`) and must not sort as a cheap paid route.
 - `limit` null means this key has no spend cap.
 - OpenRouter documents a 20 requests per minute limit on free models, which is why the reader paces probes 4 seconds apart by default (15 per minute) and remembers the stable 404 and 403 verdicts instead of re-spending probes on them.
-- Key material did not appear in stdout or stderr, and the key is never written to a file.
+- Key material did not appear in stdout, stderr, or any file under the isolated home, and the key was never written to a file during this run.

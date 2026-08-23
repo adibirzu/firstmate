@@ -504,6 +504,25 @@ test_clear_all_verdicts_reprobes_and_keeps_cooldowns() {
   pass "clear --all-verdicts re-probes remembered models and keeps live cooldowns"
 }
 
+test_flags_are_refused_outside_their_command() {
+  local home fakebin out rc=0
+  home=$(make_home flag-guard)
+  fakebin=$(make_fake_curl "$home")
+  out=$(FAKE_CURL_LOG="$home/curl.log" run_reader "$home" "$fakebin" --all-verdicts --now "$NOW" 2>&1) || rc=$?
+  expect_code 2 "$rc" "--all-verdicts without clear must be refused"
+  assert_contains "$out" "clear --all-verdicts" "refusal did not name the valid command"
+  [ ! -s "$home/curl.log" ] || fail "a refused --all-verdicts still ran a sweep: $(cat "$home/curl.log")"
+  rc=0
+  out=$(FAKE_CURL_LOG="$home/curl.log" run_reader "$home" "$fakebin" report --model 'cohere/north-mini-code:free' --now "$NOW" 2>&1) || rc=$?
+  expect_code 2 "$rc" "--model with report must be refused"
+  assert_contains "$out" "record-failure or clear" "report --model refusal did not name the valid commands"
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$BASE_PATH" \
+    "$READER" record-failure --model 'cohere/north-mini-code:free' --all-verdicts --now "$NOW" 2>&1) || rc=$?
+  expect_code 2 "$rc" "record-failure --all-verdicts must be refused"
+  pass "--all-verdicts and --model are refused outside the commands that use them"
+}
+
 test_probe_budget_keeps_partial_report() {
   local home fakebin out err rc=0
   home=$(make_home budget)
@@ -587,6 +606,7 @@ test_record_failure_during_sweep_succeeds_and_is_merged
 test_busy_lock_is_kept_and_dead_owner_lock_is_reaped
 test_permanent_verdicts_are_remembered_and_cleared
 test_clear_all_verdicts_reprobes_and_keeps_cooldowns
+test_flags_are_refused_outside_their_command
 test_probe_budget_keeps_partial_report
 test_probes_are_paced
 test_unsupported_model_id_is_logged_not_silent
