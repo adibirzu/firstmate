@@ -292,18 +292,21 @@ window_label() {
   [ -n "$task" ] && printf 'fm-%s' "$task"
 }
 
-# The ONE derivation of a window's per-window marker key: `:`, `/` and `.` become
-# `_` so a window name is usable as a filename suffix. Every per-window file the
-# watcher keeps is named by it (.hash-, .count-, .stale-, .stale-since-,
-# .wedge-escalations-, .paused-*, .writing-*), and live homes hold those markers on
-# disk under the current format, so the format lives here alone: a second copy is
-# how a future change to it silently orphans a window's markers instead of clearing
-# them. The helpers below take the derived key rather than re-deriving it, so one
-# poll of one window derives it once.
+# The ONE derivation of a window's per-window marker key. v2 hex-encodes every
+# endpoint byte so distinct endpoint strings cannot share a filename-safe key.
+# Existing unversioned markers are deliberately ignored rather than migrated:
+# their identity may already be ambiguous, and trusting or deleting an
+# ambiguous legacy name could resurrect or erase another endpoint's evidence.
+# Each endpoint therefore starts with fresh v2 evidence once. Every per-window
+# file the watcher keeps is named by this key (.hash-, .count-, .stale-,
+# .stale-since-, .wedge-escalations-, .paused-*, .writing-*), and live homes
+# hold those markers on disk under the current format, so the format lives here
+# alone: a second copy is how a future change to it silently orphans a window's
+# markers instead of clearing them. The helpers below take the derived key
+# rather than re-deriving it, so one poll of one window derives it once.
 window_key() {  # <window>
-  local key=${1//:/_}
-  key=${key//\//_}
-  printf '%s' "${key//./_}"
+  printf 'v2-'
+  printf '%s' "$1" | LC_ALL=C od -An -tx1 | tr -d ' \n'
 }
 
 # Steering-inbox loss detection, one cheap check per recorded window per poll.
