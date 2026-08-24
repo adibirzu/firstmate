@@ -49,5 +49,6 @@
     "cline": ["glm-5.3", "kimi-k3"],
     "claude": ["claude-sonnet-5", "sonnet", "haiku"]
   },
+  "modelFallbackCycles": ["cline"],
   "fallbackLanes": ["agy", "cursor", "opencode", "cline"]
 }

@@ -327,6 +327,7 @@ This section is the single owner of the canonical schema and its per-field seman
   "modelFallback": {
     "<adapter>": ["<strongest model id>", "<next model id>", "<weakest model id>"]
   },
+  "modelFallbackCycles": ["<adapter>"],
   "fallbackLanes": ["<adapter>", "<adapter>"]
 }
 ```
@@ -349,7 +350,7 @@ If a selected profile carries an effort value the chosen harness does not accept
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, a malformed or duplicate-valued model fallback chain, a malformed `fallbackLanes` order, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, a malformed or duplicate-valued model fallback chain or cycle, a malformed `fallbackLanes` order, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
@@ -366,15 +367,16 @@ Verified rate-limit or quota-exhaustion evidence from a task carrying recorded r
 `modelFallback` is an optional top-level object mapping each harness name to its own ordered model chain, strongest entry first.
 `_model_fallback` is accepted as a legacy alias for the same object; a file declaring both is invalid, because two chains for one harness cannot both be authoritative.
 Every key must be a harness verified for dispatch under the same rule as a profile `harness`, every value must be a non-empty array of non-empty model-id strings, and no model id may repeat inside one chain, because a duplicate would make the step-down order ambiguous; violations are reported as `CREW_DISPATCH` diagnostics rather than silently ignored.
+`modelFallbackCycles` is an optional, duplicate-free list of verified harnesses whose configured chain has at least two entries; after its tail depletes, that lane returns to its chain head instead of becoming exhausted.
 Read the current model ids from `bin/fm-model-refresh.sh` before writing a chain, because an id the harness does not accept fails at launch instead of being repriced.
 The chain is never consulted at selection time, so it neither overrides a profile `model` nor re-opens the strongest-reasoning-class rule that governs the initial dispatch; it acts only after dispatch, on depletion.
 
 Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
 Its depletion detector is `bin/fm-dispatch-select.mjs classify-evidence`, which exposes the same single subscription-vocabulary regex that `record-failure` verifies with - framed 429, explicit rate limit, `RESOURCE_EXHAUSTED`, or named quota/credit/balance/spending-limit exhaustion - while context-window ceilings, tool-output limits, plain authorization errors, and unframed codes classify as ordinary working states and trigger nothing.
 `apply` classifies only status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, so one piece of evidence can never cause two step-downs, and it refuses rather than relaunching when there is no fresh depleted classification.
-Selection walks the recorded harness's chain: the entry after the recorded model is next, a model absent from its chain (a default-model launch, or a task older than the chain) starts at the chain head, and the chain's last entry means this runtime lane is walked out.
+Selection walks the recorded harness's chain: the entry after the recorded model is next, a model absent from its chain (a default-model launch, or a task older than the chain) starts at the chain head, and the chain's last entry means this runtime lane is walked out unless `modelFallbackCycles` names that harness, in which case it returns to its chain head.
 On exhaustion, the optional top-level `fallbackLanes` array decides what happens: it is a non-empty, duplicate-free list of verified harnesses naming the lane order, and the task moves to the lane after its own, starting that lane's chain head, or launching on that lane's own default model when the successor has no configured chain.
-A task whose final lane's chain is exhausted, or whose harness appears in no lane order, gets an explicit `blocked:` status event for a routing decision - automation says loudly that it has run out of automatic moves rather than wrapping around to a model already known to be depleted.
+A task whose final non-cyclic lane's chain is exhausted, or whose harness appears in no lane order, gets an explicit `blocked:` status event for a routing decision - automation says loudly that it has run out of automatic moves rather than wrapping around to a model already known to be depleted.
 `apply` executes every move through `bin/fm-runtime-handoff.sh`, which preserves the worktree, branch, commits, and uncommitted changes in place; the effort axis is deliberately not carried over, so the replacement model launches on its own default effort instead of inheriting an axis tuned for the depleted model, and the routing provider is re-declared only where provable (the target's native provider, or the recorded one when the adapter is unchanged).
 Auto-step-down is standing policy (2026-08-24): availability beats escalation, so when the depleted model IS the strongest available class the fallback still proceeds automatically - routine depletion never parks on the captain and never stops the fleet - and the downgrade is made visible rather than silent through a progress note naming both models plus the matched signature, a `working:` status line recording the switch, and stderr confirmation.
 When the depleted harness carries a telemetry-backed routing provider, `apply` also records the verified failure through `record-failure`, so future dispatches avoid that account for the cooldown while this task steps down within its lane; that bookkeeping failing never blocks the relaunch itself.

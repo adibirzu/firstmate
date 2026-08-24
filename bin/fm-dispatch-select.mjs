@@ -254,6 +254,25 @@ function validateModelFallbackConfig(config) {
       }
     }
   }
+  if (Object.hasOwn(config, 'modelFallbackCycles')) {
+    const cycles = config.modelFallbackCycles;
+    if (!Array.isArray(cycles) || !cycles.length) {
+      die('modelFallbackCycles must be a non-empty array of verified harness names');
+    }
+    const invalidCycles = cycles.filter((harness) => typeof harness !== 'string' || !VERIFIED_HARNESSES.has(harness));
+    if (invalidCycles.length) {
+      die(`modelFallbackCycles has a non-string or unverified harness entry: ${invalidCycles.join(', ')}`);
+    }
+    if (new Set(cycles).size !== cycles.length) {
+      die('modelFallbackCycles has duplicate entries; a cyclic lane must be named once');
+    }
+    for (const harness of cycles) {
+      const chain = fallback?.[harness];
+      if (!Array.isArray(chain) || chain.length < 2) {
+        die(`modelFallbackCycles requires a modelFallback chain with at least two model ids: ${harness}`);
+      }
+    }
+  }
   if (Object.hasOwn(config, 'fallbackLanes')) {
     const lanes = config.fallbackLanes;
     if (!Array.isArray(lanes) || !lanes.length) {

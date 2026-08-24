@@ -24,7 +24,8 @@
 #   3. Walks the harness's modelFallback chain (legacy alias _model_fallback
 #      honored): the entry after the recorded model is next; a model absent
 #      from its chain steps to the chain head; the chain's last entry means
-#      this runtime lane is exhausted.
+#      this runtime lane is exhausted unless its configured cycle returns it
+#      to the chain head.
 #   4. When the lane is exhausted and an optional top-level fallbackLanes
 #      array names a later lane, moves there and starts that lane's own
 #      chain head (or its default model when that lane has no chain).
@@ -162,6 +163,14 @@ lanes_configured() {  # -> one harness per line, empty when unconfigured
   jq -r '.fallbackLanes // [] | if type == "array" then .[] else empty end' "$DISPATCH_CONFIG"
 }
 
+lane_cycles() {
+  jq -r '.modelFallbackCycles // [] | if type == "array" then .[] else empty end' "$DISPATCH_CONFIG"
+}
+
+lane_is_cyclic() {
+  lane_cycles | grep -Fx -- "$1" >/dev/null
+}
+
 CHAIN=$(chain_of "$HARNESS")
 
 # --- evidence classification ------------------------------------------------
@@ -172,8 +181,10 @@ case "$CURSOR" in
 esac
 STATUS_SIZE=$(wc -c < "$STATUS" | tr -d ' ')
 [ "$CURSOR" -le "$STATUS_SIZE" ] || CURSOR=0
+EVIDENCE_END=$STATUS_SIZE
+EVIDENCE_BYTES=$((EVIDENCE_END - CURSOR))
 
-EVIDENCE_TEXT=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null || true)
+EVIDENCE_TEXT=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null | head -c "$EVIDENCE_BYTES" || true)
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')
@@ -192,9 +203,8 @@ esac
 SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
 
 advance_fallback_cursor() {
-  local final_size new_cursor_line lock update_ok
-  final_size=$(wc -c < "$STATUS" | tr -d ' ')
-  new_cursor_line="fallback_cursor=$final_size"
+  local cursor_end=$1 new_cursor_line lock update_ok
+  new_cursor_line="fallback_cursor=$cursor_end"
   lock=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
   fm_lock_acquire_wait "$lock" || die "could not acquire the meta lock for $META"
   update_ok=1
@@ -208,7 +218,7 @@ advance_fallback_cursor() {
   rm -f "$META.locked-update"
   fm_lock_release "$lock" || true
   [ "$update_ok" = 1 ] || die "the fallback cursor could not be recorded; investigate duplicate-evidence handling for $ID"
-  FALLBACK_CURSOR=$final_size
+  FALLBACK_CURSOR=$cursor_end
 }
 
 if [ "$VERB" = apply ]; then
@@ -246,6 +256,9 @@ EOF_CHAIN
 if [ "$FOUND_CURRENT" = 0 ]; then
   NEXT_MODEL=$(printf '%s\n' "$CHAIN" | sed -n '1p')
   if [ "$NEXT_MODEL" = "$CURRENT_MODEL" ]; then NEXT_MODEL=; fi
+fi
+if [ -z "$NEXT_MODEL" ] && [ "$FOUND_CURRENT" = 1 ] && lane_is_cyclic "$HARNESS"; then
+  NEXT_MODEL=$(printf '%s\n' "$CHAIN" | sed -n '1p')
 fi
 
 ACTION=
@@ -287,7 +300,7 @@ if [ "$ACTION" = exhausted ]; then
   if [ "$VERB" = apply ]; then
     printf 'blocked: model fallback exhausted for %s (%s); needs a routing decision\n' \
       "$HARNESS" "$(printf '%s' "$CHAIN" | tr '\n' ' ')" >> "$STATUS"
-    advance_fallback_cursor
+    advance_fallback_cursor "$(wc -c < "$STATUS" | tr -d ' ')"
   fi
   exit 3
 fi
@@ -323,9 +336,7 @@ fi
 printf 'working: automatic model fallback %s -> %s%s on depletion evidence (%s); auto-step-down logged per standing quota rule\n' \
   "${CURRENT_MODEL:-default}" "${NEXT_MODEL:-default}" "${NEXT_HARNESS:+ on $NEXT_HARNESS}" "$SIGNATURE" >> "$STATUS" || true
 
-# Consume exactly the evidence this response acted on. The cursor is measured
-# AFTER every append above, so this script's own handoff and downgrade lines
-# can never re-classify as fresh depletion evidence on a later run.
-advance_fallback_cursor
+# Consume exactly the evidence this response acted on.
+advance_fallback_cursor "$EVIDENCE_END"
 
 log "applied $ACTION for $ID (${CURRENT_MODEL:-default} -> ${NEXT_MODEL:-default}${NEXT_HARNESS:+ on $NEXT_HARNESS}); evidence cursor advanced to byte $FALLBACK_CURSOR"

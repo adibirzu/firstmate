@@ -128,6 +128,7 @@ if [ -f "$meta" ] && [ -n "$model" ]; then
   tmp=$(mktemp)
   { grep -v '^model=' "$meta"; printf 'model=%s\n' "$model"; } > "$tmp" && mv "$tmp" "$meta"
 fi
+[ -z "${FM_STUB_HANDOFF_STATUS_APPEND:-}" ] || printf '%s\n' "$FM_STUB_HANDOFF_STATUS_APPEND" >> "${FM_HOME:?}/state/$id.status"
 exit 0
 SH
     chmod +x "$farm/fm-runtime-handoff.sh"
@@ -313,6 +314,26 @@ run_classify() {  # <text>
 }
 
 {
+  CLINE_CYCLE_CONFIG='{"default":{"harness":"cline"},"modelFallback":{"cline":["glm-5.3","kimi-k3"]},"modelFallbackCycles":["cline"],"fallbackLanes":["cline"]}'
+  setup_case plan-cline-cycle plan-p4a "$CLINE_CYCLE_CONFIG" "$DEPLETED_LINE"
+  fm_write_meta "$CASE_HOME/state/plan-p4a.meta" \
+    "window=firstmate:fm-plan-p4a" \
+    "endpoint_task_id=plan-p4a" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=cline" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=kimi-k3"
+  out=$("$FALLBACK" plan-p4a plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "cyclic cline tail should step to its head, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "cyclic lane remains an automatic model step"
+  assert_contains "$out" "to_model=glm-5.3" "kimi-k3 depletion returns cline to glm-5.3"
+  pass "a configured cline cycle alternates glm-5.3 and kimi-k3"
+}
+
+{
   setup_case plan-lane-default plan-p5 "$AGY_CHAIN_CONFIG" "$DEPLETED_LINE"
   # cursor's chain walks out and the NEXT lane (opencode) has no configured
   # chain of its own: the move still happens, launching that lane on whatever
@@ -410,6 +431,14 @@ run_classify() {  # <text>
 }
 
 {
+  setup_case refuse-cycle plan-r2c '{"modelFallback":{"cline":["glm-5.3"]},"modelFallbackCycles":["cline"]}' "$DEPLETED_LINE"
+  out=$("$FALLBACK" plan-r2c plan 2>&1); rc=$?
+  [ "$rc" -eq 1 ] || fail "single-model cycle should refuse, rc=$rc: $out"
+  assert_contains "$out" "requires a modelFallback chain with at least two model ids" "cyclic chain validation"
+  pass "refuses a cycle that cannot change models"
+}
+
+{
   setup_case refuse-nochain plan-r3 '{"modelFallback":{"claude":["sonnet"]}}' "$DEPLETED_LINE"
   out=$("$FALLBACK" plan-r3 plan 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "a terminal chainless lane should exhaust, rc=$rc"
@@ -447,6 +476,7 @@ run_classify() {  # <text>
 {
   setup_case apply-step apply-a1 "$AGY_CHAIN_CONFIG" "$DEPLETED_LINE"
   : > "$FM_FAKE_HANDOFF_LOG"
+  evidence_size=$(wc -c < "$CASE_HOME/state/apply-a1.status" | tr -d ' ')
   out=$(FM_ROOT_OVERRIDE="$ROOT" "$(make_bin_farm "$CASE_DIR" 1)/fm-model-fallback.sh" apply-a1 apply 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "apply should succeed, rc=$rc: $out"
 
@@ -458,8 +488,7 @@ run_classify() {  # <text>
   assert_contains "$handoff_args" 'depletion evidence ("Error 429")' "note names the matched evidence signature"
 
   meta=$(cat "$CASE_HOME/state/apply-a1.meta")
-  size=$(wc -c < "$CASE_HOME/state/apply-a1.status" | tr -d ' ')
-  assert_contains "$meta" "fallback_cursor=$size" "cursor lands exactly at the log end"
+  assert_contains "$meta" "fallback_cursor=$evidence_size" "cursor lands at the consumed evidence boundary"
   status_log=$(cat "$CASE_HOME/state/apply-a1.status")
   assert_contains "$status_log" "working: automatic model fallback gemini-3.7-flash-high -> gemini-3.6-flash-high" "downgrade logged as a working event"
   assert_contains "$status_log" "auto-step-down logged per standing quota rule" "step-down rule cited for visibility"
@@ -468,6 +497,23 @@ run_classify() {  # <text>
   [ -f "$routing_state" ] || fail "record-failure should have parked the depleted telemetry provider"
   assert_contains "$(cat "$routing_state")" '"agy"' "agy cooldown recorded for dispatch pricing"
   pass "apply relaunches in place with the next model, logs the downgrade, parks the provider, and consumes the evidence"
+}
+
+{
+  setup_case apply-post-handoff-evidence apply-a1b "$AGY_CHAIN_CONFIG" "$DEPLETED_LINE"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  evidence_size=$(wc -c < "$CASE_HOME/state/apply-a1b.status" | tr -d ' ')
+  FM_ROOT_OVERRIDE="$ROOT" FM_STUB_HANDOFF_STATUS_APPEND='working: replacement received API Error 429 quota exhausted' \
+    "$farm/fm-model-fallback.sh" apply-a1b apply >/dev/null 2>&1 \
+    || fail "first apply with replacement depletion should succeed"
+  meta=$(cat "$CASE_HOME/state/apply-a1b.meta")
+  assert_contains "$meta" "fallback_cursor=$evidence_size" "first apply consumes only its initial evidence"
+  : > "$FM_FAKE_HANDOFF_LOG"
+  out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a1b apply 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "replacement depletion must remain actionable, rc=$rc: $out"
+  assert_contains "$(cat "$FM_FAKE_HANDOFF_LOG")" "--model gemini-3.5-flash-high" "fresh handoff-time depletion advances again"
+  pass "depletion written during handoff remains actionable on the next apply"
 }
 
 {
