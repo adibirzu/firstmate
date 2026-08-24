@@ -381,6 +381,14 @@ run_classify() {  # <text>
 }
 
 {
+  setup_case refuse-duplicate plan-r2b '{"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high","gemini-3.7-flash-high"]}}' "$DEPLETED_LINE"
+  out=$("$FALLBACK" plan-r2b plan 2>&1); rc=$?
+  [ "$rc" -eq 1 ] || fail "duplicate chain should refuse, rc=$rc: $out"
+  assert_contains "$out" "duplicate model ids" "duplicate chain message"
+  pass "refuses duplicate chain ids at fallback execution time"
+}
+
+{
   setup_case refuse-nochain plan-r3 '{"modelFallback":{"claude":["sonnet"]}}' "$DEPLETED_LINE"
   out=$("$FALLBACK" plan-r3 plan 2>&1); rc=$?
   [ "$rc" -eq 1 ] || fail "missing chain should refuse, rc=$rc"

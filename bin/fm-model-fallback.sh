@@ -145,6 +145,10 @@ command -v node >/dev/null 2>&1 || die "node is not installed; the depletion cla
 if ! jq -e . "$DISPATCH_CONFIG" >/dev/null 2>&1; then
   die "$DISPATCH_CONFIG is malformed JSON; run bootstrap's CREW_DISPATCH validation and fix the file rather than selecting around it"
 fi
+if ! validation_error=$(node "$SCRIPT_DIR/fm-dispatch-select.mjs" validate-model-fallback --file "$DISPATCH_CONFIG" 2>&1); then
+  validation_error=${validation_error#fm-dispatch-select: }
+  die "$DISPATCH_CONFIG has invalid model fallback configuration: $validation_error"
+fi
 
 chain_of() {  # <harness> -> one model id per line, empty when unconfigured
   jq -r --arg h "$1" '

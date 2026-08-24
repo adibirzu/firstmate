@@ -517,6 +517,27 @@ scan_signals() {
   return 0
 }
 
+apply_model_fallback_for_status() {  # <status-file>
+  local status_file=$1 task fallback_bin rc
+  case "$status_file" in "$STATE"/*.status) ;; *) return 0 ;; esac
+  [ -f "$status_file" ] && [ ! -L "$status_file" ] || return 0
+  task=$(basename "$status_file" .status)
+  [ -f "$STATE/$task.meta" ] && [ ! -L "$STATE/$task.meta" ] || return 0
+  fallback_bin=${FM_MODEL_FALLBACK_BIN:-$SCRIPT_DIR/fm-model-fallback.sh}
+  [ -x "$fallback_bin" ] || { triage_log "model fallback helper is unavailable: $fallback_bin"; return 0; }
+  if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$fallback_bin" "$task" apply >/dev/null 2>&1; then
+    triage_log "applied automatic model fallback for $task"
+    return 0
+  fi
+  rc=$?
+  case "$rc" in
+    1) return 0 ;;
+    3) triage_log "automatic model fallback exhausted for $task" ;;
+    *) triage_log "automatic model fallback failed for $task (exit $rc)" ;;
+  esac
+  return 0
+}
+
 # Deliver a durably queued process-event result to firstmate. Publication is
 # owned by bin/fm-procevent.sh - by the runner at capture time and by reconcile's
 # re-announcement - so this decides only whether a queued check record has been
@@ -1001,6 +1022,12 @@ while :; do
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
       case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+    done <<EOF
+$pending
+EOF
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      apply_model_fallback_for_status "$f"
     done <<EOF
 $pending
 EOF

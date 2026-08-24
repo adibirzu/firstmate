@@ -6,6 +6,7 @@
 //   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok|cursor|agy> --task <id> [--now <epoch>]
 //   fm-dispatch-select.mjs clear --provider <claude|codex|grok|cursor|agy>
 //   fm-dispatch-select.mjs classify-evidence (--file <path> | with text on stdin)
+//   fm-dispatch-select.mjs validate-model-fallback --file <crew-dispatch.json>
 //
 // `select` accepts a full rule object with `use`, one profile object, or a
 // non-empty profile array on the command line or stdin. It prints exactly one
@@ -229,6 +230,49 @@ function settingsFromConfig(configDir) {
     settings[key] = value;
   }
   return settings;
+}
+
+function validateModelFallbackConfig(config) {
+  if (!config || Array.isArray(config) || typeof config !== 'object') {
+    die('config/crew-dispatch.json must be an object');
+  }
+  if (Object.hasOwn(config, 'modelFallback') && Object.hasOwn(config, '_model_fallback')) {
+    die('modelFallback and its legacy alias _model_fallback cannot both be declared');
+  }
+  const fallback = config.modelFallback ?? config._model_fallback;
+  if (fallback !== undefined) {
+    if (!fallback || Array.isArray(fallback) || typeof fallback !== 'object') {
+      die('modelFallback must be an object mapping a harness to its ordered model chain');
+    }
+    for (const [harness, chain] of Object.entries(fallback)) {
+      if (!VERIFIED_HARNESSES.has(harness)) die(`modelFallback has an unverified harness: ${harness}`);
+      if (!Array.isArray(chain) || !chain.length || chain.some((model) => typeof model !== 'string' || !model)) {
+        die(`modelFallback chain must be a non-empty array of non-empty model ids: ${harness}`);
+      }
+      if (new Set(chain).size !== chain.length) {
+        die(`modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: ${harness}`);
+      }
+    }
+  }
+  if (Object.hasOwn(config, 'fallbackLanes')) {
+    const lanes = config.fallbackLanes;
+    if (!Array.isArray(lanes) || !lanes.length) {
+      die('fallbackLanes must be a non-empty array of verified harness names');
+    }
+    const invalidLanes = lanes.filter((harness) => typeof harness !== 'string' || !VERIFIED_HARNESSES.has(harness));
+    if (invalidLanes.length) {
+      die(`fallbackLanes has a non-string or unverified harness entry: ${invalidLanes.join(', ')}`);
+    }
+    if (new Set(lanes).size !== lanes.length) {
+      die('fallbackLanes has duplicate entries; a lane order must name each runtime once');
+    }
+  }
+}
+
+function validateModelFallback(options) {
+  if (!options.file || options.positional.length) die('validate-model-fallback requires exactly --file <crew-dispatch.json>');
+  const config = readJson(options.file, 'config/crew-dispatch.json');
+  validateModelFallbackConfig(config);
 }
 
 function emptyState() {
@@ -662,6 +706,8 @@ try {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === 'classify-evidence') {
     classifyEvidence(options);
+  } else if (options.command === 'validate-model-fallback') {
+    validateModelFallback(options);
   } else if (!['select', 'record-failure', 'clear'].includes(options.command)) {
     die(`unknown command ${options.command}`);
   } else {

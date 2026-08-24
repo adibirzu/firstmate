@@ -216,7 +216,7 @@ Depletion detection for a provider quota-axi exposes is the recorded `record-fai
 Every automatic model switch must be logged and visible in status reporting rather than silently downgrading reasoning class; the fallback owner's progress note and status line satisfy that visibility contract.
 The fail-closed capacity contract (reserve, cooldown, and telemetry freshness) remains enforced.
 The strongest-reasoning-class rule governs which candidate is dispatched in the first place, so it is never traded away to conserve quota at selection time; model fallback is the separate in-run response to a model that depleted after dispatch, and it walks the configured chain rather than choosing a class.
-If the chain for the required class is exhausted, stop and report that the strongest-class choice cannot proceed rather than relaunching beneath it.
+When a chain is exhausted, continue through the configured fallback lanes; record a blocked routing decision only after every automatic lane move is exhausted.
 
 ## 5. Recovery
 
