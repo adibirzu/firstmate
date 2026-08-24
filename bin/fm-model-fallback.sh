@@ -184,10 +184,14 @@ STATUS_SIZE=$(wc -c < "$STATUS" | tr -d ' ')
 EVIDENCE_END=$STATUS_SIZE
 EVIDENCE_BYTES=$((EVIDENCE_END - CURSOR))
 
-EVIDENCE_TEXT=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null \
-  | head -c "$EVIDENCE_BYTES" \
-  | sed '/^working: automatic model fallback .*; auto-step-down logged per standing quota rule$/d' \
-  || true)
+if [ "$EVIDENCE_BYTES" -gt 0 ]; then
+  EVIDENCE_TEXT=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null \
+    | head -c "$EVIDENCE_BYTES" \
+    | sed '/^working: automatic model fallback .*; auto-step-down logged per standing quota rule$/d' \
+    || true)
+else
+  EVIDENCE_TEXT=
+fi
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')

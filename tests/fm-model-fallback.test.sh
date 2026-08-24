@@ -530,6 +530,9 @@ run_classify() {  # <text>
   fi
   [ "$rc" -ne 0 ] || fail "second apply on consumed evidence must refuse: $out"
   assert_contains "$out" "no depletion evidence" "second-apply refusal names the cursor guard"
+  case "$out" in
+    *"illegal byte count"*) fail "consumed evidence must not invoke head with a zero byte count: $out" ;;
+  esac
   second_calls=$(wc -l < "$FM_FAKE_HANDOFF_LOG" | tr -d ' ')
   [ "$second_calls" = "$first_calls" ] || fail "consumed evidence must not trigger another relaunch ($first_calls -> $second_calls)"
   pass "the same evidence can never trigger a second step-down"
