@@ -425,6 +425,145 @@ JSON
   pass "tied known spendPriority still rotates by least-recent use"
 }
 
+test_agy_with_declared_quota_windows_prices_separate_pools() {
+  local home fakebin quota out rc
+  home=$(make_home agy-windows)
+  fakebin=$(make_fakebin agy-windows)
+  quota="$home/quota.json"
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"agy","state":{"status":"fresh","stale":false},
+   "windows":[
+     {"id":"gemini_5h","percentRemaining":100},
+     {"id":"gemini_weekly","percentRemaining":93},
+     {"id":"claude_gpt_5h","percentRemaining":0},
+     {"id":"claude_gpt_weekly","percentRemaining":32}
+   ],
+   "quotaSemantics":{"effectiveAvailability":[]}}
+]}
+JSON
+
+  # Undeclared: worst window (claude_gpt_5h at 0%) refuses the dispatch.
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" agy-undeclared.json \
+    '[{"harness":"agy","model":"gemini-3.7-flash-high"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "undeclared agy profile must price on the worst window and fail closed"
+  assert_contains "$out" "quota headroom 0% is at or below 20% reserve" \
+    "the provider-wide refusal must name the figure it priced on"
+
+  # Declared healthy window (gemini_5h at 100%): succeeds.
+  out=$(run_select "$home" "$fakebin" "$quota" agy-gemini.json \
+    '[{"harness":"agy","model":"gemini-3.7-flash-high","quotaWindow":"gemini_5h"}]' 2>"$home/gemini.err")
+  [ "$(printf '%s\n' "$out" | jq -r .model)" = "gemini-3.7-flash-high" ] \
+    || fail "agy candidate with declared healthy gemini_5h window was refused: $out"
+  assert_contains "$(cat "$home/gemini.err")" "window gemini_5h headroom=100%" \
+    "the honoured gemini window must be inspectable in the diagnostic"
+  [ "$(printf '%s\n' "$out" | jq -r '.provider')" = "agy" ] \
+    || fail "native agy profile must establish agy provider identity: $out"
+  [ "$(printf '%s\n' "$out" | jq -r '.quotaWindow // "none"')" = none ] \
+    || fail "quotaWindow must not reach the launch profile: $out"
+
+  # Declared exhausted window (claude_gpt_5h at 0%): refused.
+  rc=0
+  out=$(run_select "$home" "$fakebin" "$quota" agy-claude.json \
+    '[{"harness":"agy","model":"claude-sonnet-4-6","quotaWindow":"claude_gpt_5h"}]' 2>&1) || rc=$?
+  expect_code 3 "$rc" "agy candidate with exhausted claude_gpt_5h window must be refused"
+  assert_contains "$out" "window claude_gpt_5h headroom 0% is at or below 20% reserve" \
+    "exhausted declared window refusal must name the window"
+  pass "agy declared quota windows price Gemini and Claude pools separately"
+}
+
+test_agy_record_failure_and_cooldown() {
+  local home fakebin quota profiles out rc
+  home=$(make_home agy-cooldown)
+  fakebin=$(make_fakebin agy-cooldown)
+  quota="$home/quota.json"
+  cat > "$quota" <<JSON
+{"schemaVersion":3,"generatedAt":"$STAMP","providers":[
+  {"provider":"agy","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"gemini_5h","percentRemaining":100}]},
+  {"provider":"codex","state":{"status":"fresh","stale":false},
+   "windows":[{"id":"all","percentRemaining":90}]}
+]}
+JSON
+
+  profiles='[{"harness":"agy","model":"gemini-3.7-flash-high","quotaWindow":"gemini_5h"},{"harness":"codex","model":"gpt"}]'
+  printf 'harness=agy\n' > "$home/state/agy-task.meta"
+  printf 'failed: 429 Too Many Requests - hit your 5-hour limit\n' > "$home/state/agy-task.status"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    PATH="$fakebin:$BASE_PATH" "$SELECTOR" record-failure --provider agy --task agy-task --now 1000 \
+    >/dev/null 2>&1 || fail "verified 429 status evidence on agy did not create cooldown"
+
+  out=$(run_select "$home" "$fakebin" "$quota" .dispatch-routing.json "$profiles" 1001 2>"$home/select.err")
+  [ "$(printf '%s\n' "$out" | jq -r .harness)" = "codex" ] || fail "cooldown did not fail over from agy to codex: $out"
+  assert_contains "$(cat "$home/select.err")" "candidate provider=agy unavailable: cooldown until epoch 2800" \
+    "cooldown diagnostic on agy omitted its bound"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    PATH="$fakebin:$BASE_PATH" "$SELECTOR" clear --provider agy \
+    >/dev/null 2>&1 || fail "clear --provider agy failed"
+
+  # Rotation is least-recently-used and agy has never been dispatched here, so
+  # only a genuinely cleared cooldown can put it back at the front.
+  out=$(run_select "$home" "$fakebin" "$quota" .dispatch-routing.json "$profiles" 1002 2>/dev/null)
+  [ "$(printf '%s\n' "$out" | jq -r .harness)" = "agy" ] \
+    || fail "cleared agy cooldown did not restore candidate eligibility: $out"
+  pass "agy verified failure records cooldown and clear restores eligibility"
+}
+
+test_depletion_evidence_gate_separates_quota_from_working_limits() {
+  local home fakebin quota out rc name status
+  home=$(make_home evidence-gate)
+  fakebin=$(make_fakebin evidence-gate)
+  quota="$home/quota.json"
+  write_quota "$quota" fresh 80 fresh 80
+
+  # Authentic subscription depletion must be accepted as cooldown evidence.
+  while IFS='^' read -r name status; do
+    [ -n "$name" ] || continue
+    printf 'harness=codex\n' > "$home/state/$name.meta"
+    printf '%s\n' "$status" > "$home/state/$name.status"
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+      PATH="$fakebin:$BASE_PATH" "$SELECTOR" record-failure --provider codex --task "$name" --now 1000 \
+      >/dev/null 2>&1 || fail "quota depletion evidence was rejected: $status"
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+      PATH="$fakebin:$BASE_PATH" "$SELECTOR" clear --provider codex >/dev/null 2>&1 \
+      || fail "clear after $name failed"
+  done <<'ROWS'
+http-429^failed: request failed with status code 429
+insufficient-quota^failed: insufficient_quota - add credits to continue
+out-of-credits^failed: you are out of credits for this billing period
+weekly-allowance^failed: your weekly usage allowance is exhausted
+ROWS
+
+  # A working ceiling is not spent quota: parking the provider on it would push
+  # dispatch onto a weaker lane for a whole cooldown with full headroom left.
+  while IFS='^' read -r name status; do
+    [ -n "$name" ] || continue
+    printf 'harness=codex\n' > "$home/state/$name.meta"
+    printf '%s\n' "$status" > "$home/state/$name.status"
+    rc=0
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+      PATH="$fakebin:$BASE_PATH" "$SELECTOR" record-failure --provider codex --task "$name" --now 1000 2>&1) || rc=$?
+    expect_code 2 "$rc" "benign working text must not qualify as quota evidence: $status"
+    assert_contains "$out" "contains no rate-limit or quota-exhaustion evidence" \
+      "benign refusal was unclear for: $status"
+  done <<'ROWS'
+context-window^working: context token limit reached; compacting
+tool-output^failed: exceeded the tool output limit
+line-number^working: applying the hunk at line 429 of the diff
+max-tokens^working: max output tokens limit hit; continuing
+ROWS
+
+  # The refused cases must have left dispatch untouched.
+  out=$(run_select "$home" "$fakebin" "$quota" .dispatch-routing.json \
+    '[{"harness":"codex"}]' 1001 2>/dev/null)
+  [ "$(printf '%s\n' "$out" | jq -r .harness)" = "codex" ] \
+    || fail "a benign working line parked a healthy provider: $out"
+  pass "depletion evidence accepts quota vocabulary and rejects working ceilings"
+}
+
 test_distribution_is_deterministic_balanced_and_array_order_independent
 test_stale_unavailable_and_reserve_thresholds_fail_closed
 test_a_declared_quota_window_is_priced_instead_of_the_provider_minimum
@@ -436,5 +575,8 @@ test_invalid_profiles_and_settings_are_actionable
 test_existing_wrapper_and_grok_routes_remain_selectable
 test_grok_without_a_resolvable_quota_window_is_not_priced
 test_new_verified_adapters_with_providers_are_selectable
+test_agy_with_declared_quota_windows_prices_separate_pools
+test_agy_record_failure_and_cooldown
+test_depletion_evidence_gate_separates_quota_from_working_limits
 
 echo "# all fm-dispatch-select tests passed"

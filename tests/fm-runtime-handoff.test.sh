@@ -112,6 +112,15 @@ exit 0
 SH
   chmod +x "$fakebin/treehouse"
 
+  # Stub every admitted harness so a fixture never depends on what happens to be
+  # installed on the runner. cursor is resolved by EXECUTABLE name, not by
+  # harness name: bin/fm-cursor-lib.sh accepts only `cursor-agent` (or an
+  # `agent` that proves itself Cursor), so a stub named `cursor` would leave the
+  # handoff to find - or on a bare CI runner fail to find - the real binary.
+  for tool in pi-signed opencode cline copilot agy cursor cursor-agent muse grok kimi pi codex claude; do
+    fm_fake_exit0 "$fakebin" "$tool"
+  done
+
   printf '%s\n' "$fakebin"
 }
 
@@ -337,7 +346,7 @@ setup_case() {
   export FM_FAKE_PANE_CMD=codex
   : > "$FM_FAKE_SEND_LOG"
   farm=$(make_bin_farm "$CASE_DIR")
-  for h in cline cursor-agent copilot; do
+  for h in spaceship cursor-agent unknown-harness; do
     set +e
     out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-u2 --harness "$h" 2>&1)
     rc=$?
@@ -493,6 +502,66 @@ setup_case() {
   pass "successful reuse preserves commits, dirt, and non-owned meta"
 }
 
+# --- provider axis: re-declared when provable, dropped otherwise -------------
+
+# A reuse relaunch must never keep the previous adapter's routing provider:
+# native targets run on their own provider, keeping the recorded adapter keeps
+# its recorded provider, and an unprovable cross-harness move drops it.
+{
+  setup_case provider-native-target task-pv2
+  sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv2.meta"
+  printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv2.meta"
+  rm -f "$CASE_HOME/state/task-pv2.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv2 --harness cursor --skip-exit 2>&1); then
+    :
+  else
+    fail "cross-harness handoff to a native target should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv2.meta")
+  assert_contains "$meta" "harness=cursor" "native target harness recorded"
+  assert_contains "$meta" "provider=cursor" "native target re-declares its own provider, not the borrowed one"
+  pass "handoff to a native target records that target's own routing provider"
+}
+
+{
+  setup_case provider-same-adapter task-pv3
+  sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv3.meta"
+  printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv3.meta"
+  rm -f "$CASE_HOME/state/task-pv3.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv3 --harness opencode --skip-exit 2>&1); then
+    :
+  else
+    fail "same-adapter handoff should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv3.meta")
+  assert_contains "$meta" "harness=opencode" "same adapter recorded"
+  assert_contains "$meta" "provider=claude" "keeping the recorded adapter keeps its borrowed provider"
+  pass "a same-harness relaunch preserves the recorded routing provider"
+}
+
+{
+  setup_case provider-unprovable task-pv4
+  sed -i.bak 's/^harness=codex$/harness=claude/' "$CASE_HOME/state/task-pv4.meta"
+  rm -f "$CASE_HOME/state/task-pv4.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv4 --harness opencode --skip-exit 2>&1); then
+    :
+  else
+    fail "cross-harness handoff into a non-native adapter should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv4.meta")
+  assert_contains "$meta" "harness=opencode" "target adapter recorded"
+  case "$meta" in
+    *provider=*) fail "no provable provider exists for the target; none may be invented: $meta" ;;
+  esac
+  pass "an unprovable cross-adapter move leaves no routing provider behind"
+}
+
 # --- success: handoff end-to-end with skip-exit (dead endpoint) -------------
 
 {
@@ -578,6 +647,51 @@ setup_case() {
     *"status: working:"*) fail "status line must not double-prefix the verb: $status_log" ;;
   esac
   pass "sends the recorded harness's exit command and completes once the pane is dead"
+}
+
+# --- success: a key-exit recorded harness hands off to a newly admitted target -
+
+{
+  setup_case exit-path-key task-x3
+  # cline is the one admitted adapter with no exit COMMAND: it leaves on C-c.
+  # cursor is a newly admitted handoff target, so this covers both new edges.
+  sed -i.bak 's/^harness=codex$/harness=cline/' "$CASE_HOME/state/task-x3.meta"
+  rm -f "$CASE_HOME/state/task-x3.meta.bak"
+  export FM_FAKE_WINDOW_FILE="$CASE_DIR/window.present"
+  : > "$FM_FAKE_WINDOW_FILE"
+  export FM_FAKE_EXIT_MARKER="$CASE_DIR/exited"
+  export FM_FAKE_SEND_MARKS_EXIT="$FM_FAKE_EXIT_MARKER"
+  export FM_FAKE_PANE_CMD=cline
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  head_before=$(git -C "$CASE_WT" rev-parse HEAD)
+
+  set +e
+  out=$(
+    FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_SETTLE_POLLS=2 \
+    FM_HANDOFF_EXIT_POLLS=5 FM_HANDOFF_EXIT_SLEEP=0 \
+    "$farm/fm-runtime-handoff.sh" task-x3 --harness cursor \
+      --progress-note "ClinePass depleted; work is unlanded." 2>&1
+  )
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "handoff from a key-exit harness to cursor should succeed: $out"
+  assert_contains "$out" "handed-off task-x3" "handoff success line"
+
+  send_log=$(cat "$FM_FAKE_SEND_LOG")
+  assert_contains "$send_log" "task-x3 --key C-c" "cline must be exited by key, never by an invented /exit"
+  case "$send_log" in
+    *"task-x3 /exit"*) fail "cline has no exit command; a text exit was sent: $send_log" ;;
+  esac
+  [ -f "$FM_FAKE_EXIT_MARKER" ] || fail "exit key should have been sent"
+  [ ! -f "$FM_FAKE_WINDOW_FILE" ] || fail "dead endpoint husk should have been killed"
+
+  [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "key-exit path must preserve HEAD"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "key-exit path must preserve uncommitted changes"
+  meta=$(cat "$CASE_HOME/state/task-x3.meta")
+  assert_contains "$meta" "harness=cursor" "meta harness updated to the newly admitted target"
+  assert_contains "$meta" "pr=https://example.test/pr/1" "pr= preserved over the key-exit path"
+  pass "exits a key-only harness by key and relaunches on a newly admitted target"
 }
 
 # --- refusal: harness ignores the exit command and stays alive --------------
