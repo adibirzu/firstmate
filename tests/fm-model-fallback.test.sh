@@ -336,6 +336,27 @@ run_classify() {  # <text>
 }
 
 {
+  CHAINLESS_CURRENT_CONFIG='{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"],"opencode":["x-preview-f-free","big-pickle"]},"fallbackLanes":["agy","cursor","opencode"]}'
+  setup_case plan-chainless-current plan-p5a "$CHAINLESS_CURRENT_CONFIG" "$DEPLETED_LINE"
+  fm_write_meta "$CASE_HOME/state/plan-p5a.meta" \
+    "window=firstmate:fm-plan-p5a" \
+    "endpoint_task_id=plan-p5a" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=cursor" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=auto"
+  out=$("$FALLBACK" plan-p5a plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "chainless current lane should advance, rc=$rc: $out"
+  assert_contains "$out" "action=lane-move" "a chainless current lane is exhausted in place"
+  assert_contains "$out" "to_harness=opencode" "chainless current lane advances to its later successor"
+  assert_contains "$out" "to_model=x-preview-f-free" "successor starts at its own chain head"
+  pass "a chainless non-terminal lane advances through fallbackLanes"
+}
+
+{
   LANES_TAIL_CONFIG='{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"],"cursor":["cursor-grok-4.6-high","auto"],"opencode":["x-preview-f-free","big-pickle"]},"fallbackLanes":["agy","cursor","opencode"]}'
   setup_case plan-final plan-p5b "$LANES_TAIL_CONFIG" "$DEPLETED_LINE"
   fm_write_meta "$CASE_HOME/state/plan-p5b.meta" \
@@ -391,9 +412,9 @@ run_classify() {  # <text>
 {
   setup_case refuse-nochain plan-r3 '{"modelFallback":{"claude":["sonnet"]}}' "$DEPLETED_LINE"
   out=$("$FALLBACK" plan-r3 plan 2>&1); rc=$?
-  [ "$rc" -eq 1 ] || fail "missing chain should refuse, rc=$rc"
-  assert_contains "$out" "no modelFallback chain configured for harness 'agy'" "missing chain message"
-  pass "refuses a harness with no configured chain"
+  [ "$rc" -eq 3 ] || fail "a terminal chainless lane should exhaust, rc=$rc"
+  assert_contains "$out" "action=exhausted" "chainless terminal lane reports exhaustion"
+  pass "a chainless terminal lane reports exhaustion without improvising a model"
 }
 
 {
@@ -483,6 +504,31 @@ run_classify() {  # <text>
 }
 
 {
+  PI_CHAIN_CONFIG='{"default":{"harness":"pi"},"modelFallback":{"pi":["claude-sonnet","claude-haiku"]}}'
+  setup_case apply-recorded-provider apply-a3b "$PI_CHAIN_CONFIG" "$DEPLETED_LINE"
+  fm_write_meta "$CASE_HOME/state/apply-a3b.meta" \
+    "window=firstmate:fm-apply-a3b" \
+    "endpoint_task_id=apply-a3b" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=pi" \
+    "provider=claude" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=claude-sonnet"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a3b apply 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "recorded-provider apply should succeed, rc=$rc: $out"
+  assert_contains "$(cat "$FM_FAKE_HANDOFF_LOG")" "--model claude-haiku" "non-native harness follows its chain"
+  routing_state="$CASE_HOME/state/.dispatch-routing.json"
+  [ -f "$routing_state" ] || fail "recorded non-native provider should be parked"
+  assert_contains "$(cat "$routing_state")" '"claude"' "recorded provider determines cooldown"
+  pass "a non-native harness records its telemetry-backed routing provider"
+}
+
+{
   LANES_TAIL_CONFIG='{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"],"cursor":["cursor-grok-4.6-high","auto"],"opencode":["x-preview-f-free","big-pickle"]},"fallbackLanes":["agy","cursor","opencode"]}'
   setup_case apply-exhausted apply-a4 "$LANES_TAIL_CONFIG" "$DEPLETED_LINE"
   fm_write_meta "$CASE_HOME/state/apply-a4.meta" \
@@ -494,7 +540,8 @@ run_classify() {  # <text>
     "kind=ship" \
     "mode=no-mistakes" \
     "yolo=off" \
-    "model=big-pickle"
+    "model=big-pickle" \
+    "provider=claude"
   farm=$(make_bin_farm "$CASE_DIR" 1)
   : > "$FM_FAKE_HANDOFF_LOG"
   if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a4 apply 2>&1); then
@@ -506,7 +553,22 @@ run_classify() {  # <text>
   [ ! -s "$FM_FAKE_HANDOFF_LOG" ] || fail "exhaustion must not launch anything"
   status_log=$(cat "$CASE_HOME/state/apply-a4.status")
   assert_contains "$status_log" "blocked: model fallback exhausted for opencode" "exhaustion surfaces as a blocked event"
-  pass "full exhaustion stops loudly with a blocked status instead of a blind relaunch"
+  cursor=$(sed -n 's/^fallback_cursor=//p' "$CASE_HOME/state/apply-a4.meta")
+  status_size=$(wc -c < "$CASE_HOME/state/apply-a4.status" | tr -d ' ')
+  [ "$cursor" = "$status_size" ] || fail "exhaustion must consume its evidence ($cursor != $status_size)"
+  routing_state="$CASE_HOME/state/.dispatch-routing.json"
+  [ -f "$routing_state" ] || fail "exhaustion must park a recorded telemetry provider"
+  assert_contains "$(cat "$routing_state")" '"claude"' "recorded non-native provider cooldown"
+  if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a4 apply 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 1 ] || fail "consumed exhausted evidence must not re-block, rc=$rc: $out"
+  assert_contains "$out" "no depletion evidence" "second exhausted apply respects the cursor"
+  [ "$(grep -c '^blocked: model fallback exhausted' "$CASE_HOME/state/apply-a4.status")" -eq 1 ] \
+    || fail "the same evidence appended blocked more than once"
+  pass "full exhaustion parks its recorded provider and consumes evidence before blocking"
 }
 
 {

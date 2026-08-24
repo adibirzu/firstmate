@@ -52,8 +52,9 @@
 #   3  the whole chain - and, when configured, the whole lane order - is
 #      exhausted; apply records a blocked status line before exiting
 #
-# Refusals are loud: a missing chain, malformed config, unreadable meta, or
-# absent evidence stops the script rather than improvising a relaunch.
+# Refusals are loud: malformed config, unreadable meta, or absent evidence
+# stops the script rather than improvising a relaunch. A chainless lane is
+# exhausted in place and can continue through its configured lane successor.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -162,7 +163,6 @@ lanes_configured() {  # -> one harness per line, empty when unconfigured
 }
 
 CHAIN=$(chain_of "$HARNESS")
-[ -n "$CHAIN" ] || die "no modelFallback chain configured for harness '$HARNESS'; add one to $DISPATCH_CONFIG"
 
 # --- evidence classification ------------------------------------------------
 
@@ -190,6 +190,41 @@ case "$CLASSIFICATION" in
     ;;
 esac
 SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
+
+advance_fallback_cursor() {
+  local final_size new_cursor_line lock update_ok
+  final_size=$(wc -c < "$STATUS" | tr -d ' ')
+  new_cursor_line="fallback_cursor=$final_size"
+  lock=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
+  fm_lock_acquire_wait "$lock" || die "could not acquire the meta lock for $META"
+  update_ok=1
+  {
+    grep -v '^fallback_cursor=' "$META" || true
+    printf '%s\n' "$new_cursor_line"
+  } > "$META.locked-update" || update_ok=0
+  if [ "$update_ok" = 1 ]; then
+    mv "$META.locked-update" "$META" || update_ok=0
+  fi
+  rm -f "$META.locked-update"
+  fm_lock_release "$lock" || true
+  [ "$update_ok" = 1 ] || die "the fallback cursor could not be recorded; investigate duplicate-evidence handling for $ID"
+  FALLBACK_CURSOR=$final_size
+}
+
+if [ "$VERB" = apply ]; then
+  PROVIDER=$(fm_meta_get "$META" provider)
+  if [ -z "$PROVIDER" ]; then
+    PROVIDER=$(native_provider_of "$HARNESS") || PROVIDER=
+  fi
+  case "$PROVIDER" in
+    claude|codex|grok|cursor|agy)
+      FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" record-failure \
+        --provider "$PROVIDER" --task "$ID" >/dev/null 2>&1 \
+        || log "provider=$PROVIDER cooldown was not recorded; continuing with automatic fallback"
+      ;;
+    *) ;;
+  esac
+fi
 
 # --- selection --------------------------------------------------------------
 
@@ -252,6 +287,7 @@ if [ "$ACTION" = exhausted ]; then
   if [ "$VERB" = apply ]; then
     printf 'blocked: model fallback exhausted for %s (%s); needs a routing decision\n' \
       "$HARNESS" "$(printf '%s' "$CHAIN" | tr '\n' ' ')" >> "$STATUS"
+    advance_fallback_cursor
   fi
   exit 3
 fi
@@ -264,17 +300,6 @@ if [ "$VERB" = plan ]; then
 fi
 
 # --- apply ------------------------------------------------------------------
-
-# Park the depleted provider for dispatch pricing too, best-effort: the
-# cooldown keeps NEW tasks off the account while this task steps down inside
-# its lane. record-failure re-verifies the evidence itself and refuses safely;
-# its failure must never block the relaunch that actually rescues the work.
-PROVIDER=$(native_provider_of "$HARNESS") || PROVIDER=
-if [ -n "$PROVIDER" ]; then
-  FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" record-failure \
-    --provider "$PROVIDER" --task "$ID" >/dev/null 2>&1 \
-    || log "provider=$PROVIDER cooldown was not recorded; continuing with the relaunch anyway"
-fi
 
 NOTE="Automatic model fallback: depletion evidence ($SIGNATURE) on ${CURRENT_MODEL:-the harness default model} of harness $HARNESS. Relaunching in place${NEXT_HARNESS:+ on harness $NEXT_HARNESS} with model '${NEXT_MODEL:-default}'. This automatic step-down may lower the reasoning class; standing quota rule makes availability beat escalation, and this note plus the status line keep the downgrade visible rather than silent. Preserve every commit and uncommitted change."
 
@@ -301,20 +326,6 @@ printf 'working: automatic model fallback %s -> %s%s on depletion evidence (%s);
 # Consume exactly the evidence this response acted on. The cursor is measured
 # AFTER every append above, so this script's own handoff and downgrade lines
 # can never re-classify as fresh depletion evidence on a later run.
-FINAL_SIZE=$(wc -c < "$STATUS" | tr -d ' ')
-NEW_CURSOR_LINE="fallback_cursor=$FINAL_SIZE"
-LOCK=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
-fm_lock_acquire_wait "$LOCK" || die "could not acquire the meta lock for $META"
-UPDATE_OK=1
-{
-  grep -v '^fallback_cursor=' "$META" || true
-  printf '%s\n' "$NEW_CURSOR_LINE"
-} > "$META.locked-update" || UPDATE_OK=0
-if [ "$UPDATE_OK" = 1 ]; then
-  mv "$META.locked-update" "$META" || UPDATE_OK=0
-fi
-rm -f "$META.locked-update"
-fm_lock_release "$LOCK" || true
-[ "$UPDATE_OK" = 1 ] || die "relaunch succeeded but the fallback cursor could not be recorded; investigate duplicate-evidence handling for $ID"
+advance_fallback_cursor
 
-log "applied $ACTION for $ID (${CURRENT_MODEL:-default} -> ${NEXT_MODEL:-default}${NEXT_HARNESS:+ on $NEXT_HARNESS}); evidence cursor advanced to byte $FINAL_SIZE"
+log "applied $ACTION for $ID (${CURRENT_MODEL:-default} -> ${NEXT_MODEL:-default}${NEXT_HARNESS:+ on $NEXT_HARNESS}); evidence cursor advanced to byte $FALLBACK_CURSOR"
