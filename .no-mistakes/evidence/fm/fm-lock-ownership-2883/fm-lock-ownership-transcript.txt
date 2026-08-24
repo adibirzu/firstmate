@@ -1,0 +1,4 @@
+ok - fm-lock: a new session binding readmits its owner and rejects a sibling in the same pool
+ok - fm-lock: legacy shared-pool ownership is accepted only visibly during migration
+ok - fm-lock: an unidentifiable new Claude acquisition refuses without legacy fallback
+ok - fm-lock: a Claude worker without session identity fails closed
