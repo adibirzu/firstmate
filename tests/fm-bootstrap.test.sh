@@ -140,6 +140,13 @@ SH
   chmod +x "$fakebin/jq"
 }
 
+add_real_node() {
+  local fakebin=$1 real_node
+  real_node=$(command -v node 2>/dev/null) || fail "node is required for dispatch profile validation tests"
+  rm -f "$fakebin/node"
+  ln -s "$real_node" "$fakebin/node"
+}
+
 make_fake_fleet_sync_root() {
   local dir=$1 fake_root
   fake_root="$dir/fake-root"
@@ -1105,6 +1112,7 @@ test_crew_dispatch_validation() {
     printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
     fakebin=$(make_fake_toolchain "$case_dir")
     add_real_jq "$fakebin"
+    add_real_node "$fakebin"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
