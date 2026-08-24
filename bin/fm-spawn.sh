@@ -380,8 +380,8 @@ case "$EFFORT" in
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
 case "$PROVIDER" in
-  ''|claude|codex|grok) ;;
-  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
+  ''|claude|codex|grok|cursor|agy) ;;
+  *) echo "error: --provider must be one of claude, codex, grok, cursor, agy" >&2; exit 1 ;;
 esac
 if [ "$REUSE_WORKTREE" = 1 ]; then
   if [ "$KIND" = secondmate ]; then
@@ -1433,7 +1433,7 @@ case "$HARNESS" in
   kimi)
     [ -z "$PROVIDER" ] || { echo "error: Kimi cannot carry a subscription routing provider" >&2; exit 1; }
     ;;
-  claude|codex|grok)
+  claude|codex|grok|cursor|agy)
     [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || { echo "error: native harness $HARNESS requires provider $HARNESS" >&2; exit 1; }
     ;;
 esac
@@ -3142,7 +3142,11 @@ spawn_write_meta_locked() {
   # carrier would otherwise survive a handoff and mis-attribute the new run.
   # control_relaunch_tx= is spawn-written on a control-parented relaunch and is
   # how bin/fm-control.sh recognizes its own replacement publication.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  # provider= belongs here because a relaunch that switches adapters must not
+  # keep the previous adapter's routing provider: every reuse caller that can
+  # prove a correct provider passes it explicitly (fm-runtime-handoff.sh and
+  # fm-control.sh), so an unprovable one is dropped instead of left lying.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|provider|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then

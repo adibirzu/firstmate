@@ -793,7 +793,7 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line recorded_provider
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -841,6 +841,20 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  # spawn drops provider= on every reuse, so the replacement's routing provider
+  # is re-declared whenever it can be proven: a native target runs on its own
+  # provider, and keeping the recorded adapter keeps the recorded provider. A
+  # cross-harness move into an adapter with no native credit identity gets no
+  # guess - the stale provider stays dropped.
+  case "$TARGET_HARNESS" in
+    claude|codex|grok|cursor|agy) spawn_args+=(--provider "$TARGET_HARNESS") ;;
+    *)
+      if [ "$TARGET_HARNESS" = "$PRIOR_RECORDED_HARNESS" ]; then
+        recorded_provider=$(fm_meta_get "$META" provider)
+        [ -z "$recorded_provider" ] || spawn_args+=(--provider "$recorded_provider")
+      fi
+      ;;
+  esac
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

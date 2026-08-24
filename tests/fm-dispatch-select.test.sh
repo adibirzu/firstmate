@@ -578,6 +578,5 @@ test_new_verified_adapters_with_providers_are_selectable
 test_agy_with_declared_quota_windows_prices_separate_pools
 test_agy_record_failure_and_cooldown
 test_depletion_evidence_gate_separates_quota_from_working_limits
-test_depletion_signal_applies_model_fallback
 
 echo "# all fm-dispatch-select tests passed"

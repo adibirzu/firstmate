@@ -196,8 +196,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cline`, `cursor-agent`, `cursor`, and `copilot`, plus `muse` for crewmates and scouts only and `agy` for crewmate launches only; never dispatch on an unverified adapter.
-`agy` is verified for crewmate launches only, and a `--secondmate` spawn refuses it.
+The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, and `cursor`, plus `muse`, `agy`, `cline`, and `copilot` for crewmate and scout launches only; never dispatch on an unverified adapter, and never select one of those four for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
@@ -218,7 +217,15 @@ Do not add model-specific versions of that policy.
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
-When an active ship or scout session is blocked due to token/quota exhaustion or harness limits, Firstmate may adopt and relaunch the blocked session in place using `bin/fm-runtime-handoff.sh <task-id> --harness <name> [--model <name>] [--effort <level>] [--progress-note <text>]`. This cleanly exits the blocked agent, preserves the existing worktree, lease, PR metadata, and work-in-progress without loss, and relaunches the replacement agent in the same worktree to continue execution seamlessly.
+When an active ship or scout session is blocked due to token/quota exhaustion or harness limits, Firstmate may adopt and relaunch the blocked session in place using `bin/fm-runtime-handoff.sh <task-id> --harness <name> [--model <name>] [--effort <level>] [--progress-note <text>]`.
+This cleanly exits the blocked agent, preserves the existing worktree, lease, PR metadata, and work-in-progress without loss, and relaunches the replacement agent in the same worktree to continue execution seamlessly.
+When a ship or scout worker's model depletes mid-run, the watcher automatically invokes `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of blocking, parking, or escalating a routine depletion; it refuses to relaunch unless the shared classifier finds fresh depletion evidence, and the script owns the guarded in-place response through `bin/fm-runtime-handoff.sh`.
+Read model fallback chains from `config/crew-dispatch.json` `modelFallback` (legacy alias `_model_fallback`) without hardcoding a duplicate copy, and move work to the next harness lane only once a harness's whole chain is exhausted, in the order named by `fallbackLanes`; when every automatic move is spent, the script records the blocked event for a routing decision.
+Ship and scout status events pass through the shared depletion classifier, which accepts framed 429s, spending-limit 403s, explicit rate-limit or `RESOURCE_EXHAUSTED` errors, and named quota or credit exhaustion but rejects bare `limit` and unframed 429 text; telemetry-backed providers additionally record the verified failure through `record-failure`.
+Every automatic model switch must be logged and visible in status reporting rather than silently downgrading reasoning class; the fallback owner's progress note and status line satisfy that visibility contract.
+The fail-closed capacity contract (reserve, cooldown, and telemetry freshness) remains enforced.
+The strongest-reasoning-class rule governs which candidate is dispatched in the first place, so it is never traded away to conserve quota at selection time; model fallback is the separate in-run response to a model that depleted after dispatch, and it walks the configured chain rather than choosing a class.
+When a chain is exhausted, continue through the configured fallback lanes; record a blocked routing decision only after every automatic lane move is exhausted.
 
 ## 5. Recovery
 

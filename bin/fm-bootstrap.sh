@@ -1079,6 +1079,11 @@ crew_dispatch_validate() {
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
     return 0
   fi
+  if ! fallback_err=$(node "$SCRIPT_DIR/fm-dispatch-select.mjs" validate-model-fallback --file "$file" 2>&1); then
+    fallback_err=${fallback_err#fm-dispatch-select: }
+    echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $fallback_err"
+    return 0
+  fi
   err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","muse","agy","cline","copilot"] | index($h);
     def effort_ok($h; $e):
@@ -1154,9 +1159,9 @@ crew_dispatch_validate() {
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
-      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok"] | index($provider)) == null)) | unique) as $bad_providers
+      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok","cursor","agy"] | index($provider)) == null)) | unique) as $bad_providers
       | (configured_profiles | map(select(.harness == "kimi" or .provider == "kimi")) | length) as $bad_kimi_routes
-      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
+      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok" or .harness == "cursor" or .harness == "agy") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
         elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
         elif ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))

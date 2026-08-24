@@ -47,7 +47,7 @@ ack_stopped_cycle() {  # <state>
 watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
   local state=$1 fakebin=$2 out=$3
   shift 3
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+  env PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
 }
 
@@ -615,6 +615,29 @@ test_provably_working_signal_absorbed() {
   [ -e "$state/.last-watcher-beat" ] || fail "watcher beacon was not touched while absorbing"
   reap "$pid"
   pass "a no-verb signal whose crew is provably working is absorbed (no exit, no queue, suppressor advanced, beacon present)"
+}
+
+test_depletion_signal_applies_model_fallback() {
+  local dir state fakebin out status_file fallback_log fallback_bin pid
+  dir=$(make_case depletion-fallback); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  status_file="$state/task.status"; fallback_log="$dir/fallback.log"; fallback_bin="$dir/fm-model-fallback.sh"
+  printf 'kind=ship\nharness=agy\nmodel=gemini-3.7-flash-high\n' > "$state/task.meta"
+  printf 'working: API Error 429 quota exhausted\n' > "$status_file"
+  cat > "$fallback_bin" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FALLBACK_LOG:?}"
+exit 0
+SH
+  chmod +x "$fallback_bin"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$fakebin" "$out" FM_MODEL_FALLBACK_BIN="$fallback_bin" FM_FALLBACK_LOG="$fallback_log"
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher exited before applying the depletion fallback: $(cat "$out")"
+  fi
+  grep -Fx 'task apply' "$fallback_log" >/dev/null || { reap "$pid"; fail "depletion status did not invoke model fallback apply"; }
+  reap "$pid"
+  pass "a fresh worker depletion status invokes the automatic fallback apply path"
 }
 
 test_turn_ended_provably_working_absorbed() {
@@ -2692,6 +2715,7 @@ test_worktree_write_probe_is_wall_clock_bounded
 test_signal_crew_provably_working_classifier
 test_secondmate_status_signal_never_absorbed_classifier
 test_provably_working_signal_absorbed
+test_depletion_signal_applies_model_fallback
 test_turn_ended_provably_working_absorbed
 test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced

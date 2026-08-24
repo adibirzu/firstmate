@@ -3,8 +3,10 @@
 //
 // Usage:
 //   fm-dispatch-select.mjs select [--quota-json <file>] [--now <epoch>] [<json>]
-//   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok> --task <id> [--now <epoch>]
-//   fm-dispatch-select.mjs clear --provider <claude|codex|grok>
+//   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok|cursor|agy> --task <id> [--now <epoch>]
+//   fm-dispatch-select.mjs clear --provider <claude|codex|grok|cursor|agy>
+//   fm-dispatch-select.mjs classify-evidence (--file <path> | with text on stdin)
+//   fm-dispatch-select.mjs validate-model-fallback --file <crew-dispatch.json>
 //
 // `select` accepts a full rule object with `use`, one profile object, or a
 // non-empty profile array on the command line or stdin. It prints exactly one
@@ -15,14 +17,13 @@
 // model support discovery, and provider identity for non-native adapters. This
 // script owns only subscription readiness and deterministic distribution:
 //
-// - Native claude, codex, and grok profiles resolve to their same-named provider.
-//   Other harnesses need an explicit `provider` field.
-// - Providers exposed by quota-axi, including Claude, Codex, and Grok, require
-//   fresh telemetry no older than the configured maximum. Their tightest
-//   reported live percentage must remain strictly above the configured reserve.
-//   Stale, absent, malformed, or
-//   windowless telemetry makes that provider ineligible; it never falls back to
-//   an unmetered guess.
+// - Native claude, codex, grok, cursor, and agy profiles resolve to their
+//   same-named provider. Other harnesses need an explicit `provider` field.
+// - Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and
+//   agy, require fresh telemetry no older than the configured maximum. Their
+//   tightest reported live percentage must remain strictly above the
+//   configured reserve. Stale, absent, malformed, or windowless telemetry makes
+//   that provider ineligible; it never falls back to an unmetered guess.
 // - A profile may declare the one quota window it is actually drawn from with
 //   an optional `quotaWindow` field naming a `windows[].id` in that provider's
 //   telemetry. The candidate is then priced on that window alone instead of the
@@ -39,6 +40,16 @@
 // - Rate-limit or quota-exhaustion evidence creates a provider cooldown.
 //   `record-failure` verifies the evidence in the named task's status file and
 //   verifies that task's recorded routing provider before changing state.
+//   Evidence must read in subscription vocabulary - a framed 429, an explicit
+//   rate limit, a RESOURCE_EXHAUSTED code, or a named quota/credit/allowance/
+//   spending limit being exhausted, depleted, or reached. A context-window or
+//   tool-output ceiling is an ordinary working state, so a bare `limit`,
+//   `token`, unframed `429`, or plain authorization `403` is refused rather
+//   than parking the provider for a whole cooldown. This one vocabulary is
+//   also the depletion detector behind `bin/fm-model-fallback.sh`: the
+//   `classify-evidence` subcommand exposes it as a pure stdin/file
+//   classification so every consumer shares one owner instead of each
+//   re-spelling quota vocabulary.
 // - Among eligible candidates, a known spendPriority from quota-axi is the
 //   quota-perspective ranker: the highest known scalar wins. When every
 //   remaining eligible candidate lacks a known scalar, or when known scalars
@@ -51,6 +62,7 @@
 //
 // A profile priced on its own pool looks like this:
 //   { "harness": "cursor", "model": "cursor-grok-4.6-high", "quotaWindow": "auto_usage" }
+//   { "harness": "agy", "model": "gemini-3.7-flash-high", "quotaWindow": "gemini_5h" }
 //
 // config/crew-dispatch.json may contain this optional settings object:
 //   "subscriptionRouting": {
@@ -74,14 +86,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 // Routable providers must have a credit-identity in quota-axi so the selector
-// can test capacity and redirect. quota-axi reports claude, codex, grok AND
-// cursor (its `cursor` provider is the Cursor subscription). cline is
-// deliberately absent: it is BYO-API-key with no subscription window quota-axi
-// can read, so it stays spawn-only (a single non-array profile), never a
-// credit-routed candidate. Same for pi/opencode. copilot has telemetry too and
-// could be added the same way if wanted.
-const PROVIDERS = new Set(['claude', 'codex', 'grok', 'cursor']);
-const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cline', 'cursor', 'copilot']);
+// can test capacity and redirect. quota-axi reports claude, codex, grok,
+// cursor, and agy. cline is deliberately absent: it is BYO-API-key with no
+// subscription window quota-axi can read, so it stays spawn-only (a single
+// non-array profile), never a credit-routed candidate. Same for pi/opencode.
+// copilot has telemetry too and could be added the same way if wanted.
+const PROVIDERS = new Set(['claude', 'codex', 'grok', 'cursor', 'agy']);
+const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cursor', 'muse', 'agy', 'cline', 'copilot']);
 const NATIVE_PROVIDER = new Map([
   ['claude', 'claude'],
   ['codex', 'codex'],
@@ -89,6 +100,8 @@ const NATIVE_PROVIDER = new Map([
   // The cursor harness draws on the Cursor subscription, which quota-axi
   // reports under the provider name `cursor`.
   ['cursor', 'cursor'],
+  // agy draws on the Google AI subscription, reported as provider `agy`.
+  ['agy', 'agy'],
 ]);
 const DEFAULTS = Object.freeze({
   reservePercent: 20,
@@ -100,7 +113,28 @@ const LIMITS = Object.freeze({
   telemetryMaxAgeSeconds: [1, 3600],
   cooldownSeconds: [60, 86400],
 });
-const RATE_LIMIT_RE = /rate[ _-]?limit|too many requests|(?:quota|usage)[^\n]{0,80}(?:exhaust|limit|deplet)|(?:exhaust|deplet)[^\n]{0,80}(?:quota|usage)/i;
+// Keep this narrow: both consumers of this gate park a provider for a whole
+// cooldown on a single match, so an ordinary working state ("context token
+// limit reached", "exceeded the tool output limit") must not reach it. The
+// subscription-vocabulary contract these alternatives encode is stated in the
+// evidence bullet of the header help above.
+const RATE_LIMIT_RE = new RegExp([
+  '(?:http|status|code|error|response)[^\\n]{0,16}\\b429\\b',
+  // A framed 403 is an authorization code, so it counts only when budget
+  // vocabulary shares the line - "403 spending limit reached", never a plain
+  // forbidden/auth error.
+  '(?:spending|budget|credit|balance|quota)[^\\n]{0,80}\\b403\\b',
+  '\\b403\\b[^\\n]{0,80}(?:spending|budget|credit|balance|quota)',
+  'rate[ _-]?limit',
+  'too many requests',
+  'resource[ _-]?exhausted',
+  'insufficient[ _-]?(?:quota|credits?|balance|funds)',
+  'out of (?:quota|credits?|tokens?|balance)',
+  'credit balance is too low',
+  'spending[ _-]?limit',
+  '(?:quota|usage|spending|allowance|subscription|credits?|balance|monthly|weekly|daily|session)[^\\n]{0,80}(?:exhaust|deplet|used up|limit|reach|exceed|zero)',
+  '(?:exhaust|deplet|reach|exceed)[^\\n]{0,80}(?:quota|usage|spending|allowance|credits?|balance)',
+].join('|'), 'i');
 
 class CliError extends Error {
   constructor(message, code = 2) {
@@ -135,7 +169,7 @@ function parseArgs(argv) {
       usage();
       process.exit(0);
     }
-    if (['--quota-json', '--now', '--provider', '--task'].includes(arg)) {
+    if (['--quota-json', '--now', '--provider', '--task', '--file'].includes(arg)) {
       if (!argv.length) die(`${arg} requires a value`);
       options[arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = argv.shift();
     } else if (arg === '--') {
@@ -196,6 +230,68 @@ function settingsFromConfig(configDir) {
     settings[key] = value;
   }
   return settings;
+}
+
+function validateModelFallbackConfig(config) {
+  if (!config || Array.isArray(config) || typeof config !== 'object') {
+    die('config/crew-dispatch.json must be an object');
+  }
+  if (Object.hasOwn(config, 'modelFallback') && Object.hasOwn(config, '_model_fallback')) {
+    die('modelFallback and its legacy alias _model_fallback cannot both be declared');
+  }
+  const fallback = config.modelFallback ?? config._model_fallback;
+  if (fallback !== undefined) {
+    if (!fallback || Array.isArray(fallback) || typeof fallback !== 'object') {
+      die('modelFallback must be an object mapping a harness to its ordered model chain');
+    }
+    for (const [harness, chain] of Object.entries(fallback)) {
+      if (!VERIFIED_HARNESSES.has(harness)) die(`modelFallback has an unverified harness: ${harness}`);
+      if (!Array.isArray(chain) || !chain.length || chain.some((model) => typeof model !== 'string' || !model)) {
+        die(`modelFallback chain must be a non-empty array of non-empty model ids: ${harness}`);
+      }
+      if (new Set(chain).size !== chain.length) {
+        die(`modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: ${harness}`);
+      }
+    }
+  }
+  if (Object.hasOwn(config, 'modelFallbackCycles')) {
+    const cycles = config.modelFallbackCycles;
+    if (!Array.isArray(cycles) || !cycles.length) {
+      die('modelFallbackCycles must be a non-empty array of verified harness names');
+    }
+    const invalidCycles = cycles.filter((harness) => typeof harness !== 'string' || !VERIFIED_HARNESSES.has(harness));
+    if (invalidCycles.length) {
+      die(`modelFallbackCycles has a non-string or unverified harness entry: ${invalidCycles.join(', ')}`);
+    }
+    if (new Set(cycles).size !== cycles.length) {
+      die('modelFallbackCycles has duplicate entries; a cyclic lane must be named once');
+    }
+    for (const harness of cycles) {
+      const chain = fallback?.[harness];
+      if (!Array.isArray(chain) || chain.length < 2) {
+        die(`modelFallbackCycles requires a modelFallback chain with at least two model ids: ${harness}`);
+      }
+    }
+  }
+  if (Object.hasOwn(config, 'fallbackLanes')) {
+    const lanes = config.fallbackLanes;
+    if (!Array.isArray(lanes) || !lanes.length) {
+      die('fallbackLanes must be a non-empty array of verified harness names');
+    }
+    const invalidLanes = lanes.filter((harness) => typeof harness !== 'string' || !VERIFIED_HARNESSES.has(harness));
+    if (invalidLanes.length) {
+      die(`fallbackLanes has a non-string or unverified harness entry: ${invalidLanes.join(', ')}`);
+    }
+    if (new Set(lanes).size !== lanes.length) {
+      die('fallbackLanes has duplicate entries; a lane order must name each runtime once');
+    }
+  }
+}
+
+function validateModelFallback(options) {
+  if (!options.file || options.positional.length) die('validate-model-fallback requires exactly --file <crew-dispatch.json>');
+  const config = readJson(options.file, 'config/crew-dispatch.json');
+  validateModelFallbackConfig(config);
 }
 
 function emptyState() {
@@ -580,7 +676,7 @@ function taskMetaProvider(paths, task) {
   }));
   const harness = entries.get('harness');
   const provider = entries.get('provider') || NATIVE_PROVIDER.get(harness);
-  if (!provider || !PROVIDERS.has(provider)) die('record-failure requires a recorded claude, codex, or grok routing provider');
+  if (!provider || !PROVIDERS.has(provider)) die('record-failure requires a recorded claude, codex, grok, cursor, or agy routing provider');
   const nativeProvider = NATIVE_PROVIDER.get(harness);
   if (nativeProvider && provider !== nativeProvider) die(`task ${task} has mismatched native harness and provider metadata`);
   if (harness === 'kimi') die('record-failure does not support Kimi tasks');
@@ -589,7 +685,7 @@ function taskMetaProvider(paths, task) {
 }
 
 function recordFailure(options, paths, settings, now, state) {
-  if (!options.provider || !PROVIDERS.has(options.provider)) die('record-failure needs --provider claude, codex, or grok');
+  if (!options.provider || !PROVIDERS.has(options.provider)) die('record-failure needs --provider claude, codex, grok, cursor, or agy');
   if (!options.task) die('record-failure needs --task');
   const actual = taskMetaProvider(paths, options.task);
   if (actual !== options.provider) die(`task ${options.task} is recorded on provider ${actual}, not ${options.provider}`);
@@ -599,27 +695,54 @@ function recordFailure(options, paths, settings, now, state) {
 }
 
 function clearProvider(options, paths, state) {
-  if (!options.provider || !PROVIDERS.has(options.provider)) die('clear needs --provider claude, codex, or grok');
+  if (!options.provider || !PROVIDERS.has(options.provider)) die('clear needs --provider claude, codex, grok, cursor, or agy');
   delete state.cooldowns[options.provider];
   saveState(paths.stateFile, state);
   log(`provider=${options.provider} cooldown cleared`);
 }
 
+// classify-evidence: the pure depletion detector behind record-failure and
+// bin/fm-model-fallback.sh. Reads evidence text from --file or stdin and
+// prints exactly one `classification=` line plus the matched signature when
+// depleted. It touches no home, lock, or state, so a caller may run it before
+// any of this script's routing machinery exists.
+function classifyEvidence(options) {
+  let text;
+  try {
+    text = options.file ? fs.readFileSync(options.file, 'utf8') : fs.readFileSync(0, 'utf8');
+  } catch {
+    die('classify-evidence requires a readable --file or stdin text');
+  }
+  const match = RATE_LIMIT_RE.exec(text);
+  if (!match) {
+    process.stdout.write('classification=none\n');
+    return;
+  }
+  process.stdout.write(`classification=depleted\nsignature=${JSON.stringify(match[0])}\n`);
+}
+
 try {
   const options = parseArgs(process.argv.slice(2));
-  if (!['select', 'record-failure', 'clear'].includes(options.command)) die(`unknown command ${options.command}`);
-  const home = explicitHome();
-  const paths = operationalPaths(home);
-  const settings = settingsFromConfig(paths.configDir);
-  const now = parseNow(options.now);
-  const unlock = acquireLock(paths.lockDir);
-  try {
-    const state = loadState(paths.stateFile);
-    if (options.command === 'select') select(options, home, paths, settings, now, state);
-    else if (options.command === 'record-failure') recordFailure(options, paths, settings, now, state);
-    else clearProvider(options, paths, state);
-  } finally {
-    unlock();
+  if (options.command === 'classify-evidence') {
+    classifyEvidence(options);
+  } else if (options.command === 'validate-model-fallback') {
+    validateModelFallback(options);
+  } else if (!['select', 'record-failure', 'clear'].includes(options.command)) {
+    die(`unknown command ${options.command}`);
+  } else {
+    const home = explicitHome();
+    const paths = operationalPaths(home);
+    const settings = settingsFromConfig(paths.configDir);
+    const now = parseNow(options.now);
+    const unlock = acquireLock(paths.lockDir);
+    try {
+      const state = loadState(paths.stateFile);
+      if (options.command === 'select') select(options, home, paths, settings, now, state);
+      else if (options.command === 'record-failure') recordFailure(options, paths, settings, now, state);
+      else clearProvider(options, paths, state);
+    } finally {
+      unlock();
+    }
   }
 } catch (error) {
   if (error instanceof CliError) {

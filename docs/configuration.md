@@ -283,13 +283,12 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, and cursor are empirically verified for crewmate and secondmate launches; cline and copilot are verified for crewmate launches only and are not yet wired for secondmate use; [README requirements](../README.md#requirements) own the set supported for the primary session.
+claude, codex, opencode, pi, pi-signed, grok, kimi, and cursor are empirically verified for crewmate and secondmate launches; muse, agy, cline, and copilot are verified for crewmate and scout launches only, and `fm-spawn.sh` refuses each of them for a `--secondmate` spawn because none of them can arm a primary supervision protocol; [README requirements](../README.md#requirements) own the set supported for the primary session.
 A cursor secondmate or primary runs the tracked project-scope `.cursor/hooks.json` in its own home and must be launched with `--trust`, or no project hook loads; [`docs/supervision-protocols/cursor.md`](supervision-protocols/cursor.md) owns its supervision protocol.
-Cursor typed-submit confirmation is verified on tmux and Herdr only.
-On Zellij, cmux, and Orca a typed-plane Cursor send (a harness-native invocation or an explicit backend target; ordinary text steers ride the durable inbox and exit 0 at enqueue) lands, but `fm-send` reports delivery unconfirmed and exits non-zero because their shared submit core does not consult the busy footer; [runtime backend verification](verification/runtime-backends.md#cursor-agent-cli) owns the evidence and transcript-state boundary.
-muse is verified for crewmate and scout launches ONLY, and `fm-spawn.sh` refuses it for a secondmate, because muse ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
+Cursor delivery confirmation is verified on tmux and Herdr only.
+On Zellij, cmux, and Orca a Cursor steer lands, but `fm-send` reports delivery unconfirmed and exits non-zero because their shared submit core does not consult the busy footer; [runtime backend verification](verification/runtime-backends.md#cursor-agent-cli) owns the evidence and transcript-state boundary.
+muse's secondmate refusal is specifically because it ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
 muse also needs a worker-reachable credential before spawning, and the portable fleet path is the `<config>/muse/auth.json` credential stored by `muse login`, because a caller-only `META_API_KEY` does not cross a long-lived backend daemon.
-claude, codex, opencode, pi, pi-signed, grok, and kimi are empirically verified for crewmate and secondmate launches; agy is verified for crewmate launches only, and a `--secondmate` spawn refuses it; [README requirements](../README.md#requirements) own the set supported for the primary session.
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter knowledge - each harness's busy-state source, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
@@ -341,14 +340,19 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "provider": "<claude|codex|grok, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
+        { "harness": "<adapter>", "provider": "<claude|codex|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
   "default": [
     { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>", "quotaWindow": "<optional quota window id>" }
-  ]
+  ],
+  "modelFallback": {
+    "<adapter>": ["<strongest model id>", "<next model id>", "<weakest model id>"]
+  },
+  "modelFallbackCycles": ["<adapter>"],
+  "fallbackLanes": ["<adapter>", "<adapter>"]
 }
 ```
 
@@ -361,7 +365,7 @@ An omitted model or effort means the selected harness uses its own default for t
 Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
 An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.
 Read the current window ids from `quota-axi --json`, and the current model ids from `bin/fm-model-refresh.sh`, before writing either field.
-Native `claude`, `codex`, `grok`, and `cursor` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, and `grok` a provider that is present must match the harness.
+Native `claude`, `codex`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, `grok`, `cursor`, and `agy` a provider that is present must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
@@ -370,7 +374,7 @@ If a selected profile carries an effort value the chosen harness does not accept
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, a malformed or duplicate-valued model fallback chain or cycle, a malformed `fallbackLanes` order, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
@@ -380,9 +384,27 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 `cooldownSeconds` is an integer from 60 through 86400 and defaults to 1800.
 Unknown fields fail bootstrap validation instead of being ignored.
 
-Providers exposed by quota-axi, including Claude, Codex, Grok, and Cursor, require fresh telemetry with a usable percentage above the reserve.
+Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry with a usable percentage above the reserve.
 The selector ranks remaining eligible candidates by a known `spendPriority` scalar when quota-axi publishes one, then persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
 Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
+
+`modelFallback` is an optional top-level object mapping each harness name to its own ordered model chain, strongest entry first.
+`_model_fallback` is accepted as a legacy alias for the same object; a file declaring both is invalid, because two chains for one harness cannot both be authoritative.
+Every key must be a harness verified for dispatch under the same rule as a profile `harness`, every value must be a non-empty array of non-empty model-id strings, and no model id may repeat inside one chain, because a duplicate would make the step-down order ambiguous; violations are reported as `CREW_DISPATCH` diagnostics rather than silently ignored.
+`modelFallbackCycles` is an optional, duplicate-free list of verified harnesses whose configured chain has at least two entries; after its tail depletes, that lane returns to its chain head instead of becoming exhausted.
+Read the current model ids from `bin/fm-model-refresh.sh` before writing a chain, because an id the harness does not accept fails at launch instead of being repriced.
+The chain is never consulted at selection time, so it neither overrides a profile `model` nor re-opens the strongest-reasoning-class rule that governs the initial dispatch; it acts only after dispatch, on depletion.
+
+Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
+At the supervision status-event boundary, `bin/fm-watch.sh` invokes `apply` automatically for ship and scout tasks; without fresh classified depletion evidence, `apply` refuses and does not relaunch the worker.
+Its depletion detector is `bin/fm-dispatch-select.mjs classify-evidence`, which exposes the same single subscription-vocabulary regex that `record-failure` verifies with - framed 429, explicit rate limit, `RESOURCE_EXHAUSTED`, or named quota/credit/balance/spending-limit exhaustion - while context-window ceilings, tool-output limits, plain authorization errors, and unframed codes classify as ordinary working states and trigger nothing.
+`apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs, and it refuses rather than relaunching when there is no fresh depleted classification.
+Selection walks the recorded harness's chain: the entry after the recorded model is next, a model absent from its chain (a default-model launch, or a task older than the chain) starts at the chain head, and the chain's last entry means this runtime lane is walked out unless `modelFallbackCycles` names that harness, in which case it returns to its chain head.
+On exhaustion, the optional top-level `fallbackLanes` array decides what happens: it is a non-empty, duplicate-free list of verified harnesses naming the lane order, and the task moves to the lane after its own, starting that lane's chain head, or launching on that lane's own default model when the successor has no configured chain.
+A task whose final non-cyclic lane's chain is exhausted, or whose harness appears in no lane order, gets an explicit `blocked:` status event for a routing decision - automation says loudly that it has run out of automatic moves rather than wrapping around to a model already known to be depleted.
+`apply` executes every move through `bin/fm-runtime-handoff.sh`, which preserves the worktree, branch, commits, and uncommitted changes in place; the effort axis is deliberately not carried over, so the replacement model launches on its own default effort instead of inheriting an axis tuned for the depleted model, and the routing provider is re-declared only where provable (the target's native provider, or the recorded one when the adapter is unchanged).
+Auto-step-down is standing policy (2026-08-24): availability beats escalation, so when the depleted model IS the strongest available class the fallback still proceeds automatically - routine depletion never parks on the captain and never stops the fleet - and the downgrade is made visible rather than silent through a progress note naming both models plus the matched signature, a `working:` status line recording the switch, and stderr confirmation.
+When the depleted harness carries a telemetry-backed routing provider, `apply` also records the verified failure through `record-failure`, so future dispatches avoid that account for the cooldown while this task steps down within its lane; that bookkeeping failing never blocks the relaunch itself.
 
 ## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 
