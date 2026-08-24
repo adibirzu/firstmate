@@ -1,0 +1,4 @@
+kind=ship
+harness=opencode
+model=free-b
+fallback_cursor=128

@@ -1,0 +1,27 @@
+== Chainless non-terminal lane plan ==
+action=lane-move
+task=lane
+harness=cursor
+from_model=cursor-default
+to_model=free-a
+to_harness=opencode
+signature="Error 429"
+
+== First exhausted apply ==
+action=exhausted
+task=exhausted
+harness=opencode
+from_model=free-b
+reason=every model in the 'opencode' chain is depleted and no fallbackLanes successor exists
+exit=3
+persisted status:
+working: API Error 429 quota exhausted
+blocked: model fallback exhausted for opencode (free-a free-b); needs a routing decision
+persisted cursor:
+fallback_cursor=128
+
+== Same evidence applied again ==
+head: illegal byte count -- 0
+error: no depletion evidence in /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/no-mistakes-evidence/01M0TCS26GFMT9R50GDGSX4068/fallback-cli-home/state/exhausted.status after byte 128; a healthy or already-consumed signal is never a fallback trigger
+exit=1
+blocked_lines=1

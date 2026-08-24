@@ -1,0 +1,1 @@
+{"modelFallback":{"agy":["gemini-3.7","gemini-3.6"],"opencode":["free-a","free-b"]},"fallbackLanes":["agy","cursor","opencode"]}

@@ -1,0 +1,35 @@
+ok - classify: framed 429 => depleted
+ok - classify: RESOURCE_EXHAUSTED => depleted
+ok - classify: 403 spending limit => depleted
+ok - classify: insufficient credits => depleted
+ok - classify: credit balance too low => depleted
+ok - classify: explicit rate limit => depleted
+ok - classify: context token ceiling => none (ordinary working state)
+ok - classify: tool-output ceiling => none
+ok - classify: plain authorization 403 => none
+ok - classify: unframed 429 => none
+ok - plan walks the chain to the entry after the current model
+ok - plan starts an out-of-chain (default) model at the strongest configured entry
+ok - plan reports exhaustion at the chain tail with exit 3
+ok - an exhausted chain moves to the next configured lane's chain head
+ok - a configured cline cycle alternates glm-5.3 and kimi-k3
+ok - moving to a lane with no configured chain launches on that lane's default model
+ok - a chainless non-terminal lane advances through fallbackLanes
+ok - walking out the final configured lane reports exhaustion rather than wrapping
+ok - _model_fallback remains a first-class spelling of the chain
+ok - refuses when no crew-dispatch.json exists
+ok - refuses malformed config loudly instead of selecting around it
+ok - refuses duplicate chain ids at fallback execution time
+ok - refuses a cycle that cannot change models
+ok - a chainless terminal lane reports exhaustion without improvising a model
+ok - a healthy worker is never relaunched by fallback: no evidence, no action
+ok - refuses a secondmate; its recovery is a different owner
+ok - apply relaunches in place with the next model, logs the downgrade, parks the provider, and consumes the evidence
+ok - depletion written during handoff remains actionable on the next apply
+ok - the same evidence can never trigger a second step-down
+ok - new depletion evidence after the cursor continues down the chain
+ok - a non-native harness records its telemetry-backed routing provider
+ok - full exhaustion parks its recorded provider and consumes evidence before blocking
+ok - when the relaunch fails, the evidence stays unconsumed for the retry supervisor
+ok - over the real handoff path, fallback preserves the worktree and work while stepping the model down
+All fm-model-fallback tests passed.
