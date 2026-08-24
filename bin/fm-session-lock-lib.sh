@@ -232,7 +232,8 @@ fm_session_lock_prepare_acquisition_identity() {
   FM_SESSION_LOCK_OWNER_PID=
   FM_SESSION_LOCK_OWNER_SESSION=
   ancestry_pid=$(fm_harness_ancestry_pid) || return 1
-  if fm_harness_ancestry_is_claude && [ "${CLAUDECODE:-}" = 1 ]; then
+  if fm_harness_ancestry_is_claude; then
+    [ "${CLAUDECODE:-}" = 1 ] || return 1
     session_id=${CLAUDE_CODE_SESSION_ID:-}
     session_pid=${CLAUDE_PID:-}
     case "$session_id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
@@ -305,6 +306,22 @@ fm_session_lock_record_matches_file() {  # <state-dir> <record-path>
   [ "$FM_SESSION_LOCK_RECORD_KIND" = "$kind" ] \
     && [ "$FM_SESSION_LOCK_RECORD_PID" = "$pid" ] \
     && [ "$FM_SESSION_LOCK_RECORD_SESSION" = "$session" ]
+}
+
+fm_session_lock_record_matches() {  # <state-dir> <kind> <pid> <session>
+  local state=$1 kind=$2 pid=$3 session=$4
+  fm_session_lock_read_record "$state" || return 1
+  [ "$FM_SESSION_LOCK_RECORD_KIND" = "$kind" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_PID" = "$pid" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_SESSION" = "$session" ]
+}
+
+fm_session_lock_print_binding() {  # <kind> <pid> <session>
+  local kind=$1 pid=$2 session=$3
+  case "$kind" in claude|ancestry) ;; *) return 1 ;; esac
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  case "$session" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  printf 'format=1\nkind=%s\npid=%s\nsession=%s\n' "$kind" "$pid" "$session"
 }
 
 # Write the complete new lock format under fm-lock.sh's acquisition claim.

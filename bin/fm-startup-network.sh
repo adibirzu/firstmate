@@ -197,17 +197,24 @@ phase_label() {  # <phases>
 # --- start -------------------------------------------------------------------
 
 cmd_start() {  # <locked> <harvest-pid>
-  local locked=$1 harvest_pid=$2 lock_pid lock_kind lock_session generation worker_pid phases started
+  local locked=$1 harvest_pid=$2 lock_pid lock_kind lock_session generation worker_pid phases started lease_held=0
   mkdir -p "$STATE" 2>/dev/null || return 1
   # Captured HERE, at the moment the caller still holds the lock, and carried to
   # the worker: re-reading the lock later would only prove that SOME session
   # holds it, which is exactly the case this guard exists to reject.
-  lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
-  if [ "$locked" = 1 ] && ! fm_session_lock_owned_by_current_session "$STATE"; then
-    return 1
-  fi
-  if [ "$locked" = 1 ] && ! fm_session_lock_read_record "$STATE"; then
-    locked=0
+  if [ "$locked" = 1 ]; then
+    fm_lock_acquire_wait "$STATE/.lock.acquire"
+    lease_held=1
+    lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
+    if ! fm_session_lock_owned_by_current_session "$STATE"; then
+      fm_lock_release "$STATE/.lock.acquire"
+      return 1
+    fi
+    if ! fm_session_lock_read_record "$STATE"; then
+      locked=0
+    fi
+  else
+    lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
   fi
   lock_kind=${FM_SESSION_LOCK_RECORD_KIND:-}
   lock_session=${FM_SESSION_LOCK_RECORD_SESSION:-}
@@ -223,6 +230,7 @@ cmd_start() {  # <locked> <harvest-pid>
     generation=$(status_get generation)
     printf '%s\t%s\n' "$generation" "$harvest_pid" > "$CLAIM_FILE" 2>/dev/null || true
     fm_lock_release "$PUBLISH_LOCK"
+    [ "$lease_held" -eq 0 ] || fm_lock_release "$STATE/.lock.acquire"
     return 0
   fi
 
@@ -243,6 +251,7 @@ lock_session=$lock_session
 EOF
   then
     fm_lock_release "$PUBLISH_LOCK"
+    [ "$lease_held" -eq 0 ] || fm_lock_release "$STATE/.lock.acquire"
     return 1
   fi
 
@@ -281,11 +290,13 @@ EOF
   then
     kill "$worker_pid" 2>/dev/null || true
     fm_lock_release "$PUBLISH_LOCK"
+    [ "$lease_held" -eq 0 ] || fm_lock_release "$STATE/.lock.acquire"
     [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
     return 1
   fi
   printf '%s\t%s\n' "$generation" "$harvest_pid" > "$CLAIM_FILE" 2>/dev/null || true
   fm_lock_release "$PUBLISH_LOCK"
+  [ "$lease_held" -eq 0 ] || fm_lock_release "$STATE/.lock.acquire"
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
   return 0
 }

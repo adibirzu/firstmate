@@ -146,6 +146,26 @@ test_unidentifiable_claude_session_cannot_use_legacy_compatibility() {
   pass "fm-lock: an unidentifiable new Claude acquisition refuses without legacy fallback"
 }
 
+test_claude_without_its_session_marker_cannot_fall_back_to_ancestry() {
+  local home fakebin session sibling spare host parent out
+  home=$(make_home missing-marker)
+  fakebin=$(fm_fakebin "$home/bin")
+  spawn_live_pid; session=$LIVE_PID
+  spawn_live_pid; sibling=$LIVE_PID
+  spawn_live_pid; spare=$LIVE_PID
+  spawn_live_pid; host=$LIVE_PID
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
+
+  out=$(FM_LOCK_TEST_MODE=pool FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH" \
+    bash "$ROOT/bin/fm-lock.sh" 2>&1) \
+    && fail "a Claude worker without session identity acquired an ancestry lock: $out"
+  case "$out" in *"cannot establish this session's lock identity"*) ;; *) fail "missing marker refusal was not explicit: $out" ;; esac
+  [ ! -e "$home/state/.lock" ] || fail "an unidentifiable Claude worker wrote a lock"
+  pass "fm-lock: a Claude worker without session identity fails closed"
+}
+
 test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner
 test_legacy_pool_lock_is_logged_when_temporarily_accepted
 test_unidentifiable_claude_session_cannot_use_legacy_compatibility
+test_claude_without_its_session_marker_cannot_fall_back_to_ancestry
