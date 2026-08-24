@@ -1417,7 +1417,17 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999\n");
 await hooks.event(event);
-await new Promise((resolve) => setTimeout(resolve, 120));
+// The event hook starts the arm attempt without awaiting it, and a foreign-lock
+// refusal costs ~10 git/ps probes before it settles. Drain that attempt through
+// the coordinator instead of sleeping a fixed budget: on a loaded runner the
+// probes outlast any wall-clock guess, and flipping the lock underneath an
+// in-flight attempt makes the next caller coalesce onto its stale refusal and
+// never arm. Awaiting also asserts the exact reason the gate refused.
+const refused = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (refused !== "read-only") {
+  console.error(`expected read-only while another session holds the lock, got ${refused}`);
+  process.exit(1);
+}
 if (existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm ran without owning the session lock");
   process.exit(1);
