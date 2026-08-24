@@ -513,7 +513,7 @@ JSON
 }
 
 test_depletion_evidence_gate_separates_quota_from_working_limits() {
-  local home fakebin quota out rc case name status
+  local home fakebin quota out rc name status
   home=$(make_home evidence-gate)
   fakebin=$(make_fakebin evidence-gate)
   quota="$home/quota.json"
