@@ -260,12 +260,11 @@ fm_session_lock_record_path() {  # <state-dir>
 FM_SESSION_LOCK_RECORD_KIND=
 FM_SESSION_LOCK_RECORD_PID=
 FM_SESSION_LOCK_RECORD_SESSION=
-fm_session_lock_read_record() {  # <state-dir>
-  local state=$1 path first second third fourth extra
+fm_session_lock_read_record_file() {  # <record-path>
+  local path=$1 first second third fourth extra
   FM_SESSION_LOCK_RECORD_KIND=
   FM_SESSION_LOCK_RECORD_PID=
   FM_SESSION_LOCK_RECORD_SESSION=
-  path=$(fm_session_lock_record_path "$state")
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
   {
     IFS= read -r first
@@ -282,6 +281,30 @@ fm_session_lock_read_record() {  # <state-dir>
   case "$FM_SESSION_LOCK_RECORD_PID" in ''|*[!0-9]*) return 1 ;; esac
   case "$FM_SESSION_LOCK_RECORD_SESSION" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   FM_SESSION_LOCK_RECORD_KIND=${second#kind=}
+}
+
+fm_session_lock_read_record() {  # <state-dir>
+  fm_session_lock_read_record_file "$(fm_session_lock_record_path "$1")"
+}
+
+# Print state dir $1's validated binding in its on-disk format.
+fm_session_lock_print_record() {  # <state-dir>
+  fm_session_lock_read_record "$1" || return 1
+  printf 'format=1\nkind=%s\npid=%s\nsession=%s\n' \
+    "$FM_SESSION_LOCK_RECORD_KIND" "$FM_SESSION_LOCK_RECORD_PID" "$FM_SESSION_LOCK_RECORD_SESSION"
+}
+
+# True when record file $2 is exactly state dir $1's validated lock binding.
+fm_session_lock_record_matches_file() {  # <state-dir> <record-path>
+  local state=$1 record=$2 kind pid session
+  fm_session_lock_read_record "$state" || return 1
+  kind=$FM_SESSION_LOCK_RECORD_KIND
+  pid=$FM_SESSION_LOCK_RECORD_PID
+  session=$FM_SESSION_LOCK_RECORD_SESSION
+  fm_session_lock_read_record_file "$record" || return 1
+  [ "$FM_SESSION_LOCK_RECORD_KIND" = "$kind" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_PID" = "$pid" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_SESSION" = "$session" ]
 }
 
 # Write the complete new lock format under fm-lock.sh's acquisition claim.

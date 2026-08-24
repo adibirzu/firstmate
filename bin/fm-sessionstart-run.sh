@@ -72,14 +72,10 @@ fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
 session_start_completed() {
-  local lock_pid completion_pid
   [ -f "$STATE/.lock" ] && [ ! -L "$STATE/.lock" ] || return 1
   [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ] || return 1
   fm_session_lock_owned_by_current_session "$STATE" || return 1
-  lock_pid=$(cat "$STATE/.lock" 2>/dev/null) || return 1
-  completion_pid=$(cat "$COMPLETION_FILE" 2>/dev/null) || return 1
-  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$completion_pid" = "$lock_pid" ]
+  fm_session_lock_record_matches_file "$STATE" "$COMPLETION_FILE"
 }
 
 if [ -z "$SOURCE" ] && [ ! -t 0 ]; then

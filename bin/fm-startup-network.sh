@@ -197,7 +197,7 @@ phase_label() {  # <phases>
 # --- start -------------------------------------------------------------------
 
 cmd_start() {  # <locked> <harvest-pid>
-  local locked=$1 harvest_pid=$2 lock_pid generation worker_pid phases started
+  local locked=$1 harvest_pid=$2 lock_pid lock_kind lock_session generation worker_pid phases started
   mkdir -p "$STATE" 2>/dev/null || return 1
   # Captured HERE, at the moment the caller still holds the lock, and carried to
   # the worker: re-reading the lock later would only prove that SOME session
@@ -206,10 +206,17 @@ cmd_start() {  # <locked> <harvest-pid>
   if [ "$locked" = 1 ] && ! fm_session_lock_owned_by_current_session "$STATE"; then
     return 1
   fi
+  if [ "$locked" = 1 ] && ! fm_session_lock_read_record "$STATE"; then
+    locked=0
+  fi
+  lock_kind=${FM_SESSION_LOCK_RECORD_KIND:-}
+  lock_session=${FM_SESSION_LOCK_RECORD_SESSION:-}
 
   fm_lock_acquire_wait "$PUBLISH_LOCK"
   if [ "$(status_get state)" = running ] && worker_alive \
-    && { [ "$locked" != 1 ] || [ "$(status_get lock_pid)" = "$lock_pid" ]; }; then
+    && [ "$(status_get lock_pid)" = "$lock_pid" ] \
+    && [ "$(status_get lock_kind)" = "$lock_kind" ] \
+    && [ "$(status_get lock_session)" = "$lock_session" ]; then
     # A worker from this or a previous session is still going. Starting a second
     # one would run the same mutating sweeps concurrently, so leave it alone and
     # let the harvest report its real state.
@@ -231,6 +238,8 @@ locked=$locked
 phases=$phases
 generation=$generation
 lock_pid=$lock_pid
+lock_kind=$lock_kind
+lock_session=$lock_session
 EOF
   then
     fm_lock_release "$PUBLISH_LOCK"
@@ -254,6 +263,7 @@ EOF
   case $- in *m*) monitor_was_on=1 ;; esac
   set -m 2>/dev/null || true
   nohup "$SCRIPT_DIR/fm-startup-network.sh" run --locked "$locked" --lock-pid "$lock_pid" \
+    --lock-kind "$lock_kind" --lock-session "$lock_session" \
     --generation "$generation" \
     >/dev/null 2>&1 </dev/null &
   worker_pid=$!
@@ -265,6 +275,8 @@ locked=$locked
 phases=$phases
 generation=$generation
 lock_pid=$lock_pid
+lock_kind=$lock_kind
+lock_session=$lock_session
 EOF
   then
     kill "$worker_pid" 2>/dev/null || true
@@ -293,12 +305,18 @@ EOF
 # nobody else has claimed, and the sweeps are idempotent, so finishing it is
 # strictly better than abandoning it. A missing, unreadable, or replaced lock all
 # fail closed to the read-only probe.
-lock_unchanged() {  # <expected-pid>
-  local expected=$1 current
-  case "$expected" in ''|*[!0-9]*) return 1 ;; esac
+lock_unchanged() {  # <expected-pid> <expected-kind> <expected-session>
+  local expected_pid=$1 expected_kind=$2 expected_session=$3 current
+  case "$expected_pid" in ''|*[!0-9]*) return 1 ;; esac
+  case "$expected_kind" in claude|ancestry) ;; *) return 1 ;; esac
+  case "$expected_session" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   [ -f "$STATE/.lock" ] && [ ! -L "$STATE/.lock" ] || return 1
   current=$(cat "$STATE/.lock" 2>/dev/null) || return 1
-  [ "$current" = "$expected" ]
+  [ "$current" = "$expected_pid" ] || return 1
+  fm_session_lock_read_record "$STATE" || return 1
+  [ "$FM_SESSION_LOCK_RECORD_KIND" = "$expected_kind" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_PID" = "$expected_pid" ] \
+    && [ "$FM_SESSION_LOCK_RECORD_SESSION" = "$expected_session" ]
 }
 
 # Bootstrap owns the meaning of its output protocol: silence is success,
@@ -398,14 +416,16 @@ locked=$locked
 phases=$phases
 generation=$generation
 lock_pid=$(status_get lock_pid)
+lock_kind=$(status_get lock_kind)
+lock_session=$(status_get lock_session)
 report_published=$report_published
 EOF
   fm_lock_release "$PUBLISH_LOCK"
   await_delivery "$generation" "$state"
 }
 
-cmd_run() {  # <locked> <lock-pid> <generation>
-  local locked=$1 lock_pid=$2 generation=$3 phases started budget out rc sweep_locked=0 downgraded=0 internal=0 lease_held=0 timings stage_started
+cmd_run() {  # <locked> <lock-pid> <lock-kind> <lock-session> <generation>
+  local locked=$1 lock_pid=$2 lock_kind=$3 lock_session=$4 generation=$5 phases started budget out rc sweep_locked=0 downgraded=0 internal=0 lease_held=0 timings stage_started
   mkdir -p "$STATE" 2>/dev/null || return 1
   started=$(now)
   budget=$(stage_budget)
@@ -423,8 +443,16 @@ cmd_run() {  # <locked> <lock-pid> <generation>
     locked=0
   fi
   if [ "$locked" = 1 ]; then
-    [ "$internal" -eq 1 ] || lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
-    if lock_unchanged "$lock_pid"; then
+    if [ "$internal" -eq 0 ]; then
+      fm_session_lock_read_record "$STATE" || {
+        downgraded=1
+        locked=0
+      }
+      lock_pid=$FM_SESSION_LOCK_RECORD_PID
+      lock_kind=$FM_SESSION_LOCK_RECORD_KIND
+      lock_session=$FM_SESSION_LOCK_RECORD_SESSION
+    fi
+    if [ "$locked" = 1 ] && lock_unchanged "$lock_pid" "$lock_kind" "$lock_session"; then
       sweep_locked=1
       phases=probe,sweeps
     else
@@ -447,6 +475,8 @@ locked=$sweep_locked
 phases=$phases
 generation=$generation
 lock_pid=$lock_pid
+lock_kind=$lock_kind
+lock_session=$lock_session
 EOF
     fm_lock_release "$PUBLISH_LOCK"
   fi
@@ -464,7 +494,7 @@ EOF
   if [ "$sweep_locked" -eq 1 ]; then
     fm_lock_acquire_wait "$STATE/.lock.acquire"
     lease_held=1
-    if ! lock_unchanged "$lock_pid"; then
+    if ! lock_unchanged "$lock_pid" "$lock_kind" "$lock_session"; then
       sweep_locked=0
       phases=probe
       downgraded=1
@@ -611,6 +641,8 @@ cmd_wait() {  # <seconds>
 LOCKED=0
 HARVEST_PID=
 LOCK_PID=
+LOCK_KIND=
+LOCK_SESSION=
 GENERATION=
 MODE=${1:-}
 [ $# -eq 0 ] || shift
@@ -619,6 +651,8 @@ while [ $# -gt 0 ]; do
     --locked) LOCKED=${2:-0}; shift; [ $# -eq 0 ] || shift ;;
     --harvest-pid|--pid) HARVEST_PID=${2:-}; shift; [ $# -eq 0 ] || shift ;;
     --lock-pid) LOCK_PID=${2:-}; shift; [ $# -eq 0 ] || shift ;;
+    --lock-kind) LOCK_KIND=${2:-}; shift; [ $# -eq 0 ] || shift ;;
+    --lock-session) LOCK_SESSION=${2:-}; shift; [ $# -eq 0 ] || shift ;;
     --generation) GENERATION=${2:-}; shift; [ $# -eq 0 ] || shift ;;
     -h|--help) usage; exit 0 ;;
     *) break ;;
@@ -628,7 +662,7 @@ case "$LOCKED" in 0|1) ;; *) LOCKED=0 ;; esac
 
 case "$MODE" in
   start) cmd_start "$LOCKED" "${HARVEST_PID:-0}" ;;
-  run) cmd_run "$LOCKED" "$LOCK_PID" "$GENERATION" ;;
+  run) cmd_run "$LOCKED" "$LOCK_PID" "$LOCK_KIND" "$LOCK_SESSION" "$GENERATION" ;;
   harvest) cmd_harvest "${HARVEST_PID:-}" ;;
   report) print_state; print_timings ;;
   wait) cmd_wait "${1:-120}" || exit $? ;;

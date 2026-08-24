@@ -118,6 +118,13 @@ run_stage() {  # <home> <root> <args...>
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-startup-network.sh" "$@"
 }
 
+write_lock_binding() {  # <home> <pid> [session]
+  local home=$1 pid=$2 session=${3:-$2}
+  printf '%s\n' "$pid" > "$home/state/.lock"
+  printf 'format=1\nkind=ancestry\npid=%s\nsession=%s\n' "$pid" "$session" \
+    > "$home/state/.lock.session"
+}
+
 wait_for_startup_network_wake() {  # <home> [tenths]
   local home=$1 limit=${2:-50} waited=0
   while ! grep -Fq $'check\tstartup-network' "$home/state/.wake-queue" 2>/dev/null \
@@ -141,7 +148,7 @@ test_start_returns_without_holding_the_callers_stdout() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   started=$(date +%s)
   # Command substitution reads to EOF, exactly like a hook harvesting hook output.
@@ -363,12 +370,35 @@ EOF
 
   # A detached start captures the lock itself and may run the mutating phase.
   : > "$log"
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
   FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" start --locked 1 --harvest-pid $$
   run_stage "$home" "$root" wait 30 >/dev/null || fail "the lock-authorized worker never published"
   assert_grep 'network=only detect_only=0' "$log" \
     "the worker refused sweeps for the very session that still holds the lock"
   pass "fm-startup-network: manual callers cannot forge mutation authority"
+}
+
+test_worker_refuses_a_reused_pid_with_a_new_lock_binding() {
+  local rec home root log
+  rec=$(new_world binding-changed)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  write_lock_binding "$home" "$$"
+  . "$ROOT/bin/fm-wake-lib.sh"
+  fm_lock_try_acquire "$home/state/.lock.acquire" \
+    || fail "could not hold the worker lease for the binding-change setup"
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
+    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  await_worker_record "$home"
+  write_lock_binding "$home" "$$" successor-session
+  fm_lock_release "$home/state/.lock.acquire"
+  run_stage "$home" "$root" wait 30 >/dev/null \
+    || fail "the binding-changed worker did not settle"
+  assert_grep 'network=only detect_only=1' "$log" \
+    "a worker ran mutating sweeps after a same-pid successor changed the lock binding"
+  pass "fm-startup-network: a same-pid successor binding downgrades the prior worker"
 }
 
 # The unbounded per-call network work is exactly what could wedge a startup. The
@@ -379,7 +409,7 @@ test_the_stage_bound_is_reported_not_swallowed() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=20 FM_STARTUP_NETWORK_TIMEOUT=2 \
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
@@ -442,7 +472,7 @@ test_start_is_single_flight() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=6 \
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
@@ -500,7 +530,7 @@ EOF
   next_owner=$(/bin/ps -o ppid= -p $$ | tr -d ' ')
   printf '%s\n' "$next_owner" > "$home/state/.lock"
   FM_FAKE_HARNESS_PID_OVERRIDE="$next_owner" FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
-    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+    run_stage "$home" "$root" start --locked 0 --harvest-pid $$
   generation_two=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
   [ "$generation_one" != "$generation_two" ] \
     || fail "the new lock owner reused the previous owner's generation"
@@ -514,7 +544,7 @@ test_lock_takeover_stays_read_only_while_a_sweep_holds_the_lease() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=6 \
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
   while [ ! -s "$log" ] && [ "$waited" -lt 50 ]; do
@@ -699,6 +729,7 @@ test_a_report_publication_failure_is_failed_and_still_wakes
 test_a_successful_result_never_queues_a_wake
 test_an_actionable_successful_result_still_queues_a_wake
 test_mutating_sweeps_are_refused_when_the_lock_changed_hands
+test_worker_refuses_a_reused_pid_with_a_new_lock_binding
 test_the_stage_bound_is_reported_not_swallowed
 test_an_abandoned_run_reads_as_needing_a_rerun
 test_start_is_single_flight
