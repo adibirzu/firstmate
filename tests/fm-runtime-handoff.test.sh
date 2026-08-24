@@ -584,6 +584,51 @@ setup_case() {
   pass "sends the recorded harness's exit command and completes once the pane is dead"
 }
 
+# --- success: a key-exit recorded harness hands off to a newly admitted target -
+
+{
+  setup_case exit-path-key task-x3
+  # cline is the one admitted adapter with no exit COMMAND: it leaves on C-c.
+  # cursor is a newly admitted handoff target, so this covers both new edges.
+  sed -i.bak 's/^harness=codex$/harness=cline/' "$CASE_HOME/state/task-x3.meta"
+  rm -f "$CASE_HOME/state/task-x3.meta.bak"
+  export FM_FAKE_WINDOW_FILE="$CASE_DIR/window.present"
+  : > "$FM_FAKE_WINDOW_FILE"
+  export FM_FAKE_EXIT_MARKER="$CASE_DIR/exited"
+  export FM_FAKE_SEND_MARKS_EXIT="$FM_FAKE_EXIT_MARKER"
+  export FM_FAKE_PANE_CMD=cline
+  : > "$FM_FAKE_SEND_LOG"
+  farm=$(make_bin_farm "$CASE_DIR")
+  head_before=$(git -C "$CASE_WT" rev-parse HEAD)
+
+  set +e
+  out=$(
+    FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_SETTLE_POLLS=2 \
+    FM_HANDOFF_EXIT_POLLS=5 FM_HANDOFF_EXIT_SLEEP=0 \
+    "$farm/fm-runtime-handoff.sh" task-x3 --harness cursor \
+      --progress-note "ClinePass depleted; work is unlanded." 2>&1
+  )
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "handoff from a key-exit harness to cursor should succeed: $out"
+  assert_contains "$out" "handed-off task-x3" "handoff success line"
+
+  send_log=$(cat "$FM_FAKE_SEND_LOG")
+  assert_contains "$send_log" "task-x3 --key C-c" "cline must be exited by key, never by an invented /exit"
+  case "$send_log" in
+    *"task-x3 /exit"*) fail "cline has no exit command; a text exit was sent: $send_log" ;;
+  esac
+  [ -f "$FM_FAKE_EXIT_MARKER" ] || fail "exit key should have been sent"
+  [ ! -f "$FM_FAKE_WINDOW_FILE" ] || fail "dead endpoint husk should have been killed"
+
+  [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "key-exit path must preserve HEAD"
+  [ -f "$CASE_WT/dirty.txt" ] || fail "key-exit path must preserve uncommitted changes"
+  meta=$(cat "$CASE_HOME/state/task-x3.meta")
+  assert_contains "$meta" "harness=cursor" "meta harness updated to the newly admitted target"
+  assert_contains "$meta" "pr=https://example.test/pr/1" "pr= preserved over the key-exit path"
+  pass "exits a key-only harness by key and relaunches on a newly admitted target"
+}
+
 # --- refusal: harness ignores the exit command and stays alive --------------
 
 {

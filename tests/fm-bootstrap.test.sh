@@ -1156,6 +1156,13 @@ default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}
 default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model, effort, and quotaWindow must be non-empty strings when present
 agy model profile with quotaWindow is accepted^{"rules":[{"when":"agy work","use":[{"harness":"agy","model":"gemini-3.7-flash-high","effort":"high","quotaWindow":"gemini_5h"}]}]}^empty^
 agy native subscription provider mismatch is flagged^{"default":[{"harness":"agy","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: agy:claude
+model fallback chains are accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.6-flash-high","gemini-3.5-flash-high"]}}^empty^
+legacy _model_fallback alias is accepted^{"default":{"harness":"claude"},"_model_fallback":{"claude":["claude-sonnet-5","haiku"]}}^empty^
+declaring both model fallback spellings is flagged^{"modelFallback":{"claude":["a"]},"_model_fallback":{"claude":["b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback and its legacy alias _model_fallback cannot both be declared
+non-object model fallback is flagged^{"modelFallback":["claude"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback must be an object mapping a harness to its ordered model chain
+model fallback unverified harness is flagged^{"modelFallback":{"spaceship":["a"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
+empty model fallback chain is flagged^{"modelFallback":{"claude":[]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
+model fallback chain with a malformed id is flagged^{"modelFallback":{"claude":["claude-sonnet-5",""]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }

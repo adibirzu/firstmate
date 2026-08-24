@@ -59,6 +59,9 @@ Grok prepaid `credits` are unrelated to paid-window headroom; never read them as
 The selector is the mechanical owner of dispatch capacity and of ranking among remaining eligible candidates.
 It does not replace reasoning-class fit: keep only candidates that meet the required reasoning class before passing the set, and never use `spendPriority` or remaining quota to silently replace that class.
 When every remaining candidate is tight, dispatch inside the strongest-reasoning class if one of those candidates can proceed, or stop and report that the strongest-class choice cannot proceed rather than downgrading it to spend or conserve quota.
+That rule governs this selection, which is the initial dispatch decision.
+The separate in-run `modelFallback` response to a model that depletes after dispatch (`AGENTS.md` section 4) walks the configured chain for the class already dispatched, so it never re-opens class choice.
+An exhausted chain for the required class stops and reports there too, rather than relaunching beneath that class.
 
 Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
 Stale, unavailable, malformed, or windowless telemetry makes that provider ineligible for a new dispatch.

@@ -324,7 +324,10 @@ This section is the single owner of the canonical schema and its per-field seman
   ],
   "default": [
     { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>", "quotaWindow": "<optional quota window id>" }
-  ]
+  ],
+  "modelFallback": {
+    "<adapter>": ["<strongest model id>", "<next model id>", "<weakest model id>"]
+  }
 }
 ```
 
@@ -346,7 +349,7 @@ If a selected profile carries an effort value the chosen harness does not accept
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, a malformed model fallback chain, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
@@ -359,7 +362,14 @@ Unknown fields fail bootstrap validation instead of being ignored.
 Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry with a usable percentage above the reserve.
 The selector ranks remaining eligible candidates by a known `spendPriority` scalar when quota-axi publishes one, then persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
 Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
-When a worker's model depletes, firstmate switches models within the same harness automatically (relaunch in place via `bin/fm-runtime-handoff.sh <task-id> --harness <name> --model <next-model>`) following configured `_model_fallback` chains before moving to the next harness.
+When an already-dispatched worker's model depletes, firstmate switches models within the same harness automatically (relaunch in place via `bin/fm-runtime-handoff.sh <task-id> --harness <name> --model <next-model>`) following the configured `modelFallback` chain before moving to the next harness.
+
+`modelFallback` is an optional top-level object mapping each harness name to its own ordered model chain, strongest entry first.
+`_model_fallback` is accepted as a legacy alias for the same object; a file declaring both is invalid, because two chains for one harness cannot both be authoritative.
+Every key must be a harness verified for dispatch under the same rule as a profile `harness`, and every value must be a non-empty array of non-empty model-id strings; a malformed chain is reported as a `CREW_DISPATCH` diagnostic rather than silently ignored.
+Read the current model ids from `bin/fm-model-refresh.sh` before writing a chain, because an id the harness does not accept fails at launch instead of being repriced.
+Firstmate consults this object only after dispatch, when a running task's model depletes: it relaunches in place on the entry after the model recorded for that task, and moves to the next harness lane only once the chain's last entry is reached.
+It is never consulted at selection time, so it neither overrides a profile `model` nor re-opens the strongest-reasoning-class rule that governs the initial dispatch.
 
 ## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 

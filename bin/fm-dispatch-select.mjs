@@ -101,7 +101,21 @@ const LIMITS = Object.freeze({
   telemetryMaxAgeSeconds: [1, 3600],
   cooldownSeconds: [60, 86400],
 });
-const RATE_LIMIT_RE = /\b429\b|rate[ _-]?limit|too many requests|insufficient[ _-]?(?:quota|credit|balance)|out of (?:quota|credits?|tokens?|balance)|(?:quota|usage|spending|monthly|daily|session|token|credit|balance)[^\n]{0,80}(?:exhaust|limit|deplet|reach|exceed|zero)|(?:exhaust|deplet|reach|exceed)[^\n]{0,80}(?:quota|usage|spending|limit|token|credit|balance)|resource[ _-]?exhausted/i;
+// Depletion evidence must read in subscription vocabulary, because both
+// consumers of this gate park a provider for a whole cooldown on a match. A
+// context-window or tool-output ceiling ("context token limit reached",
+// "exceeded the tool output limit") is an ordinary working state, not spent
+// quota, so a bare `limit`, `token`, or unframed `429` never qualifies alone.
+const RATE_LIMIT_RE = new RegExp([
+  '(?:http|status|code|error|response)[^\\n]{0,16}\\b429\\b',
+  'rate[ _-]?limit',
+  'too many requests',
+  'resource[ _-]?exhausted',
+  'insufficient[ _-]?(?:quota|credits?|balance|funds)',
+  'out of (?:quota|credits?|tokens?|balance)',
+  '(?:quota|usage|spending|allowance|subscription|credits?|balance|monthly|weekly|daily|session)[^\\n]{0,80}(?:exhaust|deplet|used up|limit|reach|exceed|zero)',
+  '(?:exhaust|deplet|reach|exceed)[^\\n]{0,80}(?:quota|usage|spending|allowance|credits?|balance)',
+].join('|'), 'i');
 
 class CliError extends Error {
   constructor(message, code = 2) {

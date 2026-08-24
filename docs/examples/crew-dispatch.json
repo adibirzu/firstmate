@@ -27,7 +27,7 @@
       "use": [
         { "harness": "agy", "model": "gemini-3.7-flash-high", "effort": "high", "quotaWindow": "gemini_5h" }
       ],
-      "why": "Antigravity bills Gemini and Claude/GPT pools separately; quotaWindow prices on the Gemini pool."
+      "why": "Antigravity bills Gemini and Claude/GPT pools separately; quotaWindow prices on the Gemini pool. Confirm both the model id against agy models (or bin/fm-model-refresh.sh) and the window id against quota-axi --json before copying this, because a stale model id surfaces only as an agy trust-gate timeout at launch."
     },
     {
       "when": "The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind.",
@@ -41,5 +41,9 @@
   "default": [
     { "harness": "claude", "provider": "claude", "model": "sonnet", "effort": "medium" },
     { "harness": "codex", "provider": "codex", "model": "gpt-5.5", "effort": "medium" }
-  ]
+  ],
+  "modelFallback": {
+    "claude": ["claude-sonnet-5", "sonnet", "haiku"],
+    "agy": ["gemini-3.7-flash-high", "gemini-3.6-flash-high", "gemini-3.5-flash-high"]
+  }
 }

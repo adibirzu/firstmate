@@ -1029,6 +1029,18 @@ crew_dispatch_validate() {
       or ($items | any(has("quotaWindow") and (((.quotaWindow | type) != "string") or (.quotaWindow | length) == 0)));
     def malformed_provider($items):
       ($items | any(has("provider") and (((.provider | type) != "string") or (.provider | length) == 0)));
+    def model_fallback: (.modelFallback // ._model_fallback);
+    def bad_fallback_harnesses:
+      (model_fallback // {}) | keys | map(select(. as $h | verified($h) | not)) | unique;
+    def bad_fallback_chains:
+      (model_fallback // {})
+      | to_entries
+      | map(select(
+          ((.value | type) != "array")
+          or ((.value | length) == 0)
+          or (.value | any((type != "string") or (length == 0)))))
+      | map(.key)
+      | unique;
     def routing_setting_ok($key; $value):
       if ($value | type) != "number" or ($value | floor) != $value then false
       elif $key == "reservePercent" then $value >= 0 and $value <= 99
@@ -1050,6 +1062,10 @@ crew_dispatch_validate() {
       "subscriptionRouting has unknown field: " + ([.subscriptionRouting | keys[] | . as $key | select((["reservePercent","telemetryMaxAgeSeconds","cooldownSeconds"] | index($key)) == null)] | sort | join(", "))
     elif has("subscriptionRouting") and ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not)] | length) > 0 then
       "subscriptionRouting setting is out of range: " + ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not) | .key] | sort | join(", "))
+    elif has("modelFallback") and has("_model_fallback") then "modelFallback and its legacy alias _model_fallback cannot both be declared"
+    elif (has("modelFallback") or has("_model_fallback")) and (model_fallback | type) != "object" then "modelFallback must be an object mapping a harness to its ordered model chain"
+    elif (bad_fallback_harnesses | length) > 0 then "modelFallback has an unverified harness: " + (bad_fallback_harnesses | join(", "))
+    elif (bad_fallback_chains | length) > 0 then "modelFallback chain must be a non-empty array of non-empty model ids: " + (bad_fallback_chains | join(", "))
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"

@@ -94,9 +94,9 @@ fm_control_harness_family() {  # <recorded-harness>
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse and cline are
-# crewmate/scout adapters only: neither has a primary supervision protocol, and
-# bin/fm-spawn.sh refuses a --secondmate launch on either. The control plane
+# Which task kinds an adapter is verified to run. muse, cline, copilot, and agy
+# are crewmate/scout adapters only: none has a primary supervision protocol, and
+# bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control plane
 # asks this BEFORE it stops anything, so an incompatible relaunch target is
 # refused while the current agent is still running rather than after it has
 # been stopped.
