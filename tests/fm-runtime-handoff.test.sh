@@ -112,7 +112,12 @@ exit 0
 SH
   chmod +x "$fakebin/treehouse"
 
-  for tool in pi-signed opencode cline copilot agy cursor muse grok kimi pi codex claude; do
+  # Stub every admitted harness so a fixture never depends on what happens to be
+  # installed on the runner. cursor is resolved by EXECUTABLE name, not by
+  # harness name: bin/fm-cursor-lib.sh accepts only `cursor-agent` (or an
+  # `agent` that proves itself Cursor), so a stub named `cursor` would leave the
+  # handoff to find - or on a bare CI runner fail to find - the real binary.
+  for tool in pi-signed opencode cline copilot agy cursor cursor-agent muse grok kimi pi codex claude; do
     fm_fake_exit0 "$fakebin" "$tool"
   done
 
