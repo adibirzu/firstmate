@@ -548,7 +548,14 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
   [ "$raw_count" -eq 13 ] || fail "missing, unreadable, malformed, empty, or oversized status input hid a raw row"
 
   expected="wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: $(cat "$state/huge.status")"
-  grep -Fx "$expected" "$out" >/dev/null \
+  # BSD grep refuses a pattern this large with "out of memory", so the exact
+  # full-line match runs through awk instead (same macOS portability class as
+  # the inbox path fix in #2857).
+  printf '%s\n' "$expected" | awk -v hay="$out" '
+    BEGIN { while ((getline line < hay) > 0) lines[++n] = line }
+    { for (i = 1; i <= n; i++) if (lines[i] == $0) found = 1 }
+    END { exit found ? 0 : 1 }
+  ' \
     || fail "the oversized unread status line was truncated or omitted"
   i=1
   while [ "$i" -le 8 ]; do
