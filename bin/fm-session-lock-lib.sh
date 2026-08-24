@@ -68,6 +68,10 @@ fm_harness_path_name() {  # <path>
 #   3. a bare interpreter (node, python) running a harness script path.
 #   4. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
 FM_HARNESS_IS_CLAUDE=0
+FM_HARNESS_ANCESTRY_CACHE_READY=0
+FM_HARNESS_ANCESTRY_CACHE_FOUND=0
+FM_HARNESS_ANCESTRY_PIDS=
+FM_HARNESS_ANCESTRY_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
   FM_HARNESS_IS_CLAUDE=0
@@ -116,14 +120,23 @@ fm_harness_process_matches() {  # <comm> <args>
 # claude), with no non-harness process between them. Which pid in that run is the
 # session cannot be read off the ancestry at all, so the whole contiguous run is
 # reported and the callers below decide what they need from it.
-fm_harness_ancestry_pids() {
+fm_harness_ancestry_cache() {
   local pid=$$ comm args extending=0 printed=0
+  if [ "$FM_HARNESS_ANCESTRY_CACHE_READY" -eq 1 ]; then
+    [ "$FM_HARNESS_ANCESTRY_CACHE_FOUND" -eq 1 ]
+    return
+  fi
+  FM_HARNESS_ANCESTRY_CACHE_READY=1
+  FM_HARNESS_ANCESTRY_CACHE_FOUND=0
+  FM_HARNESS_ANCESTRY_PIDS=
+  FM_HARNESS_ANCESTRY_IS_CLAUDE=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     if fm_harness_process_matches "$comm" "$args"; then
-      printf '%s\n' "$pid"
+      FM_HARNESS_ANCESTRY_PIDS="${FM_HARNESS_ANCESTRY_PIDS}${FM_HARNESS_ANCESTRY_PIDS:+$'\n'}$pid"
       printed=1
+      [ "$FM_HARNESS_IS_CLAUDE" -eq 0 ] || FM_HARNESS_ANCESTRY_IS_CLAUDE=1
       [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
       extending=1
     elif [ "$extending" -eq 1 ]; then
@@ -132,7 +145,13 @@ fm_harness_ancestry_pids() {
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
-  [ "$printed" -eq 1 ]
+  [ "$printed" -eq 1 ] || return 1
+  FM_HARNESS_ANCESTRY_CACHE_FOUND=1
+}
+
+fm_harness_ancestry_pids() {
+  fm_harness_ancestry_cache || return 1
+  printf '%s\n' "$FM_HARNESS_ANCESTRY_PIDS"
 }
 
 # Print the one pid that identifies this session when the session lock is being
@@ -142,12 +161,12 @@ fm_harness_ancestry_pids() {
 # is still running. Every non-Claude harness reports a single pid, so this is its
 # innermost match unchanged.
 fm_harness_ancestry_pid() {
-  local pids pid outermost=''
-  pids=$(fm_harness_ancestry_pids) || return 1
+  local pid outermost=''
+  fm_harness_ancestry_cache || return 1
   while IFS= read -r pid; do
     [ -n "$pid" ] && outermost=$pid
   done <<EOF
-$pids
+$FM_HARNESS_ANCESTRY_PIDS
 EOF
   [ -n "$outermost" ] || return 1
   printf '%s\n' "$outermost"
@@ -171,16 +190,16 @@ fm_harness_pid_alive() {
 # lock, a malformed lock, a lock held by a harness outside this ancestry, or an
 # ancestry that cannot be resolved all fail closed.
 fm_session_lock_owned_by_self() {
-  local state=$1 lock_pid pids pid
+  local state=$1 lock_pid pid
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  pids=$(fm_harness_ancestry_pids) || return 1
+  fm_harness_ancestry_cache || return 1
   while IFS= read -r pid; do
     [ "$pid" = "$lock_pid" ] && return 0
   done <<EOF
-$pids
+$FM_HARNESS_ANCESTRY_PIDS
 EOF
   return 1
 }
@@ -192,8 +211,8 @@ EOF
 # verified harness has one contiguous harness pid and retains the established
 # ancestry contract above.
 fm_harness_ancestry_is_claude() {
-  fm_harness_ancestry_pids >/dev/null || return 1
-  [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ]
+  fm_harness_ancestry_cache || return 1
+  [ "$FM_HARNESS_ANCESTRY_IS_CLAUDE" -eq 1 ]
 }
 
 # Set the identity a NEW session lock must record.
@@ -325,9 +344,10 @@ fm_session_lock_log_legacy_acceptance() {  # <state-dir> <pid>
 }
 
 # True only when state dir $1's existing PID-only lock is temporarily accepted
-# for the current session. Remove this compatibility path once all live homes
-# have turned over to new-format locks. It exists solely to avoid wedging a
-# live home whose old lock names the shared Claude pool daemon during migration.
+# for the current session. Follow-up task fm-remove-legacy-lock-compat removes
+# this compatibility path once all live homes have turned over to new-format
+# locks. It exists solely to avoid wedging a live home whose old lock names the
+# shared Claude pool daemon during migration.
 fm_session_lock_owned_by_legacy_compatibility() {  # <state-dir>
   local state=$1 lock_pid path ancestry_pid
   fm_session_lock_prepare_acquisition_identity || return 1

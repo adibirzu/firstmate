@@ -31,7 +31,7 @@ make_home() {  # <name>
   printf '%s\n' "$home"
 }
 
-write_ps() {  # <fakebin> <mode> <session-pid> <sibling-pid> <spare-pid> <host-pid>
+write_ps() {  # <fakebin> <mode> <session-pid> <sibling-pid> <spare-pid> <host-pid> <session-parent-pid>
   cat > "$1/ps" <<SH
 #!/usr/bin/env bash
 set -u
@@ -46,7 +46,7 @@ done
 case "\${FM_LOCK_TEST_MODE}:\$pid:\$field" in
   *:$3:comm=|*:$4:comm=) printf '%s\n' claude ;;
   *:$3:args=|*:$4:args=) printf '%s\n' 'claude --dangerously-skip-permissions' ;;
-  *:$3:ppid=|*:$4:ppid=) printf '%s\n' 1 ;;
+  *:$3:ppid=|*:$4:ppid=) printf '%s\n' $7 ;;
   pool:$5:comm=) printf '%s\n' 'claude bg-spare' ;;
   pool:$5:args=) printf '%s\n' 'claude bg-spare --bg-spare /tmp/cc/spare.sock' ;;
   pool:$5:ppid=) printf '%s\n' $6 ;;
@@ -59,6 +59,9 @@ case "\${FM_LOCK_TEST_MODE}:\$pid:\$field" in
   pool:*:comm=) printf '%s\n' bash ;;
   pool:*:args=) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
   pool:*:ppid=) printf '%s\n' $5 ;;
+  *:$7:comm=) printf '%s\n' bash ;;
+  *:$7:args=) printf '%s\n' bash ;;
+  *:$7:ppid=) printf '%s\n' 1 ;;
   *:comm=) printf '%s\n' bash ;;
   *:args=) printf '%s\n' bash ;;
   *:ppid=) printf '%s\n' 1 ;;
@@ -74,14 +77,15 @@ run_lock() {  # <home> <fakebin> <mode> <session-id> <claude-pid>
 }
 
 test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner() {
-  local home fakebin session sibling spare host out
+  local home fakebin session sibling spare host parent out
   home=$(make_home new-lock)
   fakebin=$(fm_fakebin "$home/bin")
   spawn_live_pid; session=$LIVE_PID
   spawn_live_pid; sibling=$LIVE_PID
   spawn_live_pid; spare=$LIVE_PID
   spawn_live_pid; host=$LIVE_PID
-  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host"
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
 
   out=$(run_lock "$home" "$fakebin" direct owner-session "$session") \
     || fail "new lock acquisition failed: $out"
@@ -101,14 +105,15 @@ test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner() {
 }
 
 test_legacy_pool_lock_is_logged_when_temporarily_accepted() {
-  local home fakebin session sibling spare host out log
+  local home fakebin session sibling spare host parent out log
   home=$(make_home legacy-lock)
   fakebin=$(fm_fakebin "$home/bin")
   spawn_live_pid; session=$LIVE_PID
   spawn_live_pid; sibling=$LIVE_PID
   spawn_live_pid; spare=$LIVE_PID
   spawn_live_pid; host=$LIVE_PID
-  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host"
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
   printf '%s\n' "$host" > "$home/state/.lock"
 
   out=$(run_lock "$home" "$fakebin" pool owner-session "$session") \
@@ -120,14 +125,15 @@ test_legacy_pool_lock_is_logged_when_temporarily_accepted() {
 }
 
 test_unidentifiable_claude_session_cannot_use_legacy_compatibility() {
-  local home fakebin session sibling spare host out
+  local home fakebin session sibling spare host parent out
   home=$(make_home unidentifiable)
   fakebin=$(fm_fakebin "$home/bin")
   spawn_live_pid; session=$LIVE_PID
   spawn_live_pid; sibling=$LIVE_PID
   spawn_live_pid; spare=$LIVE_PID
   spawn_live_pid; host=$LIVE_PID
-  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host"
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
   printf '%s\n' "$host" > "$home/state/.lock"
 
   out=$(FM_LOCK_TEST_MODE=pool CLAUDECODE=1 CLAUDE_PID=$session FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
