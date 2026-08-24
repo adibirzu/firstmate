@@ -1,0 +1,227 @@
+
+================================================================
+ACT 1 — the operator declares an agy lane and its model-fallback chain
+================================================================
+config/crew-dispatch.json is the file an operator edits. Before this change the
+`agy` harness was not a routable provider and `modelFallback` did not exist, so
+bootstrap would have rejected both. Below: the real bin/fm-bootstrap.sh reading
+the real config.
+
+$ cat config/crew-dispatch.json | jq -c .
+{"rules":[{"when":"Standard coding work suited for Gemini models on Antigravity.","use":[{"harness":"agy","model":"gemini-3.7-flash-high","effort":"high","quotaWindow":"gemini_5h"}],"why":"Antigravity bills its Gemini and Claude/GPT pools separately."}],"default":[{"harness":"agy","model":"gemini-3.7-flash-high","quotaWindow":"gemini_5h"},{"harness":"codex","provider":"codex","model":"gpt-5.5"}],"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high","gemini-3.5-flash-high"],"claude":["claude-sonnet-5","sonnet","haiku"]}}
+$ bin/fm-bootstrap.sh
+(no CREW_DISPATCH diagnostic — config accepted)
+
+--- and a chain the operator got wrong is refused with an actionable diagnostic, not ignored
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"modelFallback":{"agy":[]}}
+$ bin/fm-bootstrap.sh
+CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: agy
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"modelFallback":{"spaceship":["a"]}}
+$ bin/fm-bootstrap.sh
+CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high",""]}}
+$ bin/fm-bootstrap.sh
+CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: agy
+
+$ cat config/crew-dispatch.json | jq -c .
+{"modelFallback":{"agy":["a"]},"_model_fallback":{"agy":["b"]}}
+$ bin/fm-bootstrap.sh
+CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback and its legacy alias _model_fallback cannot both be declared
+
+--- the documented legacy spelling still loads
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"_model_fallback":{"agy":["gemini-3.6-flash-high"]}}
+$ bin/fm-bootstrap.sh
+(no CREW_DISPATCH diagnostic — config accepted)
+
+================================================================
+ACT 2 — agy is dispatchable, priced on the Antigravity pool it draws from
+================================================================
+quota-axi reports agy with four windows. The Gemini pool is healthy; the
+Claude/GPT pool is spent. A profile without quotaWindow is conservatively priced
+on the WORST window and must fail closed.
+
+$ quota-axi --json   (fixture)
+{"provider":"agy","windows":["gemini_5h=100%","gemini_weekly=93%","claude_gpt_5h=0%","claude_gpt_weekly=41%"]}
+
+--- undeclared window -> priced on the empty claude_gpt_5h pool -> fail closed (exit 3)
+
+$ bin/fm-dispatch-select.mjs select '[{"harness":"agy","model":"gemini-3.7-flash-high"}]'
+fm-dispatch-select: candidate provider=agy unavailable: quota headroom 0% is at or below 20% reserve
+fm-dispatch-select: no subscription candidate has current dispatch capacity evidence
+(exit 3)
+
+--- declared gemini_5h -> agy selected, native provider identity established
+
+$ bin/fm-dispatch-select.mjs select '[{"harness":"agy","model":"gemini-3.7-flash-high","quotaWindow":"gemini_5h"}]'
+fm-dispatch-select: candidate provider=agy window=gemini_5h eligible: fresh window gemini_5h headroom=100% reserve=20%
+fm-dispatch-select: selection provider=agy basis=least-recent eligible subscription sequence=1
+{"harness":"agy","provider":"agy","model":"gemini-3.7-flash-high"}
+(exit 0)
+
+--- declared claude_gpt_5h (the spent pool) -> refused by name
+
+$ bin/fm-dispatch-select.mjs select '[{"harness":"agy","model":"claude-sonnet-4-6","quotaWindow":"claude_gpt_5h"}]'
+fm-dispatch-select: candidate provider=agy window=claude_gpt_5h unavailable: window claude_gpt_5h headroom 0% is at or below 20% reserve
+fm-dispatch-select: no subscription candidate has current dispatch capacity evidence
+(exit 3)
+
+--- fm-spawn.sh now accepts agy as a routing provider (and still rejects nonsense)
+
+$ bin/fm-spawn.sh --harness agy --provider agy   (argument gate; stops later on a real requirement)
+error: ship spawns require --mode <no-mistakes|direct-PR|local-only>; resolve it at intake from the captain's instruction and the project's registered posture in data/projects.md
+
+$ bin/fm-spawn.sh --harness agy --provider spaceship
+error: --provider must be one of claude, codex, grok, cursor, agy
+
+================================================================
+ACT 2b - the same three commands run against the BASE commit (before the change)
+================================================================
+
+$ (base 3c544d6a1958784845356e62bc09d3dd56ee8a67) fm-spawn.sh --harness agy --provider agy
+error: --provider must be one of claude, codex, grok
+
+$ (base) fm-dispatch-select.mjs select agy profile on gemini_5h
+fm-dispatch-select: subscription dispatch requires a verified harness, not agy
+(exit 2)
+
+--- (base) a broken model-fallback chain is accepted and ignored; after the change it is refused
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"modelFallback":{"agy":[]}}
+$ (base) bin/fm-bootstrap.sh
+(base emits NO diagnostic: the whole modelFallback object is an unknown key it silently ignores)
+
+$ cat config/crew-dispatch.json | jq -c .
+{"default":{"harness":"agy"},"modelFallback":{"spaceship":["a"]}}
+$ (base) bin/fm-bootstrap.sh
+(base emits NO diagnostic: the whole modelFallback object is an unknown key it silently ignores)
+
+$ cat config/crew-dispatch.json | jq -c .
+{"modelFallback":{"agy":["a"]},"_model_fallback":{"agy":["b"]}}
+$ (base) bin/fm-bootstrap.sh
+(base emits NO diagnostic: the whole modelFallback object is an unknown key it silently ignores)
+
+================================================================
+ACT 3 — the running agy worker depletes; firstmate records the depletion
+================================================================
+
+$ cat state/ship-42.status
+failed: 429 Too Many Requests - you have reached your 5-hour Gemini usage limit
+
+$ bin/fm-dispatch-select.mjs record-failure --provider agy --task ship-42
+fm-dispatch-select: provider=agy cooldown recorded until epoch 2800
+(exit 0)
+
+--- a working ceiling is NOT spent quota — it must not park a healthy lane
+
+$ echo working:\ context\ token\ limit\ reached\;\ compacting > state/benign.status && record-failure --provider agy --task benign
+fm-dispatch-select: task status contains no rate-limit or quota-exhaustion evidence
+(exit 2)
+
+$ echo failed:\ exceeded\ the\ tool\ output\ limit > state/benign.status && record-failure --provider agy --task benign
+fm-dispatch-select: task status contains no rate-limit or quota-exhaustion evidence
+(exit 2)
+
+$ echo working:\ applying\ the\ hunk\ at\ line\ 429\ of\ the\ diff > state/benign.status && record-failure --provider agy --task benign
+fm-dispatch-select: task status contains no rate-limit or quota-exhaustion evidence
+(exit 2)
+
+================================================================
+ACT 4 — automatic model fallback: relaunch in place on the next chain entry
+================================================================
+The chain configured in ACT 1 for harness agy is:
+  ["gemini-3.7-flash-high","gemini-3.6-flash-high","gemini-3.5-flash-high"]
+The worker was running gemini-3.7-flash-high (chain[0]). Firstmate relaunches the
+SAME task, in the SAME worktree, on chain[1] via bin/fm-runtime-handoff.sh --model.
+
+$ cat state/ship-42.meta   (before)
+worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+harness=agy
+model=gemini-3.7-flash-high
+effort=high
+pr=https://example.test/pr/1
+HEAD=ea36c62eace0a0079df0e855e6a1cca1957e6d28  dirty.txt present=yes
+
+$ bin/fm-runtime-handoff.sh ship-42 --harness agy --model gemini-3.6-flash-high --skip-exit --progress-note '...'
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+warning: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/home/data/ship-42/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned ship-42 harness=agy kind=ship mode=no-mistakes yolo=off window=firstmate:fm-ship-42 worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+handed-off ship-42 from harness=agy to harness=agy worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+(exit 0)
+
+$ cat state/ship-42.meta   (after)
+pr=https://example.test/pr/1
+worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+harness=agy
+model=gemini-3.6-flash-high
+effort=default
+HEAD=ea36c62eace0a0079df0e855e6a1cca1957e6d28  (unchanged: yes)
+dirty.txt preserved: yes
+
+$ cat state/ship-42.status   (what status reporting shows)
+working: runtime handoff to agy; continue from original brief
+
+$ cat state/ship-42.handoff-prompt   (what the replacement worker is told)
+# Runtime handoff - continue this in-flight task
+
+You are replacing a previous worker runtime on the SAME task identity, worktree, and branch.
+Preserve every commit and every uncommitted change.
+Do not create a new worktree. Do not start over from a clean tree.
+
+## Progress so far
+
+agy gemini-3.7-flash-high 5h pool depleted; falling back to chain[1]. 1 commit + uncommitted work remain.
+
+## Active pipeline
+
+
+--- walk chain[1] -> chain[2] the same way
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+warning: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/home/data/ship-42/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned ship-42 harness=agy kind=ship mode=no-mistakes yolo=off window=firstmate:fm-ship-42 worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+handed-off ship-42 from harness=agy to harness=agy worktree=/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-agy-fallback-evidence.mgLAD2/handoff/wt
+(exit 0)
+harness=agy
+model=gemini-3.5-flash-high
+
+================================================================
+ACT 5 — chain exhausted: only now does work leave the agy lane
+================================================================
+agy is on cooldown from the ACT 3 depletion, so the selector routes the next
+dispatch to the next harness lane instead of re-picking a spent subscription.
+
+$ bin/fm-dispatch-select.mjs select '[{"harness":"agy","model":"gemini-3.5-flash-high","quotaWindow":"gemini_5h"},{"harness":"codex","model":"gpt-5.5"}]'
+fm-dispatch-select: candidate provider=agy unavailable: cooldown until epoch 2800
+fm-dispatch-select: candidate provider=codex eligible: fresh quota headroom=90% reserve=20%
+fm-dispatch-select: selection provider=codex basis=least-recent eligible subscription sequence=1
+{"harness":"codex","provider":"codex","model":"gpt-5.5"}
+(exit 0)
+
+--- and once the operator clears the cooldown, agy is a first-class candidate again
+
+$ bin/fm-dispatch-select.mjs clear --provider agy
+fm-dispatch-select: provider=agy cooldown cleared
+
+$ bin/fm-dispatch-select.mjs select '[{"harness":"agy","model":"gemini-3.5-flash-high","quotaWindow":"gemini_5h"},{"harness":"codex","model":"gpt-5.5"}]'
+fm-dispatch-select: candidate provider=agy window=gemini_5h eligible: fresh window gemini_5h headroom=100% reserve=20%
+fm-dispatch-select: candidate provider=codex eligible: fresh quota headroom=90% reserve=20%
+fm-dispatch-select: selection provider=agy basis=least-recent eligible subscription sequence=2
+{"harness":"agy","provider":"agy","model":"gemini-3.5-flash-high"}
+(exit 0)
+
+
+== end of walkthrough ==
