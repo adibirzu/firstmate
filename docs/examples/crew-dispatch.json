@@ -23,6 +23,13 @@
       "why": "Cursor bills its included, auto, and API pools separately, so this route is priced on the pool it actually draws on instead of on whichever pool is emptiest. Confirm the window id against quota-axi --json before copying this."
     },
     {
+      "when": "The task is standard coding work suited for Gemini or Claude models on Antigravity.",
+      "use": [
+        { "harness": "agy", "model": "gemini-3.7-flash-high", "effort": "high", "quotaWindow": "gemini_5h" }
+      ],
+      "why": "Antigravity bills Gemini and Claude/GPT pools separately; quotaWindow prices on the Gemini pool."
+    },
+    {
       "when": "The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind.",
       "use": [
         { "harness": "claude", "provider": "claude", "model": "claude-sonnet-5", "effort": "high" },

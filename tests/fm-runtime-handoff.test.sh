@@ -112,6 +112,10 @@ exit 0
 SH
   chmod +x "$fakebin/treehouse"
 
+  for tool in pi-signed opencode cline copilot agy cursor muse grok kimi pi codex claude; do
+    fm_fake_exit0 "$fakebin" "$tool"
+  done
+
   printf '%s\n' "$fakebin"
 }
 
@@ -337,7 +341,7 @@ setup_case() {
   export FM_FAKE_PANE_CMD=codex
   : > "$FM_FAKE_SEND_LOG"
   farm=$(make_bin_farm "$CASE_DIR")
-  for h in cline cursor-agent copilot; do
+  for h in spaceship cursor-agent unknown-harness; do
     set +e
     out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-runtime-handoff.sh" task-u2 --harness "$h" 2>&1)
     rc=$?

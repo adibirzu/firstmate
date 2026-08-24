@@ -317,7 +317,7 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "provider": "<claude|codex|grok, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
+        { "harness": "<adapter>", "provider": "<claude|codex|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
@@ -337,7 +337,7 @@ An omitted model or effort means the selected harness uses its own default for t
 Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
 An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.
 Read the current window ids from `quota-axi --json`, and the current model ids from `bin/fm-model-refresh.sh`, before writing either field.
-Native `claude`, `codex`, `grok`, and `cursor` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, and `grok` a provider that is present must match the harness.
+Native `claude`, `codex`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, `grok`, `cursor`, and `agy` a provider that is present must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
@@ -356,9 +356,10 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 `cooldownSeconds` is an integer from 60 through 86400 and defaults to 1800.
 Unknown fields fail bootstrap validation instead of being ignored.
 
-Providers exposed by quota-axi, including Claude, Codex, Grok, and Cursor, require fresh telemetry with a usable percentage above the reserve.
+Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry with a usable percentage above the reserve.
 The selector ranks remaining eligible candidates by a known `spendPriority` scalar when quota-axi publishes one, then persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
 Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
+When a worker's model depletes, firstmate switches models within the same harness automatically (relaunch in place via `bin/fm-runtime-handoff.sh <task-id> --harness <name> --model <next-model>`) following configured `_model_fallback` chains before moving to the next harness.
 
 ## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 

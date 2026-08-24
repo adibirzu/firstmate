@@ -209,7 +209,13 @@ Do not add model-specific versions of that policy.
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
-When an active ship or scout session is blocked due to token/quota exhaustion or harness limits, Firstmate may adopt and relaunch the blocked session in place using `bin/fm-runtime-handoff.sh <task-id> --harness <name> [--model <name>] [--effort <level>] [--progress-note <text>]`. This cleanly exits the blocked agent, preserves the existing worktree, lease, PR metadata, and work-in-progress without loss, and relaunches the replacement agent in the same worktree to continue execution seamlessly.
+When an active ship or scout session is blocked due to token/quota exhaustion or harness limits, Firstmate may adopt and relaunch the blocked session in place using `bin/fm-runtime-handoff.sh <task-id> --harness <name> [--model <name>] [--effort <level>] [--progress-note <text>]`.
+This cleanly exits the blocked agent, preserves the existing worktree, lease, PR metadata, and work-in-progress without loss, and relaunches the replacement agent in the same worktree to continue execution seamlessly.
+When a worker's model depletes, switch models within the same harness automatically (relaunch in place via `bin/fm-runtime-handoff.sh` with `--model`) instead of blocking, parking, or escalating a routine depletion.
+Read model fallback chains from `config/crew-dispatch.json` `_model_fallback` without hardcoding a duplicate copy, and move work to the next harness lane only when a harness's whole model chain is exhausted.
+Depletion detection uses live 429, limit, or quota errors in the pane or status log as the trigger of record for runtimes without telemetry (such as ClinePass and Grok).
+Every automatic model switch must be logged and visible in status reporting rather than silently downgrading reasoning class.
+The fail-closed capacity contract (reserve, cooldown, and telemetry freshness) remains enforced, and the strongest-reasoning-class preservation rule still wins over conserving quota.
 
 ## 5. Recovery
 

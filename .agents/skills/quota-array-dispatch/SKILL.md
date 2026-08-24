@@ -60,7 +60,7 @@ The selector is the mechanical owner of dispatch capacity and of ranking among r
 It does not replace reasoning-class fit: keep only candidates that meet the required reasoning class before passing the set, and never use `spendPriority` or remaining quota to silently replace that class.
 When every remaining candidate is tight, dispatch inside the strongest-reasoning class if one of those candidates can proceed, or stop and report that the strongest-class choice cannot proceed rather than downgrading it to spend or conserve quota.
 
-Providers exposed by quota-axi, including Claude, Codex, Grok, and Cursor, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
+Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
 Stale, unavailable, malformed, or windowless telemetry makes that provider ineligible for a new dispatch.
 A provider whose pools are billed separately would be priced by its worst pool under that rule, so a profile may declare the one window it draws on with `quotaWindow`; `docs/configuration.md` owns that field's semantics.
 Confirm the declared window against the provider's live telemetry before relying on it, because a declared window the telemetry does not carry blocks that candidate rather than repricing it.
@@ -84,7 +84,7 @@ Apply only among candidates satisfying required fit and strongest reasoning clas
 2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
 3. Read its sanitized per-provider diagnostics and selected JSON profile.
 4. Pass the selected `harness`, `provider`, `model`, and `effort` axes to `fm-spawn.sh`; it records `provider` as routing evidence without forwarding it to the harness CLI.
-   Its `--provider` accepts `claude`, `codex`, and `grok` only, so a selected profile whose provider is native to its harness and outside that set, such as `cursor`, is spawned without the redundant flag; the recorded harness still establishes that provider for a later `record-failure`.
+   A selected profile whose provider is native to its harness and outside the explicit wrapper set, such as `cursor` or `agy`, is spawned with its native identity; the recorded harness still establishes that provider for a later `record-failure`.
 5. If it exits 3, stop and report that no candidate has current dispatch-capacity evidence rather than choosing manually around the reserve, cooldown, or telemetry refusal.
 6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
 7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.

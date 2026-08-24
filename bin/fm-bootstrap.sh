@@ -1074,9 +1074,9 @@ crew_dispatch_validate() {
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
-      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok"] | index($provider)) == null)) | unique) as $bad_providers
+      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok","cursor","agy"] | index($provider)) == null)) | unique) as $bad_providers
       | (configured_profiles | map(select(.harness == "kimi" or .provider == "kimi")) | length) as $bad_kimi_routes
-      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
+      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok" or .harness == "cursor" or .harness == "agy") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
         elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
         elif ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))

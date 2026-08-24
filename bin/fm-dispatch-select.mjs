@@ -3,8 +3,8 @@
 //
 // Usage:
 //   fm-dispatch-select.mjs select [--quota-json <file>] [--now <epoch>] [<json>]
-//   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok> --task <id> [--now <epoch>]
-//   fm-dispatch-select.mjs clear --provider <claude|codex|grok>
+//   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok|cursor|agy> --task <id> [--now <epoch>]
+//   fm-dispatch-select.mjs clear --provider <claude|codex|grok|cursor|agy>
 //
 // `select` accepts a full rule object with `use`, one profile object, or a
 // non-empty profile array on the command line or stdin. It prints exactly one
@@ -15,14 +15,13 @@
 // model support discovery, and provider identity for non-native adapters. This
 // script owns only subscription readiness and deterministic distribution:
 //
-// - Native claude, codex, and grok profiles resolve to their same-named provider.
-//   Other harnesses need an explicit `provider` field.
-// - Providers exposed by quota-axi, including Claude, Codex, and Grok, require
-//   fresh telemetry no older than the configured maximum. Their tightest
-//   reported live percentage must remain strictly above the configured reserve.
-//   Stale, absent, malformed, or
-//   windowless telemetry makes that provider ineligible; it never falls back to
-//   an unmetered guess.
+// - Native claude, codex, grok, cursor, and agy profiles resolve to their
+//   same-named provider. Other harnesses need an explicit `provider` field.
+// - Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and
+//   agy, require fresh telemetry no older than the configured maximum. Their
+//   tightest reported live percentage must remain strictly above the
+//   configured reserve. Stale, absent, malformed, or windowless telemetry makes
+//   that provider ineligible; it never falls back to an unmetered guess.
 // - A profile may declare the one quota window it is actually drawn from with
 //   an optional `quotaWindow` field naming a `windows[].id` in that provider's
 //   telemetry. The candidate is then priced on that window alone instead of the
@@ -51,6 +50,7 @@
 //
 // A profile priced on its own pool looks like this:
 //   { "harness": "cursor", "model": "cursor-grok-4.6-high", "quotaWindow": "auto_usage" }
+//   { "harness": "agy", "model": "gemini-3.7-flash-high", "quotaWindow": "gemini_5h" }
 //
 // config/crew-dispatch.json may contain this optional settings object:
 //   "subscriptionRouting": {
@@ -74,14 +74,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 // Routable providers must have a credit-identity in quota-axi so the selector
-// can test capacity and redirect. quota-axi reports claude, codex, grok AND
-// cursor (its `cursor` provider is the Cursor subscription). cline is
-// deliberately absent: it is BYO-API-key with no subscription window quota-axi
-// can read, so it stays spawn-only (a single non-array profile), never a
-// credit-routed candidate. Same for pi/opencode. copilot has telemetry too and
-// could be added the same way if wanted.
-const PROVIDERS = new Set(['claude', 'codex', 'grok', 'cursor']);
-const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cline', 'cursor', 'copilot']);
+// can test capacity and redirect. quota-axi reports claude, codex, grok,
+// cursor, and agy. cline is deliberately absent: it is BYO-API-key with no
+// subscription window quota-axi can read, so it stays spawn-only (a single
+// non-array profile), never a credit-routed candidate. Same for pi/opencode.
+// copilot has telemetry too and could be added the same way if wanted.
+const PROVIDERS = new Set(['claude', 'codex', 'grok', 'cursor', 'agy']);
+const VERIFIED_HARNESSES = new Set(['claude', 'codex', 'opencode', 'pi', 'pi-signed', 'grok', 'kimi', 'cursor', 'muse', 'agy', 'cline', 'copilot']);
 const NATIVE_PROVIDER = new Map([
   ['claude', 'claude'],
   ['codex', 'codex'],
@@ -89,6 +88,8 @@ const NATIVE_PROVIDER = new Map([
   // The cursor harness draws on the Cursor subscription, which quota-axi
   // reports under the provider name `cursor`.
   ['cursor', 'cursor'],
+  // agy draws on the Google AI subscription, reported as provider `agy`.
+  ['agy', 'agy'],
 ]);
 const DEFAULTS = Object.freeze({
   reservePercent: 20,
@@ -100,7 +101,7 @@ const LIMITS = Object.freeze({
   telemetryMaxAgeSeconds: [1, 3600],
   cooldownSeconds: [60, 86400],
 });
-const RATE_LIMIT_RE = /rate[ _-]?limit|too many requests|(?:quota|usage)[^\n]{0,80}(?:exhaust|limit|deplet)|(?:exhaust|deplet)[^\n]{0,80}(?:quota|usage)/i;
+const RATE_LIMIT_RE = /\b429\b|rate[ _-]?limit|too many requests|insufficient[ _-]?(?:quota|credit|balance)|out of (?:quota|credits?|tokens?|balance)|(?:quota|usage|spending|monthly|daily|session|token|credit|balance)[^\n]{0,80}(?:exhaust|limit|deplet|reach|exceed|zero)|(?:exhaust|deplet|reach|exceed)[^\n]{0,80}(?:quota|usage|spending|limit|token|credit|balance)|resource[ _-]?exhausted/i;
 
 class CliError extends Error {
   constructor(message, code = 2) {
@@ -580,7 +581,7 @@ function taskMetaProvider(paths, task) {
   }));
   const harness = entries.get('harness');
   const provider = entries.get('provider') || NATIVE_PROVIDER.get(harness);
-  if (!provider || !PROVIDERS.has(provider)) die('record-failure requires a recorded claude, codex, or grok routing provider');
+  if (!provider || !PROVIDERS.has(provider)) die('record-failure requires a recorded claude, codex, grok, cursor, or agy routing provider');
   const nativeProvider = NATIVE_PROVIDER.get(harness);
   if (nativeProvider && provider !== nativeProvider) die(`task ${task} has mismatched native harness and provider metadata`);
   if (harness === 'kimi') die('record-failure does not support Kimi tasks');
@@ -589,7 +590,7 @@ function taskMetaProvider(paths, task) {
 }
 
 function recordFailure(options, paths, settings, now, state) {
-  if (!options.provider || !PROVIDERS.has(options.provider)) die('record-failure needs --provider claude, codex, or grok');
+  if (!options.provider || !PROVIDERS.has(options.provider)) die('record-failure needs --provider claude, codex, grok, cursor, or agy');
   if (!options.task) die('record-failure needs --task');
   const actual = taskMetaProvider(paths, options.task);
   if (actual !== options.provider) die(`task ${options.task} is recorded on provider ${actual}, not ${options.provider}`);
@@ -599,7 +600,7 @@ function recordFailure(options, paths, settings, now, state) {
 }
 
 function clearProvider(options, paths, state) {
-  if (!options.provider || !PROVIDERS.has(options.provider)) die('clear needs --provider claude, codex, or grok');
+  if (!options.provider || !PROVIDERS.has(options.provider)) die('clear needs --provider claude, codex, grok, cursor, or agy');
   delete state.cooldowns[options.provider];
   saveState(paths.stateFile, state);
   log(`provider=${options.provider} cooldown cleared`);

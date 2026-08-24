@@ -1154,6 +1154,8 @@ empty default array is flagged^{"default":[]}^exact^CREW_DISPATCH: invalid confi
 non-object default array entry is flagged^{"default":["codex"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile must be an object
 default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile needs harness
 default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model, effort, and quotaWindow must be non-empty strings when present
+agy model profile with quotaWindow is accepted^{"rules":[{"when":"agy work","use":[{"harness":"agy","model":"gemini-3.7-flash-high","effort":"high","quotaWindow":"gemini_5h"}]}]}^empty^
+agy native subscription provider mismatch is flagged^{"default":[{"harness":"agy","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: agy:claude
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }

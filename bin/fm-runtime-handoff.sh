@@ -191,7 +191,7 @@ fi
 
 # Verified harness only: reuse spawn's launch_template gate by requiring a known name.
 case "$HARNESS" in
-  claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
+  claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|cline|copilot|agy) ;;
   *)
     echo "error: target harness '$HARNESS' is not a verified adapter; refuse rather than launching it" >&2
     exit 1
@@ -209,8 +209,9 @@ fi
 # Exit command facts from harness-adapters (do not invent adapters here).
 handoff_exit_spec() {  # <harness> -> prints "text:<cmd>" or "key:<key>"
   case "$1" in
-    claude|opencode|grok|kimi) printf 'text:/exit\n' ;;
+    claude|opencode|grok|kimi|cursor|muse|copilot|agy) printf 'text:/exit\n' ;;
     codex|pi|pi-signed) printf 'text:/quit\n' ;;
+    cline) printf 'key:C-c\n' ;;
     *) return 1 ;;
   esac
 }

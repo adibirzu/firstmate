@@ -63,7 +63,7 @@ fm_control_verb_allowed() {  # <verb>
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harness_supported() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|cline) return 0 ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|cline|copilot|agy) return 0 ;;
   esac
   return 1
 }
@@ -88,6 +88,8 @@ fm_control_harness_family() {  # <recorded-harness>
     cursor*) printf 'cursor' ;;
     muse*) printf 'muse' ;;
     cline*) printf 'cline' ;;
+    copilot*) printf 'copilot' ;;
+    agy*) printf 'agy' ;;
     *) return 1 ;;
   esac
 }
@@ -102,7 +104,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|cline) [ "$kind" != secondmate ] || return 1 ;;
+    muse|cline|copilot|agy) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -114,8 +116,8 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # borrowing grok's interrupt key here would stop the agent instead of its turn.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|kimi|cursor|muse|cline) printf 'Escape' ;;
-    grok) printf 'C-c' ;;
+    claude|codex|opencode|pi|pi-signed|kimi|cursor|muse|cline|agy) printf 'Escape' ;;
+    grok|copilot) printf 'C-c' ;;
     *) return 1 ;;
   esac
 }
@@ -125,7 +127,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|grok|kimi|cursor|muse|cline) printf '1' ;;
+    claude|codex|pi|pi-signed|grok|kimi|cursor|muse|cline|copilot|agy) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +145,7 @@ fm_control_interrupt_repeat() {  # <harness>
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline|copilot|agy) ;;
     *) return 1 ;;
   esac
 }
@@ -155,7 +157,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # after an interrupt was measured as variable - sometimes seconds, sometimes
     # not within 20 - so a cancellation claim built on it would be unreliable.
     # Normal turn completion is prompt, which is what the busy fold depends on.
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline|copilot|agy) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -171,7 +173,7 @@ fm_control_interrupt_ack_source() {  # <harness>
 # nothing for an adapter that exits on a key instead.
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
-    claude|opencode|grok|kimi|cursor|muse) printf '/exit' ;;
+    claude|opencode|grok|kimi|cursor|muse|copilot|agy) printf '/exit' ;;
     codex|pi|pi-signed) printf '/quit' ;;
     cline) ;;
     *) return 1 ;;
@@ -186,7 +188,7 @@ fm_control_exit_command() {  # <harness>
 fm_control_exit_key() {  # <harness>
   case "${1-}" in
     cline) printf 'C-c' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|copilot|agy) ;;
     *) return 1 ;;
   esac
 }

@@ -380,8 +380,8 @@ case "$EFFORT" in
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
 case "$PROVIDER" in
-  ''|claude|codex|grok) ;;
-  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
+  ''|claude|codex|grok|cursor|agy) ;;
+  *) echo "error: --provider must be one of claude, codex, grok, cursor, agy" >&2; exit 1 ;;
 esac
 if [ "$REUSE_WORKTREE" = 1 ]; then
   if [ "$KIND" = secondmate ]; then
@@ -1418,7 +1418,7 @@ case "$HARNESS" in
   kimi)
     [ -z "$PROVIDER" ] || { echo "error: Kimi cannot carry a subscription routing provider" >&2; exit 1; }
     ;;
-  claude|codex|grok)
+  claude|codex|grok|cursor|agy)
     [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || { echo "error: native harness $HARNESS requires provider $HARNESS" >&2; exit 1; }
     ;;
 esac
