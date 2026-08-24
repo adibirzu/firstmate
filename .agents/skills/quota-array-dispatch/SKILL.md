@@ -87,7 +87,8 @@ Apply only among candidates satisfying required fit and strongest reasoning clas
 2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
 3. Read its sanitized per-provider diagnostics and selected JSON profile.
 4. Pass the selected `harness`, `provider`, `model`, and `effort` axes to `fm-spawn.sh`; it records `provider` as routing evidence without forwarding it to the harness CLI.
-   A selected profile whose provider is native to its harness and outside the explicit wrapper set, such as `cursor` or `agy`, is spawned with its native identity; the recorded harness still establishes that provider for a later `record-failure`.
+   Its `--provider` accepts every routable provider, including `cursor` and `agy`, and a native harness refuses any provider but its own; `docs/configuration.md` owns which adapters are native.
+   Omitting the field on a native harness is equally safe, because the recorded harness alone establishes that provider for a later `record-failure`.
 5. If it exits 3, stop and report that no candidate has current dispatch-capacity evidence rather than choosing manually around the reserve, cooldown, or telemetry refusal.
 6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
 7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.

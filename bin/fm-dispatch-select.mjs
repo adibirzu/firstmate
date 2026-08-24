@@ -38,6 +38,11 @@
 // - Rate-limit or quota-exhaustion evidence creates a provider cooldown.
 //   `record-failure` verifies the evidence in the named task's status file and
 //   verifies that task's recorded routing provider before changing state.
+//   Evidence must read in subscription vocabulary - a framed 429, an explicit
+//   rate limit, or a named quota/credit/allowance being exhausted, depleted,
+//   or reached. A context-window or tool-output ceiling is an ordinary working
+//   state, so a bare `limit`, `token`, or unframed `429` is refused rather
+//   than parking the provider for a whole cooldown.
 // - Among eligible candidates, a known spendPriority from quota-axi is the
 //   quota-perspective ranker: the highest known scalar wins. When every
 //   remaining eligible candidate lacks a known scalar, or when known scalars
@@ -101,11 +106,11 @@ const LIMITS = Object.freeze({
   telemetryMaxAgeSeconds: [1, 3600],
   cooldownSeconds: [60, 86400],
 });
-// Depletion evidence must read in subscription vocabulary, because both
-// consumers of this gate park a provider for a whole cooldown on a match. A
-// context-window or tool-output ceiling ("context token limit reached",
-// "exceeded the tool output limit") is an ordinary working state, not spent
-// quota, so a bare `limit`, `token`, or unframed `429` never qualifies alone.
+// Keep this narrow: both consumers of this gate park a provider for a whole
+// cooldown on a single match, so an ordinary working state ("context token
+// limit reached", "exceeded the tool output limit") must not reach it. The
+// subscription-vocabulary contract these alternatives encode is stated in the
+// evidence bullet of the header help above.
 const RATE_LIMIT_RE = new RegExp([
   '(?:http|status|code|error|response)[^\\n]{0,16}\\b429\\b',
   'rate[ _-]?limit',
