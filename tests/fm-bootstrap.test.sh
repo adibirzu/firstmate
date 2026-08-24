@@ -1163,6 +1163,15 @@ non-object model fallback is flagged^{"modelFallback":["claude"]}^exact^CREW_DIS
 model fallback unverified harness is flagged^{"modelFallback":{"spaceship":["a"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
 empty model fallback chain is flagged^{"modelFallback":{"claude":[]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
 model fallback chain with a malformed id is flagged^{"modelFallback":{"claude":["claude-sonnet-5",""]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
+model fallback chain with duplicate ids is flagged^{"modelFallback":{"claude":["sonnet","haiku","sonnet"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: claude
+legacy alias with duplicate ids is flagged under the same rule^{"_model_fallback":{"agy":["gemini-3.7-flash","gemini-3.7-flash"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: agy
+fallback lane order is accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"]},"fallbackLanes":["agy","cursor","opencode"]}^empty^
+single-entry fallback lane order is accepted^{"default":{"harness":"agy"},"fallbackLanes":["agy"]}^empty^
+non-array fallback lanes are flagged^{"default":{"harness":"agy"},"fallbackLanes":"agy"}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes must be a non-empty array of verified harness names
+empty fallback lanes are flagged^{"default":{"harness":"agy"},"fallbackLanes":[]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes must be a non-empty array of verified harness names
+unverified fallback lane is flagged^{"fallbackLanes":["agy","spaceship"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: spaceship
+non-string fallback lane is flagged^{"fallbackLanes":[7]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: 7
+duplicate fallback lanes are flagged^{"fallbackLanes":["agy","cursor","agy"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has duplicate entries; a lane order must name each runtime once
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }

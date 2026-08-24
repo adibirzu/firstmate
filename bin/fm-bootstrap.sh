@@ -1041,6 +1041,22 @@ crew_dispatch_validate() {
           or (.value | any((type != "string") or (length == 0)))))
       | map(.key)
       | unique;
+    def bad_fallback_duplicate_chains:
+      (model_fallback // {})
+      | to_entries
+      | map(select(
+          ((.value | type) == "array")
+          and ((.value | unique | length) != (.value | length)))
+        | .key)
+      | unique;
+    def bad_fallback_lanes:
+      (.fallbackLanes // [])
+      | if type == "array" then
+          map(select((type != "string") or ((. as $h | verified($h)) | not)))
+        else
+          [""]
+        end
+      | unique;
     def routing_setting_ok($key; $value):
       if ($value | type) != "number" or ($value | floor) != $value then false
       elif $key == "reservePercent" then $value >= 0 and $value <= 99
@@ -1066,6 +1082,10 @@ crew_dispatch_validate() {
     elif (has("modelFallback") or has("_model_fallback")) and (model_fallback | type) != "object" then "modelFallback must be an object mapping a harness to its ordered model chain"
     elif (bad_fallback_harnesses | length) > 0 then "modelFallback has an unverified harness: " + (bad_fallback_harnesses | join(", "))
     elif (bad_fallback_chains | length) > 0 then "modelFallback chain must be a non-empty array of non-empty model ids: " + (bad_fallback_chains | join(", "))
+    elif (bad_fallback_duplicate_chains | length) > 0 then "modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: " + (bad_fallback_duplicate_chains | join(", "))
+    elif has("fallbackLanes") and ((.fallbackLanes | type) != "array" or (.fallbackLanes | length) == 0) then "fallbackLanes must be a non-empty array of verified harness names"
+    elif (bad_fallback_lanes | length) > 0 then "fallbackLanes has a non-string or unverified harness entry: " + (bad_fallback_lanes | join(", "))
+    elif (.fallbackLanes // []) | (type == "array" and ((length != (unique | length)))) then "fallbackLanes has duplicate entries; a lane order must name each runtime once"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"

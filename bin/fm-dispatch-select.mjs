@@ -5,6 +5,7 @@
 //   fm-dispatch-select.mjs select [--quota-json <file>] [--now <epoch>] [<json>]
 //   fm-dispatch-select.mjs record-failure --provider <claude|codex|grok|cursor|agy> --task <id> [--now <epoch>]
 //   fm-dispatch-select.mjs clear --provider <claude|codex|grok|cursor|agy>
+//   fm-dispatch-select.mjs classify-evidence (--file <path> | with text on stdin)
 //
 // `select` accepts a full rule object with `use`, one profile object, or a
 // non-empty profile array on the command line or stdin. It prints exactly one
@@ -39,10 +40,15 @@
 //   `record-failure` verifies the evidence in the named task's status file and
 //   verifies that task's recorded routing provider before changing state.
 //   Evidence must read in subscription vocabulary - a framed 429, an explicit
-//   rate limit, or a named quota/credit/allowance being exhausted, depleted,
-//   or reached. A context-window or tool-output ceiling is an ordinary working
-//   state, so a bare `limit`, `token`, or unframed `429` is refused rather
-//   than parking the provider for a whole cooldown.
+//   rate limit, a RESOURCE_EXHAUSTED code, or a named quota/credit/allowance/
+//   spending limit being exhausted, depleted, or reached. A context-window or
+//   tool-output ceiling is an ordinary working state, so a bare `limit`,
+//   `token`, unframed `429`, or plain authorization `403` is refused rather
+//   than parking the provider for a whole cooldown. This one vocabulary is
+//   also the depletion detector behind `bin/fm-model-fallback.sh`: the
+//   `classify-evidence` subcommand exposes it as a pure stdin/file
+//   classification so every consumer shares one owner instead of each
+//   re-spelling quota vocabulary.
 // - Among eligible candidates, a known spendPriority from quota-axi is the
 //   quota-perspective ranker: the highest known scalar wins. When every
 //   remaining eligible candidate lacks a known scalar, or when known scalars
@@ -113,11 +119,18 @@ const LIMITS = Object.freeze({
 // evidence bullet of the header help above.
 const RATE_LIMIT_RE = new RegExp([
   '(?:http|status|code|error|response)[^\\n]{0,16}\\b429\\b',
+  // A framed 403 is an authorization code, so it counts only when budget
+  // vocabulary shares the line - "403 spending limit reached", never a plain
+  // forbidden/auth error.
+  '(?:spending|budget|credit|balance|quota)[^\\n]{0,80}\\b403\\b',
+  '\\b403\\b[^\\n]{0,80}(?:spending|budget|credit|balance|quota)',
   'rate[ _-]?limit',
   'too many requests',
   'resource[ _-]?exhausted',
   'insufficient[ _-]?(?:quota|credits?|balance|funds)',
   'out of (?:quota|credits?|tokens?|balance)',
+  'credit balance is too low',
+  'spending[ _-]?limit',
   '(?:quota|usage|spending|allowance|subscription|credits?|balance|monthly|weekly|daily|session)[^\\n]{0,80}(?:exhaust|deplet|used up|limit|reach|exceed|zero)',
   '(?:exhaust|deplet|reach|exceed)[^\\n]{0,80}(?:quota|usage|spending|allowance|credits?|balance)',
 ].join('|'), 'i');
@@ -155,7 +168,7 @@ function parseArgs(argv) {
       usage();
       process.exit(0);
     }
-    if (['--quota-json', '--now', '--provider', '--task'].includes(arg)) {
+    if (['--quota-json', '--now', '--provider', '--task', '--file'].includes(arg)) {
       if (!argv.length) die(`${arg} requires a value`);
       options[arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = argv.shift();
     } else if (arg === '--') {
@@ -625,21 +638,46 @@ function clearProvider(options, paths, state) {
   log(`provider=${options.provider} cooldown cleared`);
 }
 
+// classify-evidence: the pure depletion detector behind record-failure and
+// bin/fm-model-fallback.sh. Reads evidence text from --file or stdin and
+// prints exactly one `classification=` line plus the matched signature when
+// depleted. It touches no home, lock, or state, so a caller may run it before
+// any of this script's routing machinery exists.
+function classifyEvidence(options) {
+  let text;
+  try {
+    text = options.file ? fs.readFileSync(options.file, 'utf8') : fs.readFileSync(0, 'utf8');
+  } catch {
+    die('classify-evidence requires a readable --file or stdin text');
+  }
+  const match = RATE_LIMIT_RE.exec(text);
+  if (!match) {
+    process.stdout.write('classification=none\n');
+    return;
+  }
+  process.stdout.write(`classification=depleted\nsignature=${JSON.stringify(match[0])}\n`);
+}
+
 try {
   const options = parseArgs(process.argv.slice(2));
-  if (!['select', 'record-failure', 'clear'].includes(options.command)) die(`unknown command ${options.command}`);
-  const home = explicitHome();
-  const paths = operationalPaths(home);
-  const settings = settingsFromConfig(paths.configDir);
-  const now = parseNow(options.now);
-  const unlock = acquireLock(paths.lockDir);
-  try {
-    const state = loadState(paths.stateFile);
-    if (options.command === 'select') select(options, home, paths, settings, now, state);
-    else if (options.command === 'record-failure') recordFailure(options, paths, settings, now, state);
-    else clearProvider(options, paths, state);
-  } finally {
-    unlock();
+  if (options.command === 'classify-evidence') {
+    classifyEvidence(options);
+  } else if (!['select', 'record-failure', 'clear'].includes(options.command)) {
+    die(`unknown command ${options.command}`);
+  } else {
+    const home = explicitHome();
+    const paths = operationalPaths(home);
+    const settings = settingsFromConfig(paths.configDir);
+    const now = parseNow(options.now);
+    const unlock = acquireLock(paths.lockDir);
+    try {
+      const state = loadState(paths.stateFile);
+      if (options.command === 'select') select(options, home, paths, settings, now, state);
+      else if (options.command === 'record-failure') recordFailure(options, paths, settings, now, state);
+      else clearProvider(options, paths, state);
+    } finally {
+      unlock();
+    }
   }
 } catch (error) {
   if (error instanceof CliError) {

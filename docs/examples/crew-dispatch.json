@@ -43,7 +43,11 @@
     { "harness": "codex", "provider": "codex", "model": "gpt-5.5", "effort": "medium" }
   ],
   "modelFallback": {
-    "claude": ["claude-sonnet-5", "sonnet", "haiku"],
-    "agy": ["gemini-3.7-flash-high", "gemini-3.6-flash-high", "gemini-3.5-flash-high"]
-  }
+    "agy": ["gemini-3.7-flash-high", "gemini-3.6-flash-high", "gemini-3.5-flash-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking"],
+    "cursor": ["cursor-grok-4.6-high", "auto"],
+    "opencode": ["x-preview-f-free", "big-pickle", "hy3-free"],
+    "cline": ["glm-5.3", "kimi-k3"],
+    "claude": ["claude-sonnet-5", "sonnet", "haiku"]
+  },
+  "fallbackLanes": ["agy", "cursor", "opencode", "cline"]
 }

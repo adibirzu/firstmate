@@ -502,6 +502,66 @@ setup_case() {
   pass "successful reuse preserves commits, dirt, and non-owned meta"
 }
 
+# --- provider axis: re-declared when provable, dropped otherwise -------------
+
+# A reuse relaunch must never keep the previous adapter's routing provider:
+# native targets run on their own provider, keeping the recorded adapter keeps
+# its recorded provider, and an unprovable cross-harness move drops it.
+{
+  setup_case provider-native-target task-pv2
+  sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv2.meta"
+  printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv2.meta"
+  rm -f "$CASE_HOME/state/task-pv2.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv2 --harness cursor --skip-exit 2>&1); then
+    :
+  else
+    fail "cross-harness handoff to a native target should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv2.meta")
+  assert_contains "$meta" "harness=cursor" "native target harness recorded"
+  assert_contains "$meta" "provider=cursor" "native target re-declares its own provider, not the borrowed one"
+  pass "handoff to a native target records that target's own routing provider"
+}
+
+{
+  setup_case provider-same-adapter task-pv3
+  sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv3.meta"
+  printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv3.meta"
+  rm -f "$CASE_HOME/state/task-pv3.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv3 --harness opencode --skip-exit 2>&1); then
+    :
+  else
+    fail "same-adapter handoff should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv3.meta")
+  assert_contains "$meta" "harness=opencode" "same adapter recorded"
+  assert_contains "$meta" "provider=claude" "keeping the recorded adapter keeps its borrowed provider"
+  pass "a same-harness relaunch preserves the recorded routing provider"
+}
+
+{
+  setup_case provider-unprovable task-pv4
+  sed -i.bak 's/^harness=codex$/harness=claude/' "$CASE_HOME/state/task-pv4.meta"
+  rm -f "$CASE_HOME/state/task-pv4.meta.bak"
+  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_PANE_CMD=bash
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv4 --harness opencode --skip-exit 2>&1); then
+    :
+  else
+    fail "cross-harness handoff into a non-native adapter should succeed: $out"
+  fi
+  meta=$(cat "$CASE_HOME/state/task-pv4.meta")
+  assert_contains "$meta" "harness=opencode" "target adapter recorded"
+  case "$meta" in
+    *provider=*) fail "no provable provider exists for the target; none may be invented: $meta" ;;
+  esac
+  pass "an unprovable cross-adapter move leaves no routing provider behind"
+}
+
 # --- success: handoff end-to-end with skip-exit (dead endpoint) -------------
 
 {

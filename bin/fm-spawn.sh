@@ -3127,7 +3127,11 @@ spawn_write_meta_locked() {
   # carrier would otherwise survive a handoff and mis-attribute the new run.
   # control_relaunch_tx= is spawn-written on a control-parented relaunch and is
   # how bin/fm-control.sh recognizes its own replacement publication.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  # provider= belongs here because a relaunch that switches adapters must not
+  # keep the previous adapter's routing provider: every reuse caller that can
+  # prove a correct provider passes it explicitly (fm-runtime-handoff.sh and
+  # fm-control.sh), so an unprovable one is dropped instead of left lying.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|provider|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then

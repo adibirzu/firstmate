@@ -343,12 +343,26 @@ EOF
 } > "$HANDOFF_PROMPT"
 
 # Relaunch in place through spawn's reuse path (preserves treehouse lease).
+# spawn drops provider= on every reuse, so the replacement's routing provider
+# must be re-declared here whenever it can be proven: a native target runs on
+# its own provider, and a same-harness relaunch keeps the recorded one. A
+# cross-harness move into an adapter with no native credit identity gets no
+# guess - the stale provider stays dropped.
 SPAWN_ARGS=(
   "$ID"
   --reuse-worktree
   --harness "$HARNESS"
   --handoff-brief "$HANDOFF_PROMPT"
 )
+case "$HARNESS" in
+  claude|codex|grok|cursor|agy) SPAWN_ARGS+=(--provider "$HARNESS") ;;
+  *)
+    if [ "$HARNESS" = "${OLD_HARNESS:-}" ]; then
+      RECORDED_PROVIDER=$(fm_meta_get "$META" provider)
+      [ -z "$RECORDED_PROVIDER" ] || SPAWN_ARGS+=(--provider "$RECORDED_PROVIDER")
+    fi
+    ;;
+esac
 [ -z "$RECORDED_MODE" ] || SPAWN_ARGS+=(--mode "$RECORDED_MODE")
 [ -z "$RECORDED_YOLO" ] || SPAWN_ARGS+=(--yolo "$RECORDED_YOLO")
 [ -z "$MODEL" ] || SPAWN_ARGS+=(--model "$MODEL")
