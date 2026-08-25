@@ -187,6 +187,7 @@ family_for_basename() {
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-cline-signals-live-e2e.test.sh|\
+    fm-openrouter-cline-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-grok-continuity-live-e2e.test.sh|\
     fm-cursor-primary-live-e2e.test.sh|\
     fm-grok-signals-live-e2e.test.sh|\

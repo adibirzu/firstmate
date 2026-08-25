@@ -484,7 +484,7 @@ Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, 
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal remains a wake notification; standalone Kimi has no busy-state source until one is live-verified.
 
-## cline (VERIFIED 2026-07-27 on 3.0.46; act mode, control mechanics, and busy state added 2026-08-16 on 3.0.55)
+## cline (VERIFIED 2026-07-27 on 3.0.46; act mode, control mechanics, and busy state added 2026-08-16 on 3.0.55; OpenRouter-via-Cline adapter added 2026-08-24 on 3.0.57)
 
 Cline runs as an interactive TUI crewmate. Unlike Kimi, a positional prompt seeds AND auto-runs the first turn, so the brief rides the launch command like claude/codex/grok.
 
@@ -498,11 +498,16 @@ The rendered footer shows the live mode as `● Plan ○ Act (Tab)` / `○ Plan 
 The structural proof is cline's own session record, which stores `metadata.mode`.
 The legacy `mode` key in `<data-dir>/globalState.json` is NOT the authority on 3.0.55 - a machine carrying `mode: plan` there and `planActMode: act` in the settings file starts in act - so read the settings file, not globalState.
 
+**OpenRouter-via-Cline (provider identity = openrouter, API key from environment).**
+`fm-spawn --harness cline --provider openrouter --model <openrouter-model-id>` launches a crewmate on OpenRouter models. The key is read from firstmate's environment at spawn time (prefer `OPENROUTER_API_KEY_TOKENS`, fall back to `OPENROUTER_API_KEY` — matching `fm-openrouter-quota.sh`), silently injected into the pane via an armed read (`read -rs`), then passed as `-k "$OPENROUTER_API_KEY"` (expanded in the pane shell, never printed to scrollback). The startup gate in cline 3.0.57 (TUI onboarding / headless auth) requires the key via `-k` or stored `providers.json`; `OPENROUTER_API_KEY` env is consulted only at request time and never satisfies the gate. Any `-k` value is persisted by cline into the active provider store, so `fm-spawn` redirects that store to a firstmate-owned per-task file `state/<id>.cline-providers.json` seeded with a no-secret openrouter entry (provider id, model id from `--model`, updatedAt, tokenSource). The key is confined to that gitignored task-local file and deleted at teardown. The launch also sets `CLINE_PROVIDER_SETTINGS_PATH` to the seed file alongside `CLINE_GLOBAL_SETTINGS_PATH`. Provider `openrouter` is only accepted for `harness=cline`; it requires an explicit non-default `--model` (cline's default under `-P openrouter` is cline's shipped default, never a captain choice). Other harnesses refuse `provider=openrouter`; `cline` refuses `provider=claude|codex|grok` as meaningless. A live completion round-trip was verified on 2026-08-24 with `openai/gpt-oss-20b` (5,378 context tokens, assistant reply `ok`).
+
 | Fact | Value |
 |---|---|
 | Binary | `cline` from `PATH` (`~/.local/bin/cline`, a Node script). Detection matches `cline` in the process argv like opencode (ancestry command name may be `node`). |
-| Launch | `cline -i --tui --auto-approve true [--model <id>] [--thinking <effort>] "<brief>"`. `-i --tui` opens the persistent interactive TUI; the positional brief seeds and auto-runs the first turn (verified via tmux capture). |
-| Models | Provider/model shown in the status bar (e.g. `ClinePass: Kimi K3`); `--model`/`-m` selects within the active provider. Default provider is `cline` (ClinePass). |
+| Launch (ClinePass) | `cline -i --tui --auto-approve true [--model <id>] [--thinking <effort>] "<brief>"`. `-i --tui` opens the persistent interactive TUI; the positional brief seeds and auto-runs the first turn (verified via tmux capture). |
+| Launch (OpenRouter) | `CLINE_GLOBAL_SETTINGS_PATH=<path> CLINE_PROVIDER_SETTINGS_PATH=<path> cline -i --tui --auto-approve true -P openrouter -k "$OPENROUTER_API_KEY" -m <openrouter-model-id> "<brief>"`. Key injected silently via pane-armed read; `-k` expanded in pane; `-P openrouter` selects provider; `-m` selects model. |
+| Models (ClinePass) | Provider/model shown in status bar (e.g. `ClinePass: Kimi K3`); `--model`/`-m` selects within active provider. Default provider is `cline` (ClinePass). |
+| Models (OpenRouter) | Provider is `openrouter`; `--model`/`-m` takes OpenRouter model id (e.g. `openai/gpt-oss-20b`). Default model under `-P openrouter` is cline's shipped default (`deepseek/deepseek-v4-flash-vision-exp`), never used by firstmate (explicit `--model` required). |
 | Busy state | Its own per-session record under `<data-dir>/sessions/<session-id>/`, folded on demand by `bin/fm-busy-lib.sh` (source `cline-session`), bound to the pane by the `state/<id>.cline-session` sidecar. Structural, not rendered. TWO signals: the record's `status` (`running` -> busy, `completed`/`failed` -> idle) and, for the ambiguous `idle`, the turn log's last message role. Nothing is armed and no record is ever seeded, the same reason muse and cursor are pull sources. Requires `jq`; without it the fold reports unknown rather than reaching for a formatting-dependent text read. |
 | Queued-but-unprocessed | `status: idle` with a trailing `role: user` message and no assistant reply. This is the wedge that renders as a perfectly healthy pane - no spinner, ordinary idle composer, frozen token counter - and it is what a ClinePass refusal also leaves behind. The classifier reports it as `idle cline-session-stalled` so supervision can tell it from a completed turn. |
 | Session record caveat | Its `pid` field is the SHARED cline hub daemon's pid (`--cline-hub-daemon`), not the pane's: one pid covers every session on the machine. Binding is on `workspace_root` plus the sidecar's pre-existing-session exclusion, never on pid. A clean exit also leaves `status: idle` with a null `exit_code`, so the record never proves the agent stopped; that stays the backend's `fm_backend_agent_state` job. |
@@ -527,6 +532,12 @@ The drift guard that refreshes it is:
 
 ```bash
 FM_CLINE_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-cline-signals-live-e2e.test.sh
+```
+
+The OpenRouter-via-Cline path has its own live drift guard:
+
+```bash
+FM_OPENROUTER_CLINE_LIVE=1 bin/fm-test-run.sh tests/fm-openrouter-cline-live-e2e.test.sh
 ```
 
 ## cursor-agent (VERIFIED 2026-07-27, Cursor CLI 2026.07.16 / 2026.07.23)

@@ -12,7 +12,6 @@
 # upgrade or when the openrouter path behavior changes.
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLINE_BIN=$(command -v cline 2>/dev/null || true)
 REAL_TMUX=$(command -v tmux 2>/dev/null || true)
 LAB=

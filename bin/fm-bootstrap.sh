@@ -1074,13 +1074,15 @@ crew_dispatch_validate() {
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
-      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok"] | index($provider)) == null)) | unique) as $bad_providers
+      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","grok"] | index($provider)) == null and ($provider != "openrouter" or .harness != "cline"))) | unique) as $bad_providers
       | (configured_profiles | map(select(.harness == "kimi" or .provider == "kimi")) | length) as $bad_kimi_routes
       | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "grok") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
+      | (configured_profiles | map(select(.provider == "openrouter" and .harness == "cline" and (.model? // "") == "")) | length) as $openrouter_missing_model
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
         elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
         elif ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))
         elif ($bad_providers | length) > 0 then "unsupported subscription provider: " + ($bad_providers | join(", "))
+        elif $openrouter_missing_model > 0 then "provider openrouter on harness cline requires an explicit model"
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
         else empty
         end

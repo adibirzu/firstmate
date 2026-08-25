@@ -281,15 +281,17 @@ cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ enc
 
 | Owner | Change |
 |---|---|
-| `bin/fm-spawn.sh` | `launch_template` cline case; `--model`/`--thinking` mapping; known-adapter allowlists |
+| `bin/fm-spawn.sh` | `launch_template` cline case; `--model`/`--thinking` mapping; known-adapter allowlists; `__PROVIDERFLAG__`, `__CLINEPROVIDERS__` placeholders; `provider_flag_for_harness()`; openrouter key resolution + armed-read injection; `CLINE_PROVIDER_SETTINGS_PATH` seed file |
 | `bin/fm-harness.sh` | `detect_own` ancestry match `*cline*` (comm + args) |
 | `bin/fm-tmux-lib.sh` | `FM_TMUX_CLINE_BUSY_REGEX_DEFAULT` + `case` arm |
 | `bin/fm-composer-lib.sh` + `bin/backends/{herdr,cmux,orca}.sh` | shared `FM_COMPOSER_IDLE_RE_DEFAULT` covers cline placeholders (tmux + all backends); cmux/orca bare agent-glyph promotion reaches the borderless `❯` row |
 | `bin/fm-busy-lib.sh` | `cline-session` pull source: binding, session resolution, and the two-signal fold |
 | `bin/fm-control-lib.sh` + `bin/fm-control.sh` | cline control mechanics; the exit-key table and its delivery path |
-| `.agents/skills/harness-adapters/SKILL.md` | cline knowledge section |
-| `tests/fm-cline-harness.test.sh` | 24 portable behavior checks (all green) |
-| `tests/fm-cline-signals-live-e2e.test.sh` | opt-in live drift guard against the real binary |
+| `bin/fm-teardown.sh` | cleanup of `state/<id>.cline-providers.json` at teardown |
+| `.agents/skills/harness-adapters/SKILL.md` | cline knowledge section with OpenRouter-via-Cline facts |
+| `tests/fm-cline-harness.test.sh` | 28 portable behavior checks (all green) |
+| `tests/fm-cline-signals-live-e2e.test.sh` | opt-in live drift guard against the real binary (`FM_CLINE_SIGNALS_LIVE=1`) |
+| `tests/fm-openrouter-cline-live-e2e.test.sh` | opt-in live drift guard for openrouter path (`FM_OPENROUTER_CLINE_LIVE=1`) |
 
 ## Remaining acceptance (live end-to-end)
 
@@ -300,3 +302,77 @@ crewmate dispatch through the herdr backend**: `config/crew-harness=cline` (or a
 brief-inject → busy → turn-end on a real cline pane under supervision. Not yet run
 here (needs a full firstmate home + a real project). The optional `--hooks-dir`
 turn-end Stop-hook (only for cline-as-PRIMARY) is a separate future item.
+
+## OpenRouter-via-Cline — empirical verification (2026-08-24, cline 3.0.57)
+
+This section records the verified facts for the `harness=cline --provider openrouter`
+launch path added 2026-08-24. Every value below is a capture, not a guess.
+
+### Provider and model identity
+
+- Provider id: `openrouter` (explicit `-P openrouter` flag).
+- Model id: the OpenRouter model id verbatim via `-m <id>` (e.g. `openai/gpt-oss-20b`).
+- Default model under `-P openrouter` (no `-m`): cline's shipped default `deepseek/deepseek-v4-flash-vision-exp` — never used by firstmate; an explicit `--model` is required.
+- Base URL: `https://openrouter.ai/api/v1` (from cline's built-in provider registry).
+
+### Credential resolution order (established by binary inspection + live probe)
+
+1. `OPENROUTER_API_KEY_TOKENS` (firstmate's preferred, working inference key — matches `fm-openrouter-quota.sh`).
+2. `OPENROUTER_API_KEY` (fallback; on this account stale, returns HTTP 401).
+3. Request-time fallback: cline's provider client reads `OPENROUTER_API_KEY` from the process environment at API call time (verified by direct `curl` probe: `OPENROUTER_API_KEY_TOKENS` returned HTTP 200 on `openai/gpt-oss-20b`, `OPENROUTER_API_KEY` returned HTTP 401).
+
+### Startup gate (cline 3.0.57)
+
+The TUI and headless paths both enforce a startup auth gate BEFORE any request is made:
+- TUI: shows `Connect a model provider` onboarding modal when no resolvable key is found.
+- Headless: fails with `No cookie auth credentials found`.
+- The gate accepts ONLY:
+  - `-k <api-key>` flag (expanded in the pane shell from a silently injected export).
+  - A non-empty `apiKey` in the stored providers.json (operator's store or a redirected store via `CLINE_PROVIDER_SETTINGS_PATH`).
+- The environment variable `OPENROUTER_API_KEY` is NOT consulted by the gate (verified: env-only launches with a clean store hit the onboarding/headless failure despite the var being exported in the pane).
+- Any `-k` value IS persisted by cline into the active provider store (verified: a `-k` run wrote the key into `~/.cline/data/settings/providers.json` under `.providers.openrouter.settings.apiKey`).
+
+### Firstmate's launch construction (Option A design)
+
+1. Seed `state/<id>.cline-providers.json` with a no-secret entry:
+   ```json
+   {
+     "version": 1,
+     "lastUsedProvider": "openrouter",
+     "providers": {
+       "openrouter": {
+         "settings": {"provider": "openrouter", "model": "<requested-model>"},
+         "updatedAt": "<iso8601>",
+         "tokenSource": "manual"
+       }
+     }
+   }
+   ```
+   No `apiKey` field. This satisfies the gate's "stored entry exists" check while keeping the secret out of the file.
+
+2. Resolve the key from firstmate's env at spawn time (TOKENS-first per repo convention). Fail closed if absent.
+
+3. Silently inject the key into the pane shell via armed read:
+   ```
+   printf 'FM_OPENROUTER_KEY_ARMED\n'; IFS= read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
+   ```
+   Poll pane capture for `FM_OPENROUTER_KEY_ARMED` marker, settle 0.3s, send literal key + Enter. The key never renders in scrollback (`read -rs` suppresses echo).
+
+4. Launch: `CLINE_GLOBAL_SETTINGS_PATH=... CLINE_PROVIDER_SETTINGS_PATH=state/<id>.cline-providers.json cline -i --tui --auto-approve true -P openrouter -k "$OPENROUTER_API_KEY" -m <model> "<brief>"`
+   The `-k` reference is expanded in the pane shell from the injected export.
+
+### Live completion round-trip (verified 2026-08-24)
+
+- Model used: `openai/gpt-oss-20b` (first candidate from ordered list that answered).
+- Assistant reply: `ok` (trimmed).
+- Session record: status=idle, provider=openrouter, model=openai/gpt-oss-20b, messages=2 (user + assistant), context tokens 5,378.
+- Cost: $0.000164.
+- Redirected providers file: NO key material persisted (remained no-secret).
+- Exit: Ctrl+C returned pane to shell cleanly.
+
+### Dispatch surface
+
+- `--provider openrouter` accepted only with `--harness cline`; requires explicit non-default `--model`.
+- `cline` refuses `--provider claude|codex|grok` (meaningless for cline).
+- Other harnesses refuse `--provider openrouter` (not implemented).
+- Single-object crew-dispatch profiles with `{harness: cline, provider: openrouter, model: ...}` bypass the subscription-aware selector (BYO-key class) and are allowed by bootstrap validation (provider openrouter on cline requires model; elsewhere refused).

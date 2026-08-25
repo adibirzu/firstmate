@@ -380,8 +380,8 @@ case "$EFFORT" in
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
 case "$PROVIDER" in
-  ''|claude|codex|grok) ;;
-  *) echo "error: --provider must be one of claude, codex, grok" >&2; exit 1 ;;
+  ''|claude|codex|grok|openrouter) ;;
+  *) echo "error: --provider must be one of claude, codex, grok, openrouter" >&2; exit 1 ;;
 esac
 if [ "$REUSE_WORKTREE" = 1 ]; then
   if [ "$KIND" = secondmate ]; then
@@ -1309,12 +1309,17 @@ launch_template() {
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
     agy) printf '%s' 'agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # CLINE_GLOBAL_SETTINGS_PATH redirects only cline's start-mode/preferences
-    # file, so a crewmate starts in act mode deterministically while its
-    # credentials and provider config still resolve from the operator's own
-    # store. cline has no --act flag, and its persisted planActMode outranks the
-    # documented act-by-default, so this redirect is the whole mechanism.
-    cline) printf '%s' 'CLINE_GLOBAL_SETTINGS_PATH=__CLINESETTINGS__ cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+# CLINE_GLOBAL_SETTINGS_PATH redirects only cline's start-mode/preferences
+# file, so a crewmate starts in act mode deterministically while its
+# credentials and provider config still resolve from the operator's own
+# store. cline has no --act flag, and its persisted planActMode outranks the
+# documented act-by-default, so this redirect is the whole mechanism.
+# When provider=openrouter, CLINE_PROVIDER_SETTINGS_PATH redirects the
+# provider store to a firstmate-owned no-secret seed file and the OpenRouter
+# key is supplied via -k "$OPENROUTER_API_KEY" (expanded in the pane shell
+# from a silently injected export). The __PROVIDERFLAG__ placeholder expands
+# to -P openrouter for that case and is empty otherwise.
+cline) printf '%s' 'CLINE_GLOBAL_SETTINGS_PATH=__CLINESETTINGS__ CLINE_PROVIDER_SETTINGS_PATH=__CLINEPROVIDERS__ cline -i --tui --auto-approve true __PROVIDERFLAG____MODELFLAG____EFFORTFLAG__-k "$OPENROUTER_API_KEY" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # muse (Muse Code): a positional prompt starts the supervised interactive
     # session. --yolo is the single flag that makes a crewmate pane viable: muse
@@ -1414,6 +1419,8 @@ fi
 # A subscription routing provider is only meaningful for a wrapper adapter that
 # borrows another subscription's credit identity. A native subscription harness
 # must run on its own provider, and Kimi carries no subscription window at all.
+# Cline supports only the openrouter provider (byo-key); other providers are
+# refused as meaningless for cline.
 case "$HARNESS" in
   kimi)
     [ -z "$PROVIDER" ] || { echo "error: Kimi cannot carry a subscription routing provider" >&2; exit 1; }
@@ -1421,7 +1428,20 @@ case "$HARNESS" in
   claude|codex|grok)
     [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || { echo "error: native harness $HARNESS requires provider $HARNESS" >&2; exit 1; }
     ;;
+  cline)
+    [ -z "$PROVIDER" ] || [ "$PROVIDER" = openrouter ] || { echo "error: harness cline carries only provider openrouter" >&2; exit 1; }
+    ;;
+  *)
+    # provider openrouter is only implemented for cline
+    [ "$PROVIDER" = openrouter ] && { echo "error: provider openrouter is only implemented for harness cline" >&2; exit 1; }
+    ;;
 esac
+
+# openrouter requires an explicit model id (cline's own default under -P openrouter
+# is whatever cline ships, never a captain choice)
+if [ "$PROVIDER" = openrouter ]; then
+  [ -n "$MODEL" ] && [ "$MODEL" != default ] || { echo "error: provider openrouter requires an explicit --model <openrouter-model-id>" >&2; exit 1; }
+fi
 
 case "$HARNESS" in
   pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
@@ -1567,6 +1587,14 @@ model_flag_for_harness() {
     muse|agy)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
+  esac
+}
+
+provider_flag_for_harness() {
+  local harness=$1 provider=$2
+  [ -n "$provider" ] || return 0
+  case "$harness:$provider" in
+    cline:openrouter) printf -- '-P openrouter ' ;;
   esac
 }
 
@@ -3240,8 +3268,10 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
+PROVIDERFLAG=$(provider_flag_for_harness "$HARNESS" "$PROVIDER")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+LAUNCH=${LAUNCH//__PROVIDERFLAG__/$PROVIDERFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
@@ -3250,7 +3280,10 @@ LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
-  cline) LAUNCH=${LAUNCH//__CLINESETTINGS__/"$(shell_quote "$STATE/$ID.cline-settings.json")"} ;;
+  cline)
+    LAUNCH=${LAUNCH//__CLINESETTINGS__/"$(shell_quote "$STATE/$ID.cline-settings.json")"}
+    LAUNCH=${LAUNCH//__CLINEPROVIDERS__/"$(shell_quote "$STATE/$ID.cline-providers.json")"}
+    ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 case "$HARNESS" in
@@ -3294,6 +3327,45 @@ fi
 if [ -z "${SPAWN_TRACEPARENT:-}" ] && [ "$REUSE_WORKTREE" = 1 ]; then
   LAUNCH="unset TRACEPARENT; $LAUNCH"
 fi
+
+# OpenRouter-via-Cline credential injection: cline 3.0.57's startup gate
+# (TUI onboarding / headless auth) requires the OpenRouter key via -k flag or
+# its stored providers.json; OPENROUTER_API_KEY env is consulted only at
+# request time and never satisfies the gate. The -k value is persisted by cline
+# into the active provider store, so we redirect that store to a firstmate-owned
+# per-task file (state/<id>.cline-providers.json) seeded with a no-secret
+# openrouter entry. The key travels pane-env -> -k "$OPENROUTER_API_KEY" (expanded
+# in the pane from a silently injected export, never printed to scrollback).
+if [ "$HARNESS" = cline ] && [ "$PROVIDER" = openrouter ]; then
+  # Seed firstmate-owned provider store with no-secret openrouter entry.
+  # The key is NOT in this file; cline will persist the -k value into it.
+  NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  printf '{\n  "version": 1,\n  "lastUsedProvider": "openrouter",\n  "modes": {},\n  "providers": {\n    "openrouter": {\n      "settings": {"provider": "openrouter", "model": "%s"},\n      "updatedAt": "%s",\n      "tokenSource": "manual"\n    }\n  }\n}\n' "$MODEL" "$NOW" > "$STATE/$ID.cline-providers.json"
+
+  # Resolve OpenRouter key from firstmate's environment (TOKENS-first per
+  # fm-openrouter-quota.sh convention). Never print or log the value.
+  OR_KEY=${OPENROUTER_API_KEY_TOKENS:-}
+  [ -n "$OR_KEY" ] || OR_KEY=${OPENROUTER_API_KEY:-}
+  case "$OR_KEY" in
+    ''|*$'\n'*|*$'\r'*) echo "error: provider openrouter needs an OpenRouter API key in the environment (OPENROUTER_API_KEY_TOKENS preferred, OPENROUTER_API_KEY fallback); refusing to launch a crewmate that would stall on its first request" >&2; exit 1 ;;
+  esac
+
+  # Silently inject the key into the pane shell via armed read (no scrollback).
+  spawn_send_text_line "$T" "printf 'FM_OPENROUTER_KEY_ARMED\n'; IFS= read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY"
+  # Poll until the armed marker appears in the pane (bounded).
+  for _ in $(seq 1 "${FM_OR_KEY_POLLS:-40}"); do
+    if fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null | grep -q 'FM_OPENROUTER_KEY_ARMED'; then
+      break
+    fi
+    sleep 0.25
+  done
+  sleep 0.3
+  # Send the literal key (read -rs consumes it without echo) + Enter.
+  spawn_send_literal "$T" "$OR_KEY"
+  spawn_send_key "$T" Enter
+  sleep 0.2
+fi
+
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
