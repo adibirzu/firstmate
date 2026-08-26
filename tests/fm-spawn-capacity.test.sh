@@ -165,6 +165,46 @@ run_spawn() {
     "$SPAWN" "$@" 2>&1
 }
 
+run_spawn_relative() {
+  local home=$1 wt=$2 fakebin=$3
+  shift 3
+  local -a envs=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  [ "${1:-}" = "--" ] && shift
+  (
+    cd "$ROOT"
+    env FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_TREEHOUSE_WT="$wt" \
+      TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' GROK_HOME="$home/grok-home" \
+      FM_FAKE_TMUX_LOG="$home/tmux.log" FM_FAKE_TREEHOUSE_LOG="$home/treehouse.log" \
+      PATH="$fakebin:$PATH" "${envs[@]+"${envs[@]}"}" \
+      bin/fm-spawn.sh "$@"
+  ) 2>&1
+}
+
+run_capacity_retry() {
+  local home=$1 wt=$2 fakebin=$3
+  shift 3
+  local -a envs=()
+  while [ "$#" -gt 0 ]; do
+    envs+=("$1")
+    shift
+  done
+  env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_FAKE_PANE_PATH="$wt" FM_FAKE_TREEHOUSE_WT="$wt" TMUX="fake,1,0" \
+    CLAUDE_CONFIG_DIR='' GROK_HOME="$home/grok-home" \
+    FM_FAKE_TMUX_LOG="$home/tmux.log" FM_FAKE_TREEHOUSE_LOG="$home/treehouse.log" \
+    PATH="$fakebin:$PATH" "${envs[@]+"${envs[@]}"}" \
+    "$ROOT/bin/fm-capacity-retry.sh" 2>&1
+}
+
 # --- every spawn path refuses under saturation ------------------------------
 
 test_crewmate_spawn_refuses_when_saturated() {
@@ -550,7 +590,7 @@ test_capacity_report_shows_the_numbers_without_failing() {
 }
 
 test_spawn_capacity_queue_pauses_and_retries() {
-  local rec id out status retry_out retry_status
+  local rec id out status retry_out retry_status queue_file
   id=capacity-queue-test-1
   rec=$(make_case capacity-queue-case "$id")
   read_case_record "$rec"
@@ -560,18 +600,45 @@ test_spawn_capacity_queue_pauses_and_retries() {
   expect_code 1 "$status" "saturated spawn must exit 1"
   [ -f "$HOME_DIR/state/$id.status" ] || fail "status file must be created"
   assert_contains "$(cat "$HOME_DIR/state/$id.status")" "paused: capacity" "status must record paused: capacity"
-  [ -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command must be queued in capacity-queue"
+  queue_file=$(printf '%s\n' "$HOME_DIR/state/capacity-queue"/*.cmd)
+  [ -f "$queue_file" ] || fail "command must be queued in capacity-queue"
 
-  retry_out=$(env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" "${SATURATED[@]}" "$ROOT/bin/fm-capacity-retry.sh" 2>&1)
+  retry_out=$(run_capacity_retry "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}")
   retry_status=$?
   expect_code 0 "$retry_status" "retry on saturated machine exits 0 without failure: $retry_out"
-  [ -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command must remain queued while saturated"
+  [ -f "$queue_file" ] || fail "command must remain queued while saturated"
 
-  retry_out=$(env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 "$ROOT/bin/fm-capacity-retry.sh" 2>&1)
+  retry_out=$(run_capacity_retry "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}")
   retry_status=$?
   expect_code 0 "$retry_status" "retry with headroom exits 0: $retry_out"
-  [ ! -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command file must be removed after successful retry"
+  [ ! -f "$queue_file" ] || fail "command file must be removed after successful retry"
   pass "spawn-capacity queue: pauses with paused: capacity and auto-retries when headroom returns"
+}
+
+test_capacity_retry_uses_canonical_command_and_fifo_order() {
+  local rec first second out status retry_out first_pos second_pos
+  first=capacity-z-first
+  second=capacity-a-second
+  rec=$(make_case capacity-fifo-case "$first" "$second")
+  read_case_record "$rec"
+
+  out=$(run_spawn_relative "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$first" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "first saturated spawn must be queued"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$second" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "second saturated spawn must be queued"
+
+  retry_out=$(cd "$WT_DIR" && run_capacity_retry "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}")
+  first_pos=$(printf '%s\n' "$retry_out" | grep -n "retrying spawn for $first" | cut -d: -f1)
+  second_pos=$(printf '%s\n' "$retry_out" | grep -n "retrying spawn for $second" | cut -d: -f1)
+  [ -n "$first_pos" ] && [ -n "$second_pos" ] && [ "$first_pos" -lt "$second_pos" ] \
+    || fail "capacity retries were not FIFO: $retry_out"
+  [ -f "$HOME_DIR/state/$first.meta" ] && [ -f "$HOME_DIR/state/$second.meta" ] \
+    || fail "capacity retries did not launch every queued task: $retry_out"
+  ! compgen -G "$HOME_DIR/state/capacity-queue/*.cmd" >/dev/null \
+    || fail "successful FIFO retries must drain the queue"
+  pass "spawn-capacity queue: retries canonical commands in FIFO order"
 }
 
 test_crewmate_spawn_refuses_when_saturated
@@ -594,3 +661,4 @@ test_fleet_probe_counts_interpreter_launched_harnesses
 test_fleet_probe_reports_unknown_when_processes_cannot_be_read
 test_capacity_report_shows_the_numbers_without_failing
 test_spawn_capacity_queue_pauses_and_retries
+test_capacity_retry_uses_canonical_command_and_fifo_order

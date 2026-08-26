@@ -36,8 +36,6 @@ fi
 
 for cmd_file in "${cmd_files[@]}"; do
   [ -f "$cmd_file" ] || continue
-  task=$(basename "$cmd_file")
-  task="${task%.cmd}"
 
   args=()
   while IFS= read -r -d '' arg; do
@@ -45,6 +43,7 @@ for cmd_file in "${cmd_files[@]}"; do
   done < "$cmd_file"
 
   [ "${#args[@]}" -gt 0 ] || { rm -f "$cmd_file"; continue; }
+  task=${args[1]:-unknown}
 
   # Re-evaluate capacity before each attempt: each spawn takes resources.
   if ! fm_capacity_evaluate "$CONFIG"; then
