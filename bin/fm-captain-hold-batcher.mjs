@@ -76,12 +76,12 @@ export function renderHtml(data, today) {
       <h3 class="card-title">${escTitle}</h3>
     </div>
     <div class="card-hold">${escHold}</div>
-    <form class="btn-row" data-lavish-question="${escId}" onsubmit="return false;">
-      <button type="button" class="btn btn-accept" onclick="submitChoice('${escId}', '${escTitle}', 'Accept', 'release')">Accept</button>
-      <button type="button" class="btn btn-reject" onclick="submitChoice('${escId}', '${escTitle}', 'Reject', 'done')">Reject</button>
-      <button type="button" class="btn btn-defer"  onclick="submitChoice('${escId}', '${escTitle}', 'Defer', 'done')">Defer</button>
+    <div class="btn-row" data-lavish-question="${escId}" data-lavish-title="${escTitle}">
+      <button type="button" class="btn btn-accept" data-choice="Accept" data-close-mode="release">Accept</button>
+      <button type="button" class="btn btn-reject" data-choice="Reject" data-close-mode="done">Reject</button>
+      <button type="button" class="btn btn-defer" data-choice="Defer" data-close-mode="done">Defer</button>
       <span class="status-msg" id="status-${escId}"></span>
-    </form>
+    </div>
   </div>`;
     }
 
@@ -180,6 +180,14 @@ function submitChoice(id, title, choice, closeMode) {
   if (status) status.textContent = "✓ " + choice + " queued";
   if (card) card.classList.add("is-answered");
 }
+
+document.querySelectorAll(".btn-row button").forEach(function(button) {
+  button.addEventListener("click", function() {
+    var row = button.parentElement;
+    if (!row) return;
+    submitChoice(row.dataset.lavishQuestion, row.dataset.lavishTitle, button.dataset.choice, button.dataset.closeMode);
+  });
+});
 </script>
 </body>
 </html>`;

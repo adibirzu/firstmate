@@ -1459,6 +1459,7 @@ test_opencode_watch_arm_coordinator_respects_primary_scope() {
   fm_git_worktree "$base" "$repo" fm/opencode-coordinator
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   : > "$repo/AGENTS.md"
+  printf 'secondmate-home\n' > "$home/.fm-secondmate-home"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash

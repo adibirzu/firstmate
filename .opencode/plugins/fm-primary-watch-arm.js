@@ -104,10 +104,10 @@ function hasSecondmateMarker(dir) {
   }
 }
 
-async function isPrimaryRoot(root, home) {
+async function isPrimaryRoot(root) {
   if (!root) return false;
   if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
-  if (hasSecondmateMarker(root) || (home && hasSecondmateMarker(home))) return true;
+  if (hasSecondmateMarker(root)) return true;
   const gitDir = await runProcess("git", ["-C", root, "rev-parse", "--git-dir"]);
   const commonDir = await runProcess("git", ["-C", root, "rev-parse", "--git-common-dir"]);
   if (gitDir.code !== 0 || commonDir.code !== 0) return false;
@@ -458,7 +458,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
 
 async function beginArm(paths, sessionID, client, predecessorArmPid) {
   if (!sessionID) return { status: "skipped", armChild: null };
-  if (!(await isPrimaryRoot(paths.root, paths.home))) return { status: "not-primary", armChild: null };
+  if (!(await isPrimaryRoot(paths.root))) return { status: "not-primary", armChild: null };
   if (!(await sessionOwnsLock(paths))) return { status: "read-only", armChild: null };
   if (child) return { status: "existing", armChild: child };
   if (retryTimer) return { status: "retrying", armChild: null };
