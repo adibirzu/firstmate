@@ -231,19 +231,22 @@ hash_pane() {
 # verdict returns 0: idle, unknown, and dead all return 1, so a converted
 # adapter whose semantic state is missing, malformed, stale, or unverified is
 # treated as not-provably-working and surfaces rather than being absorbed.
-# <tail40> is the same bounded capture already read for hashing and is
-# consumed only by the Grok-scoped fallback inside the contract.
+# <tail40> is the same bounded capture already read for hashing and is consumed
+# by the contract's scoped rendered fallback paths.
 window_is_busy() {  # <window> <tail40>
-  local w=$1 tail40=$2 task meta verdict
+  local w=$1 tail40=$2 backend harness task meta verdict state
+  backend=$(window_backend "$w")
+  harness=$(window_harness "$w")
   task=$(window_to_task "$w" "$STATE")
   meta="$STATE/$task.meta"
+
   if [ -n "$task" ] && [ -f "$meta" ]; then
     verdict=$(fm_busy_classify_meta "$meta" "$task" "$STATE" "$tail40")
   else
-    verdict=$(fm_busy_classify "$(window_backend "$w")" "$w" "$(window_harness "$w")" \
-      "${task:-unknown}" "$STATE" "$tail40")
+    verdict=$(fm_busy_classify "$backend" "$w" "$harness" "${task:-unknown}" "$STATE" "$tail40")
   fi
-  [ "${verdict%% *}" = busy ]
+  state=${verdict%% *}
+  [ "$state" = busy ]
 }
 
 window_kind() {
@@ -670,12 +673,13 @@ pause_state_class() {  # <window> <task>
   # far more common no-declaration path above still costs none.
   kind=$(window_kind "$win")
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
-    # A live agent under a declared pause is healthy, not a wedge.
-    # A genuinely busy crew remains distinct through crew_absorb_class.
-    if [ "$(crew_absorb_class "$task")" = working ]; then
-      rm -f "$recheck_file"
-      printf 'working'
-      return
+    if [ "$kind" != secondmate ]; then
+      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+      if [ "$agent_alive" != dead ]; then
+        rm -f "$recheck_file"
+        printf 'none'
+        return
+      fi
     fi
     printf 'paused'
     return
@@ -686,9 +690,7 @@ pause_state_class() {  # <window> <task>
     printf 'working'
     return
   fi
-  # The first sight of a declared pause must surface once, so a live crew at an
-  # active decision gate is not hidden before the pause cadence begins.
-  if [ ! -e "$STATE/.paused-$key" ] && [ "$kind" != secondmate ]; then
+  if [ "$kind" != secondmate ]; then
     agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
       rm -f "$recheck_file"
@@ -696,10 +698,20 @@ pause_state_class() {  # <window> <task>
       return
     fi
   fi
-  # Once surfaced, a declared pause stays on its bounded recheck cadence rather
-  # than repeatedly degrading into a generic stale wake.
-  date +%s > "$recheck_file"
-  printf 'paused'
+  # Recover paused classification for a declared wait that authoritative crew state
+  # could not name. Reaching here already proves the only two admissible cases: an
+  # ordinary crew whose agent the gate above confirmed dead, so no live decision gate
+  # is being silenced, or a secondmate, whose endpoint liveness is deliberately never
+  # read and so cannot supply that confirmation. Without the mate case a mate's
+  # captain hold - which has no current-state mapping and so arrives as `none` -
+  # would be silenced by every caller rather than taking the bounded re-surface
+  # cadence, and a forgotten hold would rot invisibly.
+  [ "$class" = none ] && class=paused
+  case "$class" in
+    paused) date +%s > "$recheck_file" ;;
+    *) rm -f "$recheck_file" ;;
+  esac
+  printf '%s' "$class"
 }
 
 surface_nonterminal_stale() {  # <window> <hash>
@@ -749,6 +761,27 @@ scan_signals() {
       printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
     fi
   done
+  return 0
+}
+
+apply_model_fallback_for_status() {  # <status-file>
+  local status_file=$1 task fallback_bin rc
+  case "$status_file" in "$STATE"/*.status) ;; *) return 0 ;; esac
+  [ -f "$status_file" ] && [ ! -L "$status_file" ] || return 0
+  task=$(basename "$status_file" .status)
+  [ -f "$STATE/$task.meta" ] && [ ! -L "$STATE/$task.meta" ] || return 0
+  fallback_bin=${FM_MODEL_FALLBACK_BIN:-$SCRIPT_DIR/fm-model-fallback.sh}
+  [ -x "$fallback_bin" ] || { triage_log "model fallback helper is unavailable: $fallback_bin"; return 0; }
+  if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$fallback_bin" "$task" apply >/dev/null 2>&1; then
+    triage_log "applied automatic model fallback for $task"
+    return 0
+  fi
+  rc=$?
+  case "$rc" in
+    1) return 0 ;;
+    3) triage_log "automatic model fallback exhausted for $task" ;;
+    *) triage_log "automatic model fallback failed for $task (exit $rc)" ;;
+  esac
   return 0
 }
 
@@ -1089,18 +1122,6 @@ if ! fm_pr_poll_retirement_recover_all "$STATE" "$SCRIPT_DIR/fm-pr-poll.sh"; the
   wake "$reason"
 fi
 
-# Shared by both the first-notification and already-notified paths below so
-# the retirement sequence (bin/fm-pr-lib.sh) is stated once.
-retire_merged_pr_poll() {  # <id>
-  local id=$1
-  if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
-    fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
-      || triage_log "merged PR poll retirement remains recoverable for $id"
-  else
-    triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
-  fi
-}
-
 resurface_after_downtime() {
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
@@ -1221,27 +1242,14 @@ while :; do
       fi
       if [ -n "$out" ]; then
         reason="check: $c: $out"
-        if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ] \
-          && fm_pr_poll_merge_already_notified "$STATE" "$id" \
-            "$provider" "$host" "$path" "$number"; then
-          # This exact merge was already surfaced to main once for this task
-          # (fm_pr_poll_merge_mark_notified below records that at first
-          # notification, and it survives a later re-registered poll for the
-          # same, already-merged task - bin/fm-pr-lib.sh owns why). A repeat
-          # identical detection is a no-op, not captain-facing progress
-          # (AGENTS.md section 8): absorb it rather than enqueue another
-          # main-blocking row, but still retire the poll so it stops firing.
-          retire_merged_pr_poll "$id"
-          triage_log "absorbed duplicate merged PR poll result for $id"
-          touch "$STATE/.last-check"
-          continue
-        fi
         fm_wake_append check "$c" "$reason" || exit 1
         if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
-          fm_pr_poll_merge_mark_notified "$STATE" "$id" \
-            "$provider" "$host" "$path" "$number" \
-            || triage_log "merge notification receipt could not be recorded for $id"
-          retire_merged_pr_poll "$id"
+          if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" "$out"; then
+            fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
+              || triage_log "merged PR poll retirement remains recoverable for $id"
+          else
+            triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
+          fi
         fi
         touch "$STATE/.last-check"
         wake "$reason"
@@ -1269,6 +1277,12 @@ while :; do
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
       case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+    done <<EOF
+$pending
+EOF
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      apply_model_fallback_for_status "$f"
     done <<EOF
 $pending
 EOF

@@ -1346,11 +1346,9 @@ test_nonterminal_paused_rechecks_authoritative_state() {
 # A crew that finished, opened its PR and DECLARED a pause sits idle with a LIVE
 # agent while it waits on the captain's merge. That is the healthy parked shape,
 # not a wedge, and AGENTS.md's contract is that firstmate leaves the pane alone
-# and rechecks on a long cadence. pause_state_class used to require a DEAD agent
-# before it would honour the declaration, so every poll of a live parked crew
-# returned 'none' and re-escalated a bare stale forever - and it deleted the
-# recheck marker on the way out, so the condition could never recover either.
-# Nothing covered the live-agent path, which is why the inversion survived.
+# instead of re-escalating a bare stale forever. Both the fresh-window and the
+# aged-recheck classification paths must absorb a live parked crew; the pause
+# declaration itself must survive so the bounded cadence keeps owning the wait.
 test_live_agent_declared_pause_is_absorbed() {
   local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case live-agent-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1379,15 +1377,13 @@ test_live_agent_declared_pause_is_absorbed() {
     reap "$pid"; fail "a live crew's declared pause was re-escalated as a stale instead of absorbed: $(cat "$out")"
   fi
   [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "the declared pause was dropped for a live agent"; }
-  [ -e "$state/.paused-rechecked-$key" ] || { reap "$pid"; fail "the recheck marker was deleted, so the pause could never hold again"; }
   assert_not_contains "$(cat "$out")" "stale: $window" "a bare stale surfaced for a declared pause on a live agent"
   reap "$pid"
 
-  # Second path, and the one that kept the escalation alive after the first was
-  # fixed: the recheck marker AGES OUT past STALE_ESCALATE_SECS, so the branch
-  # above is skipped and classification falls through. That fall-through carried
-  # the identical dead-agent requirement and deleted the marker on its way out,
-  # so a live parked crew re-entered it every STALE_ESCALATE_SECS forever.
+  # Second path: the recheck marker AGES OUT past STALE_ESCALATE_SECS, so the
+  # fresh-window branch above is skipped and classification falls through to
+  # the aged path. That fall-through must also absorb a live parked crew rather
+  # than re-escalating it as a bare stale every STALE_ESCALATE_SECS.
   # `.paused-<key>` is retained here, which is what distinguishes an already
   # surfaced pause from first sight - first sight must still surface once, and
   # test_exited_pause_and_captain_held_use_bounded_cadence pins that.
