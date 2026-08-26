@@ -1317,7 +1317,7 @@ EOF
   [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
     # Heartbeat jobs: done sweeper, spawn-capacity retry, and daily captain-hold batcher.
-    "$SCRIPT_DIR/fm-done-sweeper.sh" 5 >/dev/null 2>&1 || true
+    "$SCRIPT_DIR/fm-done-sweeper.sh" >/dev/null 2>&1 || true
     "$SCRIPT_DIR/fm-capacity-retry.sh" >/dev/null 2>&1 || true
     "$SCRIPT_DIR/fm-captain-hold-batcher.sh" build --daily >/dev/null 2>&1 || true
 

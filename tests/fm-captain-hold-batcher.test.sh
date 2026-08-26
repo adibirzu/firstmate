@@ -49,10 +49,11 @@ SAMPLE_BACKLOG='
 # --- Test 2: Build generates Lavish HTML digest with Accept/Reject/Defer ---
 {
   dir="$TMP_ROOT/test-build"
-  mkdir -p "$dir/data" "$dir/state"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
   printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
 
-  out=$(FM_HOME="$dir" "$BATCHER" build --force 2>&1)
+  out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --force 2>&1)
   html="$dir/.lavish/captain-hold-digest.html"
   [ -f "$html" ] || fail "digest HTML should exist at $html: $out"
 
@@ -73,23 +74,50 @@ SAMPLE_BACKLOG='
 # --- Test 3: Status reports accurately and --daily gates execution ---
 {
   dir="$TMP_ROOT/test-daily-gate"
-  mkdir -p "$dir/data" "$dir/state"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
   printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
 
-  status_out=$(FM_HOME="$dir" "$BATCHER" status)
+  status_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" status)
   assert_contains "$status_out" "status: pending" "initial status is pending"
 
   # Run build
-  FM_HOME="$dir" "$BATCHER" build --force >/dev/null
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --force >/dev/null
 
-  status_out=$(FM_HOME="$dir" "$BATCHER" status)
+  status_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" status)
   assert_contains "$status_out" "status: ran-today" "status after run is ran-today"
 
   # Second build with --daily should skip
-  daily_out=$(FM_HOME="$dir" "$BATCHER" build --daily)
+  daily_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily)
   assert_contains "$daily_out" "already generated" "--daily skips when already run"
 
   pass "captain-hold-batcher: respects daily cadence marker and reports status"
+}
+
+# --- Test 4: Daily marker is written only after keyed-answer arming succeeds ---
+{
+  dir="$TMP_ROOT/test-arm-retry"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
+  printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  cat > "$dir/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/fakebin/lavish-axi"
+
+  if PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily >/dev/null 2>&1; then
+    fail "batcher should fail when Lavish session setup fails"
+  fi
+  [ ! -e "$dir/state/.last-captain-hold-digest" ] \
+    || fail "failed arming must not record the daily marker"
+
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily >/dev/null \
+    || fail "batcher should retry and arm after Lavish recovers"
+  [ -f "$dir/state/.last-captain-hold-digest" ] \
+    || fail "successful arming must record the daily marker"
+
+  pass "captain-hold-batcher: retries daily arming after a failed setup"
 }
 
 printf 'All fm-captain-hold-batcher tests passed.\n'
