@@ -180,6 +180,20 @@ shell_quote() {
 }
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
+INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
+
+# The receive-and-ack half of the steering-inbox contract, included in every
+# scaffold kind. The record format, doorbell line, and re-ring ladder are
+# owned by bin/fm-task-inbox-lib.sh; the doorbell itself is self-describing,
+# so this section is reinforcement for the natural-checkpoint habit, not the
+# only carrier of the instruction.
+IFS= read -r -d '' INBOX_SECTION <<EOF || true
+# Firstmate instruction inbox
+Firstmate steers you through durable message files in $INBOX_DIR.
+When a terminal message says an instruction is waiting there - and at any natural checkpoint when you are unsure - list $INBOX_DIR/*.msg, read and act on each message in numeric order, then acknowledge each handled message by moving it: \`mv $INBOX_DIR/NNN.msg $INBOX_DIR/handled/\`.
+The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
+EOF
+INBOX_SECTION=${INBOX_SECTION%$'\n'}
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -365,6 +379,8 @@ $GRAPH_FIRST_SECTION
 $RULE_NO_PROMPT
 $RULE_NO_POLL
 
+$INBOX_SECTION
+
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
@@ -486,6 +502,8 @@ $RULE1
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 $RULE_NO_PROMPT
 $RULE_NO_POLL
+
+$INBOX_SECTION
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

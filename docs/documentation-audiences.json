@@ -285,6 +285,10 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/watched-tools.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/quota-overrides.json",
       "audience": "operator-example"
     },

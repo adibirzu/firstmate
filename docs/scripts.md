@@ -24,7 +24,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-job-worker.sh` | Long-lived remote queue worker for tracked `fm-*.sh` commands in the account runtime |
 | `fm-remote-job-reap-orphans.sh` | Stop remote job workers left running by a pruned code root, never one whose checkout still exists |
 | `fm-remote-doctor.sh`    | Check, and with `--fix` repair, one remote account's second-mate readiness (remote job worker, Herdr, Aqua launch agents, PATH, and required tools) |
-| `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
+| `fm-backlog-handoff.sh`  | Move queued backlog items into a secondmate home and durably wake its recorded receiver |
 | `fm-handoff-doc.sh`      | Publish, discover, show, and fetch session handoff documents and optional ref bundles |
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record his answers, and gate investigation completion |
@@ -128,8 +128,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-x-dismiss.sh`        | Dismiss a skipped Relay mention at the relay without replying                        |
 | `fm-x-link.sh`           | Link a spawned task to its originating Relay mention in task meta                    |
 | `fm-x-followup.sh`       | Detect, post, and cap completion follow-ups for a Relay-linked task                  |
-| `fm-public-followup-lib.sh` | Shared relay-activation gate, O(1) presence checks, and private transport paths for promised public replies |
-| `fm-public-followup.sh`  | Reconcile typed terminal work results into a public commitment and deliver its final reply once |
+| `fm-public-followup-lib.sh` | Shared Relay gate, open-loop registry state, expiry classification, locking, and private transport paths |
+| `fm-public-followup.sh`  | Reconcile and deliver typed public commitments, then rechain or explicitly retire their retained loops |
 | `fm-public-followup-emit.sh` | Report one typed terminal work result into the home that owes the public reply    |
 | `fm-fleet.sh`            | Federated multi-operator coordination CLI over the shared fleet KB, plus per-surface quota, models, and picker verbs (docs/fleet-quickstart.md) |
 | `fm-fleet-lib.sh`        | Shared federation KB helpers: atomic claim/lock, routing, usability guards, operator lifecycle |
@@ -146,3 +146,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `quota-cursor-usage.sh`  | Authed Cursor headroom reader via the CLI's own stored access token                  |
 | `quota-sources/copilot.sh` | Copilot surface row for `fm-fleet.sh quota`, superseding the stale native probe    |
 | `quota-sources/cursor.sh`  | Cursor surface row for `fm-fleet.sh quota` from an operator-supplied authed reader |
+| `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note, dictate one, read status, ask a side question |
+| `fm-voice-relay.py`      | Hold the spoken conversation on this host, answer from the records, and hand real work to `fm-inbox.sh` ([voice-relay.md](voice-relay.md)) |
+| `fm-voice-client.py`     | The laptop end of the spoken interface: capture, playback, and turn timing over SSH; audio devices unverified |
+| `fm_voice_frame.py`      | The wire format both machines share, copied to the laptop beside the client          |
+| `fm_voice_records.py`    | What a spoken answer may read, and the handover that queues real work                |

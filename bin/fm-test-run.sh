@@ -201,8 +201,9 @@ family_for_basename() {
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
     fm-tmux-agent-liveness.test.sh|\
-    fm-herdr-session-cleanup.test.sh|fm-send-strict.test.sh|fm-spawn-batch.test.sh|\
-    fm-spawn-capacity.test.sh|\
+    fm-control.test.sh|fm-control-relaunch.test.sh|\
+    fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
+    fm-send-inbox.test.sh|fm-spawn-batch.test.sh|fm-spawn-capacity.test.sh|\
     fm-spawn-dispatch-profile.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
@@ -982,6 +983,14 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' secondmate
       printf '%s\n' real-herdr-gated
+      ;;
+    bin/fm-task-inbox-lib.sh)
+      # The steering-inbox record/doorbell/ladder owner: fm-send's data plane
+      # (backend-dispatch), the watcher's re-ring check (watcher-wake-lock),
+      # and the live doorbell guard against real harnesses.
+      printf '%s\n' backend-dispatch
+      printf '%s\n' watcher-wake-lock
+      printf '%s\n' live-harness-optin
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh)
       printf '%s\n' snapshot-bearings

@@ -1011,6 +1011,15 @@ fi
 ID=${POS[0]:-}
 [ -n "$ID" ] || { echo "error: missing task id" >&2; exit 2; }
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+# Role partition: spawning NEW work is MAIN-owned. A relaunch of an existing
+# task is legitimate branch recovery (fm-control drives it through this same
+# entrypoint), so only a fresh spawn refuses the branch actor (contract:
+# bin/fm-lease-lib.sh; no-op in homes without a branch actor).
+# shellcheck source=bin/fm-lease-lib.sh
+. "$SCRIPT_DIR/fm-lease-lib.sh"
+if [ "$RELAUNCH" -ne 1 ]; then
+  fm_lease_forbid_branch "new-task spawn (fm-spawn)"
+fi
 # Machine-capacity guard (bin/fm-capacity-lib.sh). Every kind of direct report -
 # crewmate, scout, and secondmate - passes through here, in every home, so this
 # one call is the whole fleet's admission control. It runs before the task lock
