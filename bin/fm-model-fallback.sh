@@ -136,6 +136,16 @@ native_provider_of() {  # <harness>
   esac
 }
 
+# NO-telemetry harnesses have no subscription window or quota telemetry in
+# quota-axi (e.g. opencode, grok, cline, pi). They rely on direct evidence
+# matching (429/limit/quota) rather than provider-level cooldown records.
+is_no_telemetry_harness() {  # <harness>
+  case "$1" in
+    claude|codex|cursor|agy) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # --- configuration ----------------------------------------------------------
 
 DISPATCH_CONFIG="$CONFIG/crew-dispatch.json"
@@ -195,6 +205,15 @@ fi
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')
+
+if [ -n "$EVIDENCE_TEXT" ] && is_no_telemetry_harness "$HARNESS" \
+  && printf '%s' "$EVIDENCE_TEXT" | grep -Eqi '429|limit|quota'; then
+  CLASSIFICATION="classification=depleted"
+  SIGNATURE="429-limit-quota"
+  log "NO-telemetry harness $HARNESS matched 429/limit/quota in evidence; rotating model/lane-hopping"
+  printf 'fm-model-fallback: rotated on 429/limit/quota for NO-telemetry harness %s (task %s)\n' "$HARNESS" "$ID" >&2
+fi
+
 case "$CLASSIFICATION" in
   classification=depleted*) ;;
   *)
@@ -207,7 +226,7 @@ case "$CLASSIFICATION" in
     exit 0
     ;;
 esac
-SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
+[ -n "${SIGNATURE:-}" ] || SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
 
 advance_fallback_cursor() {
   local cursor_end=$1 new_cursor_line lock update_ok

@@ -669,4 +669,45 @@ run_classify() {  # <text>
   pass "over the real handoff path, fallback preserves the worktree and work while stepping the model down"
 }
 
+{
+  OPENCODE_4MODEL_CONFIG='{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high"],"opencode":["opencode/x-preview-f-free","opencode/big-pickle","opencode/hy3-free","opencode/mimo-v2.5-free"]},"fallbackLanes":["agy","opencode","grok","codex"]}'
+  setup_case no-telemetry-plan opencode-p1 "$OPENCODE_4MODEL_CONFIG" "working: API error 429 quota reached on provider"
+  fm_write_meta "$CASE_HOME/state/opencode-p1.meta" \
+    "window=firstmate:fm-opencode-p1" \
+    "endpoint_task_id=opencode-p1" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=opencode" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=opencode/x-preview-f-free"
+  out=$("$FALLBACK" opencode-p1 plan 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "no-telemetry plan should succeed on 429/quota, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "no-telemetry plan steps to next model on 429"
+  assert_contains "$out" "to_model=opencode/big-pickle" "steps to second model in 4-model chain"
+  assert_contains "$out" "rotated on 429/limit/quota for NO-telemetry harness opencode" "logs visibly on 429"
+  pass "no-telemetry harness rotates on 429/limit/quota with visible logging"
+}
+
+{
+  LANE_HOP_CONFIG='{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high"],"opencode":["opencode/mimo-v2.5-free"]},"fallbackLanes":["agy","opencode","grok","codex"]}'
+  setup_case lane-hop-opencode-grok hop-p1 "$LANE_HOP_CONFIG" "working: rate limit exceeded on model"
+  fm_write_meta "$CASE_HOME/state/hop-p1.meta" \
+    "window=firstmate:fm-hop-p1" \
+    "endpoint_task_id=hop-p1" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=opencode" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=opencode/mimo-v2.5-free"
+  out=$("$FALLBACK" hop-p1 plan 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "lane-hop plan should succeed, rc=$rc: $out"
+  assert_contains "$out" "action=lane-move" "tail of opencode chain moves lane"
+  assert_contains "$out" "to_harness=grok" "lane-hops from opencode to grok"
+  pass "lane-hop advances agy -> opencode -> grok -> codex"
+}
+
 printf 'All fm-model-fallback tests passed.\n'

@@ -1496,6 +1496,54 @@ EOF
   pass "OpenCode watcher coordinator respects primary scope"
 }
 
+test_opencode_watch_arm_coordinator_accepts_secondmate_linked_worktree() {
+  local plugin base repo home log out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  base="$TMP_ROOT/opencode-sm-coordinator-base"
+  repo="$TMP_ROOT/opencode-sm-coordinator-wt"
+  home="$TMP_ROOT/opencode-sm-coordinator-home"
+  log="$TMP_ROOT/opencode-sm-coordinator.log"
+  fm_git_worktree "$base" "$repo" fm/opencode-sm-coordinator
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  printf 'sm-coordinator-test\n' > "$repo/.fm-secondmate-home"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+printf 'watcher: healthy pid=1 (beacon 0s)\n'
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" node 2>&1 <<'EOF'
+import { existsSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const client = { session: { promptAsync: async () => {} } };
+await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const status = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+await new Promise((resolve) => setTimeout(resolve, 120));
+if (status === "not-primary") {
+  console.error(`expected armed/healthy, got ${status}`);
+  process.exit(1);
+}
+if (!existsSync(process.env.FM_ARM_LOG)) {
+  console.error("coordinator did not arm for secondmate linked worktree");
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode watch coordinator must accept linked worktrees with .fm-secondmate-home marker"
+  [ -z "$out" ] || fail "OpenCode coordinator secondmate-scope test printed output: $out"
+  pass "OpenCode watcher coordinator accepts secondmate linked worktrees"
+}
+
 test_opencode_primary_watch_plugin_rearms_after_wake() {
   local plugin repo home log stop out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -2266,6 +2314,7 @@ test_opencode_primary_watch_plugin_uses_effective_state_home
 test_opencode_primary_watch_plugin_sources_effective_config
 test_opencode_primary_watch_plugin_requires_session_lock
 test_opencode_watch_arm_coordinator_respects_primary_scope
+test_opencode_watch_arm_coordinator_accepts_secondmate_linked_worktree
 test_opencode_primary_watch_plugin_rearms_after_wake
 test_opencode_pre_ready_actionable_close_preserves_its_successor
 test_opencode_hung_successor_falls_back_to_typed_wake

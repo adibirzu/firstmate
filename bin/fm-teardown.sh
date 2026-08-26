@@ -856,7 +856,7 @@ pr_is_merged() {
   head=${view#*$'\t'}
   [ "$state" != "$view" ] || return 1
   case "$state" in
-    MERGED|merged) ;;
+    MERGED|merged|CLOSED|closed) ;;
     *) return 1 ;;
   esac
   [ -n "$head" ] || return 1
