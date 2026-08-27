@@ -641,6 +641,32 @@ test_capacity_retry_uses_canonical_command_and_fifo_order() {
   pass "spawn-capacity queue: retries canonical commands in FIFO order"
 }
 
+test_capacity_queue_preserves_existing_and_deduplicates_tasks() {
+  local rec existing queued out status queue_count paused_count
+  existing=capacity-existing-task
+  queued=capacity-duplicate-task
+  rec=$(make_case capacity-queue-ownership "$existing" "$queued")
+  read_case_record "$rec"
+  printf 'window=firstmate:fm-%s\n' "$existing" > "$HOME_DIR/state/$existing.meta"
+  printf 'working: active\n' > "$HOME_DIR/state/$existing.status"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$existing" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "capacity refusal must reject an existing task"
+  [ "$(cat "$HOME_DIR/state/$existing.status")" = "working: active" ] \
+    || fail "capacity refusal must not mutate an existing task status"
+  ! compgen -G "$HOME_DIR/state/capacity-queue/*-$existing.cmd" >/dev/null \
+    || fail "capacity refusal must not queue an existing task"
+
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$queued" "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null || true
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$queued" "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null || true
+  queue_count=$(compgen -G "$HOME_DIR/state/capacity-queue/*-$queued.cmd" | wc -l | tr -d '[:space:]')
+  paused_count=$(grep -c '^paused: capacity$' "$HOME_DIR/state/$queued.status")
+  [ "$queue_count" = 1 ] && [ "$paused_count" = 1 ] \
+    || fail "capacity queue must keep one original entry for a duplicated task"
+  pass "spawn-capacity queue: preserves existing tasks and deduplicates requests"
+}
+
 test_crewmate_spawn_refuses_when_saturated
 test_scout_spawn_refuses_when_saturated
 test_secondmate_spawn_refuses_when_saturated
@@ -662,3 +688,4 @@ test_fleet_probe_reports_unknown_when_processes_cannot_be_read
 test_capacity_report_shows_the_numbers_without_failing
 test_spawn_capacity_queue_pauses_and_retries
 test_capacity_retry_uses_canonical_command_and_fifo_order
+test_capacity_queue_preserves_existing_and_deduplicates_tasks

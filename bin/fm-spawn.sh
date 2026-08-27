@@ -1020,12 +1020,25 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # pair is admitted against the machine as the previous pair left it.
 if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
   mkdir -p "$STATE" "$STATE/capacity-queue"
-  printf 'paused: capacity\n' >> "$STATE/$ID.status"
+  if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+    echo "error: task $ID already exists; capacity refusal did not modify it" >&2
+    exit 1
+  fi
   queue_lock="$STATE/capacity-queue.lock"
   fm_lock_acquire_wait "$queue_lock" || {
     echo "error: could not lock capacity queue" >&2
     exit 1
   }
+  shopt -s nullglob
+  queued_for_task=("$STATE/capacity-queue"/*-"$ID".cmd)
+  shopt -u nullglob
+  [ ! -f "$STATE/capacity-queue/$ID.cmd" ] || queued_for_task+=("$STATE/capacity-queue/$ID.cmd")
+  if [ "${#queued_for_task[@]}" -gt 0 ]; then
+    fm_lock_release "$queue_lock" || true
+    echo "capacity: spawn for $ID is already queued" >&2
+    exit 1
+  fi
+  printf 'paused: capacity\n' >> "$STATE/$ID.status"
   queue_sequence_file="$STATE/capacity-queue/.sequence"
   queue_sequence=$(cat "$queue_sequence_file" 2>/dev/null || printf '0')
   case "$queue_sequence" in

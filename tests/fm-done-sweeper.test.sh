@@ -68,6 +68,25 @@ SH
   chmod +x "$dir/fm-teardown.sh"
 }
 
+create_local_only_worktree() {
+  local home=$1 id=$2 landed=$3 project worktree
+  project="$home/projects/project"
+  worktree="$home/projects/$id"
+  if [ ! -d "$project/.git" ]; then
+    git init -q -b main "$project"
+    printf 'base\n' > "$project/README.md"
+    git -C "$project" add README.md
+    git -C "$project" commit -qm base
+  fi
+  git -C "$project" worktree add -q -b "$id" "$worktree"
+  if [ "$landed" != 1 ]; then
+    printf '%s\n' "$id" >> "$worktree/README.md"
+    git -C "$worktree" add README.md
+    git -C "$worktree" commit -qm unlanded
+  fi
+  printf 'mode=local-only\nworktree=%s\nproject=%s\n' "$worktree" "$project" >> "$home/state/$id.meta"
+}
+
 # --- Test 1: Fewer than keepDone tasks => nothing swept ---
 {
   dir="$TMP_ROOT/test-below-limit"
@@ -80,6 +99,7 @@ SH
   farm="$dir/bin"
   mkdir -p "$farm"
   ln -sf "$ROOT/bin/fm-classify-lib.sh" "$farm/fm-classify-lib.sh"
+  ln -sf "$ROOT/bin/fm-landed-lib.sh" "$farm/fm-landed-lib.sh"
   make_fake_teardown "$farm"
 
   out=$(FM_HOME="$dir" FM_TEST_TEARDOWN_LOG="$log" FM_TEST_GH_STATE=MERGED "$SWEEPER" --keep 5 2>&1)
@@ -104,6 +124,7 @@ SH
   farm="$dir/bin"
   mkdir -p "$farm"
   ln -sf "$ROOT/bin/fm-classify-lib.sh" "$farm/fm-classify-lib.sh"
+  ln -sf "$ROOT/bin/fm-landed-lib.sh" "$farm/fm-landed-lib.sh"
   make_fake_teardown "$farm"
   cp "$SWEEPER" "$farm/fm-done-sweeper.sh"
   chmod +x "$farm/fm-done-sweeper.sh"
@@ -131,6 +152,7 @@ SH
   farm="$dir/bin"
   mkdir -p "$farm"
   ln -sf "$ROOT/bin/fm-classify-lib.sh" "$farm/fm-classify-lib.sh"
+  ln -sf "$ROOT/bin/fm-landed-lib.sh" "$farm/fm-landed-lib.sh"
   make_fake_teardown "$farm"
   cp "$SWEEPER" "$farm/fm-done-sweeper.sh"
 
@@ -150,6 +172,7 @@ SH
   farm="$dir/bin"
   mkdir -p "$farm"
   ln -sf "$ROOT/bin/fm-classify-lib.sh" "$farm/fm-classify-lib.sh"
+  ln -sf "$ROOT/bin/fm-landed-lib.sh" "$farm/fm-landed-lib.sh"
   make_fake_teardown "$farm"
   cp "$SWEEPER" "$farm/fm-done-sweeper.sh"
 
@@ -158,6 +181,30 @@ SH
   [ ! -f "$log" ] || fail "dry-run must not execute teardown"
   [ -f "$dir/state/task-1.meta" ] || fail "dry-run must preserve meta"
   pass "done-sweeper: --dry-run logs without tearing down"
+}
+
+# --- Test 5: Landed local-only tasks are swept, unlanded work is preserved ---
+{
+  dir="$TMP_ROOT/test-local-only"
+  setup_home "$dir"
+  create_task "$dir" "local-landed" "done" "" "ship" 20
+  create_task "$dir" "local-unlanded" "done" "" "ship" 10
+  create_local_only_worktree "$dir" "local-landed" 1
+  create_local_only_worktree "$dir" "local-unlanded" 0
+
+  log="$dir/teardown.log"
+  farm="$dir/bin"
+  mkdir -p "$farm"
+  ln -sf "$ROOT/bin/fm-classify-lib.sh" "$farm/fm-classify-lib.sh"
+  ln -sf "$ROOT/bin/fm-landed-lib.sh" "$farm/fm-landed-lib.sh"
+  make_fake_teardown "$farm"
+  cp "$SWEEPER" "$farm/fm-done-sweeper.sh"
+  chmod +x "$farm/fm-done-sweeper.sh"
+
+  FM_HOME="$dir" FM_TEST_TEARDOWN_LOG="$log" "$farm/fm-done-sweeper.sh" --keep 0 >/dev/null
+  assert_contains "$(cat "$log")" "local-landed" "landed local-only task should be swept"
+  [ -f "$dir/state/local-unlanded.meta" ] || fail "unlanded local-only task must be preserved"
+  pass "done-sweeper: sweeps landed local-only work and preserves unlanded work"
 }
 
 printf 'All fm-done-sweeper tests passed.\n'
