@@ -642,7 +642,7 @@ test_capacity_retry_uses_canonical_command_and_fifo_order() {
 }
 
 test_capacity_queue_preserves_existing_and_deduplicates_tasks() {
-  local rec existing queued out status queue_count paused_count
+  local rec existing queued claimed out status queue_count paused_count claimed_file
   existing=capacity-existing-task
   queued=capacity-duplicate-task
   rec=$(make_case capacity-queue-ownership "$existing" "$queued")
@@ -664,6 +664,19 @@ test_capacity_queue_preserves_existing_and_deduplicates_tasks() {
   paused_count=$(grep -c '^paused: capacity$' "$HOME_DIR/state/$queued.status")
   [ "$queue_count" = 1 ] && [ "$paused_count" = 1 ] \
     || fail "capacity queue must keep one original entry for a duplicated task"
+
+  claimed=capacity-inflight-task
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$claimed" "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null || true
+  claimed_file=$(compgen -G "$HOME_DIR/state/capacity-queue/*-$claimed.cmd")
+  mv "$claimed_file" "$claimed_file.inflight"
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$claimed" "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null || true
+  ! compgen -G "$HOME_DIR/state/capacity-queue/*-$claimed.cmd" >/dev/null \
+    || fail "an in-flight retry must prevent a replacement queue entry"
+  [ -f "$claimed_file.inflight" ] \
+    || fail "an in-flight retry claim must remain durable during launch"
+  paused_count=$(grep -c '^paused: capacity$' "$HOME_DIR/state/$claimed.status")
+  [ "$paused_count" = 1 ] \
+    || fail "an in-flight retry claim must not append another paused status"
   pass "spawn-capacity queue: preserves existing tasks and deduplicates requests"
 }
 

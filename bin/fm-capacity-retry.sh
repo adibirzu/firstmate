@@ -37,24 +37,33 @@ fi
 for cmd_file in "${cmd_files[@]}"; do
   [ -f "$cmd_file" ] || continue
 
-  args=()
-  while IFS= read -r -d '' arg; do
-    args+=("$arg")
-  done < "$cmd_file"
-
-  [ "${#args[@]}" -gt 0 ] || { rm -f "$cmd_file"; continue; }
-  task=${args[1]:-unknown}
-
   # Re-evaluate capacity before each attempt: each spawn takes resources.
   if ! fm_capacity_evaluate "$CONFIG"; then
     break
   fi
 
+  inflight_file="$cmd_file.inflight"
+  if ! mv "$cmd_file" "$inflight_file"; then
+    continue
+  fi
+
+  args=()
+  while IFS= read -r -d '' arg; do
+    args+=("$arg")
+  done < "$inflight_file"
+
+  [ "${#args[@]}" -gt 0 ] || { rm -f "$inflight_file"; continue; }
+  task=${args[1]:-unknown}
   echo "capacity-retry: retrying spawn for $task" >&2
-  rm -f "$cmd_file"
   if ! "${args[@]}"; then
     echo "capacity-retry: retry for $task exited non-zero" >&2
+    if [ ! -e "$STATE/$task.meta" ] && [ ! -L "$STATE/$task.meta" ]; then
+      mv "$inflight_file" "$cmd_file" 2>/dev/null || true
+    else
+      rm -f "$inflight_file"
+    fi
   else
+    rm -f "$inflight_file"
     echo "capacity-retry: successfully spawned $task" >&2
   fi
 done

@@ -1030,9 +1030,10 @@ if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
     exit 1
   }
   shopt -s nullglob
-  queued_for_task=("$STATE/capacity-queue"/*-"$ID".cmd)
+  queued_for_task=("$STATE/capacity-queue"/*-"$ID".cmd "$STATE/capacity-queue"/*-"$ID".cmd.inflight)
   shopt -u nullglob
   [ ! -f "$STATE/capacity-queue/$ID.cmd" ] || queued_for_task+=("$STATE/capacity-queue/$ID.cmd")
+  [ ! -f "$STATE/capacity-queue/$ID.cmd.inflight" ] || queued_for_task+=("$STATE/capacity-queue/$ID.cmd.inflight")
   if [ "${#queued_for_task[@]}" -gt 0 ]; then
     fm_lock_release "$queue_lock" || true
     echo "capacity: spawn for $ID is already queued" >&2
