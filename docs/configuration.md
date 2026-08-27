@@ -211,7 +211,17 @@ By default an unreadable signal refuses, because the check could not prove there
 A machine with no swap configured is a real answer rather than an unknown, and is admitted on that signal.
 
 This setting is primary-authoritative and is propagated to every registered secondmate home through the inherited-local-material contract in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), because every home shares one physical machine and its admission limits must be one setting rather than a per-home guess.
+When a spawn is declined for capacity, Firstmate queues its exact launch request and returns failure without creating task metadata or a worktree.
+Each watcher heartbeat retries queued requests in FIFO order once headroom returns, rechecking capacity before every retry.
 `bin/fm-capacity-lib.sh`'s header owns the exact probe, parsing, and decision mechanics, including the per-signal measurement overrides used for tests and diagnosis.
+
+## Done retention (config/keepDone)
+
+On each watcher heartbeat, Firstmate silently runs the Done sweeper after its normal supervision scan.
+It retains the five most recent eligible Done ship or scout homes by default and tears down older eligible homes, freeing their pooled worktrees and capacity.
+Set the gitignored `config/keepDone` file to a non-negative integer to change that retention count.
+Eligible ships have a merged or closed PR, landed `local-only` content, and eligible scouts have their required report; secondmate homes remain outside this sweep.
+`bin/fm-done-sweeper.sh`'s header owns its exact eligibility, ordering, command, and override mechanics.
 
 ## Secondmate routes (data/secondmates.md)
 
@@ -373,7 +383,8 @@ The chain is never consulted at selection time, so it neither overrides a profil
 
 Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
 At the supervision status-event boundary, `bin/fm-watch.sh` invokes `apply` automatically for ship and scout tasks; without fresh classified depletion evidence, `apply` refuses and does not relaunch the worker.
-Its depletion detector is `bin/fm-dispatch-select.mjs classify-evidence`, which exposes the same single subscription-vocabulary regex that `record-failure` verifies with - framed 429, explicit rate limit, `RESOURCE_EXHAUSTED`, or named quota/credit/balance/spending-limit exhaustion - while context-window ceilings, tool-output limits, plain authorization errors, and unframed codes classify as ordinary working states and trigger nothing.
+Its depletion detector is `bin/fm-dispatch-select.mjs classify-evidence`, which exposes the subscription-vocabulary regex that `record-failure` verifies with - framed 429, explicit rate limit, `RESOURCE_EXHAUSTED`, or named quota/credit/balance/spending-limit exhaustion - while context-window ceilings, tool-output limits, plain authorization errors, and unframed codes classify as ordinary working states and trigger nothing.
+For harnesses without quota-axi telemetry, direct fresh `429`, `limit`, or `quota` evidence is also sufficient to rotate the configured chain or fallback lane, with the automatic rotation logged visibly; these harnesses do not create provider cooldown telemetry.
 `apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs, and it refuses rather than relaunching when there is no fresh depleted classification.
 Selection walks the recorded harness's chain: the entry after the recorded model is next, a model absent from its chain (a default-model launch, or a task older than the chain) starts at the chain head, and the chain's last entry means this runtime lane is walked out unless `modelFallbackCycles` names that harness, in which case it returns to its chain head.
 On exhaustion, the optional top-level `fallbackLanes` array decides what happens: it is a non-empty, duplicate-free list of verified harnesses naming the lane order, and the task moves to the lane after its own, starting that lane's chain head, or launching on that lane's own default model when the successor has no configured chain.
