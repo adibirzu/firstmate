@@ -1082,7 +1082,7 @@ async function replaceSession(previous, reason) {
   await waitFor(() => {
     if (!existsSync(process.env.FM_CHILD_PID_FILE)) return false;
     const child = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
-    return child && child !== previousChild && pidAlive(child);
+    return child && child !== previousChild && pidAlive(child) && liveArmPids().includes(child);
   }, `${reason} replacement child`);
   const live = liveArmPids();
   if (live.length !== 1) {
@@ -1106,7 +1106,7 @@ if (!sameInstanceArm.details?.ok || String(sameInstanceArm.details.message).incl
 await waitFor(() => {
   if (!existsSync(process.env.FM_CHILD_PID_FILE)) return false;
   const child = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
-  return child !== sameInstanceChild && pidAlive(child);
+  return child !== sameInstanceChild && pidAlive(child) && liveArmPids().includes(child);
 }, "same-instance replacement child");
 await waitFor(() => !pidAlive(sameInstanceChild), "same-instance previous child exit");
 if (liveArmPids().length !== 1) {
