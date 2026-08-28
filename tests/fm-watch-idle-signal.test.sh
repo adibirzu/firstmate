@@ -41,7 +41,7 @@ eval "$(sed -n '/^fleet_idle_signal() {/,/^}/p' "$ROOT/bin/fm-watch.sh")"
   dir="$TMP_ROOT/test-mixed"
   mkdir -p "$dir/state" "$dir/data"
   STATE="$dir/state"
-  FM_HOME="$dir"
+  export FM_HOME="$dir"
 
   # 2 healthy secondmates
   printf 'kind=secondmate\nhome=%s/sm1\n' "$dir" > "$STATE/sm1.meta"
