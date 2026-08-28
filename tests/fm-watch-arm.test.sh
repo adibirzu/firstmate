@@ -287,7 +287,14 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   append_wake "$state" check startup-network 'check: startup-network'
 
   start_rearm_arm "$home" "$state" "$fakebin" "$armout"
-  sleep 0.25
+  # Wall-clock exit budget, not a fixed sleep: surfacing now runs the model
+  # fallback hook on each pending status before it delivers, so an instantaneous
+  # liveness check can misread a healthy in-flight re-arm as a wedged one on a
+  # loaded runner. A genuinely stuck arm still trips this because it never exits.
+  rearm_deadline=$(( $(date +%s) + 10 ))
+  while is_live_non_zombie "$ARM_PID" && [ "$(date +%s)" -lt "$rearm_deadline" ]; do
+    sleep 0.1
+  done
   if is_live_non_zombie "$ARM_PID"; then
     # End the fixture through an ordinary actionable status transition so this
     # failing pre-fix path leaves no child behind.

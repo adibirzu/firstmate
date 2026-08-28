@@ -413,7 +413,7 @@ if [ "$KIND" = ship ]; then
       exit 1
     }
     [ "$YOLO_SET" -eq 1 ] || {
-      echo "error: ship spawns require --yolo <on|off>; it is this task's routine approval authority, not a project lookup" >&2
+      echo "error: ship spawns require --yolo <on|off>; it is this task's merge authority, not a project lookup" >&2
       exit 1
     }
   fi
@@ -1019,17 +1019,32 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # work that is already running. A batch re-execs this script per pair, so each
 # pair is admitted against the machine as the previous pair left it.
 fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
+# Role partition: spawning NEW work is MAIN-owned. A reuse-worktree relaunch of an
+# existing task is legitimate recovery (fm-control or fm-runtime-handoff drive it
+# through this same entrypoint), so only a fresh spawn refuses the branch actor
+# (contract: bin/fm-lease-lib.sh; no-op in homes without a branch actor).
+# shellcheck source=bin/fm-lease-lib.sh
+. "$SCRIPT_DIR/fm-lease-lib.sh"
+if [ "$REUSE_WORKTREE" != 1 ]; then
+  fm_lease_forbid_branch "new-task spawn (fm-spawn)"
+fi
 if [ "$REUSE_WORKTREE" = 1 ]; then
-  # A relaunch is one step of a lifecycle transaction, so it takes the task's
-  # control lock: two lifecycle actions on the same task must never interleave.
-  # bin/fm-control.sh already holds it when it drives the relaunch itself, and
-  # it is this process's parent, so that case adopts the lock rather than
-  # deadlocking against it. Any other holder is a concurrent lifecycle action
-  # and refuses.
+  # A reuse-worktree relaunch is one step of a lifecycle transaction, so it
+  # takes the task's control lock: two lifecycle actions on the same task must
+  # never interleave. bin/fm-control.sh already holds it when it drives the
+  # relaunch itself, and it is this process's parent, so that case adopts the
+  # lock rather than deadlocking against it. Any other holder is a concurrent
+  # lifecycle action and refuses.
   SPAWN_CONTROL_LOCK="$STATE/.control-$ID.lock"
   control_owner=$(cat "$SPAWN_CONTROL_LOCK/pid" 2>/dev/null || true)
   if [ "$control_owner" = "$PPID" ] && fm_pid_alive "$control_owner"; then
     SPAWN_CONTROL_PARENT=1
+  elif [ "$(fm_lease_actor)" = branch ]; then
+    # Role partition refinement: branch recovery relaunches only through the
+    # fm-control transaction that owns the control lock, never by invoking
+    # this entrypoint directly (contract: bin/fm-lease-lib.sh).
+    echo "error: relaunch (fm-spawn) refused - the supervision branch must relaunch through fm-control" >&2
+    exit "$FM_LEASE_REFUSE_EXIT"
   elif fm_lock_try_acquire "$SPAWN_CONTROL_LOCK"; then
     SPAWN_CONTROL_LOCK_HELD=1
   else
