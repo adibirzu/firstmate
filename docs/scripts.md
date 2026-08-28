@@ -146,3 +146,4 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `quota-cursor-usage.sh`  | Authed Cursor headroom reader via the CLI's own stored access token                  |
 | `quota-sources/copilot.sh` | Copilot surface row for `fm-fleet.sh quota`, superseding the stale native probe    |
 | `quota-sources/cursor.sh`  | Cursor surface row for `fm-fleet.sh quota` from an operator-supplied authed reader |
+| `fm-active-active-check.sh`| Validate Caddyfile syntax and active-active dual-node health for Mac + Gb10 load balancer |
