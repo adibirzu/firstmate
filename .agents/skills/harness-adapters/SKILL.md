@@ -248,7 +248,7 @@ The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and
 Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
 The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
 
-## opencode (VERIFIED 2026-06-11, v1.15.7-1.18.20; 1.18.4 busy-queue re-verified 2026-07-20; 1.18.20 OpenRouter discovery re-verified 2026-08-23)
+## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20; 1.18.20 OpenRouter discovery re-verified 2026-08-23)
 
 | Fact | Value |
 |---|---|

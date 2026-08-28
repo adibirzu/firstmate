@@ -181,7 +181,7 @@ OpenCode was verified on 2026-08-23 at `/opt/homebrew/bin/opencode`, installed t
 /opt/homebrew/bin/opencode --version
 opencode models
 env -u OPENROUTER_API_KEY opencode models
-OPENROUTER_API_KEY="$OPENROUTER_API_KEY" opencode models
+OPENROUTER_API_KEY=<key> opencode models
 ```
 
 The default `opencode models` output listed seven free OpenCode models, including `opencode/big-pickle`.
