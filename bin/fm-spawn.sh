@@ -1018,7 +1018,12 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # nothing half-created. It reads machine state and declines; it never touches
 # work that is already running. A batch re-execs this script per pair, so each
 # pair is admitted against the machine as the previous pair left it.
-fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
+if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
+  mkdir -p "$STATE" "$STATE/capacity-queue"
+  printf 'paused: capacity\n' >> "$STATE/$ID.status"
+  printf '%s\0' "$0" "$@" > "$STATE/capacity-queue/$ID.cmd"
+  exit 1
+fi
 if [ "$REUSE_WORKTREE" = 1 ]; then
   # A relaunch is one step of a lifecycle transaction, so it takes the task's
   # control lock: two lifecycle actions on the same task must never interleave.

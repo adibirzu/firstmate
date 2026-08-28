@@ -701,6 +701,64 @@ heartbeat_scan_finds_actionable() {
   return 1
 }
 
+# fleet_idle_signal: computes the counts of idle (healthy) secondmates,
+# active ships, items awaiting the captain's word, and blocked items.
+fleet_idle_signal() {
+  local x_secondmates_idle=0
+  local y_ships_active=0
+  local z_awaiting=0
+  local w_blocked=0
+  local meta task kind last verb is_dead held_count
+
+  for meta in "$STATE"/*.meta; do
+    [ -e "$meta" ] || continue
+    task=$(basename "$meta")
+    task="${task%.meta}"
+    kind=$(grep '^kind=' "$meta" 2>/dev/null | cut -d= -f2- || true)
+    [ -n "$kind" ] || kind=ship
+
+    last=$(last_status_line "$STATE/$task.status" 2>/dev/null || true)
+    verb=$(status_line_verb "$last" 2>/dev/null || true)
+
+    if [ "$kind" = "secondmate" ]; then
+      is_dead=0
+      if [ -f "$STATE/$task.dead" ]; then
+        is_dead=1
+      elif [ "$verb" = "dead" ] || [ "$verb" = "crashed" ]; then
+        is_dead=1
+      fi
+      if [ "$is_dead" = 0 ]; then
+        x_secondmates_idle=$((x_secondmates_idle + 1))
+      fi
+    else
+      case "$verb" in
+        working|busy)
+          y_ships_active=$((y_ships_active + 1))
+          ;;
+        blocked)
+          w_blocked=$((w_blocked + 1))
+          ;;
+        needs-decision|decision|captain-held|paused)
+          z_awaiting=$((z_awaiting + 1))
+          ;;
+      esac
+    fi
+  done
+
+  if [ -f "$FM_HOME/data/backlog.md" ]; then
+    held_count=$(grep -c '(hold-kind: *captain)' "$FM_HOME/data/backlog.md" 2>/dev/null || true)
+    case "$held_count" in
+      ''|*[!0-9]*) held_count=0 ;;
+    esac
+    if [ "$held_count" -gt "$z_awaiting" ]; then
+      z_awaiting=$held_count
+    fi
+  fi
+
+  printf 'Fleet: %d secondmates idle (healthy), %d ships active, %d awaiting your word, %d blocked.\n' \
+    "$x_secondmates_idle" "$y_ships_active" "$z_awaiting" "$w_blocked"
+}
+
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
 # with push-capable windows (herdr), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
@@ -1258,27 +1316,28 @@ EOF
   hb=$(( HEARTBEAT * (1 << streak) ))
   [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
-    # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
-    # turns up a captain-relevant status the per-wake path missed. Absorb the
-    # no-change case (advance the schedule and back off exactly as wake() would,
-    # without exiting); the away-mode daemon, when present, owns triage and wants
-    # every heartbeat.
+    # Heartbeat jobs: done sweeper, spawn-capacity retry, and daily captain-hold batcher.
+    "$SCRIPT_DIR/fm-done-sweeper.sh" 5 >/dev/null 2>&1 || true
+    "$SCRIPT_DIR/fm-capacity-retry.sh" >/dev/null 2>&1 || true
+    "$SCRIPT_DIR/fm-captain-hold-batcher.sh" build --daily >/dev/null 2>&1 || true
+
+    idle_line=$(fleet_idle_signal)
     if afk_present; then
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      fm_wake_append heartbeat heartbeat "$idle_line" || exit 1
       touch "$STATE/.last-heartbeat"
-      wake "heartbeat"
+      wake "heartbeat: $idle_line"
     elif heartbeat_scan_finds_actionable; then
       # Backstop: a captain-relevant status the per-wake path absorbed by mistake.
       # Enqueue first, then mark every captain-relevant status surfaced so the next
       # heartbeat does not re-fire them (enqueue-before-suppress preserved).
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      fm_wake_append heartbeat heartbeat "$idle_line" || exit 1
       touch "$STATE/.last-heartbeat"
       mark_all_captain_relevant_surfaced
-      wake "heartbeat"
+      wake "heartbeat: $idle_line"
     else
       touch "$STATE/.last-heartbeat"
       echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
-      triage_log "absorbed heartbeat (no captain-relevant change)"
+      triage_log "absorbed heartbeat (no captain-relevant change) - $idle_line"
     fi
   fi
 

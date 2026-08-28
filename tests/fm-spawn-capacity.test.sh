@@ -549,6 +549,31 @@ test_capacity_report_shows_the_numbers_without_failing() {
   pass "the capacity report shows live numbers, and check exits non-zero without headroom"
 }
 
+test_spawn_capacity_queue_pauses_and_retries() {
+  local rec id out status retry_out retry_status
+  id=capacity-queue-test-1
+  rec=$(make_case capacity-queue-case "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${SATURATED[@]}" -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "saturated spawn must exit 1"
+  [ -f "$HOME_DIR/state/$id.status" ] || fail "status file must be created"
+  assert_contains "$(cat "$HOME_DIR/state/$id.status")" "paused: capacity" "status must record paused: capacity"
+  [ -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command must be queued in capacity-queue"
+
+  retry_out=$(env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" "${SATURATED[@]}" "$ROOT/bin/fm-capacity-retry.sh" 2>&1)
+  retry_status=$?
+  expect_code 0 "$retry_status" "retry on saturated machine exits 0 without failure: $retry_out"
+  [ -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command must remain queued while saturated"
+
+  retry_out=$(env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 "$ROOT/bin/fm-capacity-retry.sh" 2>&1)
+  retry_status=$?
+  expect_code 0 "$retry_status" "retry with headroom exits 0: $retry_out"
+  [ ! -f "$HOME_DIR/state/capacity-queue/$id.cmd" ] || fail "command file must be removed after successful retry"
+  pass "spawn-capacity queue: pauses with paused: capacity and auto-retries when headroom returns"
+}
+
 test_crewmate_spawn_refuses_when_saturated
 test_scout_spawn_refuses_when_saturated
 test_secondmate_spawn_refuses_when_saturated
@@ -568,3 +593,4 @@ test_malformed_settings_refuse_rather_than_silently_defaulting
 test_fleet_probe_counts_interpreter_launched_harnesses
 test_fleet_probe_reports_unknown_when_processes_cannot_be_read
 test_capacity_report_shows_the_numbers_without_failing
+test_spawn_capacity_queue_pauses_and_retries
