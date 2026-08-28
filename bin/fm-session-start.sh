@@ -638,6 +638,8 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '●  otherwise mutate fleet state from this session.\n'
     printf '%s\n' "$BAR"
   }
+  subsection "SESSION CONTINUITY"
+  "$SCRIPT_DIR/fm-session-continuity.sh" 2>&1 || true
 fi
 REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
 print_agents_refresh_if_required "$REBUILDING_SESSION_PID"

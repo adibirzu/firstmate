@@ -754,6 +754,7 @@ EOF
   # FM_BOOTSTRAP_DETECT_ONLY=1 actually suppressed the mutating sweep.
   mkdir -p "$home/other-secondmate/state"
   fm_write_secondmate_meta "$home/state/sm-x.meta" "$home/other-secondmate" "firstmate:fm-sm-x" alpha
+  printf '%s\n' 'needs-decision: retain the recovery context' > "$home/state/sm-x.status"
   append_wake "$home/state" signal sm-x "done: surfaced before refusal" || fail "seed wake failed"
   git -C "$root" checkout -q -B fm/read-only-tangle
 
@@ -768,6 +769,12 @@ EOF
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a lock refusal"
   assert_contains "$out" "READ-ONLY SESSION" "read-only banner missing on lock refusal"
+  assert_contains "$out" "SESSION CONTINUITY - DURABLE LOCAL RECOVERY INDEX" \
+    "read-only startup did not surface durable recovery context before the bulk digest"
+  assert_contains "$out" "task: sm-x" \
+    "continuity index did not preserve the recorded task identity"
+  assert_contains "$out" "latest status EVENT (not current state): needs-decision: retain the recovery context" \
+    "continuity index did not label the last task status as historical"
   assert_contains "$out" "another live firstmate session holds the lock" "read-only banner did not surface fm-lock.sh's own error text"
   assert_contains "$out" "Skipping every mutating step" "read-only banner did not explain what was skipped"
   assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
