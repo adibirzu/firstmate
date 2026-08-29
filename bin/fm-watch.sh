@@ -1263,17 +1263,22 @@ while :; do
         reason="check: $c: $out"
         if [ "$absorbed" -eq 0 ]; then
           fm_wake_append check "$c" "$reason" || exit 1
+          # The durable queue row, not the retirement below, is what makes this
+          # merge notified: retirement is deferred whenever the registration was
+          # re-armed mid-poll, which is exactly the case the marker exists to
+          # absorb, so recording it there would let that same merge wake the
+          # captain again on the next cycle.
+          if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
+            fm_pr_poll_merge_mark_notified "$STATE" "$id" \
+              "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
+              "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER" \
+              || triage_log "merge-notified marker not recorded for $id"
+          fi
         fi
         if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
           if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" "$out"; then
             fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
               || triage_log "merged PR poll retirement remains recoverable for $id"
-            if [ "$absorbed" -eq 0 ]; then
-              fm_pr_poll_merge_mark_notified "$STATE" "$id" \
-                "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
-                "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER" \
-                || triage_log "merge-notified marker not recorded for $id"
-            fi
           else
             triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
           fi
