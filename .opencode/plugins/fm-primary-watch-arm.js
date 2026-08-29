@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
+import { isArmEligibleRoot } from "./lib/fm-watch-arm-eligibility.js";
 
 const COORDINATOR_KEY = "__firstmateOpenCodeWatchArm";
 // 35s on Windows so the budget stays above arm's MSYS confirm default (30s in
@@ -88,55 +89,6 @@ function effectivePaths(root) {
   const state = process.env.FM_STATE_OVERRIDE || `${fmHome}/state`;
   const config = process.env.FM_CONFIG_OVERRIDE || `${fmHome}/config`;
   return { root: fmRoot, home: fmHome, state, config };
-}
-
-const SECONDMATE_MARKER = ".fm-secondmate-home";
-
-// Mirror bin/fm-primary-scope-lib.sh::fm_root_is_secondmate_home: the marker
-// must be a regular, non-symlink file whose first line is a non-empty id made
-// only of [A-Za-z0-9._-]. A stray or empty marker must never force-include a
-// linked worktree, exactly as the shared shell owner requires.
-function rootIsMarkedSecondmateHome(root) {
-  const marker = `${root}/${SECONDMATE_MARKER}`;
-  let stat;
-  try {
-    stat = lstatSync(marker);
-  } catch {
-    return false;
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) return false;
-  let contents;
-  try {
-    contents = readFileSync(marker, "utf8");
-  } catch {
-    return false;
-  }
-  // `IFS= read -r id < "$marker"` reports failure at EOF when the first line
-  // carries no newline, so the shell owner rejects an unterminated marker.
-  // Reject it here too: otherwise a home every shell hook scopes out as
-  // non-primary would still arm a watcher from OpenCode.
-  const lineEnd = contents.indexOf("\n");
-  if (lineEnd < 0) return false;
-  const id = contents.slice(0, lineEnd).replace(/[ \t\n\v\f\r]+/g, "");
-  if (!id) return false;
-  return /^[A-Za-z0-9._-]+$/.test(id);
-}
-
-// A root is arm-eligible when it is a genuine firstmate primary home: the main
-// checkout OR a marked secondmate home (which runs its own primary session and
-// must arm its own supervision even when treehouse leases it as a linked
-// worktree). Exported as the testable public contract. Mirrors
-// bin/fm-primary-scope-lib.sh::fm_primary_scope_matches: a valid secondmate
-// marker force-includes; otherwise only a plain checkout (git-dir ==
-// git-common-dir) qualifies, so crewmate/scout task worktrees stay silent.
-async function isArmEligibleRoot(root) {
-  if (!root) return false;
-  if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
-  if (rootIsMarkedSecondmateHome(root)) return true;
-  const gitDir = await runProcess("git", ["-C", root, "rev-parse", "--git-dir"]);
-  const commonDir = await runProcess("git", ["-C", root, "rev-parse", "--git-common-dir"]);
-  if (gitDir.code !== 0 || commonDir.code !== 0) return false;
-  return gitDir.stdout.trim() === commonDir.stdout.trim();
 }
 
 function shouldArm(paths) {
@@ -514,8 +466,6 @@ async function ensureArm(paths, sessionID, client, predecessorArmPid = "", inclu
   }
   return armAttempt(await waitForArmReady(armChild), armChild, includeArmChild);
 }
-
-export { isArmEligibleRoot };
 
 export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
   const root = worktree ? resolvePath(worktree) : await resolveRoot(directory);

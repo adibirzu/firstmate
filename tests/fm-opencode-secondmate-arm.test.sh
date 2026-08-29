@@ -5,9 +5,12 @@
 # The OpenCode watch-arm plugin must arm a watcher in a genuine primary home -
 # the main checkout OR a marked secondmate home (which runs its own primary
 # session) - and stay silent in child crewmate/scout task worktrees. The
-# eligibility predicate is exported as the testable public contract. These tests
-# drive that predicate against hermetic git fixtures over temp dirs; no real
-# agent session or OpenCode client is invoked.
+# eligibility predicate is the testable public contract of
+# .opencode/plugins/lib/fm-watch-arm-eligibility.js. These tests drive that
+# predicate against hermetic git fixtures over temp dirs, and additionally drive
+# the real plugin factory through a session.idle event so the regression is
+# proven at the arm path that actually failed in production, not only at the
+# predicate. No live agent session or OpenCode client is involved.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -18,6 +21,10 @@ fm_git_identity fmtest fmtest@example.invalid
 
 PLUGIN="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
 [ -f "$PLUGIN" ] || fail "watch-arm plugin missing: $PLUGIN"
+# The predicate lives in lib/ rather than in the plugin module: OpenCode treats
+# every export of a plugin file as a plugin factory, and lib/ is not scanned.
+ELIGIBILITY="$ROOT/.opencode/plugins/lib/fm-watch-arm-eligibility.js"
+[ -f "$ELIGIBILITY" ] || fail "watch-arm eligibility module missing: $ELIGIBILITY"
 # The predicate is imported by a node driver below. Resolve the interpreter up
 # front, like the sibling node-driven suites do, so a shard without node fails
 # as a missing prerequisite instead of reporting every case as an eligibility
@@ -162,7 +169,7 @@ is_linked_worktree() {
 
 # --- driver ---------------------------------------------------------------
 
-# run_predicate <plugin> <path>:<expected>... imports the plugin's exported
+# run_predicate <module> <path>:<expected>... imports the eligibility module's
 # isArmEligibleRoot and asserts each path resolves to the expected boolean.
 run_predicate() {
   local plugin=$1
@@ -213,7 +220,7 @@ test_primary_checkout_arms() {
     fail "primary fixture must be a plain checkout (git-dir == git-common-dir), got a linked worktree"
   fi
   shell_owner_agrees "$dir" true
-  run_predicate "$PLUGIN" "$dir:true" \
+  run_predicate "$ELIGIBILITY" "$dir:true" \
     || fail "primary (plain non-worktree) checkout must be arm-eligible"
   pass "watch-arm: arms the plain primary checkout"
 }
@@ -226,7 +233,7 @@ test_secondmate_linked_home_arms() {
   is_linked_worktree "$dir" \
     || fail "secondmate-home fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" true
-  run_predicate "$PLUGIN" "$dir:true" \
+  run_predicate "$ELIGIBILITY" "$dir:true" \
     || fail "a marked secondmate home must arm its own supervision even when treehouse-leased as a linked worktree"
   pass "watch-arm: arms a treehouse-leased LINKED secondmate home via its marker (regression)"
 }
@@ -239,7 +246,7 @@ test_crewmate_worktree_stays_silent() {
   is_linked_worktree "$dir" \
     || fail "crewmate-worktree fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" false
-  run_predicate "$PLUGIN" "$dir:false" \
+  run_predicate "$ELIGIBILITY" "$dir:false" \
     || fail "a markerless linked task worktree must stay silent"
   pass "watch-arm: stays silent in a crewmate/scout linked task worktree"
 }
@@ -252,7 +259,7 @@ test_stray_marker_cannot_spoof() {
   is_linked_worktree "$dir" \
     || fail "stray-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" false
-  run_predicate "$PLUGIN" "$dir:false" \
+  run_predicate "$ELIGIBILITY" "$dir:false" \
     || fail "an empty/invalid marker must not spoof force-inclusion in a linked worktree"
   pass "watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt"
 }
@@ -265,7 +272,7 @@ test_annotated_marker_home_arms() {
   is_linked_worktree "$dir" \
     || fail "annotated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" true
-  run_predicate "$PLUGIN" "$dir:true" \
+  run_predicate "$ELIGIBILITY" "$dir:true" \
     || fail "a marker with a valid first-line id plus a trailing annotation must arm, matching fm_root_is_secondmate_home"
   pass "watch-arm: honours the first-line marker contract when the marker has extra lines"
 }
@@ -278,7 +285,7 @@ test_blank_first_line_marker_cannot_spoof() {
   is_linked_worktree "$dir" \
     || fail "blank-first-line fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" false
-  run_predicate "$PLUGIN" "$dir:false" \
+  run_predicate "$ELIGIBILITY" "$dir:false" \
     || fail "a marker whose first line is blank must not spoof force-inclusion in a linked worktree"
   pass "watch-arm: a blank first line cannot spoof inclusion via a later line"
 }
@@ -291,7 +298,7 @@ test_unterminated_marker_matches_shell_owner() {
   is_linked_worktree "$dir" \
     || fail "unterminated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" false
-  run_predicate "$PLUGIN" "$dir:false" \
+  run_predicate "$ELIGIBILITY" "$dir:false" \
     || fail "an unterminated marker must not force-include where fm_primary_scope_matches scopes the home out"
   pass "watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it"
 }
@@ -304,9 +311,72 @@ test_nbsp_marker_matches_shell_owner() {
   is_linked_worktree "$dir" \
     || fail "nbsp-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
   shell_owner_agrees "$dir" false
-  run_predicate "$PLUGIN" "$dir:false" \
+  run_predicate "$ELIGIBILITY" "$dir:false" \
     || fail "a non-breaking space in the marker id must not be stripped into a valid id where fm_root_is_secondmate_home keeps it and rejects the home"
   pass "watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C"
+}
+
+# The predicate cases above prove eligibility in isolation. This one reproduces
+# the reported production failure end to end: in tms-captain/hosp-captain the
+# TUI warned that supervision was off because beginArm turned a marked
+# secondmate home into status not-primary and never spawned an arm child. Drive
+# the real FmPrimaryWatchArm factory through session.idle over such a home and
+# require that bin/fm-watch-arm.sh actually ran.
+test_secondmate_home_spawns_an_arm_child() {
+  local base dir log out status
+  base="$TMP_ROOT/arm-path-base"
+  dir="$TMP_ROOT/arm-path-secondmate-home"
+  log="$TMP_ROOT/arm-path-arm.log"
+  fm_git_worktree "$base" "$dir" fm/opencode-arm-path
+  mkdir -p "$dir/bin" "$dir/state" "$dir/config"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc-test-6\n' > "$dir/.fm-secondmate-home"
+  : > "$dir/state/task.meta"
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'root=%s home=%s\n' "${FM_ROOT_OVERRIDE:-}" "${FM_HOME:-}" >> "${FM_ARM_LOG:?}"
+printf 'watcher: healthy pid=1 (beacon 0s)\n'
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  is_linked_worktree "$dir" \
+    || fail "arm-path fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" true
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$log" "$NODE_BIN" 2>&1 <<'EOF'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+if (typeof mod.FmPrimaryWatchArm !== "function") {
+  console.error("plugin does not export the FmPrimaryWatchArm factory");
+  process.exit(2);
+}
+const client = { session: { promptAsync: async () => {} } };
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-arm-path" } } });
+for (let i = 0; i < 250 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
+  await new Promise((settle) => setTimeout(settle, 20));
+}
+if (!existsSync(process.env.FM_ARM_LOG)) {
+  console.error("no arm child ran: the marked secondmate home was scoped out of supervision");
+  process.exit(1);
+}
+const text = readFileSync(process.env.FM_ARM_LOG, "utf8");
+const expectedRoot = realpathSync(process.env.WORKTREE);
+if (!text.includes(`root=${expectedRoot}`)) {
+  console.error(`arm child ran against the wrong root:\n${text}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a marked secondmate home must spawn an arm child on session.idle"
+  [ -z "$out" ] || fail "secondmate arm-path test printed output: $out"
+  pass "watch-arm: a marked secondmate home spawns a real arm child on session.idle (regression)"
 }
 
 test_primary_checkout_arms
@@ -317,3 +387,4 @@ test_annotated_marker_home_arms
 test_blank_first_line_marker_cannot_spoof
 test_unterminated_marker_matches_shell_owner
 test_nbsp_marker_matches_shell_owner
+test_secondmate_home_spawns_an_arm_child
