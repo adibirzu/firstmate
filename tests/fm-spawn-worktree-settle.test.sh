@@ -244,6 +244,70 @@ test_pane_that_never_lands_fails_the_spawn() {
   pass "a pane that never enters the leased worktree fails the spawn loudly"
 }
 
+# Once state/<id>.meta is published the task exists, and bin/fm-teardown.sh owns
+# returning its worktree. bin/fm-spawn.sh must therefore disarm its lease-abort
+# cleanup at that publication point rather than after the side-band home-summary
+# refresh that follows it: an operator interrupt arriving while that refresh is
+# still running would otherwise reach spawn_abort_cleanup with the flag still
+# armed and hand a live task's leased worktree straight back to the pool.
+#
+# The interrupt is delivered from inside the refresh itself - a jq shim that
+# fires once, only while the refresh holds its own lock, and only at the spawn
+# process it finds by walking its own ancestry - so the signal lands in exactly
+# the window under test.
+test_interrupt_during_the_post_publication_refresh_keeps_the_lease() {
+  local rec id out status real_jq
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "skip: jq not found"
+    return 0
+  fi
+  if ! command -v ps >/dev/null 2>&1; then
+    echo "skip: ps not found"
+    return 0
+  fi
+  real_jq=$(command -v jq)
+  id=settle-lease-abort-z6
+  rec=$(make_settle_case settle-lease-abort "$id" 0)
+  read_settle_record "$rec"
+
+  cat > "$FAKEBIN_DIR/jq" <<'SH'
+#!/usr/bin/env bash
+set -u
+lock=${FM_FAKE_JQ_KILL_ON_LOCK:-}
+once=${FM_FAKE_JQ_KILL_ONCE:-}
+if [ -n "$lock" ] && [ -n "$once" ] && [ ! -e "$once" ] \
+  && { [ -e "$lock" ] || [ -L "$lock" ]; }; then
+  : > "$once"
+  pid=$PPID
+  for _ in 1 2 3 4 5 6 7 8; do
+    case "$pid" in ''|0|1) break ;; esac
+    case "$(ps -o args= -p "$pid" 2>/dev/null)" in
+      *fm-spawn.sh*) kill -TERM "$pid" 2>/dev/null || true; break ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+fi
+exec "${FM_FAKE_REAL_JQ:?fake jq needs the real jq}" "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/jq"
+
+  status=0
+  out=$(FM_FAKE_JQ_KILL_ON_LOCK="$HOME_DIR/state/.home-summary-refresh.lock" \
+    FM_FAKE_JQ_KILL_ONCE="$CASE_DIR/interrupt-delivered" \
+    FM_FAKE_REAL_JQ="$real_jq" \
+    run_settle_spawn "$id") || status=$?
+
+  [ -e "$CASE_DIR/interrupt-delivered" ] \
+    || fail "the interrupt was never delivered, so the abort window was not exercised: $out"
+  [ -f "$HOME_DIR/state/$id.meta" ] \
+    || fail "the task record was not published before the interrupt: $out"
+  [ "$status" -ne 0 ] \
+    || fail "the interrupted spawn reported success, so it never reached its abort path: $out"
+  [ ! -e "$TREEHOUSE_RETURN_HOMEFILE" ] \
+    || fail "the abort path returned the leased worktree of a task that already exists in state/"
+  pass "an interrupt during the post-publication refresh never returns a live task's lease"
+}
+
 # --- bin/fm-treehouse-lib.sh decisions --------------------------------------
 #
 # Placement decisions are driven through a stubbed fm_treehouse_device rather than
@@ -399,6 +463,7 @@ test_already_settled_pane_costs_one_confirm_sleep
 test_pane_is_sent_a_cd_and_never_a_home_changing_command
 test_treehouse_is_leased_under_the_resolved_pool_home
 test_pane_that_never_lands_fails_the_spawn
+test_interrupt_during_the_post_publication_refresh_keeps_the_lease
 test_pool_home_stays_on_the_home_filesystem_when_not_split
 test_each_project_gets_its_own_pool
 test_same_named_projects_do_not_share_a_pool
