@@ -265,6 +265,43 @@ test_concurrent_writers_never_clobber() {
   pass "inbox: concurrent writers serialize on the sequence lock and lose nothing"
 }
 
+# Regression: a writer that loses the lock-creation race and then re-checks
+# after the winner has already released observes NO lock on disk. That absence
+# is not a terminal condition - the lock is simply free again - but it used to
+# short-circuit the acquire into a hard failure, so a concurrent writer failed
+# while its lock was available. That is the intermittent "a concurrent inbox
+# write failed" flake, and it fails fast rather than after the wait budget.
+#
+# The natural interleaving is rare and load-dependent, so pin it deterministically:
+# make the first fm_lock_try_create lose exactly once with the lock absent,
+# which is precisely the state the losing racer sees after the winner releases.
+# The write must still succeed by retrying, not report failure.
+test_write_survives_a_lost_create_race() {
+  local state rec count
+  state="$TMP_ROOT/lost-create-race/state"; mkdir -p "$state"
+  rec=$(FM_STATE_OVERRIDE="$state" FM_TEST_LOST_ONCE="$state/.lost-once" bash -c '
+    . "$1"
+    eval "$(declare -f fm_lock_try_create | sed "1s/fm_lock_try_create/_original_fm_lock_try_create/")"
+    fm_lock_try_create() {
+      # Lose the ln -s race exactly once, leaving no lock behind - the winner
+      # acquired and released while this frame was between the two checks.
+      if [ ! -e "$FM_TEST_LOST_ONCE" ]; then
+        : > "$FM_TEST_LOST_ONCE"
+        return 1
+      fi
+      _original_fm_lock_try_create "$@"
+    }
+    fm_task_inbox_write "$2" t1 "$3"
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "steer after a lost race") \
+    || fail "a writer that lost the create race must retry, not fail while the lock is free"
+  [ -f "$rec" ] || fail "the retried write should have produced a record, got: $rec"
+  grep -qF "steer after a lost race" "$rec" \
+    || fail "the retried write lost its payload:"$'\n'"$(cat "$rec" 2>/dev/null)"
+  count=$(find "$state/t1.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')
+  [ "$count" = 1 ] || fail "the retry should write exactly one record, got $count"
+  pass "inbox: a writer that loses the lock-creation race retries instead of failing"
+}
+
 test_ladder_writes_ignore_vanished_inbox() {
   local state rec
   state="$TMP_ROOT/vanished/state"; mkdir -p "$state"
@@ -484,6 +521,7 @@ test_idempotent_write_dedups_exact_body
 test_idempotent_write_follows_concurrent_ack
 test_handled_mv_dedups_by_sequence
 test_concurrent_writers_never_clobber
+test_write_survives_a_lost_create_race
 test_ladder_writes_ignore_vanished_inbox
 test_ring_ladder_policy
 test_watcher_rerings_idle_pane_quietly
