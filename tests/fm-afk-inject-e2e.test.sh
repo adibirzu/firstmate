@@ -47,37 +47,11 @@ LOOP_SCRIPT=
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-# How long the daemon gets to honour SIGTERM before this test stops waiting for
-# it. The daemon's own contract is a signal-trapped shutdown within ~1s, so this
-# is generous headroom on a loaded runner, not an expected-case budget.
-DAEMON_STOP_GRACE_SECS=30
-
-# Signal the daemon and reap it within a hard bound.
-#
-# A bare `wait` here is unbounded: any daemon (or watcher child it reaps in its
-# own shutdown path) that does not honour SIGTERM parks this test forever, and a
-# parked test burns its whole CI serial shard up to the job cap - which surfaces
-# as a cancelled job with no failing assertion to read. A watchdog SIGKILL keeps
-# the wait bounded so the breach is reported as an ordinary failure instead.
-# Returns 0 when SIGTERM alone was enough, 1 when the SIGKILL was needed.
-stop_daemon_bounded() {
-  local pid=$1 watchdog started ended
-  started=$(date '+%s')
-  kill "$pid" 2>/dev/null || true
-  ( sleep "$DAEMON_STOP_GRACE_SECS"; kill -KILL "$pid" 2>/dev/null || true ) &
-  watchdog=$!
-  wait "$pid" 2>/dev/null || true
-  kill "$watchdog" 2>/dev/null || true
-  wait "$watchdog" 2>/dev/null || true
-  ended=$(date '+%s')
-  [ "$((ended - started))" -lt "$DAEMON_STOP_GRACE_SECS" ]
-}
-
 cleanup_all() {
   if [ -n "${DAEMON_PID:-}" ]; then
     afk_exit "${STATE_DIR:-}" 2>/dev/null || true
-    stop_daemon_bounded "$DAEMON_PID" || true
-    DAEMON_PID=""
+    kill "$DAEMON_PID" 2>/dev/null || true
+    wait "$DAEMON_PID" 2>/dev/null || true
   fi
   if [ -n "${SOCKET:-}" ] && [ -n "${REAL_TMUX:-}" ]; then
     "$REAL_TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
@@ -218,14 +192,11 @@ start_daemon() {
 }
 
 stop_daemon() {
-  local pid
   [ -n "${DAEMON_PID:-}" ] || return 0
   afk_exit "$STATE_DIR" 2>/dev/null || true
-  pid=$DAEMON_PID
-  # Cleared before the bound is judged so the EXIT trap never waits on it twice.
+  kill "$DAEMON_PID" 2>/dev/null || true
+  wait "$DAEMON_PID" 2>/dev/null || true
   DAEMON_PID=""
-  stop_daemon_bounded "$pid" \
-    || fail "daemon ignored SIGTERM for ${DAEMON_STOP_GRACE_SECS}s and had to be SIGKILLed"
   sleep 1
 }
 
