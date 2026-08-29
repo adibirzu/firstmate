@@ -1313,38 +1313,13 @@ while :; do
         fi
       fi
       if [ -n "$out" ]; then
-        absorbed=0
-        if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
-          # A poll's own retirement state is scoped to one registration, so it
-          # cannot by itself catch a poll re-registered for a task whose merge
-          # was already surfaced (e.g. fm-pr-check.sh re-armed after the
-          # fact). The per-task merge-notified marker is what stops that
-          # re-registration from producing a second main-blocking wake for
-          # the identical merge. This is a read-only check, so it never
-          # reorders the queue-publish-before-retirement contract below.
-          if fm_pr_poll_merge_already_notified "$STATE" "$id" \
-            "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
-            "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER"; then
-            absorbed=1
-            triage_log "absorbed merged PR poll (merge already notified for $id)"
-          fi
-        fi
         reason="check: $c: $out"
-        if [ "$absorbed" -eq 0 ]; then
-          fm_wake_append check "$c" "$reason" || exit 1
-          # The durable queue row, not the retirement below, is what makes this
-          # merge notified: retirement is deferred whenever the registration was
-          # re-armed mid-poll, which is exactly the case the marker exists to
-          # absorb, so recording it there would let that same merge wake the
-          # captain again on the next cycle.
-          if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
-            fm_pr_poll_merge_mark_notified "$STATE" "$id" \
-              "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
-              "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER" \
-              || triage_log "merge-notified marker not recorded for $id"
-          fi
-        fi
         if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
+          # bin/fm-merge-outcome-lib.sh owns locked publication, the
+          # merge-notified marker, and duplicate suppression for the same PR
+          # identity, including a poll re-armed after the first merge already
+          # woke the captain. Do not mark notified before this call: that would
+          # make the first observation look already recorded and swallow it.
           merge_outcome_rc=0
           fm_merge_outcome_report "$FM_HOME" "$STATE" "$id" "$url" poll \
             || merge_outcome_rc=$?
@@ -1362,9 +1337,6 @@ while :; do
         fi
         fm_wake_append check "$c" "$reason" || exit 1
         touch "$STATE/.last-check"
-        if [ "$absorbed" -eq 1 ]; then
-          continue
-        fi
         wake "$reason"
       fi
     done
