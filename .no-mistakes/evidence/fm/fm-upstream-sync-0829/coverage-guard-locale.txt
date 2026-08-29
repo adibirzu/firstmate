@@ -1,0 +1,14 @@
+$ locale | head -2
+LANG=en_US.utf8
+LANGUAGE=
+
+# BEFORE the fix (bin/fm-test-run.sh as of merge commit 30324eb), ambient en_US.utf8:
+$ bin/fm-test-run.sh --check-coverage
+comm: file 2 is not in sorted order
+comm: input is not in sorted order
+exit=1
+
+# AFTER the fix (85f62a3), same ambient locale:
+$ bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=196 parallel=24 serial=161 serial_shards=4 herdr=11
+exit=0

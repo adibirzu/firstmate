@@ -1,0 +1,43 @@
+# Merge shape: fork history preserved (no rebase rewrite)
+
+$ git log --graph --oneline --decorate -14
+* 05373f8 (HEAD, fm/fm-upstream-sync-0829) no-mistakes(review): remove merged duplicates and close spawn lease-abort window
+*   30324eb merge: origin/main #23 into upstream-sync branch
+|\  
+| * 18c7472 (origin/main) fix(plugins): arm opencode supervision in secondmate homes (#23)
+* | bdcce1f fix(watch): publish a merged PR through one outcome path
+* |   41ad2b2 merge: sync fork with upstream/main, preserving fork-only work
+|\ \  
+| |/  
+|/|   
+| * f66be0f fix(pi): restore Pi 0.84.4 renderer compatibility (#3261)
+| * 52b59a1 fix(pi): gate first provider call on startup context (#3158)
+| * a390659 feat(bin): publish per-home summary ledgers (#3222)
+| * 4207214 fix(bin): accelerate and bound changed test runs (#3250)
+| * 1fd7ea2 feat(bin): add concurrent bounded remote transport lanes (#3210)
+| * c651b59 fix(pi): surface requested outcomes without replaying fleet events (#3211)
+| * bca584a fix(bin): prioritize active pipeline-owned crew runs (#3194)
+| * 4f89f5b fix(pi): prevent duplicate captain outcome reports (#3184)
+| * 7ee0c19 fix(bin): verify the real GitHub merge outcome instead of reporting an unproved merge (#3064)
+
+$ git rev-list --merges --parents -n2 HEAD~1 HEAD~3  # merge commits keep both parents
+30324eb parents=[bdcce1f 18c7472] merge: origin/main #23 into upstream-sync branch
+41ad2b2 parents=[1a92f9e f66be0f] merge: sync fork with upstream/main, preserving fork-only work
+
+$ git remote -v
+origin	https://github.com/adibirzu/firstmate.git (fetch)
+origin	https://github.com/adibirzu/firstmate.git (push)
+
+# fork-only commits still reachable from HEAD (sample)
+1a92f9e fix(watch): mark merged PR polls notified so one merge wakes the captain once (#24)
+db5dd6d sync: bring fork main to upstream/main, preserving all fork-only work (#22)
+53336ac feat(skills): add harness-creator skill pack with skills lock
+3c544d6 feat(bin): add OpenRouter capacity reader with per-model cooldown state (#14)
+ef411d6 feat(bin): add fleet-only Graphify orientation index with triggered consult and freshness checks (#12)
+7fd119a feat(bin): land fleet federation, quota-aware dispatch, and runtime handoff, restoring main CI (#8)
+7ec2522 feat(bin): add in-place runtime handoff and the quota statusline
+0095a2b feat(spawn): refuse to spawn when the machine has no memory headroom
+746c703 test(portability): stop the fleet suites assuming GNU sed, date and getent
+a25901e test(federation): use the documented example operators, not this host's
+31c3fb0 fix(herdr): scope the presentation lock namespace per operator
+bb4d65c feat(fleet): cross-operator overflow on token exhaustion

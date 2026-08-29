@@ -1,0 +1,47 @@
+{
+  "stats": [
+    {
+      "n": 0,
+      "label": "need you"
+    },
+    {
+      "n": 1,
+      "label": "underway"
+    },
+    {
+      "n": 1,
+      "label": "landed recently"
+    },
+    {
+      "n": 1,
+      "label": "charted next"
+    }
+  ],
+  "charted": [
+    {
+      "title": "Map tests/assets so --changed selects the board-render suite",
+      "sub": "queued behind the sync · adibirzu/firstmate",
+      "badges": [
+        {
+          "tone": "warn",
+          "text": "waiting"
+        }
+      ],
+      "pickable": true
+    },
+    {
+      "title": "Main inventory integrity",
+      "sub": "main inventory · adibirzu/firstmate",
+      "badges": [
+        {
+          "tone": "danger",
+          "text": "needs repair"
+        }
+      ],
+      "pickable": false
+    }
+  ],
+  "empty": [],
+  "more": [],
+  "error": ""
+}

@@ -1,0 +1,51 @@
+# Merge-resolution repairs: before -> after (each reproduced, then fixed)
+
+## 1. tests/fm-remote-job.test.sh - duplicated restart-guard block
+$ git show 30324eb:tests/fm-remote-job.test.sh > /tmp/prefix.test.sh && bash /tmp/prefix.test.sh
+ok - barely healthy worker failures remain bounded by the restart guard
+ok - a repeatedly signalled shutdown still releases ownership for the next worker
+not ok - the restart guard did not stop at the configured maximum
+exit=1
+
+$ bin/fm-test-run.sh tests/fm-remote-job.test.sh   # after 05373f8
+ok - a repeatedly signalled shutdown still releases ownership for the next worker
+ok - barely healthy worker failures remain bounded by the restart guard
+ALL TESTS PASSED
+FM_TEST_END 2026-08-29T16:26:36Z tests/fm-remote-job.test.sh exit=0 duration_ms=63373 gate_skip=false
+
+## 2. bin/fm-watch.sh - the first merged PR was swallowed
+$ (bin/fm-watch.sh reverted to 41ad2b2) bash tests/fm-pr-check-security.test.sh
+not ok - first merged notification was not preserved: check: /tmp/fm-pr-check-security.yK2AT2/merged-retirement-once/home/state/z-stop.check.sh: stop-cycle
+exit=1
+
+$ bin/fm-test-run.sh tests/fm-pr-check-security.test.sh   # after bdcce1f
+FM_TEST_END 2026-08-29T16:39:21Z tests/fm-pr-check-security.test.sh exit=0 duration_ms=344906 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=344966
+
+## 3. bin/fm-brief.sh - the instruction inbox was emitted twice per brief
+New regression test: tests/fm-brief.test.sh::test_instruction_inbox_contract_is_delivered_once_per_brief
+(asserts on the generated brief - the prompt handed to the agent - not on the scaffold source)
+
+$ (bin/fm-brief.sh reverted to the merged duplicate placement) bash tests/fm-brief.test.sh
+not ok - ship brief delivers the instruction-inbox contract 2 times, expected exactly 1
+exit=1
+
+$ bash tests/fm-brief.test.sh   # after 05373f8
+ok - fm-brief.sh: ship and scout briefs deliver the instruction-inbox contract exactly once
+exit=0
+
+Generated briefs are attached: brief-scout.generated.md, brief-ship.generated.md
+  $ grep -c '^# Firstmate instruction inbox$' brief-{scout,ship}.generated.md  ->  1 and 1
+  (pre-fix bin/fm-brief.sh produced 2 and 2)
+
+## 4. bin/fm-spawn.sh - lease-abort window after the task record was published
+New regression test: tests/fm-spawn-worktree-settle.test.sh::test_interrupt_during_the_post_publication_refresh_keeps_the_lease
+It delivers a real SIGTERM from inside the post-publication home-summary refresh.
+
+$ (bin/fm-spawn.sh reverted to refresh-before-disarm) bash tests/fm-spawn-worktree-settle.test.sh
+not ok - the abort path returned the leased worktree of a task that already exists in state/
+exit=1
+
+$ bash tests/fm-spawn-worktree-settle.test.sh   # after 05373f8
+ok - an interrupt during the post-publication refresh never returns a live task's lease
+exit=0

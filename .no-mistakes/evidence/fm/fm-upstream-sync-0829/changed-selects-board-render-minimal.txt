@@ -1,0 +1,29 @@
+# Intent: "Map tests/assets so --changed can select the board-render suite."
+#
+# Minimal reproduction: one comment line appended to
+# tests/assets/board-render-harness.mjs is the ONLY working-tree change, so the
+# selection below is attributable to that asset alone. The edit was reverted
+# afterwards; `git status --porcelain` prints nothing.
+#
+# Transcript of the real commands run in this worktree:
+
+=== BEFORE (base commit 18c7472, its own bin/fm-test-run.sh) ===
+$ bin/fm-test-run.sh --list --changed --base HEAD
+fm-test-run: no changed-test mapping for source path: tests/assets/board-render-harness.mjs
+exit=2
+
+=== AFTER (this branch, 85f62a3) ===
+$ bin/fm-test-run.sh --list --changed --base HEAD
+tests/fm-bearings-board-render.test.sh
+tests/fm-bearings-snapshot.test.sh
+tests/fm-fleet-snapshot-view.test.sh
+tests/fm-home-summary-refresh.test.sh
+exit=0
+
+At the base commit the runner failed closed on the unmapped asset and refused
+the whole --changed selection. On this branch the same edit selects the
+board-render suite plus the other suites that reference the shared asset, and
+that selected suite passes:
+
+$ bin/fm-test-run.sh tests/fm-bearings-board-render.test.sh
+FM_TEST_END 2026-08-29T17:10:02Z tests/fm-bearings-board-render.test.sh exit=0 duration_ms=1617 gate_skip=false

@@ -1,0 +1,40 @@
+# Contract behaviour at target commit 85f62a3 (ambient locale en_US.utf8)
+# Only the intent-bearing assertions are quoted; each line is the suite's own output.
+
+$ bin/fm-test-run.sh tests/fm-test-run.test.sh tests/fm-brief.test.sh \
+    tests/fm-spawn-worktree-settle.test.sh tests/fm-remote-job.test.sh \
+    tests/fm-pr-check-security.test.sh
+
+## merge-resolution repair 1 - bin/fm-brief.sh: inbox contract delivered once
+ok - fm-brief.sh: ship and scout briefs deliver the instruction-inbox contract exactly once
+
+## merge-resolution repair 2 - bin/fm-spawn.sh: lease-abort window closed
+ok - an interrupt during the post-publication refresh never returns a live task's lease
+
+## merge-resolution repair 3 - tests/fm-remote-job.test.sh: each case runs once, both pass
+ok - a repeatedly signalled shutdown still releases ownership for the next worker
+ok - barely healthy worker failures remain bounded by the restart guard
+
+## intent: a merged PR is published through one outcome path
+ok - validated merged polls notify once and retire before the next watcher cycle
+ok - a repeat identical merged poll for an already-notified task is absorbed, never queued as a main-blocking row
+ok - a different merged PR for the same task gets its own first notification
+ok - GitHub and GitLab exact merged results share one retirement path
+
+## intent: --changed can select the board-render suite (coverage guard + selection contracts)
+ok - changed selection covers dependents and fails closed for unmapped source
+ok - portable shard union, disjointness, and coverage guard hold
+
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=534145
+
+# Fork-only contracts still working after the merge
+$ bin/fm-test-run.sh tests/fm-ask-user-authority.test.sh tests/fm-graphify.test.sh \
+    tests/fm-model-fallback.test.sh tests/fm-openrouter-quota.test.sh \
+    tests/fm-spawn-capacity.test.sh tests/fm-bearings-board-render.test.sh
+FM_TEST_END 2026-08-29T17:09:14Z tests/fm-ask-user-authority.test.sh exit=0 duration_ms=106 gate_skip=false
+FM_TEST_END 2026-08-29T17:09:15Z tests/fm-graphify.test.sh exit=0 duration_ms=1161 gate_skip=false
+FM_TEST_END 2026-08-29T17:09:25Z tests/fm-model-fallback.test.sh exit=0 duration_ms=10450 gate_skip=false
+FM_TEST_END 2026-08-29T17:09:47Z tests/fm-openrouter-quota.test.sh exit=0 duration_ms=21044 gate_skip=false
+FM_TEST_END 2026-08-29T17:10:00Z tests/fm-spawn-capacity.test.sh exit=0 duration_ms=13531 gate_skip=false
+FM_TEST_END 2026-08-29T17:10:02Z tests/fm-bearings-board-render.test.sh exit=0 duration_ms=1617 gate_skip=false
+FM_TEST_SUMMARY total=6 failed=0 skipped_gate=0 duration_ms=48134

@@ -1,0 +1,13 @@
+# --changed selects the board-render suite (tests/assets mapping, bdcce1f)
+
+## Without the tests/assets/* mapping (pre-fix runner) the selection fails closed:
+$ bin/fm-test-run.sh --list --changed --base 18c7472
+fm-test-run: no changed-test mapping for source path: tests/assets/board-render-harness.mjs
+exit=2
+
+## With the mapping (this branch, bin/fm-test-run.sh at 05373f8):
+$ bin/fm-test-run.sh --list --changed --base 18c7472   # 18c7472 = origin/main, the sync base
+exit=0, 185 scripts selected; the board-render suite is selected:
+4:tests/fm-bearings-board.test.sh
+38:tests/fm-bearings-board-render.test.sh
+39:tests/fm-bearings-snapshot.test.sh
