@@ -147,6 +147,25 @@ make_nbsp_marker_worktree_dir() {
   printf '%s\n' "$dir"
 }
 
+# Anti-spoof: fm_root_is_secondmate_home rejects a symlinked marker outright
+# (`[ -L "$marker" ] && return 1`) before it ever reads an id, so a marker
+# pointed at a file outside the home cannot lease supervision to a linked task
+# worktree. A JS mirror stating the file with statSync instead of lstatSync
+# would follow the link, read a perfectly valid id, and arm a watcher in a root
+# every shell hook treats as non-primary.
+make_symlinked_marker_worktree_dir() {
+  local base=$1 dir=$2 target=$3
+  fm_git_worktree "$base" "$dir" fm/opencode-symlinked-marker
+  mkdir -p "$dir/bin" "$dir/state"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc-test-7\n' > "$target"
+  ln -s "$target" "$dir/.fm-secondmate-home" \
+    || fail "cannot create the symlinked marker fixture at $dir/.fm-secondmate-home"
+  [ -L "$dir/.fm-secondmate-home" ] \
+    || fail "symlinked-marker fixture must be a symlink, got a regular path"
+  printf '%s\n' "$dir"
+}
+
 # Run the shared shell owner over the same fixture so the plugin is pinned to
 # it rather than to a hand-picked expectation.
 shell_owner_scopes_in() {
@@ -345,6 +364,19 @@ test_nbsp_marker_matches_shell_owner() {
   pass "watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C"
 }
 
+test_symlinked_marker_cannot_spoof() {
+  local base dir
+  base="$TMP_ROOT/symlinked-base"
+  dir="$TMP_ROOT/symlinked-marker-worktree"
+  make_symlinked_marker_worktree_dir "$base" "$dir" "$TMP_ROOT/symlinked-marker-target" >/dev/null
+  is_linked_worktree "$dir" \
+    || fail "symlinked-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" false
+  run_predicate "$ELIGIBILITY" "$dir:false" \
+    || fail "a symlinked marker must not spoof force-inclusion where fm_root_is_secondmate_home rejects the link outright"
+  pass "watch-arm: a symlinked marker cannot spoof inclusion, matching the shell owner's [ -L ] rejection"
+}
+
 # The predicate cases above prove eligibility in isolation. This one reproduces
 # the reported production failure end to end: in tms-captain/hosp-captain the
 # TUI warned that supervision was off because beginArm turned a marked
@@ -417,4 +449,5 @@ test_annotated_marker_home_arms
 test_blank_first_line_marker_cannot_spoof
 test_unterminated_marker_matches_shell_owner
 test_nbsp_marker_matches_shell_owner
+test_symlinked_marker_cannot_spoof
 test_secondmate_home_spawns_an_arm_child
