@@ -1020,8 +1020,57 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # pair is admitted against the machine as the previous pair left it.
 if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
   mkdir -p "$STATE" "$STATE/capacity-queue"
+  if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+    echo "error: task $ID already exists; capacity refusal did not modify it" >&2
+    exit 1
+  fi
+  queue_lock="$STATE/capacity-queue.lock"
+  fm_lock_acquire_wait "$queue_lock" || {
+    echo "error: could not lock capacity queue" >&2
+    exit 1
+  }
+  shopt -s nullglob
+  queued_for_task=("$STATE/capacity-queue"/*-"$ID".cmd "$STATE/capacity-queue"/*-"$ID".cmd.inflight)
+  shopt -u nullglob
+  [ ! -f "$STATE/capacity-queue/$ID.cmd" ] || queued_for_task+=("$STATE/capacity-queue/$ID.cmd")
+  [ ! -f "$STATE/capacity-queue/$ID.cmd.inflight" ] || queued_for_task+=("$STATE/capacity-queue/$ID.cmd.inflight")
+  if [ "${#queued_for_task[@]}" -gt 0 ]; then
+    fm_lock_release "$queue_lock" || true
+    echo "capacity: spawn for $ID is already queued" >&2
+    exit 1
+  fi
   printf 'paused: capacity\n' >> "$STATE/$ID.status"
-  printf '%s\0' "$0" "$@" > "$STATE/capacity-queue/$ID.cmd"
+  queue_sequence_file="$STATE/capacity-queue/.sequence"
+  queue_sequence=$(cat "$queue_sequence_file" 2>/dev/null || printf '0')
+  case "$queue_sequence" in
+    ''|*[!0-9]*) queue_sequence=0 ;;
+  esac
+  queue_sequence=$((queue_sequence + 1))
+  printf -v queue_order '%020d' "$queue_sequence"
+  queue_sequence_tmp=$(mktemp "$STATE/capacity-queue/.sequence.XXXXXX") || {
+    fm_lock_release "$queue_lock" || true
+    echo "error: could not stage capacity queue sequence" >&2
+    exit 1
+  }
+  queue_command_tmp=$(mktemp "$STATE/capacity-queue/.command.XXXXXX") || {
+    rm -f "$queue_sequence_tmp"
+    fm_lock_release "$queue_lock" || true
+    echo "error: could not stage capacity queue command" >&2
+    exit 1
+  }
+  if ! { printf '%s\n' "$queue_sequence" > "$queue_sequence_tmp" \
+    && printf '%s\0' "$SCRIPT_DIR/fm-spawn.sh" "$@" > "$queue_command_tmp" \
+    && mv -f "$queue_sequence_tmp" "$queue_sequence_file" \
+    && mv -f "$queue_command_tmp" "$STATE/capacity-queue/$queue_order-$ID.cmd"; }; then
+    rm -f "$queue_sequence_tmp" "$queue_command_tmp"
+    fm_lock_release "$queue_lock" || true
+    echo "error: could not queue capacity-declined spawn" >&2
+    exit 1
+  fi
+  fm_lock_release "$queue_lock" || {
+    echo "error: could not unlock capacity queue" >&2
+    exit 1
+  }
   exit 1
 fi
 if [ "$REUSE_WORKTREE" = 1 ]; then

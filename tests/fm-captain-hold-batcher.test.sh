@@ -49,10 +49,11 @@ SAMPLE_BACKLOG='
 # --- Test 2: Build generates Lavish HTML digest with Accept/Reject/Defer ---
 {
   dir="$TMP_ROOT/test-build"
-  mkdir -p "$dir/data" "$dir/state"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
   printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
 
-  out=$(FM_HOME="$dir" "$BATCHER" build --force 2>&1)
+  out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --force 2>&1)
   html="$dir/.lavish/captain-hold-digest.html"
   [ -f "$html" ] || fail "digest HTML should exist at $html: $out"
 
@@ -65,31 +66,119 @@ SAMPLE_BACKLOG='
   assert_contains "$content" "btn-accept" "Accept button exists"
   assert_contains "$content" "btn-reject" "Reject button exists"
   assert_contains "$content" "btn-defer" "Defer button exists"
-  assert_contains "$content" "window.lavish.queuePrompt" "Lavish prompt queueing script exists"
 
   pass "captain-hold-batcher: generates HTML with Accept/Reject/Defer options"
+}
+
+{
+  dir="$TMP_ROOT/test-interaction"
+  mkdir -p "$dir/data" "$dir/output"
+  cat > "$dir/data/backlog.md" <<'EOF'
+- [ ] quoted-hold - Captain's "approval" </h3><img src=x onerror=evil> & urgent (repo: proj-q) (kind: captain) (hold: Confirm) (hold-kind: captain)
+EOF
+  node "$PARSER" --backlog "$dir/data/backlog.md" --output "$dir/output/digest.html"
+  HTML="$dir/output/digest.html" node <<'EOF'
+const { readFileSync } = require("node:fs");
+const vm = require("node:vm");
+
+const html = readFileSync(process.env.HTML, "utf8");
+const script = html.match(/<script>([\s\S]*)<\/script>/);
+const question = html.match(/data-lavish-question="([^"]+)"/);
+const title = html.match(/data-lavish-title="([^"]+)"/);
+if (!script || !question || !title) throw new Error("digest did not publish an interactive card");
+const decode = (value) => value
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&lt;/g, "<")
+  .replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
+const queued = [];
+const row = { dataset: { lavishQuestion: decode(question[1]), lavishTitle: decode(title[1]) } };
+const card = { classList: { add() {} } };
+const status = {};
+const buttons = [
+  ["Accept", "release"],
+  ["Reject", "done"],
+  ["Defer", "done"],
+].map(([choice, closeMode]) => ({
+  dataset: { choice, closeMode },
+  parentElement: row,
+  addEventListener(type, handler) { if (type === "click") this.click = handler; },
+}));
+const context = {
+  window: { lavish: { queuePrompt(prompt, payload) { queued.push({ prompt, payload }); } } },
+  document: {
+    getElementById(id) { return id === `card-${row.dataset.lavishQuestion}` ? card : status; },
+    querySelectorAll(selector) { return selector === ".btn-row button" ? buttons : []; },
+  },
+};
+vm.runInNewContext(script[1], context);
+for (const button of buttons) button.click();
+const expectedTitle = 'Captain\'s "approval" </h3><img src=x onerror=evil> & urgent';
+const expected = [["Accept", "release"], ["Reject", "done"], ["Defer", "done"]];
+if (queued.length !== expected.length) throw new Error("card actions did not queue every choice");
+for (const [index, [answer, close]] of expected.entries()) {
+  const entry = queued[index];
+  if (entry.prompt !== `Captain Hold: ${expectedTitle} -> ${answer}`
+    || entry.payload.text !== `${expectedTitle} -> ${answer}`
+    || entry.payload.data.question !== "quoted-hold"
+    || entry.payload.data.answer !== answer
+    || entry.payload.data.close !== close) {
+    throw new Error(`queued ${answer} payload was incorrect`);
+  }
+}
+EOF
+
+  pass "captain-hold-batcher: card choices queue keyed Lavish payloads"
 }
 
 # --- Test 3: Status reports accurately and --daily gates execution ---
 {
   dir="$TMP_ROOT/test-daily-gate"
-  mkdir -p "$dir/data" "$dir/state"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
   printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
 
-  status_out=$(FM_HOME="$dir" "$BATCHER" status)
+  status_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" status)
   assert_contains "$status_out" "status: pending" "initial status is pending"
 
   # Run build
-  FM_HOME="$dir" "$BATCHER" build --force >/dev/null
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --force >/dev/null
 
-  status_out=$(FM_HOME="$dir" "$BATCHER" status)
+  status_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" status)
   assert_contains "$status_out" "status: ran-today" "status after run is ran-today"
 
   # Second build with --daily should skip
-  daily_out=$(FM_HOME="$dir" "$BATCHER" build --daily)
+  daily_out=$(PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily)
   assert_contains "$daily_out" "already generated" "--daily skips when already run"
 
   pass "captain-hold-batcher: respects daily cadence marker and reports status"
+}
+
+# --- Test 4: Daily marker is written only after keyed-answer arming succeeds ---
+{
+  dir="$TMP_ROOT/test-arm-retry"
+  mkdir -p "$dir/data" "$dir/state" "$dir/fakebin"
+  printf '%s\n' "$SAMPLE_BACKLOG" > "$dir/data/backlog.md"
+  cat > "$dir/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/fakebin/lavish-axi"
+
+  if PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily >/dev/null 2>&1; then
+    fail "batcher should fail when Lavish session setup fails"
+  fi
+  [ ! -e "$dir/state/.last-captain-hold-digest" ] \
+    || fail "failed arming must not record the daily marker"
+
+  fm_fake_exit0 "$dir/fakebin" lavish-axi
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" "$BATCHER" build --daily >/dev/null \
+    || fail "batcher should retry and arm after Lavish recovers"
+  [ -f "$dir/state/.last-captain-hold-digest" ] \
+    || fail "successful arming must record the daily marker"
+
+  pass "captain-hold-batcher: retries daily arming after a failed setup"
 }
 
 printf 'All fm-captain-hold-batcher tests passed.\n'

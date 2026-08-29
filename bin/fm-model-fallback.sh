@@ -17,10 +17,10 @@
 #      fallback cursor (the byte offset of the last evidence this script
 #      consumed).
 #   2. Classifies status-file text AFTER that cursor through
-#      bin/fm-dispatch-select.mjs classify-evidence, whose subscription
-#      vocabulary is the single owner of depletion signatures. No evidence,
-#      no fallback - a healthy or ambiguous worker is never relaunched by
-#      this script.
+#      bin/fm-dispatch-select.mjs classify-evidence. Harnesses without
+#      quota-axi telemetry also rotate on direct 429/limit/quota evidence.
+#      No evidence, no fallback - a healthy or ambiguous worker is never
+#      relaunched by this script.
 #   3. Walks the harness's modelFallback chain (legacy alias _model_fallback
 #      honored): the entry after the recorded model is next; a model absent
 #      from its chain steps to the chain head; the chain's last entry means

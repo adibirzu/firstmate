@@ -21,6 +21,8 @@ CONFIG="$FM_HOME/config"
 
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-landed-lib.sh
+. "$SCRIPT_DIR/fm-landed-lib.sh"
 
 fm_meta_get() {  # <meta-file> <key>
   local meta=$1 key=$2
@@ -122,6 +124,12 @@ for meta in "$STATE"/*.meta; do
     esac
   elif [ "$kind" = "scout" ]; then
     if [ -f "$FM_HOME/data/$task/report.md" ]; then
+      is_eligible=1
+    fi
+  elif [ "$(fm_meta_get "$meta" mode)" = "local-only" ]; then
+    worktree=$(fm_meta_get "$meta" worktree)
+    project=$(fm_meta_get "$meta" project)
+    if [ -n "$worktree" ] && [ -n "$project" ] && fm_content_in_default "$worktree" "$project"; then
       is_eligible=1
     fi
   fi

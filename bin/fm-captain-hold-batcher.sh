@@ -76,22 +76,36 @@ command_build() {
 
   node "$SCRIPT_DIR/fm-captain-hold-batcher.mjs" --backlog "$BACKLOG" --output "$DIGEST_HTML"
 
+  command -v lavish-axi >/dev/null 2>&1 || {
+    printf 'captain-hold-batcher: lavish-axi is not installed\n' >&2
+    return 1
+  }
+  if [ ! -x "$SCRIPT_DIR/fm-procevent-lavish.sh" ] || [ ! -x "$SCRIPT_DIR/fm-captain-hold.sh" ]; then
+    printf 'captain-hold-batcher: required Lavish helpers are unavailable\n' >&2
+    return 1
+  fi
+  if ! lavish-axi "$DIGEST_HTML"; then
+    printf 'captain-hold-batcher: cannot establish the Lavish session\n' >&2
+    return 1
+  fi
+
+  local sid
+  if ! sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$DIGEST_HTML"); then
+    printf 'captain-hold-batcher: cannot derive the Lavish source id\n' >&2
+    return 1
+  fi
+  if ! "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" --any-origin >/dev/null; then
+    printf 'captain-hold-batcher: cannot bind keyed-answer intake\n' >&2
+    return 1
+  fi
+  if ! "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$DIGEST_HTML" >/dev/null; then
+    printf 'captain-hold-batcher: cannot arm the Lavish digest\n' >&2
+    return 1
+  fi
+
   printf '%s\n' "$today" > "$MARKER"
   printf 'captain-hold-batcher: built digest at %s\n' "$DIGEST_HTML"
-
-  # If lavish-axi is installed, establish session, derive source ID, bind, and arm.
-  if command -v lavish-axi >/dev/null 2>&1; then
-    lavish-axi "$DIGEST_HTML" || true
-    if [ -f "$SCRIPT_DIR/fm-procevent-lavish.sh" ] && [ -f "$SCRIPT_DIR/fm-captain-hold.sh" ]; then
-      local sid
-      sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$DIGEST_HTML" 2>/dev/null || true)
-      if [ -n "$sid" ]; then
-        "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" --any-origin >/dev/null 2>&1 || true
-        "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$DIGEST_HTML" >/dev/null 2>&1 || true
-        printf 'captain-hold-batcher: armed as %s\n' "$sid"
-      fi
-    fi
-  fi
+  printf 'captain-hold-batcher: armed as %s\n' "$sid"
 }
 
 case "${1:-build}" in

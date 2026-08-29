@@ -270,7 +270,7 @@ land_on_origin_main() {
 
 # Override GitHub lookups to report PR 7 as merged with the supplied head.
 add_gh_pr_merged_for_head() {
-  local case_dir=$1 head=$2
+  local case_dir=$1 head=$2 state=${3:-MERGED}
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
@@ -286,7 +286,7 @@ SH
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
-      *"state,headRefOid"*) printf '%s\t%s\n' 'MERGED' '$head' ; exit 0 ;;
+      *"state,headRefOid"*) printf '%s\t%s\n' '$state' '$head' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
     esac
     ;;
@@ -754,6 +754,25 @@ test_squash_merged_branch_deleted_allows() {
   expect_code 0 "$rc" "squash-merged: teardown should succeed when the PR is merged"
   ! grep -q REFUSED "$case_dir/stderr" || fail "squash-merged: teardown printed a REFUSED line"
   pass "squash-merged + deleted-branch worktree (PR merged) is torn down (the fix)"
+}
+
+test_closed_pr_branch_deleted_allows() {
+  local case_dir rc pr_head
+  case_dir=$(make_case closed-pr)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head" CLOSED
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "closed-pr: teardown should succeed when the PR is closed"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "closed-pr: teardown printed a REFUSED line"
+  pass "closed PR + deleted-branch worktree is treated as landed and torn down"
 }
 
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head() {
@@ -2654,6 +2673,7 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_squash_merged_branch_deleted_allows
+test_closed_pr_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
 test_squash_merged_pr_allows_replayed_unpushed_patch
