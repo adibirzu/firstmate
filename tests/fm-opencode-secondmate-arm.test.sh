@@ -18,6 +18,11 @@ fm_git_identity fmtest fmtest@example.invalid
 
 PLUGIN="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
 [ -f "$PLUGIN" ] || fail "watch-arm plugin missing: $PLUGIN"
+# The predicate is imported by a node driver below. Resolve the interpreter up
+# front, like the sibling node-driven suites do, so a shard without node fails
+# as a missing prerequisite instead of reporting every case as an eligibility
+# regression (node absent => 127 => each `run_predicate || fail` fires).
+NODE_BIN=$(command -v node) || fail "test needs node"
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -133,7 +138,7 @@ for (const c of cases) {
 process.exit(failures ? 1 : 0);
 EOF
   local out status
-  out=$(node "$DRIVER" "$plugin" "$@" 2>&1); status=$?
+  out=$("$NODE_BIN" "$DRIVER" "$plugin" "$@" 2>&1); status=$?
   printf '%s\n' "$out" >&2
   return "$status"
 }
