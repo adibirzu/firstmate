@@ -419,15 +419,21 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-arm-path" } } });
-for (let i = 0; i < 250 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
+const expectedRoot = realpathSync(process.env.WORKTREE);
+// The arm child creates the log by `>>` redirection before it writes its line,
+// so polling on mere existence can observe the empty file and misreport a live
+// arm as an arm against the wrong root. Poll on the line itself instead.
+const readLog = () =>
+  (existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8") : "");
+let text = readLog();
+for (let i = 0; i < 250 && !text.includes("root="); i += 1) {
   await new Promise((settle) => setTimeout(settle, 20));
+  text = readLog();
 }
-if (!existsSync(process.env.FM_ARM_LOG)) {
+if (!text.includes("root=")) {
   console.error("no arm child ran: the marked secondmate home was scoped out of supervision");
   process.exit(1);
 }
-const text = readFileSync(process.env.FM_ARM_LOG, "utf8");
-const expectedRoot = realpathSync(process.env.WORKTREE);
 if (!text.includes(`root=${expectedRoot}`)) {
   console.error(`arm child ran against the wrong root:\n${text}`);
   process.exit(1);
