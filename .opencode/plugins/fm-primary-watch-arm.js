@@ -107,7 +107,7 @@ function rootIsMarkedSecondmateHome(root) {
   if (stat.isSymbolicLink() || !stat.isFile()) return false;
   let id;
   try {
-    id = readFileSync(marker, "utf8").replace(/\s+/g, "");
+    id = readFileSync(marker, "utf8").split("\n", 1)[0].replace(/\s+/g, "");
   } catch {
     return false;
   }
@@ -124,8 +124,8 @@ function rootIsMarkedSecondmateHome(root) {
 // git-common-dir) qualifies, so crewmate/scout task worktrees stay silent.
 async function isArmEligibleRoot(root) {
   if (!root) return false;
-  if (existsSync(`${root}/AGENTS.md`) && existsSync(`${root}/bin`) && rootIsMarkedSecondmateHome(root)) return true;
   if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
+  if (rootIsMarkedSecondmateHome(root)) return true;
   const gitDir = await runProcess("git", ["-C", root, "rev-parse", "--git-dir"]);
   const commonDir = await runProcess("git", ["-C", root, "rev-parse", "--git-common-dir"]);
   if (gitDir.code !== 0 || commonDir.code !== 0) return false;

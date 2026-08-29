@@ -67,6 +67,31 @@ make_stray_marker_worktree_dir() {
   printf '%s\n' "$dir"
 }
 
+# Marker fidelity: fm_root_is_secondmate_home validates only the FIRST line of
+# the marker, so a home whose marker carries a valid id plus a trailing
+# annotation line is still a genuine secondmate home to every shell hook - the
+# plugin must agree, or the home silently loses its watcher again.
+make_annotated_marker_home_dir() {
+  local base=$1 dir=$2
+  fm_git_worktree "$base" "$dir" fm/opencode-annotated-marker-home
+  mkdir -p "$dir/bin"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc-test-2\n# leased 2026-08\n' > "$dir/.fm-secondmate-home"
+  printf '%s\n' "$dir"
+}
+
+# Anti-spoof: only the first line counts, so a marker whose first line is blank
+# has an empty id and must not force-include, even though a later line looks
+# like a valid id.
+make_blank_first_line_marker_worktree_dir() {
+  local base=$1 dir=$2
+  fm_git_worktree "$base" "$dir" fm/opencode-blank-first-line-marker
+  mkdir -p "$dir/bin"
+  : > "$dir/AGENTS.md"
+  printf '\nsm-oc-test-3\n' > "$dir/.fm-secondmate-home"
+  printf '%s\n' "$dir"
+}
+
 is_linked_worktree() {
   local dir=$1 gd gcd
   gd=$(git -C "$dir" rev-parse --git-dir 2>/dev/null) || return 1
@@ -159,7 +184,33 @@ test_stray_marker_cannot_spoof() {
   pass "watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt"
 }
 
+test_annotated_marker_home_arms() {
+  local base dir
+  base="$TMP_ROOT/annotated-base"
+  dir="$TMP_ROOT/annotated-marker-home"
+  make_annotated_marker_home_dir "$base" "$dir" >/dev/null
+  is_linked_worktree "$dir" \
+    || fail "annotated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  run_predicate "$PLUGIN" "$dir:true" \
+    || fail "a marker with a valid first-line id plus a trailing annotation must arm, matching fm_root_is_secondmate_home"
+  pass "watch-arm: honours the first-line marker contract when the marker has extra lines"
+}
+
+test_blank_first_line_marker_cannot_spoof() {
+  local base dir
+  base="$TMP_ROOT/blank-first-base"
+  dir="$TMP_ROOT/blank-first-line-marker-worktree"
+  make_blank_first_line_marker_worktree_dir "$base" "$dir" >/dev/null
+  is_linked_worktree "$dir" \
+    || fail "blank-first-line fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  run_predicate "$PLUGIN" "$dir:false" \
+    || fail "a marker whose first line is blank must not spoof force-inclusion in a linked worktree"
+  pass "watch-arm: a blank first line cannot spoof inclusion via a later line"
+}
+
 test_primary_checkout_arms
 test_secondmate_linked_home_arms
 test_crewmate_worktree_stays_silent
 test_stray_marker_cannot_spoof
+test_annotated_marker_home_arms
+test_blank_first_line_marker_cannot_spoof
