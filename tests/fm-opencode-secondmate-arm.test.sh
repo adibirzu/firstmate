@@ -148,6 +148,14 @@ EOF
 test_primary_checkout_arms() {
   local dir
   dir=$(make_primary_dir "$TMP_ROOT/primary")
+  # Pin the positive control's shape, exactly as every linked-worktree case
+  # below pins its own. This case is the only evidence that the markerless
+  # plain-checkout branch still arms; it carries no marker, so if the fixture
+  # ever drifted into a linked worktree the assertion would have to go red
+  # rather than keep passing through some other branch of the predicate.
+  if is_linked_worktree "$dir"; then
+    fail "primary fixture must be a plain checkout (git-dir == git-common-dir), got a linked worktree"
+  fi
   run_predicate "$PLUGIN" "$dir:true" \
     || fail "primary (plain non-worktree) checkout must be arm-eligible"
   pass "watch-arm: arms the plain primary checkout"
