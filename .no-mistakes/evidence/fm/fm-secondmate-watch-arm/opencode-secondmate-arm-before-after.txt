@@ -1,0 +1,27 @@
+=== BEFORE the fix (db5dd6da isPrimaryRoot behavior) ===
+firstmate tree: /tmp/fm-prefix-vGEi
+
+secondmate home (treehouse-leased LINKED worktree + valid marker)
+  tms-captain            shell owner: IN  (every shell hook supervises this root)
+                         opencode   : NO WATCHER ARMED -> supervision silently off
+                         expected   : watcher ARMED (it runs its own primary session)
+
+crewmate task worktree (markerless LINKED worktree) - control
+  crew-task              shell owner: OUT (shell hooks scope this root out)
+                         opencode   : NO WATCHER ARMED -> supervision silently off
+                         expected   : NO WATCHER ARMED (child worktrees stay silent)
+
+
+=== AFTER the fix (b16fe60d isArmEligibleRoot) ===
+firstmate tree: /Users/adrianb/.no-mistakes/worktrees/80e4cf1781af/01M165BYW4XX7X1Y6MEJJWMWTH
+
+secondmate home (treehouse-leased LINKED worktree + valid marker)
+  tms-captain            shell owner: IN  (every shell hook supervises this root)
+                         opencode   : watcher ARMED   -> ARMED root=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-arm-demo-ut1j/tms-captain
+                         expected   : watcher ARMED (it runs its own primary session)
+
+crewmate task worktree (markerless LINKED worktree) - control
+  crew-task              shell owner: OUT (shell hooks scope this root out)
+                         opencode   : NO WATCHER ARMED -> supervision silently off
+                         expected   : NO WATCHER ARMED (child worktrees stay silent)
+
