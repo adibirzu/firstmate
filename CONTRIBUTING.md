@@ -29,6 +29,8 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
 7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
+8. Push every follow-up commit on that open PR through the gate as well, never with a plain `git push`.
+   The attestation in the PR body binds to the exact head it was produced for, so a push that bypasses the gate leaves the PR body bound to the older head and fails `Require no-mistakes`; re-run `git push no-mistakes` so the attestation binds to the current head again.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
