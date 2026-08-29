@@ -59,7 +59,10 @@
 #                          an unhandled record's ladder cannot advance; quiet
 #                          successful attempts never wake firstmate
 #                          (bin/fm-task-inbox-lib.sh owns the ladder policy)
-#   check: <script>: <out> authenticated check output, always actionable
+#   check: <script>: <out> authenticated check output, actionable except a
+#                          merged PR poll whose canonical identity already
+#                          matches this task's merge-notified marker, which is
+#                          absorbed so one merge never wakes the captain twice
 #   check: process-event result captured: <keys>
 #                          a durably captured process-to-event result is queued
 #                          and has not been surfaced yet; reported once per
@@ -1254,6 +1257,7 @@ while :; do
             "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
             "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER"; then
             absorbed=1
+            triage_log "absorbed merged PR poll (merge already notified for $id)"
           fi
         fi
         reason="check: $c: $out"
