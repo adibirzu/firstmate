@@ -1,0 +1,20 @@
+==============================================================
+SCENARIO: PR #1 for task-a is merged; the merge poll is later
+          re-armed for that SAME already-announced merge.
+WATCHER : AFTER the fix (bin/fm-watch.sh @ 2de57e3)
+==============================================================
+
+--- cycle 1: the merge is detected for the first time ---
+captain sees : check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.IOeAjp/evidence-rearm/home/state/task-a.check.sh: merged
+merge-notified marker recorded: yes
+  identity -> fm-pr-poll-merge-notified-v1 github github.com o/r 1 
+
+--- fm-pr-check.sh re-arms the poll for the same merged PR #1 ---
+
+--- cycle 2: the identical merge is polled again ---
+captain sees : check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.IOeAjp/evidence-rearm/home/state/z-stop.check.sh: stop-cycle
+RESULT       : absorbed - no second main-blocking wake for the same merge
+main-blocking wake rows queued for task-a: 0
+watcher triage log:
+  [2026-08-29T08:14:47+0300] absorbed merged PR poll (merge already notified for task-a)
+

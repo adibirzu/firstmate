@@ -1,0 +1,12 @@
+# focused merge-absorption tests (tests/fm-pr-check-security.test.sh)
+
+## with bin/fm-watch.sh at base db5dd6d (missing the fm_pr_poll_merge_mark_notified call)
+ok - validated merged polls notify once and retire before the next watcher cycle
+not ok - the merge-notified marker was not recorded
+exit=1
+
+## with bin/fm-watch.sh at 2de57e3 (the change under test)
+ok - validated merged polls notify once and retire before the next watcher cycle
+ok - a repeat identical merged poll for an already-notified task is absorbed, never queued as a main-blocking row
+ok - a different merged PR for the same task gets its own first notification
+exit=0

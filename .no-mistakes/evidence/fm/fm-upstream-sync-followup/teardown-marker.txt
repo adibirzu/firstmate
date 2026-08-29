@@ -1,0 +1,8 @@
+state/ before teardown:
+  task-a.check.sh
+  task-a.meta
+  task-a.pr-poll
+  task-a.pr-poll-merge-notified
+  task-a.pr-poll-registration
+state/ after teardown --force:
+RESULT: marker removed by teardown, as AGENTS.md documents

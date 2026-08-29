@@ -1,0 +1,13 @@
+# docs/documentation-audiences.json — real consumer (bin/fm-doc-audience-check.sh via tests/fm-documentation-audiences.test.sh)
+
+## with the JSON at base db5dd6d
+fm-doc-audience-check: unclassified: .agents/skills/harness-creator/README-UK.md, .agents/skills/harness-creator/README.md, .agents/skills/harness-creator/SKILL.md, .agents/skills/harness-creator/references/context-engineering-pattern.md, .agents/skills/harness-creator/references/gotchas.md, .agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md, .agents/skills/harness-creator/references/memory-persistence-pattern.md, .agents/skills/harness-creator/references/multi-agent-pattern.md, .agents/skills/harness-creator/references/skill-runtime-pattern.md, .agents/skills/harness-creator/references/tool-registry-pattern.md, .agents/skills/harness-creator/templates/agents.md, .agents/skills/harness-creator/templates/progress.md, .agents/skills/harness-creator/templates/session-handoff.md
+not ok - repository documentation audience check failed
+exit=1
+
+## with the JSON at 2de57e3
+ok - documentation inventory classifies every maintained prose surface exactly once
+ok - classification, setup routing, and maintained-prose scope fail safely
+ok - required documentation owner pointers cannot silently disappear
+ok - local links resolve while dates, versions, commands, and incident prose remain semantically reviewed
+exit=0

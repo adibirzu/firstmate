@@ -1,0 +1,19 @@
+==============================================================
+SCENARIO: PR #1 for task-a is merged; the merge poll is later
+          re-armed for that SAME already-announced merge.
+WATCHER : BEFORE the fix (bin/fm-watch.sh @ base db5dd6d)
+==============================================================
+
+--- cycle 1: the merge is detected for the first time ---
+captain sees : check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.lc3PhY/evidence-rearm/home/state/task-a.check.sh: merged
+merge-notified marker recorded: NO
+
+--- fm-pr-check.sh re-arms the poll for the same merged PR #1 ---
+
+--- cycle 2: the identical merge is polled again ---
+captain sees : check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.lc3PhY/evidence-rearm/home/state/task-a.check.sh: merged
+RESULT       : DUPLICATE - the captain is woken a second time for the same merge
+main-blocking wake rows queued for task-a: 0
+watcher triage log:
+  (empty)
+
