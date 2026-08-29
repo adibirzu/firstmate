@@ -1,0 +1,25 @@
+bin/fm-doc-audience-check.sh -- the real consumer of docs/documentation-audiences.json
+
+--- BASE db5dd6d (both docs files reverted): harness-creator surfaces unclassified ---
+  fm-doc-audience-check: unclassified: .agents/skills/harness-creator/README-UK.md
+  .agents/skills/harness-creator/README.md
+  .agents/skills/harness-creator/SKILL.md
+  .agents/skills/harness-creator/references/context-engineering-pattern.md
+  .agents/skills/harness-creator/references/gotchas.md
+  .agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md
+  .agents/skills/harness-creator/references/memory-persistence-pattern.md
+  .agents/skills/harness-creator/references/multi-agent-pattern.md
+  .agents/skills/harness-creator/references/skill-runtime-pattern.md
+  .agents/skills/harness-creator/references/tool-registry-pattern.md
+  .agents/skills/harness-creator/templates/agents.md
+  .agents/skills/harness-creator/templates/progress.md
+  .agents/skills/harness-creator/templates/session-handoff.md
+exit=1
+
+--- BASE docs/configuration.md only: README.md anchor is dead ---
+fm-doc-audience-check: unresolved local anchor in README.md: docs/configuration.md#pi-supervision-branch-model-and-effort-configsupervision-branch-model-configsupervision-branch-effort
+exit=1
+
+--- HEAD 2eb305f: every surface classified, all local links and anchors resolve ---
+fm-doc-audience-check: ok surfaces=102 local_links=317
+exit=0

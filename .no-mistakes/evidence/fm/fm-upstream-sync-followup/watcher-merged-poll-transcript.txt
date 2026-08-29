@@ -1,0 +1,16 @@
+### Cycle 1 - PR o/r#1 is merged for the first time
+captain wake (watcher stdout):
+    check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.6c1vtN/evidence-merged-reregistration/home/state/task-a.check.sh: merged
+main-blocking wake-queue rows for task-a:
+    count=1
+merge-notified marker on disk:
+    task-a.pr-poll-merge-notified
+
+### Cycle 2 - the SAME merge is re-registered (fm-pr-check.sh re-armed)
+captain wake (watcher stdout):
+    check: /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-pr-check-security.6c1vtN/evidence-merged-reregistration/home/state/z-stop.check.sh: stop-cycle
+main-blocking wake-queue rows for task-a:
+    count=0
+watcher triage log:
+    [2026-08-29T05:50:13+0300] absorbed merged PR poll (merge already notified for task-a)
+

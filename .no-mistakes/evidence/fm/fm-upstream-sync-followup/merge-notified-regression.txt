@@ -1,0 +1,17 @@
+Targeted subset of tests/fm-pr-check-security.test.sh (pre-existing tests, unchanged
+by this branch), run against the base and the head bin/fm-watch.sh:
+
+  test_merged_poll_retires_once
+  test_merged_poll_reregistration_after_notification_is_absorbed
+  test_different_merged_pr_for_same_task_is_not_absorbed
+  test_retirement_queue_failure_and_receipt_tampering   (queue-publish-before-retirement ordering)
+
+--- BASE bin/fm-watch.sh (db5dd6d): the marker is never written ---
+ok - validated merged polls notify once and retire before the next watcher cycle
+not ok - the merge-notified marker was not recorded
+
+--- HEAD bin/fm-watch.sh (2eb305f) ---
+ok - validated merged polls notify once and retire before the next watcher cycle
+ok - a repeat identical merged poll for an already-notified task is absorbed, never queued as a main-blocking row
+ok - a different merged PR for the same task gets its own first notification
+ok - queue failure and untrusted receipts preserve canonical poll evidence
