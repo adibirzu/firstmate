@@ -66,7 +66,7 @@ The supervision branch's job is narrower than the captain's own work, so it can 
 It is also an easier job than the captain's own conversation needs reasoning for, so the branch can run at a shallower effort than main as well.
 The Pi `/supervision-model` command settles both in one flow: it opens Pi's own selector over the models that Pi reports with configured credentials and that this home's stored credentials let the isolated supervision branch resolve, plus a first "Follow main" entry, and then a second picker for the branch's reasoning effort.
 It persists the model pick in gitignored `config/supervision-branch-model` and the effort pick in gitignored `config/supervision-branch-effort`, both under the effective Firstmate home, resolved from `FM_HOME`, then `FM_ROOT_OVERRIDE`, then the tracked code root derived from the extension path, or under `FM_CONFIG_OVERRIDE` when that test and specialized-setup override is present.
-Picking also releases the live branch so the next wake reopens the same persistent branch conversation under the new model without waiting for a session replacement.
+Picking also releases the live branch so the next wake reopens the same persistent branch conversation under the new model and effort without waiting for a session replacement.
 
 The effort file holds one Pi thinking level followed by one newline, and the two pins are independent: a captain may pin a model, an effort, both, or neither.
 The effort step runs after the model step because the effective branch model decides which levels exist: its menu is Pi's own supported-level list, so a model that maps no extended levels simply does not offer them and a non-reasoning model offers only `off`.
