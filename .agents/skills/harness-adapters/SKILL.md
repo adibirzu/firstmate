@@ -275,6 +275,11 @@ Throwing from `session.idle` does not block `opencode run`, so the primary adapt
 The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher wake supervision and coordinates with the guard plugin before the guard tries a blind-turn follow-up.
 The follow-up was verified in the interactive TUI; `opencode run` can exit before displaying a queued follow-up, so the adapter is fail-open in headless mode.
 
+**Every export of a scanned plugin module is a plugin factory.**
+OpenCode treats every export of a scanned `.opencode/plugins/*.js` module as a plugin factory, so such a module must export exactly one factory.
+Shared helpers therefore live in the unscanned `.opencode/plugins/lib/` directory - `fm-operational-input.js` and the arm-eligibility predicate `fm-watch-arm-eligibility.js` - and are imported by the plugin files.
+Moving one back beside a plugin would register the helper as a second plugin; test fixtures that copy a plugin must copy its `lib/` imports too.
+
 ## pi and pi-signed (VERIFIED 2026-07-27)
 
 | Fact | Value |
