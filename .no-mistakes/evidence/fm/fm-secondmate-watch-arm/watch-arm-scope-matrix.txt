@@ -1,0 +1,8 @@
+======================================================================
+OpenCode watch-arm scope on this branch (session.idle in each root)
+======================================================================
+  main primary checkout                          plain checkout   marker=none           -> ARMED   [as required]
+  treehouse-leased secondmate home               linked worktree  marker=sm-1           -> ARMED   [as required]
+  crewmate/scout task worktree                   linked worktree  marker=none           -> SILENT  [as required]
+  linked worktree w/ empty marker                linked worktree  marker=(empty)        -> SILENT  [as required]
+======================================================================

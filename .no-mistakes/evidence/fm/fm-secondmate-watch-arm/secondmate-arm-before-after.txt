@@ -1,0 +1,19 @@
+======================================================================
+OpenCode watch-arm: session.idle inside a treehouse-leased secondmate home
+======================================================================
+
+BEFORE  (base 1a92f9eff591 - isPrimaryRoot gate)
+  fixture:            /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//nm-arm-evidence.j9JuoV/before-idle-home
+  linked worktree:    yes (git-dir != git-common-dir)
+  marker:             .fm-secondmate-home = sm-evidence-1
+  arm gate verdict:   not-primary
+  supervision:        NONE - no arm child was ever spawned (secondmate silently unsupervised)
+
+AFTER   (this branch - isArmEligibleRoot gate)
+  fixture:            /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//nm-arm-evidence.j9JuoV/after-idle-home
+  linked worktree:    yes (git-dir != git-common-dir)
+  marker:             .fm-secondmate-home = sm-evidence-1
+  arm gate verdict:   external
+  supervision:        ARMED -> ARM CHILD RAN  root=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/nm-arm-evidence.j9JuoV/after-idle-home
+
+======================================================================
