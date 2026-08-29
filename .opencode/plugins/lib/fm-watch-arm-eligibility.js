@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 
 const SECONDMATE_MARKER = ".fm-secondmate-home";
@@ -36,11 +36,26 @@ function rootIsMarkedSecondmateHome(root) {
 }
 
 // Empty on any failure, so a root git cannot resolve is never mistaken for one
-// whose git-dir and git-common-dir agree.
+// whose git-dir and git-common-dir agree. Asynchronous like the plugin's own
+// process helper: this runs on every session.idle inside the OpenCode TUI
+// process, which must never block on a git spawn.
 function gitRevParse(root, flag) {
-  const result = spawnSync("git", ["-C", root, "rev-parse", flag], { encoding: "utf8" });
-  if (result.error || result.status !== 0) return "";
-  return String(result.stdout ?? "").trim();
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn("git", ["-C", root, "rev-parse", flag], { stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      resolve("");
+      return;
+    }
+    let stdout = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on("data", () => {});
+    proc.on("error", () => resolve(""));
+    proc.on("close", (code) => resolve(code === 0 ? stdout.trim() : ""));
+  });
 }
 
 // A root is arm-eligible when it is a genuine firstmate primary home: the main
@@ -55,8 +70,8 @@ export async function isArmEligibleRoot(root) {
   if (!root) return false;
   if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
   if (rootIsMarkedSecondmateHome(root)) return true;
-  const gitDir = gitRevParse(root, "--git-dir");
-  const commonDir = gitRevParse(root, "--git-common-dir");
+  const gitDir = await gitRevParse(root, "--git-dir");
+  const commonDir = await gitRevParse(root, "--git-common-dir");
   if (!gitDir || !commonDir) return false;
   return gitDir === commonDir;
 }
