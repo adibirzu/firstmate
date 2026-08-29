@@ -50,9 +50,19 @@ This preference is local to each Firstmate home and is not part of secondmate in
 ## Pi supervision branch
 
 On a Pi primary, ordinary actionable fleet wakes that pass the unchanged watcher classifier, plus heartbeat scans that the cheap bash-level scan flags as possibly captain-relevant, are handled by a persistent in-process supervision branch that keeps the captain's conversation clean; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns the architecture.
+Supervision is default-on: once a Pi primary session owns this home's fleet lock, the branch is eligible for every task with no captain grant file required.
+A wake is delegated only when every row observed by its unread-queue eligibility checks is either a resolvable task-local signal or stale event or a heartbeat; a genuinely no-op heartbeat is absorbed in bash and never reaches Pi, while an observed fleet-wide or unresolvable wake and every watcher-failure alarm stays on the captain-facing main path.
+The branch repeats the eligibility check immediately before prompting the branch to drain; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns the accepted confused-agent-grade race limit between that final check and drain startup.
+Away mode still declines every wake offer, and a broken branch still falls back to today's wake-to-main path.
+The branch's role stays bounded exactly as the captain-approved architecture set it: it cannot merge a PR, land local work, or freshly spawn, and every existing captain gate remains unchanged.
+Homes on any other primary harness never load this feature and are entirely unaffected.
+Runtime state lives in `state/branch-outcomes.jsonl` with its `.branch-outcomes-cursor`, the persistent conversation under `state/branch-session/` with its `.branch-session` pointer and `.branch-mirror-cursor`, and per-task `state/.lease-<task>` files; `bin/fm-branch-outcome.sh` and `bin/fm-lease-lib.sh` own those formats.
+A captain-facing (verdict `captain`) branch outcome opens exactly one follow-up turn on main - that turn is the captain-visible result, and Pi never separately prints or renders the merge note itself.
+A no-change heartbeat outcome explicitly reported with `task=fleet` and `silent=true` is delivered silently with no rendered note, while every other routine outcome still appends a rendered, sailboat-prefixed note.
 
 ## Pi supervision branch model and effort (config/supervision-branch-model, config/supervision-branch-effort)
 
+The supervision branch's job is narrower than the captain's own work, so it can run on a cheaper model than main.
 It is also an easier job than the captain's own conversation needs reasoning for, so the branch can run at a shallower effort than main as well.
 The Pi `/supervision-model` command settles both in one flow: it opens Pi's own selector over the models that Pi reports with configured credentials and that this home's stored credentials let the isolated supervision branch resolve, plus a first "Follow main" entry, and then a second picker for the branch's reasoning effort.
 It persists the model pick in gitignored `config/supervision-branch-model` and the effort pick in gitignored `config/supervision-branch-effort`, both under the effective Firstmate home, resolved from `FM_HOME`, then `FM_ROOT_OVERRIDE`, then the tracked code root derived from the extension path, or under `FM_CONFIG_OVERRIDE` when that test and specialized-setup override is present.
@@ -73,15 +83,6 @@ An effort token Pi would not recognize at all is treated as no pin rather than p
 Cancelling the model picker cancels the whole command and changes neither choice.
 Cancelling only the effort picker keeps the standing effort choice and still applies the model pick made in the same run, and the command's one closing message reports both choices as they will actually take effect.
 Both choices are local to each Firstmate home and are not part of secondmate inherited configuration, the same as the Pi Calm preference; a secondmate home pins its own supervision model and effort with its own `/supervision-model`.
-Supervision is default-on: once a Pi primary session owns this home's fleet lock, the branch is eligible for every task with no captain grant file required.
-A wake is delegated only when every row observed by its unread-queue eligibility checks is either a resolvable task-local signal or stale event or a heartbeat; a genuinely no-op heartbeat is absorbed in bash and never reaches Pi, while an observed fleet-wide or unresolvable wake and every watcher-failure alarm stays on the captain-facing main path.
-The branch repeats the eligibility check immediately before prompting the branch to drain; [docs/pi-supervision-branch.md](pi-supervision-branch.md) owns the accepted confused-agent-grade race limit between that final check and drain startup.
-Away mode still declines every wake offer, and a broken branch still falls back to today's wake-to-main path.
-The branch's role stays bounded exactly as the captain-approved architecture set it: it cannot merge a PR, land local work, or freshly spawn, and every existing captain gate remains unchanged.
-Homes on any other primary harness never load this feature and are entirely unaffected.
-Runtime state lives in `state/branch-outcomes.jsonl` with its `.branch-outcomes-cursor`, the persistent conversation under `state/branch-session/` with its `.branch-session` pointer and `.branch-mirror-cursor`, and per-task `state/.lease-<task>` files; `bin/fm-branch-outcome.sh` and `bin/fm-lease-lib.sh` own those formats.
-A captain-facing (verdict `captain`) branch outcome opens exactly one follow-up turn on main - that turn is the captain-visible result, and Pi never separately prints or renders the merge note itself.
-A no-change heartbeat outcome explicitly reported with `task=fleet` and `silent=true` is delivered silently with no rendered note, while every other routine outcome still appends a rendered, sailboat-prefixed note.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
