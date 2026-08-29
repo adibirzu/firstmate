@@ -15,3 +15,5 @@ When this session owns supervision and away mode is not active:
 
 OpenCode's persistent TUI plugin runtime is the wake mechanism.
 The plugin applies in the main primary checkout and a secondmate's own home, and stays silent only in child crewmate and scout worktrees.
+That scope decision is `isArmEligibleRoot` in `.opencode/plugins/lib/fm-watch-arm-eligibility.js`, which mirrors the shell owner `bin/fm-primary-scope-lib.sh`: a valid `.fm-secondmate-home` marker force-includes a secondmate home even when treehouse leases it as a linked worktree, and a markerless root must be a plain checkout.
+It lives under `lib/` rather than beside the plugin because OpenCode treats every export of a scanned plugin module as a plugin factory, so moving it back into `.opencode/plugins/` would register the predicate as a second plugin.
