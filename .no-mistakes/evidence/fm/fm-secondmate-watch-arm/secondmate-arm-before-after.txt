@@ -1,19 +1,23 @@
-======================================================================
-OpenCode watch-arm: session.idle inside a treehouse-leased secondmate home
-======================================================================
+==============================================================================
+ Scenario: a treehouse-leased secondmate home running OpenCode (tms-captain)
+==============================================================================
+home dir      : $HOME/tms-captain-secondmate-home
+git-dir       : /private/tmp/fm-arm-evidence.OAIepW/fixture-base/.git/worktrees/tms-captain-secondmate-home
+git-common-dir: /private/tmp/fm-arm-evidence.OAIepW/fixture-base/.git
+  -> linked worktree (git-dir != git-common-dir), as treehouse leases them
+marker        : .fm-secondmate-home = sm-evidence-1
 
-BEFORE  (base 1a92f9eff591 - isPrimaryRoot gate)
-  fixture:            /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//nm-arm-evidence.j9JuoV/before-idle-home
-  linked worktree:    yes (git-dir != git-common-dir)
-  marker:             .fm-secondmate-home = sm-evidence-1
-  arm gate verdict:   not-primary
-  supervision:        NONE - no arm child was ever spawned (secondmate silently unsupervised)
+--- Ground truth: what every firstmate SHELL hook decides for this home ---
+bin/fm-primary-scope-lib.sh :: fm_primary_scope_matches -> IN SCOPE (this home supervises itself)
 
-AFTER   (this branch - isArmEligibleRoot gate)
-  fixture:            /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//nm-arm-evidence.j9JuoV/after-idle-home
-  linked worktree:    yes (git-dir != git-common-dir)
-  marker:             .fm-secondmate-home = sm-evidence-1
-  arm gate verdict:   external
-  supervision:        ARMED -> ARM CHILD RAN  root=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/nm-arm-evidence.j9JuoV/after-idle-home
+--- BEFORE (base 1a92f9e, isPrimaryRoot) : OpenCode turn ends, session goes idle ---
+RESULT: NO watcher armed -- session.idle produced no arm child for this secondmate home
+exit=1
 
-======================================================================
+--- AFTER (39389fc, isArmEligibleRoot)   : OpenCode turn ends, session goes idle ---
+RESULT: watcher ARMED -- arm child ran: bin/fm-watch-arm.sh invoked for root=/private/tmp/fm-arm-evidence.OAIepW/tms-captain-secondmate-home
+exit=0
+
+--- Counter-check: a markerless crewmate/scout task worktree must stay silent ---
+RESULT: NO watcher armed -- session.idle produced no arm child for this secondmate home
+exit=1 (1 = stayed silent, which is correct for a task worktree)

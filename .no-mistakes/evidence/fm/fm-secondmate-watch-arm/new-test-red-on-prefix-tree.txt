@@ -1,0 +1,8 @@
+=== tests/fm-opencode-secondmate-arm.test.sh run against the PRE-FIX tree (base 1a92f9e) ===
+(base tree extracted with git archive; only the new test file added)
+
+ok /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-opencode-secondmate-arm.BXJmpv/primary -> true
+ok - watch-arm: arms the plain primary checkout
+FAIL /var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-opencode-secondmate-arm.BXJmpv/bin-not-a-dir-checkout: expected false, got true
+not ok - a root whose bin is a plain file must stay silent, matching fm_primary_scope_matches
+EXIT=1

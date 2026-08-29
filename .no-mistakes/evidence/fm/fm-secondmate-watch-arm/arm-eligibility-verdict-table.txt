@@ -1,0 +1,8 @@
+FIXTURE                        SHELL OWNER    BEFORE (base)  AFTER (fix)   
+------------------------------ -----------    -------------  -----------   
+main-primary-checkout          arm            arm            arm           
+secondmate-home-leased         arm            silent         arm              <-- BUG: diverged from shell owner
+secondmate-home-annotated      arm            silent         arm              <-- BUG: diverged from shell owner
+crewmate-task-worktree         silent         silent         silent        
+worktree-empty-marker          silent         silent         silent        
+worktree-symlinked-marker      silent         silent         silent        
