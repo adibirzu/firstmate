@@ -749,6 +749,11 @@ select_lane() {
   [ "$found" -eq 1 ] || die "lane '$want' selected no tests"
 }
 
+# Every set operation below runs under LC_ALL=C, on the sort that builds a list
+# and on the comm that compares two of them alike. comm re-checks its inputs
+# against the collation of ITS OWN locale, so a C-sorted file handed to a comm
+# running under an ambient UTF-8 locale aborts with "is not in sorted order" and
+# the guard exits non-zero with no finding of its own to explain it.
 run_coverage_guard() {
   local tmp missing extra a b shard
   local -a saved_scripts=()
