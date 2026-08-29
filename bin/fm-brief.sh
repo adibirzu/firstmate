@@ -388,8 +388,6 @@ $RULE_NO_POLL
 
 $INBOX_SECTION
 
-$INBOX_SECTION
-
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
@@ -511,8 +509,6 @@ $RULE1
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 $RULE_NO_PROMPT
 $RULE_NO_POLL
-
-$INBOX_SECTION
 
 $INBOX_SECTION
 
