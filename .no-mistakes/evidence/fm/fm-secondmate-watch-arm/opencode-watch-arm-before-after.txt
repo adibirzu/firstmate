@@ -1,0 +1,23 @@
+=======================================================================================
+ firstmate - OpenCode watch-arm supervision eligibility
+ Each row: a real .opencode/plugins/fm-primary-watch-arm.js factory driven through a
+ session.idle event over a hermetic git fixture with a task in flight. SHELL-OWNER is
+ bin/fm-primary-scope-lib.sh::fm_primary_scope_matches run over the same fixture.
+=======================================================================================
+
+  BEFORE  (base db5dd6d)
+  SCENARIO (real plugin, session.idle)       SHAPE   SHELL-OWNER OPENCODE PLUGIN OUTCOME
+  -------------------------------------------------------------------------------------
+  main primary checkout (markerless)         PLAIN   SCOPES IN  ARMED  (arm child spawned)
+  secondmate home, valid marker              LINKED  SCOPES IN  SILENT (no arm child)
+  crewmate/scout task worktree, no marker    LINKED  SCOPES OUT  SILENT (no arm child)
+  linked worktree, stray EMPTY marker        LINKED  SCOPES OUT  SILENT (no arm child)
+
+  AFTER   (88659da)
+  SCENARIO (real plugin, session.idle)       SHAPE   SHELL-OWNER OPENCODE PLUGIN OUTCOME
+  -------------------------------------------------------------------------------------
+  main primary checkout (markerless)         PLAIN   SCOPES IN  ARMED  (arm child spawned)
+  secondmate home, valid marker              LINKED  SCOPES IN  ARMED  (arm child spawned)
+  crewmate/scout task worktree, no marker    LINKED  SCOPES OUT  SILENT (no arm child)
+  linked worktree, stray EMPTY marker        LINKED  SCOPES OUT  SILENT (no arm child)
+

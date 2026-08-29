@@ -1,0 +1,11 @@
+$ bash tests/fm-opencode-secondmate-arm.test.sh
+ok - watch-arm: arms the plain primary checkout
+ok - watch-arm: arms a treehouse-leased LINKED secondmate home via its marker (regression)
+ok - watch-arm: stays silent in a crewmate/scout linked task worktree
+ok - watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt
+ok - watch-arm: honours the first-line marker contract when the marker has extra lines
+ok - watch-arm: a blank first line cannot spoof inclusion via a later line
+ok - watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it
+ok - watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C
+ok - watch-arm: a marked secondmate home spawns a real arm child on session.idle (regression)
+exit=0
