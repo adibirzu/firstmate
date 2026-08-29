@@ -97,6 +97,31 @@ make_blank_first_line_marker_worktree_dir() {
   printf '%s\n' "$dir"
 }
 
+# Mirror fidelity: fm_root_is_secondmate_home reads the first line with
+# `IFS= read -r`, which reports failure at EOF when that line carries no
+# trailing newline - so the shell owner scopes such a home OUT. The plugin must
+# reach the same verdict, or OpenCode would arm a watcher in a root every shell
+# hook treats as non-primary.
+make_unterminated_marker_worktree_dir() {
+  local base=$1 dir=$2
+  fm_git_worktree "$base" "$dir" fm/opencode-unterminated-marker
+  mkdir -p "$dir/bin" "$dir/state"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc-test-4' > "$dir/.fm-secondmate-home"
+  printf '%s\n' "$dir"
+}
+
+# Run the shared shell owner over the same fixture so the plugin is pinned to
+# it rather than to a hand-picked expectation.
+shell_owner_scopes_in() {
+  local dir=$1
+  (
+    # shellcheck source=bin/fm-primary-scope-lib.sh
+    . "$ROOT/bin/fm-primary-scope-lib.sh"
+    fm_primary_scope_matches "$dir" "$dir/state"
+  )
+}
+
 is_linked_worktree() {
   local dir=$1 gd gcd
   gd=$(git -C "$dir" rev-parse --git-dir 2>/dev/null) || return 1
@@ -221,9 +246,25 @@ test_blank_first_line_marker_cannot_spoof() {
   pass "watch-arm: a blank first line cannot spoof inclusion via a later line"
 }
 
+test_unterminated_marker_matches_shell_owner() {
+  local base dir
+  base="$TMP_ROOT/unterminated-base"
+  dir="$TMP_ROOT/unterminated-marker-worktree"
+  make_unterminated_marker_worktree_dir "$base" "$dir" >/dev/null
+  is_linked_worktree "$dir" \
+    || fail "unterminated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  if shell_owner_scopes_in "$dir"; then
+    fail "fixture assumption broken: fm_primary_scope_matches now accepts an unterminated marker"
+  fi
+  run_predicate "$PLUGIN" "$dir:false" \
+    || fail "an unterminated marker must not force-include where fm_primary_scope_matches scopes the home out"
+  pass "watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it"
+}
+
 test_primary_checkout_arms
 test_secondmate_linked_home_arms
 test_crewmate_worktree_stays_silent
 test_stray_marker_cannot_spoof
 test_annotated_marker_home_arms
 test_blank_first_line_marker_cannot_spoof
+test_unterminated_marker_matches_shell_owner

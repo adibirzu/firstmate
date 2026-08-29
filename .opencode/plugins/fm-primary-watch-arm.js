@@ -105,12 +105,19 @@ function rootIsMarkedSecondmateHome(root) {
     return false;
   }
   if (stat.isSymbolicLink() || !stat.isFile()) return false;
-  let id;
+  let contents;
   try {
-    id = readFileSync(marker, "utf8").split("\n", 1)[0].replace(/\s+/g, "");
+    contents = readFileSync(marker, "utf8");
   } catch {
     return false;
   }
+  // `IFS= read -r id < "$marker"` reports failure at EOF when the first line
+  // carries no newline, so the shell owner rejects an unterminated marker.
+  // Reject it here too: otherwise a home every shell hook scopes out as
+  // non-primary would still arm a watcher from OpenCode.
+  const lineEnd = contents.indexOf("\n");
+  if (lineEnd < 0) return false;
+  const id = contents.slice(0, lineEnd).replace(/\s+/g, "");
   if (!id) return false;
   return /^[A-Za-z0-9._-]+$/.test(id);
 }
