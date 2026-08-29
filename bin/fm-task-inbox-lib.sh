@@ -124,13 +124,9 @@ fm_task_inbox_lock_acquire() {  # <lock-path>
   case "$wait" in ''|*[!0-9]*) wait=$FM_TASK_INBOX_LOCK_WAIT_DEFAULT ;; esac
   probe=$(mktemp "${lock%/*}/.lock-probe.XXXXXX") || return 1
   rm -f "$probe" || return 1
-  # Opportunistic fast path only. A failed create must fall through to the
-  # bounded wait below: losing the ln -s race and then re-checking after the
-  # winner already released leaves no lock on disk, and treating that absence
-  # as terminal failed a writer whose lock was in fact free (the concurrent
-  # writer flake). Directory writability is already proven by the probe above.
   if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
     fm_lock_try_create "$lock" && return 0
+    [ -e "$lock" ] || [ -L "$lock" ] || return 1
   fi
   deadline=$(( $(date +%s) + wait ))
   while ! fm_lock_try_acquire "$lock"; do
