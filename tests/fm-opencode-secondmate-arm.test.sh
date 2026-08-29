@@ -30,7 +30,7 @@ NODE_BIN=$(command -v node) || fail "test needs node"
 # bin/ - the shapes bin/fm-primary-scope-lib.sh requires of a primary root.
 make_primary_dir() {
   local dir=$1
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   git init -q "$dir"
   git -C "$dir" commit -q --allow-empty -m init
   : > "$dir/AGENTS.md"
@@ -44,7 +44,7 @@ make_primary_dir() {
 make_secondmate_linked_home_dir() {
   local base=$1 dir=$2
   fm_git_worktree "$base" "$dir" fm/opencode-secondmate-linked-home
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   : > "$dir/AGENTS.md"
   printf 'sm-oc-test-1\n' > "$dir/.fm-secondmate-home"
   printf '%s\n' "$dir"
@@ -55,7 +55,7 @@ make_secondmate_linked_home_dir() {
 make_crewmate_worktree_dir() {
   local base=$1 dir=$2
   fm_git_worktree "$base" "$dir" fm/opencode-crewmate-worktree
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   : > "$dir/AGENTS.md"
   printf '%s\n' "$dir"
 }
@@ -66,7 +66,7 @@ make_crewmate_worktree_dir() {
 make_stray_marker_worktree_dir() {
   local base=$1 dir=$2
   fm_git_worktree "$base" "$dir" fm/opencode-stray-marker-worktree
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   : > "$dir/AGENTS.md"
   : > "$dir/.fm-secondmate-home"
   printf '%s\n' "$dir"
@@ -79,7 +79,7 @@ make_stray_marker_worktree_dir() {
 make_annotated_marker_home_dir() {
   local base=$1 dir=$2
   fm_git_worktree "$base" "$dir" fm/opencode-annotated-marker-home
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   : > "$dir/AGENTS.md"
   printf 'sm-oc-test-2\n# leased 2026-08\n' > "$dir/.fm-secondmate-home"
   printf '%s\n' "$dir"
@@ -91,7 +91,7 @@ make_annotated_marker_home_dir() {
 make_blank_first_line_marker_worktree_dir() {
   local base=$1 dir=$2
   fm_git_worktree "$base" "$dir" fm/opencode-blank-first-line-marker
-  mkdir -p "$dir/bin"
+  mkdir -p "$dir/bin" "$dir/state"
   : > "$dir/AGENTS.md"
   printf '\nsm-oc-test-3\n' > "$dir/.fm-secondmate-home"
   printf '%s\n' "$dir"
@@ -111,6 +111,20 @@ make_unterminated_marker_worktree_dir() {
   printf '%s\n' "$dir"
 }
 
+# Mirror fidelity: fm_root_is_secondmate_home strips whitespace under LC_ALL=C,
+# so only ASCII blanks are removed and a non-breaking space survives to fail the
+# [A-Za-z0-9._-] charset test - the shell owner scopes such a home OUT. A JS
+# mirror stripping the wider Unicode class instead would normalise the id into a
+# valid one and arm a watcher in a root every shell hook treats as non-primary.
+make_nbsp_marker_worktree_dir() {
+  local base=$1 dir=$2
+  fm_git_worktree "$base" "$dir" fm/opencode-nbsp-marker
+  mkdir -p "$dir/bin" "$dir/state"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc\302\240test-5\n' > "$dir/.fm-secondmate-home"
+  printf '%s\n' "$dir"
+}
+
 # Run the shared shell owner over the same fixture so the plugin is pinned to
 # it rather than to a hand-picked expectation.
 shell_owner_scopes_in() {
@@ -120,6 +134,23 @@ shell_owner_scopes_in() {
     . "$ROOT/bin/fm-primary-scope-lib.sh"
     fm_primary_scope_matches "$dir" "$dir/state"
   )
+}
+
+# shell_owner_agrees <dir> <true|false> pins a fixture's expected verdict to the
+# shared shell owner before the plugin is asserted against the same expectation.
+# The plugin mirrors a predicate written in another language in another file, so
+# a case pinned only to a hand-picked boolean would keep passing while the two
+# implementations silently diverged. Every fixture therefore carries the state/
+# dir fm_primary_scope_matches requires, so both predicates are comparable.
+shell_owner_agrees() {
+  local dir=$1 expected=$2
+  if shell_owner_scopes_in "$dir"; then
+    [ "$expected" = true ] \
+      || fail "fixture assumption broken: fm_primary_scope_matches scopes IN $dir, expected it scoped out"
+  else
+    [ "$expected" = false ] \
+      || fail "fixture assumption broken: fm_primary_scope_matches scopes OUT $dir, expected it scoped in"
+  fi
 }
 
 is_linked_worktree() {
@@ -181,6 +212,7 @@ test_primary_checkout_arms() {
   if is_linked_worktree "$dir"; then
     fail "primary fixture must be a plain checkout (git-dir == git-common-dir), got a linked worktree"
   fi
+  shell_owner_agrees "$dir" true
   run_predicate "$PLUGIN" "$dir:true" \
     || fail "primary (plain non-worktree) checkout must be arm-eligible"
   pass "watch-arm: arms the plain primary checkout"
@@ -193,6 +225,7 @@ test_secondmate_linked_home_arms() {
   make_secondmate_linked_home_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "secondmate-home fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" true
   run_predicate "$PLUGIN" "$dir:true" \
     || fail "a marked secondmate home must arm its own supervision even when treehouse-leased as a linked worktree"
   pass "watch-arm: arms a treehouse-leased LINKED secondmate home via its marker (regression)"
@@ -205,6 +238,7 @@ test_crewmate_worktree_stays_silent() {
   make_crewmate_worktree_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "crewmate-worktree fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" false
   run_predicate "$PLUGIN" "$dir:false" \
     || fail "a markerless linked task worktree must stay silent"
   pass "watch-arm: stays silent in a crewmate/scout linked task worktree"
@@ -217,6 +251,7 @@ test_stray_marker_cannot_spoof() {
   make_stray_marker_worktree_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "stray-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" false
   run_predicate "$PLUGIN" "$dir:false" \
     || fail "an empty/invalid marker must not spoof force-inclusion in a linked worktree"
   pass "watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt"
@@ -229,6 +264,7 @@ test_annotated_marker_home_arms() {
   make_annotated_marker_home_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "annotated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" true
   run_predicate "$PLUGIN" "$dir:true" \
     || fail "a marker with a valid first-line id plus a trailing annotation must arm, matching fm_root_is_secondmate_home"
   pass "watch-arm: honours the first-line marker contract when the marker has extra lines"
@@ -241,6 +277,7 @@ test_blank_first_line_marker_cannot_spoof() {
   make_blank_first_line_marker_worktree_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "blank-first-line fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" false
   run_predicate "$PLUGIN" "$dir:false" \
     || fail "a marker whose first line is blank must not spoof force-inclusion in a linked worktree"
   pass "watch-arm: a blank first line cannot spoof inclusion via a later line"
@@ -253,12 +290,23 @@ test_unterminated_marker_matches_shell_owner() {
   make_unterminated_marker_worktree_dir "$base" "$dir" >/dev/null
   is_linked_worktree "$dir" \
     || fail "unterminated-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
-  if shell_owner_scopes_in "$dir"; then
-    fail "fixture assumption broken: fm_primary_scope_matches now accepts an unterminated marker"
-  fi
+  shell_owner_agrees "$dir" false
   run_predicate "$PLUGIN" "$dir:false" \
     || fail "an unterminated marker must not force-include where fm_primary_scope_matches scopes the home out"
   pass "watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it"
+}
+
+test_nbsp_marker_matches_shell_owner() {
+  local base dir
+  base="$TMP_ROOT/nbsp-base"
+  dir="$TMP_ROOT/nbsp-marker-worktree"
+  make_nbsp_marker_worktree_dir "$base" "$dir" >/dev/null
+  is_linked_worktree "$dir" \
+    || fail "nbsp-marker fixture must be a linked worktree (git-dir != git-common-dir), got equal"
+  shell_owner_agrees "$dir" false
+  run_predicate "$PLUGIN" "$dir:false" \
+    || fail "a non-breaking space in the marker id must not be stripped into a valid id where fm_root_is_secondmate_home keeps it and rejects the home"
+  pass "watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C"
 }
 
 test_primary_checkout_arms
@@ -268,3 +316,4 @@ test_stray_marker_cannot_spoof
 test_annotated_marker_home_arms
 test_blank_first_line_marker_cannot_spoof
 test_unterminated_marker_matches_shell_owner
+test_nbsp_marker_matches_shell_owner

@@ -117,7 +117,7 @@ function rootIsMarkedSecondmateHome(root) {
   // non-primary would still arm a watcher from OpenCode.
   const lineEnd = contents.indexOf("\n");
   if (lineEnd < 0) return false;
-  const id = contents.slice(0, lineEnd).replace(/\s+/g, "");
+  const id = contents.slice(0, lineEnd).replace(/[ \t\n\v\f\r]+/g, "");
   if (!id) return false;
   return /^[A-Za-z0-9._-]+$/.test(id);
 }
