@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 
 const SECONDMATE_MARKER = ".fm-secondmate-home";
 
@@ -58,6 +58,21 @@ function gitRevParse(root, flag) {
   });
 }
 
+// Mirror bin/fm-primary-scope-lib.sh's `[ -f ]` / `[ -d ]` shape tests, which
+// require a regular file and a directory respectively (following symlinks) and
+// not merely an existing path. A bare existence test would scope IN a root the
+// shell owner scopes OUT - e.g. one carrying a plain file named `bin` - and the
+// plugin would arm a watcher every shell hook treats as non-primary.
+function isType(path, kind) {
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    return false;
+  }
+  return kind === "dir" ? stat.isDirectory() : stat.isFile();
+}
+
 // A root is arm-eligible when it is a genuine firstmate primary home: the main
 // checkout OR a marked secondmate home (which runs its own primary session and
 // must arm its own supervision even when treehouse leases it as a linked
@@ -68,7 +83,7 @@ function gitRevParse(root, flag) {
 // export of a plugin module as a plugin factory; lib/ is not scanned.
 export async function isArmEligibleRoot(root) {
   if (!root) return false;
-  if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
+  if (!isType(`${root}/AGENTS.md`, "file") || !isType(`${root}/bin`, "dir")) return false;
   if (rootIsMarkedSecondmateHome(root)) return true;
   const gitDir = await gitRevParse(root, "--git-dir");
   const commonDir = await gitRevParse(root, "--git-common-dir");

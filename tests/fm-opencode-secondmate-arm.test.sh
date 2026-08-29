@@ -44,6 +44,21 @@ make_primary_dir() {
   printf '%s\n' "$dir"
 }
 
+# Shape fidelity: fm_primary_scope_matches requires `[ -f AGENTS.md ]` and
+# `[ -d bin ]`, so a root whose `bin` is a plain file - not the bin/ directory a
+# provisioned home carries - is scoped OUT by every shell hook. Its git shape is
+# otherwise that of an armable plain checkout, so a plugin gate testing mere path
+# existence would arm a watcher exactly where the shell owner refuses to.
+make_bin_not_a_dir_checkout_dir() {
+  local dir=$1
+  mkdir -p "$dir/state"
+  git init -q "$dir"
+  git -C "$dir" commit -q --allow-empty -m init
+  : > "$dir/AGENTS.md"
+  : > "$dir/bin"
+  printf '%s\n' "$dir"
+}
+
 # A treehouse-leased secondmate HOME: a genuine linked `git worktree` (git-dir
 # != git-common-dir) that carries a valid .fm-secondmate-home marker. This is
 # the production topology the old code wrongly exempted: it must arm its own
@@ -225,6 +240,20 @@ test_primary_checkout_arms() {
   pass "watch-arm: arms the plain primary checkout"
 }
 
+test_bin_not_a_dir_stays_silent() {
+  local dir
+  dir=$(make_bin_not_a_dir_checkout_dir "$TMP_ROOT/bin-not-a-dir-checkout")
+  # A plain checkout, so the git-shape branch alone would scope this root IN;
+  # only the AGENTS.md/bin shape gate can keep it out, which is what this pins.
+  if is_linked_worktree "$dir"; then
+    fail "bin-not-a-dir fixture must be a plain checkout (git-dir == git-common-dir), got a linked worktree"
+  fi
+  shell_owner_agrees "$dir" false
+  run_predicate "$ELIGIBILITY" "$dir:false" \
+    || fail "a root whose bin is a plain file must stay silent, matching fm_primary_scope_matches"
+  pass "watch-arm: a root failing the AGENTS.md/bin shape gate stays silent, as the shell owner requires"
+}
+
 test_secondmate_linked_home_arms() {
   local base dir
   base="$TMP_ROOT/secondmate-base"
@@ -380,6 +409,7 @@ EOF
 }
 
 test_primary_checkout_arms
+test_bin_not_a_dir_stays_silent
 test_secondmate_linked_home_arms
 test_crewmate_worktree_stays_silent
 test_stray_marker_cannot_spoof
