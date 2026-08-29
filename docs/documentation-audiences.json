@@ -172,7 +172,7 @@
       "path": ".agents/skills/harness-adapters/SKILL.md",
       "audience": "agent-runtime"
     },
-       {
+    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -467,6 +467,58 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/README.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/README-UK.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/context-engineering-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/gotchas.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/memory-persistence-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/multi-agent-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/skill-runtime-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/tool-registry-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/agents.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/progress.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/session-handoff.md",
+      "audience": "agent-runtime"
     }
   ]
 }

@@ -1241,17 +1241,43 @@ while :; do
         fi
       fi
       if [ -n "$out" ]; then
+        absorbed=0
+        if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
+          # A poll's own retirement state is scoped to one registration, so it
+          # cannot by itself catch a poll re-registered for a task whose merge
+          # was already surfaced (e.g. fm-pr-check.sh re-armed after the
+          # fact). The per-task merge-notified marker is what stops that
+          # re-registration from producing a second main-blocking wake for
+          # the identical merge. This is a read-only check, so it never
+          # reorders the queue-publish-before-retirement contract below.
+          if fm_pr_poll_merge_already_notified "$STATE" "$id" \
+            "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
+            "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER"; then
+            absorbed=1
+          fi
+        fi
         reason="check: $c: $out"
-        fm_wake_append check "$c" "$reason" || exit 1
+        if [ "$absorbed" -eq 0 ]; then
+          fm_wake_append check "$c" "$reason" || exit 1
+        fi
         if [ "$is_pr_poll" -eq 1 ] && [ "$out" = merged ]; then
           if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" "$out"; then
             fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
               || triage_log "merged PR poll retirement remains recoverable for $id"
+            if [ "$absorbed" -eq 0 ]; then
+              fm_pr_poll_merge_mark_notified "$STATE" "$id" \
+                "$FM_PR_POLL_SNAPSHOT_PROVIDER" "$FM_PR_POLL_SNAPSHOT_HOST" \
+                "$FM_PR_POLL_SNAPSHOT_PATH" "$FM_PR_POLL_SNAPSHOT_NUMBER" \
+                || triage_log "merge-notified marker not recorded for $id"
+            fi
           else
             triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
           fi
         fi
         touch "$STATE/.last-check"
+        if [ "$absorbed" -eq 1 ]; then
+          continue
+        fi
         wake "$reason"
       fi
     done
