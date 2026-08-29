@@ -1,0 +1,53 @@
+===============================================================================
+ OpenCode supervision arm in a secondmate home - live plugin lifecycle
+===============================================================================
+Fixture topology (matches production): each home below is a treehouse-style
+LINKED git worktree, i.e. git-dir != git-common-dir:
+/private  /b3/.git/worktrees/after-tms-captain
+/private  /b3/.git
+
+Scenario driven through the REAL plugin: OpenCode loads FmPrimaryWatchArm for
+the worktree, the session owns state/.lock, one task .meta is in flight, and
+OpenCode emits session.idle. A stub bin/fm-watch-arm.sh records whether the
+plugin actually launched a watcher.
+
+################ BEFORE the fix (base db5dd6d) ################
+
+--- secondmate home tms-captain (marker present) ---
+home:            /tmp/fm-oc-arm-e2e.Kq0V2t/f/before-tms-captain
+marker:          tms-captain
+tasks in flight: task-1.meta
+watcher armed:   NO
+arm launch log:  (fm-watch-arm.sh was never launched - supervision is OFF)
+re-arm status:   not-primary  <- plugin refuses to supervise this root
+
+--- crewmate/scout task worktree (no marker - must stay silent) ---
+home:            /tmp/fm-oc-arm-e2e.Kq0V2t/f/before-crewmate-task
+marker:          (none)
+tasks in flight: task-1.meta
+watcher armed:   NO
+arm launch log:  (fm-watch-arm.sh was never launched - supervision is OFF)
+re-arm status:   not-primary  <- plugin refuses to supervise this root
+
+################ AFTER the fix (114af9d) ################
+
+--- secondmate home tms-captain (marker present) ---
+home:            /tmp/fm-oc-arm-e2e.Kq0V2t/f/after-tms-captain
+marker:          tms-captain
+tasks in flight: task-1.meta
+watcher armed:   YES
+arm launch log:  LAUNCHED args=--restart cwd=/private/tmp/fm-oc-arm-e2e.Kq0V2t/f/after-tms-captain FM_HOME=/private/tmp/fm-oc-arm-e2e.Kq0V2t/f/after-tms-captain
+re-arm status:   armed
+
+--- crewmate/scout task worktree (no marker - must stay silent) ---
+home:            /tmp/fm-oc-arm-e2e.Kq0V2t/f/after-crewmate-task
+marker:          (none)
+tasks in flight: task-1.meta
+watcher armed:   NO
+arm launch log:  (fm-watch-arm.sh was never launched - supervision is OFF)
+re-arm status:   not-primary  <- plugin refuses to supervise this root
+
+===============================================================================
+ RESULT: the secondmate home goes from NO watcher (silently unsupervised) to an
+ armed watcher; the crewmate/scout task worktree stays silent in both builds.
+===============================================================================
