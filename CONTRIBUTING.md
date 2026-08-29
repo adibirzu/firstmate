@@ -33,6 +33,8 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    The attestation in the PR body binds to the exact head it was produced for, so any head the gate has not attested yet fails `Require no-mistakes` with a head mismatch.
    A plain `git push` leaves the PR body bound to the older head permanently, so re-run `git push no-mistakes` to bind the attestation to the current head.
    A red `Require no-mistakes` while a pipeline is still running is expected instead: the head lands before the gate rewrites the PR body, and the body edit reruns the check against the new head.
+   Read the reported `attestation.head_sha` to tell the two apart: while a pipeline runs it names an ancestor of the PR head, because the gate's own auto-fix commits land before the body edit that rebinds it.
+   Either way a head mismatch is mechanical and no source change clears it, so never answer one by editing code: a fix commit only moves the head further ahead of the attestation. Let the running pipeline finish its body edit, or re-run `git push no-mistakes`.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
