@@ -4,10 +4,17 @@
 # Each case invokes bin/fm-lock.sh rather than its sourced implementation.
 # The fake process table models a live Claude session and a reparented shared
 # worker pool, while real sleepers make the holder-liveness checks meaningful.
+#
+# Drop ambient Claude lock-identity markers leaked from the suite runner.
+# A firstmate worker launched under Claude Code inherits CLAUDECODE and
+# CLAUDE_CODE_SESSION_ID; leaving those set would make the fail-closed cases
+# look identifiable and let them take the legacy compatibility path.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 TMP_ROOT=$(fm_test_tmproot fm-lock-ownership)
 PIDS=
@@ -136,7 +143,8 @@ test_unidentifiable_claude_session_cannot_use_legacy_compatibility() {
   write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
   printf '%s\n' "$host" > "$home/state/.lock"
 
-  out=$(FM_LOCK_TEST_MODE=pool CLAUDECODE=1 CLAUDE_PID=$session FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+  out=$(env -u CLAUDE_CODE_SESSION_ID \
+    FM_LOCK_TEST_MODE=pool CLAUDECODE=1 CLAUDE_PID=$session FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     PATH="$fakebin:$PATH" bash "$ROOT/bin/fm-lock.sh" 2>&1) \
     && fail "an unidentifiable session fell through to legacy compatibility: $out"
   case "$out" in *"cannot establish this session's lock identity"*) ;; *) fail "identity refusal was not explicit: $out" ;; esac
@@ -157,7 +165,8 @@ test_claude_without_its_session_marker_cannot_fall_back_to_ancestry() {
   spawn_live_pid; parent=$LIVE_PID
   write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
 
-  out=$(FM_LOCK_TEST_MODE=pool FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH" \
+  out=$(env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+    FM_LOCK_TEST_MODE=pool FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH" \
     bash "$ROOT/bin/fm-lock.sh" 2>&1) \
     && fail "a Claude worker without session identity acquired an ancestry lock: $out"
   case "$out" in *"cannot establish this session's lock identity"*) ;; *) fail "missing marker refusal was not explicit: $out" ;; esac
