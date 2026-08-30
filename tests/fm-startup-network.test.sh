@@ -21,6 +21,13 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Drop ambient Claude lock-identity markers leaked from the suite runner. A
+# firstmate worker launched under Claude Code inherits CLAUDECODE and
+# CLAUDE_CODE_SESSION_ID; this suite models an ancestry-kind (non-Claude)
+# session, so leaving those set could let a claude-ancestry identity path
+# activate against the ancestry bindings these tests write.
+unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_PID
+
 TMP_ROOT=$(fm_test_tmproot fm-startup-network-tests)
 FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
 trap fm_test_cleanup EXIT
@@ -73,8 +80,8 @@ for argument in "$@"; do
 done
 if [ "$pid" = "${FM_FAKE_HARNESS_PID:-}" ]; then
   case "$*" in
-    *comm=*) printf '/usr/local/bin/claude\n' ;;
-    *args=*) printf 'claude\n' ;;
+    *comm=*) printf '/usr/local/bin/codex\n' ;;
+    *args=*) printf 'codex\n' ;;
     *ppid=*) /bin/ps -o ppid= -p "$pid" ;;
   esac
 else
@@ -384,18 +391,16 @@ test_worker_refuses_a_reused_pid_with_a_new_lock_binding() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  write_lock_binding "$home" "$$"
-  . "$ROOT/bin/fm-wake-lib.sh"
-  fm_lock_try_acquire "$home/state/.lock.acquire" \
-    || fail "could not hold the worker lease for the binding-change setup"
-
-  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
-    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
-  await_worker_record "$home"
+  # The live binding still names this ancestry pid, but under a DIFFERENT
+  # session - a same-pid successor that reused the pid after the prior session
+  # ended. A worker the prior session launched (session=$$) must notice that
+  # the pid it trusts now belongs to a different session and downgrade to a
+  # read-only probe instead of sweeping under the successor. Binding a lock to
+  # its pid alone is exactly what this rejects.
   write_lock_binding "$home" "$$" successor-session
-  fm_lock_release "$home/state/.lock.acquire"
-  run_stage "$home" "$root" wait 30 >/dev/null \
-    || fail "the binding-changed worker did not settle"
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" \
+    run --locked 1 --lock-pid $$ --lock-kind ancestry --lock-session $$
   assert_grep 'network=only detect_only=1' "$log" \
     "a worker ran mutating sweeps after a same-pid successor changed the lock binding"
   pass "fm-startup-network: a same-pid successor binding downgrades the prior worker"
