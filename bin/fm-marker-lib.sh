@@ -5,8 +5,8 @@
 #
 # fm_window_marker_key is the one key scheme behind every per-window watcher
 # marker family under state/ (.hash-, .count-, .stale-, .stale-since-,
-# .paused-*, .wedge-escalations-) and the herdr adapter's .herdr-escalated-
-# dedupe marker. bin/fm-watch.sh, bin/fm-supervise-daemon.sh, and
+# .paused-*, .wedge-escalations-, .writing-*) and the herdr adapter's
+# .herdr-escalated- dedupe marker. bin/fm-watch.sh, bin/fm-supervise-daemon.sh, and
 # bin/backends/herdr.sh all source it here so a marker one writer records is
 # the marker another writer clears. Pinned by tests/fm-watch-triage.test.sh
 # (test_window_marker_keys_are_injective_and_ignore_legacy_state) and
