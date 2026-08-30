@@ -623,6 +623,9 @@ LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
+COMPLETION_LOCK_KIND=
+COMPLETION_LOCK_PID=
+COMPLETION_LOCK_SESSION=
 if [ "$LOCK_RC" -ne 0 ]; then
   READ_ONLY=1
   BAR='●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
@@ -639,7 +642,15 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
   }
 fi
-REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
+if [ "$READ_ONLY" -eq 0 ] && fm_session_lock_read_record "$STATE"; then
+  COMPLETION_LOCK_KIND=$FM_SESSION_LOCK_RECORD_KIND
+  COMPLETION_LOCK_PID=$FM_SESSION_LOCK_RECORD_PID
+  COMPLETION_LOCK_SESSION=$FM_SESSION_LOCK_RECORD_SESSION
+fi
+REBUILDING_SESSION_PID=
+if fm_session_lock_prepare_acquisition_identity 2>/dev/null; then
+  REBUILDING_SESSION_PID=$FM_SESSION_LOCK_OWNER_PID
+fi
 print_agents_refresh_if_required "$REBUILDING_SESSION_PID"
 
 if [ "$READ_ONLY" -eq 0 ]; then
@@ -947,13 +958,11 @@ EOF
 
 if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   COMPLETION_RECORDED=0
-  COMPLETION_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$COMPLETION_PID" in
-    ''|*[!0-9]*) COMPLETION_PID= ;;
-  esac
+  COMPLETION_PID=$COMPLETION_LOCK_PID
   COMPLETION_TMP=$(mktemp "$STATE/.session-start-complete.XXXXXX" 2>/dev/null || true)
   if [ -n "$COMPLETION_PID" ] && [ -n "$COMPLETION_TMP" ] \
-    && printf '%s\n' "$COMPLETION_PID" > "$COMPLETION_TMP" 2>/dev/null \
+    && fm_session_lock_record_matches "$STATE" "$COMPLETION_LOCK_KIND" "$COMPLETION_LOCK_PID" "$COMPLETION_LOCK_SESSION" \
+    && fm_session_lock_print_binding "$COMPLETION_LOCK_KIND" "$COMPLETION_LOCK_PID" "$COMPLETION_LOCK_SESSION" > "$COMPLETION_TMP" \
     && mv -f "$COMPLETION_TMP" "$COMPLETION_FILE" 2>/dev/null; then
     COMPLETION_RECORDED=1
   else

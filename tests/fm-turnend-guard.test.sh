@@ -1133,8 +1133,15 @@ run_integrated_autoarm() {
   local dir=$1 home
   home=$(cd "$dir" && pwd)
   # shellcheck disable=SC2016 # the fake harness expands FM_HOME inside its child shell.
+  # The fleet lock binds a Claude Stop-hook run to its session identity, and the
+  # fake harness ("fake-claude") is detected as Claude ancestry. Supply the
+  # controlled identity inside the child so the lock-owning session is
+  # established from CLAUDECODE + a stable session id + this live pid (the same
+  # pid written to .lock) instead of any ambient identity leaked from the suite
+  # runner. Without it the auto-arm fails closed on identity and exits 0.
   printf '{"session_id":"sess-claude-mode","stop_hook_active":false}\n' \
     | FM_HOME="$home" "$dir/fake-claude" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="integrated-autoarm-session-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1

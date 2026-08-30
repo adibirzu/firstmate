@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Acquire or inspect the per-home firstmate session lock.
-# Writes the harness (agent) process PID found by walking the shell's ancestry,
-# which lives as long as the firstmate session - unlike the transient subshell
-# PID of any one tool call, which is dead moments after it is written.
+# Writes a verified session identity beside the compatible numeric lock pid.
+# Claude's binding is independent of its reparented worker-pool ancestry, so a
+# sibling session cannot claim the same home through that shared pool.
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
 #        fm-lock.sh status    print holder and liveness; always exits 0
 set -u
@@ -33,7 +33,11 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
-me=$(fm_harness_ancestry_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+fm_session_lock_prepare_acquisition_identity || {
+  echo "error: cannot establish this session's lock identity; operate read-only until resolved" >&2
+  exit 1
+}
+me=$FM_SESSION_LOCK_OWNER_PID
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
@@ -57,8 +61,8 @@ trap 'exit 1' HUP INT TERM
 
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$old" = "$me" ]; then
-    echo "lock acquired: harness pid $me"
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    echo "lock acquired: harness pid $old"
     exit 0
   fi
   if fm_harness_pid_alive "$old"; then
@@ -86,12 +90,17 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: session lock is unreadable; operate read-only until resolved" >&2
     exit 1
   }
-  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    release_claim_lock
+    echo "lock acquired: harness pid $old"
+    exit 0
+  fi
+  if fm_harness_pid_alive "$old"; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi
 fi
-if ! { printf '%s\n' "$me" > "$LOCK"; } 2>/dev/null; then
+if ! fm_session_lock_write_new_format "$STATE"; then
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
 fi
