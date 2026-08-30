@@ -1,0 +1,33 @@
+firstmate window marker key — injective, stable, pure function of endpoint (issue 2878)
+branch fm/fm-window-key-injective-2878   target f463e9b
+host: Darwin 25.3.0 arm64
+
+=== 1. review-1 fix: same non-ASCII endpoint => one persistent key across bash generations ===
+endpoint: s:café  (UTF-8 high-bit bytes c3 a9 — the exact byte class review-1 flagged)
+  bash 5.3 (5.3.9(1)-release) v2-733a636166c3a9
+  bash 3.2 (3.2.57(1)-release) v2-733a636166c3a9
+  independent od oracle      v2-733a636166c3a9
+  -> all three identical. (Pre-fix, bash 3.2 sign-extended to v2-733a636166ffffffffffffffc3ffffffffffffffa9)
+
+=== 2. issue-2878 injectivity: endpoints the OLD tr ':/.' '___' scheme collapsed into one marker ===
+  endpoint | OLD key  | NEW fm_window_marker_key
+  s:a.b    | s_a_b    | v2-733a612e62
+  s:a_b    | s_a_b    | v2-733a615f62
+  s:a/b    | s_a_b    | v2-733a612f62
+  s:a:b    | s_a_b    | v2-733a613a62
+  -> OLD: all four => s_a_b (one shared marker = the 2878 bug). NEW: four distinct v2 keys.
+
+=== 3. review-2 fix: herdr escalation dedupe marker routes through the SAME shared owner ===
+  s:a.b -> /st/.herdr-escalated-v2-733a612e62
+  s:a_b -> /st/.herdr-escalated-v2-733a615f62
+  -> distinct markers for windows differing only in '.' vs '_' (was a shared .herdr-escalated-s_a_b)
+
+=== 4. targeted regression suites (bash 5.3.9(1)-release) ===
+  fm-watch-triage        EXIT=0  ok=64  not-ok=0
+  fm-backend-herdr       EXIT=0  ok=189  not-ok=0
+  fm-daemon              EXIT=0  ok=103  not-ok=0
+  fm-wake-queue          EXIT=0  ok=23  not-ok=0
+
+  new regression tests (fm-watch-triage.test.sh):
+    ok - colliding endpoint spellings receive distinct filename-safe markers and ignore ambiguous legacy state
+    ok - a non-ASCII endpoint keeps one persistent marker key across bash generations
