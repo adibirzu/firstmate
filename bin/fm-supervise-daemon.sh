@@ -439,6 +439,14 @@ classify_unknown() {  # <reason>
 # Seen:     state/.subsuper-seen-status-<task>  last status line the scan
 #           escalated, so the catch-all does not re-fire the same terminal.
 
+# Key derivation for the daemon's OWN task-keyed markers (.subsuper-stale-,
+# .subsuper-paused-, .subsuper-seen-status-). These live only in the daemon's
+# namespace and are never read by the watcher, so they keep this legacy lossy
+# scheme. The SHARED watcher markers (.paused-, .stale-, .wedge-escalations-,
+# ...) must instead go through fm_window_marker_key (the injective v2 owner in
+# fm-marker-lib.sh) so a marker the watcher records is the marker the daemon
+# clears — see clear_pause_tracking/reconcile_pause_tracking below. Do not
+# collapse these two onto one scheme: the split is deliberate, not an oversight.
 _stale_key() { printf '%s' "$1" | tr ':/.' '___'; }
 
 stale_marker_record() {  # <window> <state>  — create if absent
