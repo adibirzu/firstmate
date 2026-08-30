@@ -359,6 +359,170 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
 }
 
+# --- end-to-end layer: fm-lock.sh identity and the CLAUDE_PID fallback --------
+#
+# These run the REAL bin/fm-lock.sh inside real, orphaned process trees whose
+# leaf is a genuine Claude-named executable, so the identity verdict comes from
+# the live process table and never from a stub asserting its own assumption. The
+# trees are orphaned to init before fm-lock.sh runs, so the ancestry walk
+# terminates inside the fixture and can never escape into the session running
+# this suite. The live-harness half of this contract - that the real installed
+# Claude Code build, which does not export CLAUDE_PID, still resolves its lock
+# identity - is proven end to end by tests/fm-claude-stop-autoarm-live-e2e.test.sh.
+
+# Install the lock scripts and a reusable probe into <dir>. The probe orphans
+# itself, publishes its own pid, drives the requested CLAUDE_PID / CLAUDECODE /
+# session-id markers, runs fm-lock.sh against FM_LOCK_HOME, and records the exit
+# code; with FM_PROBE_HOLD=1 it then keeps its pid live until a release file
+# appears, so a second session can collide with a genuinely live owner.
+make_lock_home() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/state"
+  install_autoarm_scripts "$dir"
+  cat > "$dir/lock-probe.sh" <<'SH'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+out=$FM_PROBE_OUT
+mkdir -p "$out"
+printf '%s\n' "$$" > "$out/session-pid"
+export CLAUDECODE="${FM_PROBE_CLAUDECODE:-1}"
+export CLAUDE_CODE_SESSION_ID="$FM_PROBE_SESSION_ID"
+if [ "${FM_PROBE_SET_CLAUDE_PID:-0}" = 1 ]; then
+  export CLAUDE_PID=$$
+else
+  unset CLAUDE_PID
+fi
+FM_HOME="$FM_LOCK_HOME" "$FM_LOCK_HOME/bin/fm-lock.sh" </dev/null > "$out/lock.out" 2>&1
+printf '%s\n' "$?" > "$out/lock.rc"
+if [ "${FM_PROBE_HOLD:-0}" = 1 ]; then
+  touch "$out/held"
+  j=0
+  while [ "$j" -lt 600 ] && [ ! -f "$out/release" ]; do
+    sleep 0.05
+    j=$((j + 1))
+  done
+fi
+SH
+  chmod +x "$dir/lock-probe.sh"
+}
+
+# Start a probe detached, so the launcher exits and the tree reparents to init.
+launch_lock_probe() {  # <lock-home> <out> <leaf-bin> <set-claude-pid> <session-id> <hold> [claudecode]
+  local home=$1 out=$2 leaf=$3 set_pid=$4 sid=$5 hold=$6 cc=${7:-1}
+  mkdir -p "$out"
+  FM_LOCK_HOME="$home" FM_PROBE_OUT="$out" FM_PROBE_SET_CLAUDE_PID="$set_pid" \
+    FM_PROBE_SESSION_ID="$sid" FM_PROBE_HOLD="$hold" FM_PROBE_CLAUDECODE="$cc" \
+    bash -c '"$0" "$1" &' "$leaf" "$home/lock-probe.sh"
+}
+
+wait_for_probe() {  # <out>
+  local out=$1 i=0
+  while [ "$i" -lt 600 ] && [ ! -s "$out/lock.rc" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$out/lock.rc" ] || fail "the lock probe never finished"
+}
+
+wait_for_hold() {  # <out>
+  local out=$1 i=0
+  while [ "$i" -lt 600 ] && [ ! -e "$out/held" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -e "$out/held" ] || fail "the holding lock probe never acquired"
+}
+
+test_e2e_claude_pid_set_resolves_identity() {
+  local dir out selfpid lock record
+  dir="$TMP_ROOT/e2e-claude-pid-set"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  launch_lock_probe "$dir" "$out" "$VERSIONED_CLAUDE" 1 pid-set-session 0
+  wait_for_probe "$out"
+  expect_code 0 "$(tr -d '[:space:]' < "$out/lock.rc")" "a claude session that exports CLAUDE_PID must acquire the lock"
+  selfpid=$(tr -d '[:space:]' < "$out/session-pid")
+  lock=$(tr -d '[:space:]' < "$dir/state/.lock")
+  [ "$lock" = "$selfpid" ] || fail "the lock pid did not record the claude session pid: expected $selfpid, got $lock"
+  record=$(cat "$dir/state/.lock.session")
+  [ "$record" = "$(printf 'format=1\nkind=claude\npid=%s\nsession=pid-set-session' "$selfpid")" ] \
+    || fail "the CLAUDE_PID-set path wrote an unexpected binding: $record"
+  pass "session-lock e2e: a claude session that exports CLAUDE_PID resolves its identity unchanged"
+}
+
+test_e2e_claude_pid_absent_resolves_via_ancestry_fallback() {
+  local dir out selfpid lock record
+  dir="$TMP_ROOT/e2e-claude-pid-absent"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  launch_lock_probe "$dir" "$out" "$VERSIONED_CLAUDE" 0 pid-absent-session 0
+  wait_for_probe "$out"
+  expect_code 0 "$(tr -d '[:space:]' < "$out/lock.rc")" "a claude session without CLAUDE_PID must still acquire via the ancestry fallback"
+  selfpid=$(tr -d '[:space:]' < "$out/session-pid")
+  lock=$(tr -d '[:space:]' < "$dir/state/.lock")
+  [ "$lock" = "$selfpid" ] || fail "the fallback recorded a pid other than the live claude ancestor: expected $selfpid, got $lock"
+  record=$(cat "$dir/state/.lock.session")
+  [ "$record" = "$(printf 'format=1\nkind=claude\npid=%s\nsession=pid-absent-session' "$selfpid")" ] \
+    || fail "the fallback wrote an unexpected binding: $record"
+  pass "session-lock e2e: a claude session with no CLAUDE_PID resolves identity from its live ancestry"
+}
+
+test_e2e_claude_markers_without_a_live_ancestor_refuse() {
+  local dir out
+  dir="$TMP_ROOT/e2e-no-claude-ancestor"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  # Identical CLAUDECODE and session-id markers to the fallback case and no
+  # CLAUDE_PID, but a non-claude leaf: driving the two cases apart on the
+  # ancestry signal alone proves the env markers cannot mint a claude lock on
+  # their own, so the fallback did not open a hole.
+  launch_lock_probe "$dir" "$out" /bin/bash 0 pid-absent-session 0
+  wait_for_probe "$out"
+  expect_code 1 "$(tr -d '[:space:]' < "$out/lock.rc")" "claude env markers without a live claude ancestor must refuse"
+  case "$(cat "$out/lock.out")" in
+    *"cannot establish this session's lock identity"*) ;;
+    *) fail "the refusal was not the identity refusal: $(cat "$out/lock.out")" ;;
+  esac
+  [ ! -e "$dir/state/.lock" ] || fail "a session with no live claude ancestor wrote a lock"
+  [ ! -e "$dir/state/.lock.session" ] || fail "a session with no live claude ancestor wrote a binding"
+  pass "session-lock e2e: claude env markers without a live claude ancestor still fail closed"
+}
+
+test_e2e_fallback_owner_still_excludes_a_second_live_session() {
+  local dir out_a out_b owner_a i
+  dir="$TMP_ROOT/e2e-fallback-collision"
+  make_lock_home "$dir"
+  out_a="$dir/probe-a"
+  out_b="$dir/probe-b"
+  # Session A acquires through the CLAUDE_PID fallback and holds its pid live.
+  launch_lock_probe "$dir" "$out_a" "$VERSIONED_CLAUDE" 0 owner-a-session 1
+  wait_for_hold "$out_a"
+  expect_code 0 "$(tr -d '[:space:]' < "$out_a/lock.rc")" "the fallback owner must acquire the lock"
+  owner_a=$(tr -d '[:space:]' < "$out_a/session-pid")
+  # Session B is a different live claude session, also using the fallback.
+  launch_lock_probe "$dir" "$out_b" "$NAMED_CLAUDE" 0 intruder-b-session 0
+  wait_for_probe "$out_b"
+  expect_code 1 "$(tr -d '[:space:]' < "$out_b/lock.rc")" "a second live session must be refused"
+  case "$(cat "$out_b/lock.out")" in
+    *"another live firstmate session holds the lock (pid $owner_a)"*) ;;
+    *) fail "the collision refusal did not name the live fallback owner pid $owner_a: $(cat "$out_b/lock.out")" ;;
+  esac
+  [ "$(tr -d '[:space:]' < "$dir/state/.lock")" = "$owner_a" ] \
+    || fail "the second session moved the lock off the fallback owner"
+  # Release A and let the held session exit on its own.
+  touch "$out_a/release"
+  i=0
+  while [ "$i" -lt 200 ] && kill -0 "$owner_a" 2>/dev/null; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  pass "session-lock e2e: a fallback-acquired lock still excludes a second live claude session"
+}
+
 test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
@@ -366,3 +530,7 @@ test_competing_version_named_session_is_seen_as_live
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
+test_e2e_claude_pid_set_resolves_identity
+test_e2e_claude_pid_absent_resolves_via_ancestry_fallback
+test_e2e_claude_markers_without_a_live_ancestor_refuse
+test_e2e_fallback_owner_still_excludes_a_second_live_session

@@ -217,12 +217,16 @@ fm_harness_ancestry_is_claude() {
 
 # Set the identity a NEW session lock must record.
 #
-# Claude Code supplies both a stable session id and the served session pid.
-# Require both, and require that pid to be a live verified harness, before a
-# new Claude lock may be written. This deliberately does not guess from a
-# reparented worker-pool ancestry. Other supported harnesses expose their
-# session through their one verified ancestry pid, which remains their stable
-# lock identity.
+# Claude Code supplies a stable session id, and normally the served session pid
+# in CLAUDE_PID. Require the session id, and require a live verified-harness pid,
+# before a new Claude lock may be written. When CLAUDE_PID is unset - the
+# homebrew Claude Code build exports CLAUDECODE and CLAUDE_CODE_SESSION_ID into
+# hook and tool shells but not CLAUDE_PID - fall back to the live claude ancestry
+# pid, the contiguous-run pid state/.lock records for this session anyway. The
+# session id, not the pid, is what distinguishes one Claude session from a
+# reparented worker-pool sibling, so this fallback keeps a sibling from claiming
+# the lock. Other supported harnesses expose their session through their one
+# verified ancestry pid, which remains their stable lock identity.
 FM_SESSION_LOCK_OWNER_KIND=
 FM_SESSION_LOCK_OWNER_PID=
 FM_SESSION_LOCK_OWNER_SESSION=
@@ -237,6 +241,7 @@ fm_session_lock_prepare_acquisition_identity() {
     session_id=${CLAUDE_CODE_SESSION_ID:-}
     session_pid=${CLAUDE_PID:-}
     case "$session_id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+    [ -n "$session_pid" ] || session_pid=$ancestry_pid
     case "$session_pid" in ''|*[!0-9]*) return 1 ;; esac
     fm_harness_pid_alive "$session_pid" || return 1
     FM_SESSION_LOCK_OWNER_KIND=claude
