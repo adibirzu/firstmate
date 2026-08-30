@@ -173,6 +173,26 @@ Valid cleanup removed only the exact task-bound target and left the control wind
 The metadata-only validation covers tmux, Herdr, Zellij, Orca, and cmux before backend dispatch.
 Claude, Codex, OpenCode, Pi, pi-signed, Grok, Kimi, Cursor, Muse, Cline, and Copilot share that backend cleanup boundary; their harness-specific hook files, tokens, transcript bindings, and session-log sidecars are cleaned only after it, so no harness needs a separate endpoint parser.
 
+## OpenCode
+
+OpenCode was verified on 2026-08-23 at `/opt/homebrew/bin/opencode`, installed through Homebrew, with version 1.18.20.
+
+```sh
+/opt/homebrew/bin/opencode --version
+opencode models
+env -u OPENROUTER_API_KEY opencode models
+OPENROUTER_API_KEY=<key> opencode models
+```
+
+The default `opencode models` output listed seven free OpenCode models, including `opencode/big-pickle`.
+With `OPENROUTER_API_KEY` available in the process environment, the same discovery command additionally listed 360 `openrouter/<model>` entries, including `openrouter/cohere/north-mini-code:free`, `openrouter/openai/gpt-oss-20b`, and `openrouter/openai/gpt-oss-120b`.
+With that variable absent, it listed no OpenRouter entries.
+This proves that OpenCode reads the environment variable for provider discovery without `auth login` or a credential written to disk.
+
+A supervised smoke scout completed its brief, all four requested steps, report write, and `done:` status append through the OpenCode adapter using `opencode/big-pickle`.
+That smoke did not exercise an OpenRouter-backed worker launch.
+It remains unverified whether a command-scoped `OPENROUTER_API_KEY` reaches a worker through the long-lived backend daemon, which is the same credential-propagation hazard documented for Muse.
+
 ## Composer classification matrix
 
 The shared composer classifier (`bin/fm-composer-lib.sh`, `fm_composer_classify_screen`) owns every composer shape fleet-wide; each backend contributes only a capture and a capability descriptor.

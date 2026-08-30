@@ -312,6 +312,14 @@ hash_text() {
   fi
 }
 
+# The watcher persists this public marker-name format, so fixtures that seed or
+# inspect per-window marker files (.hash-, .count-, .stale-, .paused-, ...) use
+# its externally observable v2 representation via an independent byte oracle.
+watch_marker_key() {  # <window>
+  printf 'v2-'
+  printf '%s' "$1" | LC_ALL=C od -An -tx1 | tr -d ' \n'
+}
+
 dead_pid() {
   local p=999999
   while kill -0 "$p" 2>/dev/null; do

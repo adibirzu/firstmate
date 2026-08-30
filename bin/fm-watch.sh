@@ -134,6 +134,9 @@ mkdir -p "$STATE"
 # gate and the wake emission (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# Persistent watcher-marker identity, shared with the away-mode daemon.
+# shellcheck source=bin/fm-marker-lib.sh
+. "$SCRIPT_DIR/fm-marker-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -310,18 +313,18 @@ window_label() {
   [ -n "$task" ] && printf 'fm-%s' "$task"
 }
 
-# The ONE derivation of a window's per-window marker key: `:`, `/` and `.` become
-# `_` so a window name is usable as a filename suffix. Every per-window file the
-# watcher keeps is named by it (.hash-, .count-, .stale-, .stale-since-,
-# .wedge-escalations-, .paused-*, .writing-*), and live homes hold those markers on
-# disk under the current format, so the format lives here alone: a second copy is
-# how a future change to it silently orphans a window's markers instead of clearing
-# them. The helpers below take the derived key rather than re-deriving it, so one
-# poll of one window derives it once.
+# The ONE derivation of a window's per-window marker key, delegated to
+# fm-marker-lib.sh because the away-mode daemon also clears these watcher
+# markers. Existing unversioned markers are deliberately ignored rather than
+# migrated: their identity may already be ambiguous, and trusting or deleting
+# an ambiguous legacy name could resurrect or erase another endpoint's evidence.
+# Each endpoint therefore starts with fresh v2 evidence once. Every per-window
+# file the watcher keeps is named by this key (.hash-, .count-, .stale-,
+# .stale-since-, .wedge-escalations-, .paused-*, .writing-*). The helpers
+# below take the derived key rather than re-deriving it, so one poll of one
+# window derives it once.
 window_key() {  # <window>
-  local key=${1//:/_}
-  key=${key//\//_}
-  printf '%s' "${key//./_}"
+  fm_window_marker_key "$1"
 }
 
 # Steering-inbox loss detection, one cheap check per recorded window per poll.
