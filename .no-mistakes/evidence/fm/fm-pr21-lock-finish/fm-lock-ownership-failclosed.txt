@@ -1,0 +1,25 @@
+=== firstmate PR21: session-lock identity binding — fail-closed evidence ===
+branch: fm/fm-pr21-lock-finish   target: c28b993
+
+## Ambient condition (this suite runner is launched under Claude Code)
+CLAUDECODE=1
+CLAUDE_CODE_SESSION_ID=8f280585-2d2f-4628-8386-0293bf447ec0
+   ^ exactly the inherited identity that made the fail-closed cases
+     previously look identifiable and take the legacy compatibility path.
+
+## POST-FIX (target commit): tests/fm-lock-ownership.test.sh
+ok - fm-lock: a new session binding readmits its owner and rejects a sibling in the same pool
+ok - fm-lock: legacy shared-pool ownership is accepted only visibly during migration
+ok - fm-lock: an unidentifiable new Claude acquisition refuses without legacy fallback
+ok - fm-lock: a Claude worker without session identity fails closed
+exit=0
+
+## Regression reproduction — PRE-FIX test body, same ambient identity
+ok - fm-lock: a new session binding readmits its owner and rejects a sibling in the same pool
+ok - fm-lock: legacy shared-pool ownership is accepted only visibly during migration
+exit=1
+
+Interpretation: pre-fix the unidentifiable Claude acquisition inherited the
+ambient session id -> 'lock acquired' (legacy fallthrough) -> test FAILS.
+Post-fix it refuses with 'cannot establish this session's lock identity'
+and writes no lock/binding -> test PASSES. Assertion is unchanged/unweakened.
