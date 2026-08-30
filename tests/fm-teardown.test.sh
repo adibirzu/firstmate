@@ -1391,7 +1391,7 @@ case "\${1:-} \${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
-  marker="$case_dir/state/.herdr-escalated-default_wG_pQ"
+  marker="$case_dir/state/.herdr-escalated-v2-$(printf '%s' default:wG:pQ | LC_ALL=C od -An -tx1 | tr -d ' \n')"
   : > "$marker"
 
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \

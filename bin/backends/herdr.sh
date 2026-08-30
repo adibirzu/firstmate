@@ -86,6 +86,14 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-transition-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-transition-lib.sh"
 
+# Shared persistent watcher-marker identity (fm_window_marker_key), the same
+# single owner used by bin/fm-watch.sh and the away-mode daemon, so the
+# escalation dedupe marker below cannot drift from the watcher's key scheme.
+if ! declare -F fm_window_marker_key >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-marker-lib.sh
+  . "$FM_BACKEND_HERDR_ROOT/bin/fm-marker-lib.sh"
+fi
+
 FM_BACKEND_HERDR_MIN_PROTOCOL=14
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
@@ -123,10 +131,10 @@ FM_BACKEND_HERDR_MIN_PRESENTATION_VERSION=0.8.0
 # release, so an upgrade or a downgrade is announced again.
 FM_BACKEND_HERDR_PRESENTATION_FLOOR_MARKER_PREFIX=".herdr-presentation-floor-"
 # Per-pane escalation dedupe marker prefix, under the state dir. One marker per
-# window (keyed like the watcher's own .stale-<key>): set when a ->blocked edge
-# is enqueued, cleared on any working edge, so exactly one wake fires per
-# ->blocked edge and a reconnect level-reconcile never re-delivers a still-
-# blocked pane. Mirrors bin/fm-watch.sh's .stale-<key> naming.
+# window (keyed via the shared fm_window_marker_key owner, like the watcher's
+# own .stale-<key>): set when a ->blocked edge is enqueued, cleared on any
+# working edge, so exactly one wake fires per ->blocked edge and a reconnect
+# level-reconcile never re-delivers a still-blocked pane.
 FM_BACKEND_HERDR_ESCALATED_PREFIX=".herdr-escalated-"
 # .fm-secondmate-home is written by bin/fm-home-seed.sh (AGENTS.md section 6)
 # at a seeded secondmate home's root, containing exactly that secondmate's id.
@@ -3247,11 +3255,12 @@ fm_backend_herdr_event_reader_cmd() {
 }
 
 # fm_backend_herdr_escalation_marker: the per-pane dedupe marker path for a
-# <window> ("<session>:<pane_id>"), keyed identically to the watcher's
-# .stale-<key> (tr ':/.' '___'), under <state_dir>.
+# <window> ("<session>:<pane_id>"), keyed through the shared
+# fm_window_marker_key owner (bin/fm-marker-lib.sh) - the same injective v2
+# scheme as the watcher's .stale-<key> - under <state_dir>.
 fm_backend_herdr_escalation_marker() {  # <state_dir> <window>
   local state=$1 window=$2 key
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(fm_window_marker_key "$window")
   printf '%s/%s%s' "$state" "$FM_BACKEND_HERDR_ESCALATED_PREFIX" "$key"
 }
 
