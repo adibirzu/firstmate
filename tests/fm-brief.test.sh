@@ -554,8 +554,12 @@ test_secondmate_marked_request_reporting_contract() {
     "secondmate charter lost detailed document pointers"
   assert_grep 'Report only true captain-relevant outcomes or a declared external wait' "$brief" \
     "secondmate charter lost declared external waits"
-  assert_grep 'a captain decision, a real blocker, a failure, or work ready for review' "$brief" \
-    "secondmate charter lost decisions, blockers, failures, or ready outcomes"
+  assert_grep 'a captain decision, a real blocker, a failure, work ready for review, or work you landed' "$brief" \
+    "secondmate charter lost decisions, blockers, failures, ready outcomes, or landed work"
+  # Under standing merge authority nothing is ever "ready for review", so the
+  # landed merge is the trigger a charter without this line silently omits.
+  assert_grep 'a merge you performed yourself under standing merge authority and one the captain merged on the forge' "$brief" \
+    "secondmate charter did not name a landed merge as a reporting trigger"
   assert_grep 'States: working, needs-decision, blocked, paused, done, failed.' "$brief" \
     "secondmate charter changed the preserved status vocabulary"
   pass "fm-brief.sh: marked requests avoid generic acknowledgements and preserve material reporting"
@@ -752,6 +756,33 @@ test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
   pass "fm-brief.sh: ship and scout briefs forbid interactive-prompt decisions and worker-side polling loops"
 }
 
+# The instruction-inbox contract is delivered to the crewmate exactly once per
+# brief. A merge resolution that kept both parents' placement of the section
+# emitted it twice back to back, which spends the home's startup-memory budget
+# on a repeated contract and reads to the agent as a generation bug. The
+# assertion is on the generated brief - the prompt actually handed to the agent
+# - not on the scaffold's source.
+test_instruction_inbox_contract_is_delivered_once_per_brief() {
+  local home brief kind kind_brief count
+  home="$TMP_ROOT/inbox-once-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-ship some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-scout some-proj --scout >/dev/null 2>&1
+  for kind_brief in "ship:$home/data/brief-inbox-ship/brief.md" "scout:$home/data/brief-inbox-scout/brief.md"; do
+    kind=${kind_brief%%:*}
+    brief=${kind_brief#*:}
+    assert_present "$brief" "$kind brief was not scaffolded"
+    count=$(grep -c '^# Firstmate instruction inbox$' "$brief")
+    [ "$count" = 1 ] \
+      || fail "$kind brief delivers the instruction-inbox contract $count times, expected exactly 1"
+    count=$(grep -c 'The move IS the acknowledgement' "$brief")
+    [ "$count" = 1 ] \
+      || fail "$kind brief repeats the inbox acknowledgement rule $count times, expected exactly 1"
+  done
+  pass "fm-brief.sh: ship and scout briefs deliver the instruction-inbox contract exactly once"
+}
+
 # Every ship and scout brief carries the graph-first context instruction: query
 # the DevViz code graph before broad file reads, with a fail-soft fallback to
 # normal file reads when the graph surface is unreachable.
@@ -824,5 +855,6 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
+test_instruction_inbox_contract_is_delivered_once_per_brief
 test_ship_and_scout_carry_graph_first_instruction
 test_scout_and_secondmate_scaffold
