@@ -2,11 +2,45 @@
 # Behavior tests for Grok-harness hook authentication, teardown cleanup, and session-lock holder detection.
 set -u
 
-# shellcheck source=tests/fixtures.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 TMP_ROOT=$(fm_test_tmproot fm-grok-harness)
+
+make_spawn_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+  has-session|new-session|new-window|kill-window) exit 0 ;;
+  send-keys)
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then
+        [ -z "${FM_FAKE_LAUNCH_LOG:-}" ] || printf '%s\n' "$arg" >> "$FM_FAKE_LAUNCH_LOG"
+        break
+      fi
+      prev=$arg
+    done
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_treehouse "$fakebin"
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  printf '%s\n' "$fakebin"
+}
 
 make_spawn_case() {
   local name=$1 case_dir home proj wt fakebin grok_home id
@@ -14,21 +48,66 @@ make_spawn_case() {
   home="$case_dir/home"
   proj="$case_dir/project"
   wt="$case_dir/wt"
-  fakebin=$(make_spawn_fakebin "$case_dir/fake" gh-axi gh)
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
   grok_home="$case_dir/grok"
   id="grok-$name-x1"
-  mkdir -p "$grok_home"
-  fm_test_spawn_home "$home"
-  fm_test_spawn_brief "$home" "$id" brief
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" "$grok_home"
+  printf 'brief\n' > "$home/data/$id/brief.md"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$grok_home|$id"
 }
 
 run_grok_spawn() {
   local home=$1 proj=$2 wt=$3 fakebin=$4 grok_home=$5 id=$6
-  GROK_HOME="$grok_home" \
-    fm_test_run_spawn "$home" "$wt" "$fakebin" \
-    "$id" "$proj" grok --mode no-mistakes --yolo off
+  shift 6
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$home/launch.log" \
+    GROK_HOME="$grok_home" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" "$proj" grok --mode no-mistakes --yolo off "$@" 2>&1
+}
+
+# grok's reasoning-effort ceiling MOVED between installed versions: 0.2.99
+# rejected xhigh, 1.0.4 accepts it, and max is still rejected. Passing a
+# known-bad value would fail the launch, so the mapping omits what the binary
+# refuses rather than guessing. The live counterpart that catches the next move
+# is tests/fm-grok-signals-live-e2e.test.sh.
+test_grok_effort_maps_to_the_accepted_vocabulary() {
+  local rec case_dir home proj wt fakebin grok_home id launch entry effort expect
+  local -a cases=(
+    "low|--reasoning-effort 'low'"
+    "medium|--reasoning-effort 'medium'"
+    "high|--reasoning-effort 'high'"
+    "xhigh|--reasoning-effort 'xhigh'"
+  )
+  for entry in "${cases[@]}"; do
+    effort=${entry%%|*}
+    expect=${entry#*|}
+    rec=$(make_spawn_case "effort-$effort")
+    IFS='|' read -r case_dir home proj wt fakebin grok_home id <<EOF
+$rec
+EOF
+    run_grok_spawn "$home" "$proj" "$wt" "$fakebin" "$grok_home" "$id" --effort "$effort" >/dev/null \
+      || fail "grok spawn with effort $effort failed"
+    launch=$(cat "$home/launch.log")
+    assert_contains "$launch" "$expect" "grok effort $effort did not map to '$expect'"
+  done
+  # max is outside grok's vocabulary, so it must be omitted rather than passed.
+  rec=$(make_spawn_case effort-max)
+  IFS='|' read -r case_dir home proj wt fakebin grok_home id <<EOF
+$rec
+EOF
+  run_grok_spawn "$home" "$proj" "$wt" "$fakebin" "$grok_home" "$id" --effort max >/dev/null \
+    || fail "grok spawn with effort max failed"
+  launch=$(cat "$home/launch.log")
+  case "$launch" in
+    *--reasoning-effort*) fail "grok must omit max rather than pass a value the binary rejects" ;;
+  esac
+  assert_contains "$launch" "grok --always-approve" "grok launch shape changed"
+  pass "fm-spawn: grok maps low|medium|high|xhigh and omits max"
 }
 
 test_grok_hook_requires_registered_token() {
@@ -115,3 +194,4 @@ SH
 test_grok_hook_requires_registered_token
 test_grok_teardown_removes_pointer_and_token
 test_fm_lock_recognizes_grok_holder
+test_grok_effort_maps_to_the_accepted_vocabulary

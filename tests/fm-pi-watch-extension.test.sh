@@ -1074,9 +1074,12 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-hung-successor", {}, undefined, undefined, {});
-// Three unready successors each cost the full readiness budget, so wait well
-// past their sum. The wait ends as soon as the wake lands.
-for (let i = 0; i < 1500 && !prompt; i += 1) {
+// Wall-clock deadline, not an iteration count. This path deliberately burns one
+// whole arm-ready window per attempt (successor + two retries), so a fixed
+// 500x10ms budget can expire before the wake is even due once the window is
+// wide enough to survive a loaded runner's process-start latency.
+const promptDeadline = Date.now() + 60000;
+while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
@@ -1092,7 +1095,7 @@ if (stableRows.length !== 4) throw new Error(`single-flight recovery launched ${
 EOF
 )
   status=$?
-  expect_code 0 "$status" "Pi must deliver the actionable wake after bounded hung-successor recovery"
+  expect_code 0 "$status" "Pi must deliver the actionable wake after bounded hung-successor recovery: $out"
   [ -z "$out" ] || fail "Pi hung-successor test printed output: $out"
   pass "Pi hung successor falls back to one typed actionable wake"
 }
@@ -1840,6 +1843,7 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
   cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/fm-operational-input.js"
+  cp "$ROOT/.opencode/plugins/lib/fm-watch-arm-eligibility.js" "$fixture/plugins/lib/fm-watch-arm-eligibility.js"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 await import(pathToFileURL(process.env.PLUGIN).href);
@@ -1980,14 +1984,15 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999\n");
 await hooks.event(event);
-// The hook starts its attempt without awaiting it, and the plugin answers a
-// second attempt from the one already in flight. Join that attempt through the
-// coordinator rather than waiting a fixed span: refusing an unowned lock walks
-// git and ps probes that can outlast any such span, and the owned-lock event
-// below would then be answered from the refusal instead of arming.
-const refusal = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
-if (refusal !== "read-only") {
-  console.error(`expected a read-only refusal without the session lock, got ${refusal}`);
+// The event hook starts the arm attempt without awaiting it, and a foreign-lock
+// refusal costs ~10 git/ps probes before it settles. Drain that attempt through
+// the coordinator instead of sleeping a fixed budget: on a loaded runner the
+// probes outlast any wall-clock guess, and flipping the lock underneath an
+// in-flight attempt makes the next caller coalesce onto its stale refusal and
+// never arm. Awaiting also asserts the exact reason the gate refused.
+const refused = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (refused !== "read-only") {
+  console.error(`expected read-only while another session holds the lock, got ${refused}`);
   process.exit(1);
 }
 if (existsSync(process.env.FM_ARM_LOG)) {
@@ -2281,9 +2286,12 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-// Three unready successors each cost the full readiness budget, so wait well
-// past their sum. The wait ends as soon as the wake lands.
-for (let i = 0; i < 1500 && !prompt; i += 1) {
+// Wall-clock deadline, not an iteration count. This path deliberately burns one
+// whole arm-ready window per attempt (successor + two retries), so a fixed
+// 500x10ms budget can expire before the wake is even due once the window is
+// wide enough to survive a loaded runner's process-start latency.
+const promptDeadline = Date.now() + 60000;
+while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
@@ -2299,7 +2307,7 @@ if (stableRows.length !== 4) throw new Error(`single-flight recovery launched ${
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode must deliver the actionable wake after bounded hung-successor recovery"
+  expect_code 0 "$status" "OpenCode must deliver the actionable wake after bounded hung-successor recovery: $out"
   [ -z "$out" ] || fail "OpenCode hung-successor test printed output: $out"
   pass "OpenCode hung successor falls back to one typed actionable wake"
 }

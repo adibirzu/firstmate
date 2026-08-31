@@ -86,7 +86,7 @@ test_signal_catchup_without_running_watcher() {
 }
 
 test_stale_enqueue_before_suppressor() {
-  local dir state fakebin out drain_out capture_file window key pane_hash
+  local dir state fakebin out drain_out capture_file window key pane_hash sig
   dir=$(make_case stale)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -101,8 +101,9 @@ test_stale_enqueue_before_suppressor() {
   # to its current signature so the per-poll signal scan does not pre-empt the
   # stale wake with a signal wake.
   printf 'done: ready in branch fm/stale\n' > "$state/stale.status"
-  prime_status_seen "$state" "$state/stale.status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  if [ "$(uname)" = Darwin ]; then sig=$(stat -f '%z:%Fm' "$state/stale.status"); else sig=$(stat -c '%s:%Y' "$state/stale.status"); fi
+  printf '%s' "$sig" > "$state/.seen-stale_status"
+  key=$(watch_marker_key "$window")
   pane_hash=$(hash_text "idle prompt")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -120,7 +121,7 @@ test_stale_enqueue_before_suppressor() {
 # the queue-safety invariant - enqueue the stale wake BEFORE advancing the .stale-*
 # suppressor - so a watcher killed between the two never swallows the surfaced finish.
 test_not_working_stale_enqueue_before_suppressor() {
-  local dir state fakebin out drain_out capture_file window key pane_hash
+  local dir state fakebin out drain_out capture_file window key pane_hash sig
   dir=$(make_case stale-stopped)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -133,8 +134,9 @@ test_not_working_stale_enqueue_before_suppressor() {
   # Non-terminal status (no captain-relevant verb); prime .seen-* so the per-poll
   # signal scan does not pre-empt the stale path.
   printf 'working: implementing\n' > "$state/stopped.status"
-  prime_status_seen "$state" "$state/stopped.status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  if [ "$(uname)" = Darwin ]; then sig=$(stat -f '%z:%Fm' "$state/stopped.status"); else sig=$(stat -c '%s:%Y' "$state/stopped.status"); fi
+  printf '%s' "$sig" > "$state/.seen-stopped_status"
+  key=$(watch_marker_key "$window")
   pane_hash=$(hash_text "idle prompt, finished")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -161,6 +163,9 @@ test_check_output_is_queued() {
   out="$dir/watch.out"
   drain_out="$dir/drain.out"
   check_file="$state/task.check.sh"
+  printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
+  printf '%s\n' fm-pr-check-migration-v1 > "$state/.pr-check-migration-v1"
+  chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
   cat > "$check_file" <<'SH'
 #!/usr/bin/env bash
 printf 'merged: https://example.test/pr/1\n'
@@ -517,7 +522,7 @@ SH
 }
 
 test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
-  local dir state out i raw_count expected
+  local dir state out i raw_count expected huge_prefix huge_expected_bytes huge_actual_bytes
   dir=$(make_case complete-enrichment)
   state="$dir/state"
   out="$dir/drain.out"
@@ -543,8 +548,13 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
   raw_count=$(awk -F '\t' 'NF == 5 { count++ } END { print count + 0 }' "$out")
   [ "$raw_count" -eq 13 ] || fail "missing, unreadable, malformed, empty, or oversized status input hid a raw row"
 
-  expected="wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: $(cat "$state/huge.status")"
-  grep -Fx "$expected" "$out" >/dev/null \
+  # Do not materialize the intentionally oversized fixture in an assertion
+  # argument while the fleet is under memory pressure. The fixed prefix plus
+  # exact emitted byte count still proves this annotation was retained in full.
+  huge_prefix='wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: '
+  huge_expected_bytes=$(( ${#huge_prefix} + $(wc -c < "$state/huge.status") ))
+  huge_actual_bytes=$(grep -F "$huge_prefix" "$out" | wc -c | tr -d '[:space:]')
+  [ "$huge_actual_bytes" -eq "$huge_expected_bytes" ] \
     || fail "the oversized unread status line was truncated or omitted"
   i=1
   while [ "$i" -le 8 ]; do

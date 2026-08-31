@@ -27,8 +27,8 @@
 # agents' project instructions on the no-mistakes side).
 set -u
 
-# shellcheck source=tests/fixtures.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -50,6 +50,13 @@ PATH_MSG='no-mistakes gate worktree'
 # (<NM_HOME>/repos/<id>.git + <NM_HOME>/worktrees/<id>/<run>).
 make_gate_worktree() {
   local root=$1 id=016d88035d58 run=01KXC3SD5NZYMERGDS68Z1C8ER seed
+  # This helper RETURNS its path on stdout, so nothing else may write there.
+  # The `git push` below runs the caller's pre-push hook, and a hook that logs
+  # informationally to stdout instead of stderr lands its banner INSIDE the
+  # `GATE_WT=$(make_gate_worktree ...)` capture. Every later `cd "$GATE_WT"`
+  # then fails, which surfaced as the guard "exiting 111" - run_guard_lib's own
+  # `cd ... || exit 111` - rather than the expected refusal code 3.
+  {
   mkdir -p "$root/.no-mistakes/repos"
   git init -q --bare "$root/origin.git"
   seed=$(mktemp -d "$TMP/gate-seed.XXXXXX")
@@ -60,6 +67,7 @@ make_gate_worktree() {
   git clone -q --bare "$root/origin.git" "$root/.no-mistakes/repos/$id.git"
   git -C "$root/.no-mistakes/repos/$id.git" worktree add --detach \
     "$root/.no-mistakes/worktrees/$id/$run" main >/dev/null 2>&1
+  } >/dev/null
   printf '%s\n' "$root/.no-mistakes/worktrees/$id/$run"
 }
 
@@ -67,8 +75,11 @@ make_gate_worktree() {
 # normal primary/crew checkout: its git-common-dir is <dir>/.git, never a gate.
 make_normal_repo() {
   local dir=$1
+  # Same stdout contract as make_gate_worktree above.
+  {
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
+  } >/dev/null
   printf '%s\n' "$dir"
 }
 
@@ -133,18 +144,40 @@ test_helper_normal_is_noop() {
 
 # --- fm-spawn ---------------------------------------------------------------
 
+# A fake tmux/treehouse so fm-spawn resolves the crew worktree from a controlled
+# pane path and completes without a live terminal (mirrors tests/fm-tangle-guard).
+make_spawn_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+  has-session|new-session|new-window|send-keys|set-window-option) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_treehouse "$fakebin"
+  printf '%s\n' "$fakebin"
+}
+
 # run_spawn <cwd> <home> <id> <proj> <pane> <fakebin> [ASSIGN...] -> combined output
-# Gate-refuse cases must cd into a controlled cwd and drop both refusal signals
-# so the suite stays hermetic when it itself runs inside a real gate worktree.
 run_spawn() {
   local cwd=$1 home=$2 id=$3 proj=$4 pane=$5 fakebin=$6; shift 6
-  fm_test_spawn_brief "$home" "$id" brief
+  mkdir -p "$home/data/$id"
+  printf 'brief\n' > "$home/data/$id/brief.md"
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
-      FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-      FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX=fake,1,0 \
-      PATH="$fakebin:$PATH" "$@" \
+      "FM_ROOT_OVERRIDE=" "FM_HOME=$home" \
+      "FM_STATE_OVERRIDE=$home/state" "FM_DATA_OVERRIDE=$home/data" \
+      "FM_PROJECTS_OVERRIDE=$home/projects" "FM_CONFIG_OVERRIDE=$home/config" \
+      "FM_SPAWN_NO_GUARD=1" "FM_FAKE_PANE_PATH=$pane" "TMUX=fake,1,0" \
+      "PATH=$fakebin:$PATH" "$@" \
       "$SPAWN" "$id" "$proj" codex --mode no-mistakes --yolo off ) 2>&1
 }
 
@@ -267,9 +300,16 @@ test_send_refuses_and_admits() {
 # task (HEAD reachable from origin), so a normal teardown genuinely succeeds and a
 # refused one leaves the task untouched (mirrors tests/fm-teardown make_case).
 make_teardown_case() {
+  # This helper RETURNS its path on stdout, so nothing else may write there.
+  # `git push` runs the caller's pre-push hook, and a hook that logs
+  # informationally to stdout instead of stderr lands its banner INSIDE the
+  # caller's `$(...)` capture, prefixing every derived path and collapsing the
+  # fixture with "No such file or directory". `-q` silences git, never the hook.
+  # Grouping the setup makes the stdout contract explicit for ANY hook.
+  {
   local name=$1 case_dir fakebin t
   case_dir="$TMP/$name"; fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
   for t in treehouse tmux; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/$t"
     chmod +x "$fakebin/$t"
@@ -305,8 +345,9 @@ SH
   fm_write_meta "$case_dir/state/task-x1.meta" \
     "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
     "worktree=$case_dir/wt" "project=$case_dir/project" \
-    "kind=ship" "mode=no-mistakes" "spawn_gen=spawn-gate-refuse-task-x1"
+    "kind=ship" "mode=no-mistakes"
   touch "$case_dir/state/.last-watcher-beat"
+  } >/dev/null
   printf '%s\n' "$case_dir"
 }
 
@@ -315,8 +356,7 @@ run_teardown() {
   local cwd=$1 case_dir=$2; shift 2
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
       "FM_ROOT_OVERRIDE=$ROOT" "FM_STATE_OVERRIDE=$case_dir/state" \
-      "FM_DATA_OVERRIDE=$case_dir/data" "FM_CONFIG_OVERRIDE=$case_dir/config" \
-      "PATH=$case_dir/fakebin:$PATH" "$@" \
+      "FM_CONFIG_OVERRIDE=$case_dir/config" "PATH=$case_dir/fakebin:$PATH" "$@" \
       "$TEARDOWN" task-x1 ) 2>&1
 }
 
