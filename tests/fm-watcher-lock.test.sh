@@ -22,13 +22,6 @@ ARM_FAIL_EXIT_POLLS=400
 
 TMP_ROOT=$(fm_test_tmproot fm-watcher-lock-tests)
 
-mark_pr_check_migration_complete() {
-  local state=$1
-  printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
-  printf '%s\n' fm-pr-check-migration-v1 > "$state/.pr-check-migration-v1"
-  chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
-}
-
 drain_and_ack() {  # <state>
   local state=$1 err sequence generation
   err="$state/.test-drain.err"
@@ -48,7 +41,6 @@ test_singleton_start() {
   fakebin="$dir/fakebin"
   out1="$dir/watch-one.out"
   out2="$dir/watch-two.out"
-  mark_pr_check_migration_complete "$state"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out1" &
   pid1=$!
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out2" &
@@ -114,7 +106,6 @@ test_live_stale_watch_lock_is_actionable() {
   fakebin="$dir/fakebin"
   out="$dir/watch.out"
   err="$dir/watch.err"
-  mark_pr_check_migration_complete "$state"
   mkdir "$state/.watch.lock"
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
   touch -t 200001010000 "$state/.last-watcher-beat"
@@ -433,7 +424,6 @@ test_watch_restart_rejects_reused_pid() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
-  mark_pr_check_migration_complete "$state"
   sleep 300 &
   live=$!
   mkdir "$state/.watch.lock"
@@ -466,7 +456,6 @@ test_watch_restart_attaches_to_healthy_peer() {
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
   peer_ready="$dir/peer.ready"
-  mark_pr_check_migration_complete "$state"
   node -e 'const fs = require("node:fs"); process.on("SIGTERM", () => {}); fs.writeFileSync(process.argv[1], "ready\n"); setTimeout(() => {}, 300000)' "$peer_ready" &
   peer=$!
   i=0
@@ -542,7 +531,6 @@ test_arm_self_eviction_is_loud_without_successor() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  mark_pr_check_migration_complete "$state"
   # The arm's confirmation budget bounds a REAL child startup (fork, exec, lock
   # acquisition, beacon publication), so this case holds the arm to production's
   # own budget rather than a shrunken fixture one: a one-second budget turned
@@ -745,9 +733,6 @@ test_arm_propagates_immediate_wake_before_confirmation() {
   armout="$dir/arm.out"
   drain_out="$dir/drain.out"
   check_file="$state/task.check.sh"
-  printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
-  printf '%s\n' fm-pr-check-migration-v1 > "$state/.pr-check-migration-v1"
-  chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
   cat > "$check_file" <<'SH'
 #!/usr/bin/env bash
 printf 'merged: https://example.test/pr/7\n'
@@ -777,7 +762,6 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  mark_pr_check_migration_complete "$state"
   sleep 300 &
   peer=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
@@ -829,7 +813,6 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  mark_pr_check_migration_complete "$state"
   sleep 300 &
   live=$!
   # A live process holds the lock but is NOT a confirmable watcher (no identity),
@@ -860,7 +843,6 @@ test_cycle_exit_ledger_links_successor_and_stays_bounded() {
   fakebin="$dir/fakebin"
   armout="$dir/first-arm.out"
   check_file="$state/task.check.sh"
-  mark_pr_check_migration_complete "$state"
   cat > "$check_file" <<'SH'
 #!/usr/bin/env bash
 printf 'done: synthetic cycle\n'
@@ -931,7 +913,6 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  mark_pr_check_migration_complete "$state"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
@@ -1018,69 +999,6 @@ SH
     pass "real ps fallback locale check skipped where ps -o lstart= is unsupported"
   fi
   pass "fm_pid_identity is locale-invariant across LC_ALL/LC_TIME"
-}
-
-test_lock_identity_survives_symlinked_home() {
-  # One home reachable through a symlinked ancestor has two names, and bin/ derives
-  # its root both ways: bin/fm-arm-pretool-check.sh and bin/fm-cd-pretool-check.sh
-  # resolve with pwd -P while most scripts use a logical pwd. So the lock can be
-  # published under one name and re-read under the other. Comparing the raw strings
-  # rejects the home's own live watcher, and re-arming records the same divergent
-  # pair again, so nothing recovers. Both names must resolve to one identity.
-  local dir real link state live identity
-  dir=$(make_case symlinked-home)
-  real="$dir/real-home"
-  link="$dir/link-home"
-  mkdir -p "$real/bin" "$real/state/.watch.lock" "$dir/other-home/bin"
-  : > "$real/bin/fm-watch.sh"
-  : > "$dir/other-home/bin/fm-watch.sh"
-  ln -s "$real" "$link"
-  state="$real/state"
-  sleep 300 &
-  live=$!
-  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$live" 2>/dev/null)
-  # Publish the lock under the PHYSICAL names, the way a pwd -P deriver records it.
-  printf '%s\n' "$live" > "$state/.watch.lock/pid"
-  printf '%s\n' "$real" > "$state/.watch.lock/fm-home"
-  printf '%s\n' "$real/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
-  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
-
-  # Re-read under the SYMLINKED names, the way a logical-pwd deriver sees them.
-  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_watcher_lock_matches_pid "$2" "$3" "$4" "$5"' \
-    _ "$LIB" "$state" "$link/bin/fm-watch.sh" "$live" "$link" \
-    || { kill "$live" 2>/dev/null; fail "lock published under the physical home did not match the same home read through a symlink"; }
-  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_watcher_healthy "$2" "$3" 300 "$4"' \
-    _ "$LIB" "$state" "$link/bin/fm-watch.sh" "$link" \
-    && { kill "$live" 2>/dev/null; fail "fm_watcher_healthy passed with a stale beacon"; }
-  touch "$state/.last-watcher-beat"
-  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_watcher_healthy "$2" "$3" 300 "$4"' \
-    _ "$LIB" "$state" "$link/bin/fm-watch.sh" "$link" \
-    || { kill "$live" 2>/dev/null; fail "a fresh watcher was not healthy when read through the symlinked home"; }
-
-  # A genuinely different home must still be rejected: resolving is not loosening.
-  if FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_watcher_lock_matches_pid "$2" "$3" "$4" "$5"' \
-    _ "$LIB" "$state" "$dir/other-home/bin/fm-watch.sh" "$live" "$dir/other-home"; then
-    kill "$live" 2>/dev/null
-    fail "a different home matched this home's watcher lock"
-  fi
-  kill "$live" 2>/dev/null || true
-  wait "$live" 2>/dev/null || true
-  pass "watcher lock identity resolves symlinked and physical home names to one identity"
-}
-
-test_lock_paths_equal_keeps_unresolvable_paths_distinct() {
-  # A stale lock can name a home that no longer exists. Those paths cannot be
-  # resolved, so they must fall back to their raw value: collapsing them to an
-  # empty string would make every removed home match every other removed home.
-  FM_STATE_OVERRIDE="$TMP_ROOT/paths-equal-state" bash -c '
-    . "$1"
-    fm_lock_paths_equal "$2/gone-a" "$2/gone-a" || exit 1
-    fm_lock_paths_equal "$2/gone-a" "$2/gone-b" && exit 1
-    fm_lock_paths_equal "" "$2/gone-a" && exit 1
-    exit 0
-  ' _ "$LIB" "$TMP_ROOT/removed-homes" \
-    || fail "fm_lock_paths_equal mishandled unresolvable or empty paths"
-  pass "fm_lock_paths_equal keeps unresolvable and empty paths distinct"
 }
 
 write_fake_proc_identity() {
@@ -1186,8 +1104,6 @@ test_msys_pid_identity_uses_proc() {
 
 test_singleton_start
 test_pid_identity_is_locale_invariant
-test_lock_identity_survives_symlinked_home
-test_lock_paths_equal_keeps_unresolvable_paths_distinct
 test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed

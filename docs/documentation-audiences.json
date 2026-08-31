@@ -105,10 +105,6 @@
     {
       "source": "docs/trace-context.md",
       "target": "docs/verification/trace-context.md"
-    },
-    {
-      "source": ".agents/skills/graphify-orientation/SKILL.md",
-      "target": "docs/graphify.md"
     }
   ],
   "surfaces": [
@@ -173,11 +169,127 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/process-event-sources/SKILL.md",
+      "path": ".agents/skills/harness-adapters/references/common/control-and-recovery.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/common/dispatch.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/common/model-and-effort.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/common/primary-hooks.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/agy.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/claude.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cline.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/codex.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/copilot.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cursor-agent.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cursor.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/grok.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/kimi.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/muse.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/opencode.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/pi.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/README-UK.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/README.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/context-engineering-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/gotchas.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/memory-persistence-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/multi-agent-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/skill-runtime-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/tool-registry-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/agents.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/progress.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/session-handoff.md",
       "audience": "agent-runtime"
     },
     {
       "path": ".agents/skills/multi-account/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -253,6 +365,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/captain-hold-lifecycle.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
     },
@@ -267,10 +383,6 @@
     {
       "path": "docs/configuration.md",
       "audience": "operator-current"
-    },
-    {
-      "path": "docs/captain-hold-lifecycle.md",
-      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/documentation-audiences.md",
@@ -289,6 +401,14 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/process-event-extension/file-signal.mjs",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/process-event-extension/firstmate-extension.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/quota-overrides.json",
       "audience": "operator-example"
     },
@@ -299,6 +419,10 @@
     {
       "path": "docs/examples/wedge-alarm",
       "audience": "operator-example"
+    },
+    {
+      "path": "docs/extension-bindings.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/fleet-addon.md",
@@ -397,6 +521,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/verification/agy-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/cline-adapter.md",
       "audience": "maintainer-verification"
     },
@@ -406,10 +534,6 @@
     },
     {
       "path": "docs/verification/cursor-agent-adapter.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/agy-adapter.md",
       "audience": "maintainer-verification"
     },
     {
@@ -467,58 +591,6 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
-    },
-    {
-      "path": ".agents/skills/harness-creator/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/README.md",
-      "audience": "public-product"
-    },
-    {
-      "path": ".agents/skills/harness-creator/README-UK.md",
-      "audience": "public-product"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/context-engineering-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/gotchas.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/memory-persistence-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/multi-agent-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/skill-runtime-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/references/tool-registry-pattern.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/templates/agents.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/templates/progress.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-creator/templates/session-handoff.md",
-      "audience": "agent-runtime"
     }
   ]
 }

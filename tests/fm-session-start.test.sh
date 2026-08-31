@@ -6,7 +6,7 @@
 # Coverage:
 #   - absent-file markers vs empty-but-present files in the context digest
 #   - the lock-refusal read-only path: banner leads, every mutating step is
-#     skipped (including bootstrap's five mutating sweeps, verified by their
+#     skipped (including bootstrap's seven mutating sweeps, verified by their
 #     ABSENCE), the digest still completes
 #   - output section ordering: the safety preamble leads unchanged, live fleet
 #     state precedes the curated memory a truncated tail may take, and the
@@ -35,13 +35,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/wake-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
-
-# Drop ambient Claude lock-identity markers leaked from the suite runner. A
-# firstmate worker launched under Claude Code inherits CLAUDECODE and
-# CLAUDE_CODE_SESSION_ID; leaving those set would let a session that means to
-# model a missing or foreign identity look identifiable from the runner instead.
-# Every claude-session invocation below supplies its own controlled identity.
-unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 SESSION_START="$ROOT/bin/fm-session-start.sh"
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
@@ -516,34 +509,14 @@ SH
 # codex and opencode have no env markers (ancestry only). Without this, a local
 # claude/pi/grok session fails cases that pin a different fake harness while CI
 # (no ambient markers) still passes.
-#
-# The claude path additionally supplies a controlled Claude session identity
-# (CLAUDECODE + a stable session id + a live harness pid). The fleet lock binds
-# a Claude session to that identity rather than to its reparentable worker-pool
-# ancestry, so a claude session start cannot acquire the lock without it. The
-# harness pid is the one the fake ps reports as claude - the pinned
-# FM_FAKE_HARNESS_PID when a caller sets it, otherwise this live shell, which the
-# unpinned fake ps reports as claude for every pid.
 run_session_start() {
-  local home=$1 root=$2 path=$3 pi_harness=${4:-} claude_pid
+  local home=$1 root=$2 path=$3 pi_harness=${4:-}
   if [ -n "$pi_harness" ]; then
-    env -u CLAUDECODE -u GROK_AGENT -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
-      PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
-      FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
-      "$SESSION_START"
-  elif [ "${FM_FAKE_HARNESS:-claude}" = claude ]; then
-    claude_pid=${FM_FAKE_HARNESS_PID:-$$}
-    env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-      CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="fm-test-session-$claude_pid" CLAUDE_PID="$claude_pid" \
+    env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   else
-    # A non-Claude harness pinned through FM_FAKE_HARNESS (pi, codex, ...) is
-    # identified from its fake ps ancestry and binds its lock to that single
-    # ancestry pid, so it needs no Claude identity markers - supplying them
-    # would misclassify it as Claude. Drop them exactly as the pi path does.
-    env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
-      -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
@@ -944,7 +917,6 @@ SH
       done
       if FM_HOME="$home" FM_FAKE_LOCK_STATE="$home/state" \
         FM_FAKE_HARNESS_PID="$harness_pid" PATH="$fakebin:$BASE_PATH" \
-        CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="session-$harness_pid" CLAUDE_PID="$harness_pid" \
         "$ROOT/bin/fm-lock.sh" >/dev/null 2>&1; then
         printf '%s\n' "$harness_pid" >> "$winners"
       fi
@@ -981,12 +953,7 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   # Force a MISSING diagnostic line so the bootstrap section is non-trivial.
-  # The removed tool must be one BASE_PATH cannot supply, or the diagnostic
-  # never fires and this ordering assertion silently tests nothing. node is a
-  # bad choice: BASE_PATH is /usr/bin:/bin:... and most hosts ship node there,
-  # so removing it from the fakebin leaves it resolvable anyway.
-  # gh-axi is created by make_fake_toolchain and is never a system package.
-  rm -f "$fakebin/gh-axi"
+  rm -f "$fakebin/node"
 
   printf 'window=fm-sess:w1\nkind=ship\n' > "$home/state/task-a.meta"
   printf 'Captain memory that may be truncated away safely.\n' > "$home/data/captain.md"
@@ -1000,11 +967,7 @@ EOF
   context_line=$(printf '%s\n' "$out" | grep -n '^CONTEXT$' | head -1 | cut -d: -f1)
   fleet_line=$(printf '%s\n' "$out" | grep -n '^FLEET STATE$' | head -1 | cut -d: -f1)
   next_line=$(printf '%s\n' "$out" | grep -n '^NEXT STEP$' | head -1 | cut -d: -f1)
-  # The inventory header carries the task id, optionally followed by the
-  # readable crew name bin/fm-name.sh mints for it (AGENTS.md section 9). The
-  # id is what recovery keys on and is pinned here; the crew name is
-  # presentation and must not make this fixture brittle.
-  inventory_line=$(printf '%s\n' "$out" | grep -nE '^--- task-a( \(.+\))? ---$' | head -1 | cut -d: -f1)
+  inventory_line=$(printf '%s\n' "$out" | grep -n '^--- task-a ---$' | head -1 | cut -d: -f1)
 
   if [ -z "$lock_line" ] || [ -z "$boot_line" ] || [ -z "$wake_line" ] \
     || [ -z "$read_once_line" ] || [ -z "$context_line" ] || [ -z "$fleet_line" ] \
@@ -1029,7 +992,7 @@ EOF
   assert_contains "$out" "Captain memory that may be truncated away safely." \
     "the ordering fixture did not actually print a memory file"
 
-  missing_line=$(printf '%s\n' "$out" | grep -n 'MISSING: gh-axi' | head -1 | cut -d: -f1)
+  missing_line=$(printf '%s\n' "$out" | grep -n 'MISSING: node' | head -1 | cut -d: -f1)
   [ -n "$missing_line" ] || fail "MISSING diagnostic did not appear at all"
   [ "$missing_line" -lt "$fleet_line" ] || fail "actionable MISSING diagnostic was buried after the bulk fleet-state digest"
 
@@ -1394,10 +1357,7 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
-  # Removing node would not fire the diagnostic: BASE_PATH is /usr/bin:/bin:...
-  # and most hosts ship node there, so it stays resolvable. gh-axi is created
-  # by make_fake_toolchain and is never a system package.
-  rm -f "$fakebin/gh-axi"
+  rm -f "$fakebin/node"
 
   printf 'needs-decision: pick a library\n' > "$home/state/task-z.status"
   append_wake "$home/state" signal task-z.status "needs-decision: pick a library"
@@ -1407,7 +1367,7 @@ EOF
   # fm-lock.sh's own exact success text.
   assert_contains "$out" "lock acquired: harness pid" "fm-lock.sh's real output did not appear (composition, not reimplementation)"
   # fm-bootstrap.sh's own exact MISSING-tool line format.
-  assert_contains "$out" "MISSING: gh-axi (install:" "fm-bootstrap.sh's real detect line did not appear verbatim"
+  assert_contains "$out" "MISSING: node (install:" "fm-bootstrap.sh's real detect line did not appear verbatim"
   # fm-wake-drain.sh's real drained record (raw tab-separated queue line).
   assert_contains "$out" "$(printf 'signal\ttask-z.status\tneeds-decision: pick a library')" "fm-wake-drain.sh's real drained record did not appear"
   assert_contains "$out" "wake annotation: latest wake-EVENT observed at drain, not current state: task-z.status: needs-decision: pick a library" "fm-session-start.sh did not preserve the drain's separate annotation line"
@@ -1434,7 +1394,7 @@ EOF
   FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_LEASE_HOLDER_PID=$$ "$ROOT/bin/fm-lease.sh" claim task-live --actor branch \
     || fail "could not seed the live lease"
 
-  out=$(FM_FAKE_HARNESS=pi run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  out=$(run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "BRANCH OUTCOMES (handled by the supervision branch, not yet seen by this session):" \
     "locked start did not replay the unread branch outcome"
   assert_contains "$out" "https://example.com/pr/b" "replayed outcome lost its content"
@@ -1443,7 +1403,7 @@ EOF
 
   # Replay is one-shot: presenting the digest is the delivery, so the next
   # locked start stays silent about the same outcome.
-  out=$(FM_FAKE_HARNESS=pi run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  out=$(run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   case "$out" in
     *"BRANCH OUTCOMES"*) fail "second start re-presented already-replayed branch outcomes" ;;
   esac
@@ -1674,16 +1634,8 @@ EOF
     "tasks-axi compact listing omitted a dispatchable queued row inside the bound"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "tasks-axi compact digest leaked an in-flight task body"
   assert_not_contains "$out" "QUEUED-BODY-LINE" "tasks-axi compact digest leaked a queued task body"
-  # Assert the ID, not the whole header line. bin/fm-session-start.sh prints
-  # `--- <id> (<crew-name>) ---` whenever bin/fm-name.sh resolves a name, and
-  # falls back to a bare `--- <id> ---` only when it fails - the name is
-  # explicitly "derived, never stored, best-effort". Pinning the bare form made
-  # this assertion pass only on hosts where fm-name.sh happens NOT to work; where
-  # it does, the header reads `--- compact-startup (high-cutter) ---` and the
-  # suite failed for a naming feature working as designed. The id is the
-  # identity this test cares about, so match that and let the suffix vary.
-  # (The orphan-status assertion above stays exact: that path never adds a name.)
-  assert_contains "$out" "--- compact-startup" "in-flight meta identity disappeared from startup recovery digest"
+  assert_not_contains "$out" "DONE-ROW-LINE" "tasks-axi compact digest listed a done row at startup"
+  assert_contains "$out" "--- compact-startup ---" "in-flight meta identity disappeared from startup recovery digest"
   assert_contains "$out" "worktree=$home/projects/firstmate" "in-flight recovery worktree identity disappeared from startup digest"
   assert_contains "$out" "Full task bodies remain available on demand: tasks-axi show <id> --full" \
     "compact digest omitted the full-body lookup pointer"
@@ -2013,14 +1965,9 @@ SH
   chmod +x "$nest"
 
   # shellcheck disable=SC2016 # $$ must expand in the launched shell, not here.
-  # The launched shell is the sole claude-named ancestor (the fake ps reports
-  # FM_FAKE_HARNESS_PID as claude), so it supplies the controlled Claude session
-  # identity the fleet lock now binds to: CLAUDECODE, a stable session id, and
-  # its own pid as the live served-session pid. Without it a claude session
-  # start fails closed instead of taking the lock.
   out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
-    bash -c 'export FM_FAKE_HARNESS_PID=$$ CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="nested-ancestry-$$" CLAUDE_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
+    bash -c 'export FM_FAKE_HARNESS_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
 
   assert_contains "$out" "lock acquired: harness pid" \
     "the runtime bound's wrapper processes pushed the harness out of the bounded ancestry walk"
@@ -2053,14 +2000,8 @@ EOF
     "the full startup fixture did not exercise a mutating sweep"
 
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
-  # The re-emit re-enters the SAME session that ran the full startup above, so it
-  # presents that session's controlled Claude identity (CLAUDECODE + the stable
-  # session id run_session_start bound for FM_FAKE_HARNESS_PID=$$ + the live
-  # served pid). Without it the fleet lock fails closed, the run drops to
-  # read-only, and the queued wake is never drained.
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
-    env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="fm-test-session-$$" CLAUDE_PID=$$ \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     "$SESSION_START" --reemit)
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
@@ -2278,14 +2219,8 @@ EOF
   make_fake_ps_claude "$fakebin"
   git -C "$root" checkout -q -B fm/reemit-tangle
 
-  # This re-emit acquires the lock fresh, so it presents a valid controlled
-  # Claude identity (CLAUDECODE + a stable session id + the live served pid).
-  # With the ambient markers unset at the top of this file, a stripped re-emit
-  # would fail closed on identity and mask the repair-ownership behavior under
-  # test; the identity lets it own the lock exactly as the feature intends.
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
-    env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="reemit-tangle-$$" CLAUDE_PID=$$ \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     "$SESSION_START" --reemit)
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
@@ -2299,12 +2234,8 @@ EOF
   sleep 300 &
   holder_pid=$!
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
-  # The re-emit carries the SAME valid identity, but the lock pid now names a
-  # live foreign holder. Ownership re-verification must reject the mismatch and
-  # drop to read-only - a genuine ownership check, not an absence of identity.
   readonly_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
-    env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="reemit-tangle-$$" CLAUDE_PID=$$ \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     "$SESSION_START" --reemit)
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
