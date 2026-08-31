@@ -1,0 +1,30 @@
+# Session-lock CLAUDE_PID ancestry fallback — end-to-end evidence
+
+Target: df54848  bin/fm-session-lock-lib.sh (+1 fallback line) + 4 real-process regression cases
+Suite:  tests/fm-session-lock-ancestry.test.sh  (drives real bin/fm-lock.sh in orphaned claude-named process trees)
+
+## WITH the fix — full suite (11/11 pass)
+ok - session-lock: a version-named Claude Code session is identified from its install path and argv[0]
+ok - session-lock: ordinary script paths under a harness directory are not harness processes
+ok - session-lock: ownership stops at the first non-harness gap above the contiguous run
+ok - session-lock: a live version-named session holding the lock is not mistaken for a stale owner
+ok - session-lock e2e: a version-named session claims the home and arms supervision
+ok - session-lock e2e: a session parented by a harness-named daemon claims the home and arms supervision
+ok - session-lock e2e: a version-named session under a harness-named daemon keeps its own lock
+ok - session-lock e2e: a claude session that exports CLAUDE_PID resolves its identity unchanged
+ok - session-lock e2e: a claude session with no CLAUDE_PID resolves identity from its live ancestry
+ok - session-lock e2e: claude env markers without a live claude ancestor still fail closed
+ok - session-lock e2e: a fallback-acquired lock still excludes a second live claude session
+suite exit: 0
+
+## WITHOUT the fix (fallback line reverted) — reproduces the reported defect
+ok - session-lock: a version-named Claude Code session is identified from its install path and argv[0]
+ok - session-lock: ordinary script paths under a harness directory are not harness processes
+ok - session-lock: ownership stops at the first non-harness gap above the contiguous run
+ok - session-lock: a live version-named session holding the lock is not mistaken for a stale owner
+ok - session-lock e2e: a version-named session claims the home and arms supervision
+ok - session-lock e2e: a session parented by a harness-named daemon claims the home and arms supervision
+ok - session-lock e2e: a version-named session under a harness-named daemon keeps its own lock
+ok - session-lock e2e: a claude session that exports CLAUDE_PID resolves its identity unchanged
+not ok - a claude session without CLAUDE_PID must still acquire via the ancestry fallback: expected exit 0, got 1
+suite exit: 1
