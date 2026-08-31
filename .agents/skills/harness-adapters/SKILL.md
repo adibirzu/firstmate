@@ -248,7 +248,7 @@ The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and
 Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
 The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
 
-## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20)
+## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20; 1.18.20 OpenRouter discovery re-verified 2026-08-23)
 
 | Fact | Value |
 |---|---|
@@ -260,6 +260,8 @@ No trust dialog.
 Opencode can auto-upgrade itself in the background and the running TUI can exit mid-task, observed live from 1.15.7 to 1.17.3.
 If a pane shows the exit banner, relaunch with `--continue` to resume the session.
 `--prompt` does not auto-submit alongside `--continue`, so send the next instruction via `fm-send` once the TUI is up.
+With `OPENROUTER_API_KEY` in its process environment, `opencode models` discovers OpenRouter model identifiers without `auth login` or a credential written to disk.
+The current count and the unverified long-lived-daemon credential-propagation path are owned by [Runtime backend verification](../../../docs/verification/runtime-backends.md#opencode).
 
 **Busy-queued Enter (opencode 1.18.4).**
 While opencode is mid-turn, the composer accepts Enter as a "send when the turn
@@ -274,6 +276,11 @@ The firstmate PRIMARY's own `.opencode/plugins/fm-primary-turnend-guard.js` list
 Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `bin/fm-turnend-guard.sh` returns 2.
 The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher wake supervision and coordinates with the guard plugin before the guard tries a blind-turn follow-up.
 The follow-up was verified in the interactive TUI; `opencode run` can exit before displaying a queued follow-up, so the adapter is fail-open in headless mode.
+
+**Every export of a scanned plugin module is a plugin factory.**
+OpenCode treats every export of a scanned `.opencode/plugins/*.js` module as a plugin factory, so such a module must export exactly one factory.
+Shared helpers therefore live in the unscanned `.opencode/plugins/lib/` directory - `fm-operational-input.js` and the arm-eligibility predicate `fm-watch-arm-eligibility.js` - and are imported by the plugin files.
+Moving one back beside a plugin would register the helper as a second plugin; test fixtures that copy a plugin must copy its `lib/` imports too.
 
 ## pi and pi-signed (VERIFIED 2026-07-27)
 

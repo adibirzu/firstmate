@@ -15,3 +15,4 @@ When this session owns supervision and away mode is not active:
 
 OpenCode's persistent TUI plugin runtime is the wake mechanism.
 The plugin applies in the main primary checkout and a secondmate's own home, and stays silent only in child crewmate and scout worktrees.
+That scope decision is `isArmEligibleRoot` in `.opencode/plugins/lib/fm-watch-arm-eligibility.js`, which mirrors the shell owner `bin/fm-primary-scope-lib.sh`; `docs/turnend-guard.md` owns the shared scope rules.
