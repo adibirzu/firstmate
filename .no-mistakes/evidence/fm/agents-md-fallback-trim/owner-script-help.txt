@@ -1,0 +1,100 @@
+### bin/fm-model-fallback.sh --help  (FM_HOME=empty temp dir, read-only)
+usage: fm-model-fallback.sh <task-id> plan|apply
+  plan    decide only; print action=harness-step|lane-move|exhausted fields
+  apply   execute the decision through bin/fm-runtime-handoff.sh
+rc=2
+
+### bin/fm-runtime-handoff.sh --help  (FM_HOME=empty temp dir, read-only)
+usage: fm-runtime-handoff.sh <task-id> --harness <name> [options]
+  --harness <name>              required verified target harness
+  --model <name>                optional model axis for the new launch
+  --effort <low|medium|high|xhigh|max>
+  --progress-note <text>        concise progress for the replacement agent
+  --progress-note-file <path>   same, read from a file
+  --skip-exit                   skip the old harness exit command (endpoint
+                                must already be dead/missing)
+  --backend <name>              must match the recorded backend; omit to keep it
+rc=2
+
+### bin/fm-dispatch-select.mjs --help
+Resolve one already-matched set of comparable crew-dispatch candidates.
+
+Usage:
+  fm-dispatch-select.mjs select [--quota-json <file>] [--now <epoch>] [<json>]
+  fm-dispatch-select.mjs record-failure --provider <claude|codex|grok|cursor|agy> --task <id> [--now <epoch>]
+  fm-dispatch-select.mjs clear --provider <claude|codex|grok|cursor|agy>
+  fm-dispatch-select.mjs classify-evidence (--file <path> | with text on stdin)
+  fm-dispatch-select.mjs validate-model-fallback --file <crew-dispatch.json>
+
+`select` accepts a full rule object with `use`, one profile object, or a
+non-empty profile array on the command line or stdin. It prints exactly one
+compact profile JSON object on stdout. Diagnostics are sanitized summaries on
+stderr; quota payloads and harness output are never printed.
+
+The caller owns natural-language rule matching, task fit, reasoning class,
+model support discovery, and provider identity for non-native adapters. This
+script owns only subscription readiness and deterministic distribution:
+
+- Native claude, codex, grok, cursor, and agy profiles resolve to their
+  same-named provider. Other harnesses need an explicit `provider` field.
+- Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and
+  agy, require fresh telemetry no older than the configured maximum. Their
+  tightest reported live percentage must remain strictly above the
+  configured reserve. Stale, absent, malformed, or windowless telemetry makes
+  that provider ineligible; it never falls back to an unmetered guess.
+- A profile may declare the one quota window it is actually drawn from with
+  an optional `quotaWindow` field naming a `windows[].id` in that provider's
+  telemetry. The candidate is then priced on that window alone instead of the
+  provider-wide minimum, because a provider whose separate pools are billed
+  separately would otherwise be priced by its worst pool and refused while its
+  own pool is healthy. A declared window that is absent from the live
+  telemetry, or that carries no usable percentage, makes that candidate
+  ineligible; it never falls back to a different, rosier window. No mapping
+  from model name to pool is inferred: the pool is declared in config, where
+  it is checkable and correctable, or it is not used at all.
+- Kimi is deliberately unsupported by this selector: its 0.29.1 lifecycle
+  exit could not be made deterministic after interrupt in the guarded Herdr
+  lab. Explicit Kimi work remains outside automatic subscription dispatch.
+- Rate-limit or quota-exhaustion evidence creates a provider cooldown.
+  `record-failure` verifies the evidence in the named task's status file and
+  verifies that task's recorded routing provider before changing state.
+  Evidence must read in subscription vocabulary - a framed 429, an explicit
+  rate limit, a RESOURCE_EXHAUSTED code, or a named quota/credit/allowance/
+  spending limit being exhausted, depleted, or reached. A context-window or
+  tool-output ceiling is an ordinary working state, so a bare `limit`,
+  `token`, unframed `429`, or plain authorization `403` is refused rather
+  than parking the provider for a whole cooldown. This one vocabulary is
+  also the depletion detector behind `bin/fm-model-fallback.sh`: the
+  `classify-evidence` subcommand exposes it as a pure stdin/file
+  classification so every consumer shares one owner instead of each
+  re-spelling quota vocabulary.
+- Among eligible candidates, a known spendPriority from quota-axi is the
+  quota-perspective ranker: the highest known scalar wins. When every
+  remaining eligible candidate lacks a known scalar, or when known scalars
+  tie, providers rotate by least-recent selection. Hash ordering breaks a
+  never-used tie independently of candidate array order, then persisted
+  last-use state gives exact round-robin behavior while the eligible set is
+  stable. Profiles within one provider rotate the same way.
+- State updates are serialized by a private mkdir lock and published through
+  rename. No task is selected when every candidate is unavailable.
+
+A profile priced on its own pool looks like this:
+  { "harness": "cursor", "model": "cursor-grok-4.6-high", "quotaWindow": "auto_usage" }
+  { "harness": "agy", "model": "gemini-3.7-flash-high", "quotaWindow": "gemini_5h" }
+
+config/crew-dispatch.json may contain this optional settings object:
+  "subscriptionRouting": {
+    "reservePercent": 20,
+    "telemetryMaxAgeSeconds": 300,
+    "cooldownSeconds": 1800
+  }
+The defaults above are used when the object or a field is absent. Exact schema
+validation is shared with bootstrap. FM_HOME must be explicit so routing state
+can never land in the wrong Firstmate home.
+
+Test-only seams:
+  --quota-json reads a fixture instead of running quota-axi.
+  --now fixes the current epoch second.
+  FM_DISPATCH_QUOTA_AXI overrides the quota-axi executable.
+  FM_DISPATCH_STATE_FILE overrides the state path.
+rc=0

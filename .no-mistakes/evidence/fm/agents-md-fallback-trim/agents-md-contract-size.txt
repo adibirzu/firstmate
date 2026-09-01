@@ -1,0 +1,18 @@
+# always-loaded AGENTS.md contract: base (3ded4a0) vs target (c556251)
+base   lines=604 bytes=76974
+target lines=598 bytes=75455
+
+# git diff --stat base..target
+ AGENTS.md | 12 +++---------
+ 1 file changed, 3 insertions(+), 9 deletions(-)
+
+# section 4 model-fallback block AFTER (AGENTS.md lines 223-225):
+When a live ship or scout is blocked by quota exhaustion or a harness limit, relaunch it in place with `bin/fm-runtime-handoff.sh <task-id> --harness <name>`, which preserves the worktree, lease, PR metadata, and work in progress.
+When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns chain order and lane moves from `config/crew-dispatch.json` (`modelFallback`, `fallbackLanes`), `bin/fm-dispatch-select.mjs classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
+Every automatic switch must be visible in status reporting; fallback walks the configured chain after dispatch and never replaces the strongest-reasoning-class rule that governs selection.
+
+# commit messages on the branch (trailers check):
+c556251 no-mistakes(review): attribute depletion classifier to fm-dispatch-select classify-evidence
+
+4de2803 docs(agents): route model-fallback mechanics to their script owners
+

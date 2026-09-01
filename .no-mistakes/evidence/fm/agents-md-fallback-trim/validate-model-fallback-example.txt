@@ -1,0 +1,3 @@
+# real consumer of the config keys AGENTS.md names (modelFallback, fallbackLanes):
+$ bin/fm-dispatch-select.mjs validate-model-fallback --file docs/examples/crew-dispatch.json
+rc=0

@@ -1,0 +1,39 @@
+# bin/fm-dispatch-select.mjs classify-evidence  (text on stdin -> classification)
+# These are the exact accepted / rejected error shapes the removed AGENTS.md prose listed; this script is their single owner.
+
+$ printf %s "Error 429: quota exceeded for model gemini-3.7-flash" | fm-dispatch-select.mjs classify-evidence
+classification=depleted
+signature="Error 429"
+rc=0
+
+$ printf %s "API Error 403 - spending limit reached for this organization" | fm-dispatch-select.mjs classify-evidence
+classification=depleted
+signature="403 - spending"
+rc=0
+
+$ printf %s "RESOURCE_EXHAUSTED: Quota exceeded for metric" | fm-dispatch-select.mjs classify-evidence
+classification=depleted
+signature="RESOURCE_EXHAUSTED"
+rc=0
+
+$ printf %s "rate limit exceeded, retry later" | fm-dispatch-select.mjs classify-evidence
+classification=depleted
+signature="rate limit"
+rc=0
+
+$ printf %s "insufficient credits remaining for this account" | fm-dispatch-select.mjs classify-evidence
+classification=depleted
+signature="insufficient credits"
+rc=0
+
+$ printf %s "context token limit reached; compacting conversation" | fm-dispatch-select.mjs classify-evidence
+classification=none
+rc=0
+
+$ printf %s "a bare 429 with no framing words around it" | fm-dispatch-select.mjs classify-evidence
+classification=none
+rc=0
+
+$ printf %s "request failed with HTTP 403 Forbidden" | fm-dispatch-select.mjs classify-evidence
+classification=none
+rc=0
