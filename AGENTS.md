@@ -221,7 +221,7 @@ Do not add model-specific versions of that policy.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
 When a live ship or scout is blocked by quota exhaustion or a harness limit, relaunch it in place with `bin/fm-runtime-handoff.sh <task-id> --harness <name>`, which preserves the worktree, lease, PR metadata, and work in progress.
-When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script and `config/crew-dispatch.json` (`modelFallback`, `fallbackLanes`) own the depletion classifier, chain order, and lane moves, and it records a blocked routing decision only once every automatic move is spent.
+When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns chain order and lane moves from `config/crew-dispatch.json` (`modelFallback`, `fallbackLanes`), `bin/fm-dispatch-select.mjs classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
 Every automatic switch must be visible in status reporting; fallback walks the configured chain after dispatch and never replaces the strongest-reasoning-class rule that governs selection.
 
 ## 5. Recovery
