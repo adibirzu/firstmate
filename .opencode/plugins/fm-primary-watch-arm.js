@@ -2,7 +2,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
-import { isArmEligibleRoot } from "./lib/fm-watch-arm-eligibility.js";
 
 const COORDINATOR_KEY = "__firstmateOpenCodeWatchArm";
 // 35s on Windows so the budget stays above arm's MSYS confirm default (30s in
@@ -89,6 +88,17 @@ function effectivePaths(root) {
   const state = process.env.FM_STATE_OVERRIDE || `${fmHome}/state`;
   const config = process.env.FM_CONFIG_OVERRIDE || `${fmHome}/config`;
   return { root: fmRoot, home: fmHome, state, config };
+}
+
+async function isPrimaryRoot(root, home) {
+  if (!root) return false;
+  if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
+  if (existsSync(`${root}/.fm-secondmate-home`)) return false;
+  if (home && home !== root && existsSync(`${home}/.fm-secondmate-home`)) return false;
+  const gitDir = await runProcess("git", ["-C", root, "rev-parse", "--git-dir"]);
+  const commonDir = await runProcess("git", ["-C", root, "rev-parse", "--git-common-dir"]);
+  if (gitDir.code !== 0 || commonDir.code !== 0) return false;
+  return gitDir.stdout.trim() === commonDir.stdout.trim();
 }
 
 function shouldArm(paths) {
@@ -435,7 +445,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
 
 async function beginArm(paths, sessionID, client, predecessorArmPid) {
   if (!sessionID) return { status: "skipped", armChild: null };
-  if (!(await isArmEligibleRoot(paths.root))) return { status: "not-primary", armChild: null };
+  if (!(await isPrimaryRoot(paths.root, paths.home))) return { status: "not-primary", armChild: null };
   if (!(await sessionOwnsLock(paths))) return { status: "read-only", armChild: null };
   if (child) return { status: "existing", armChild: child };
   if (retryTimer) return { status: "retrying", armChild: null };

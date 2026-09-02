@@ -27,18 +27,6 @@ TMP_ROOT=$(fm_test_tmproot fm-public-followup)
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
-# The retained thread window every fixture promises to answer inside.
-# It is anchored to the run's own clock, never to a written-down date: a literal
-# instant silently turns every open-window test into an expired-window test the
-# day the calendar passes it. Tests that need the exact instant (to pin
-# FMX_NOW_OVERRIDE either side of it) use REPRO_EXPIRES_EPOCH rather than
-# re-parsing the rendered string.
-iso_utc() {  # <epoch-seconds>
-  date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ
-}
-REPRO_EXPIRES_EPOCH=$(( $(date -u +%s) + 30 * 24 * 3600 ))
-REPRO_EXPIRES_AT=$(iso_utc "$REPRO_EXPIRES_EPOCH")
-
 # A fakebin `curl` standing in for the relay. It logs every call so a test can
 # prove exactly how many public posts happened, and honours FAKE_FOLLOWUP_CODE so
 # a transport failure can be simulated.
@@ -166,13 +154,13 @@ seed_commitment() {
 # The pi-rearm shape: a report-ready promised-final bound to a secondmate.
 seed_repro_commitment() {   # <home> <obligation> <request> <work-home> <work-id>
   local home=$1 obligation=$2 request=$3 work_home=$4 work_id=$5
-  jq -n --arg r "$request" --arg exp "$REPRO_EXPIRES_AT" \
+  jq -n --arg r "$request" \
     '{request_id:$r, platform:"discord",
       context_binding:{version:"ctx1", value:("ctx1_" + $r)},
       public_safe_summary:"reproduce a Pi recovery notification loop",
       received_at:"2026-08-21T01:12:00Z",
-      followup_expires_at:$exp,
-      reservation_expires_at:$exp}' > "$home/request.json"
+      followup_expires_at:"2026-08-28T01:12:00Z",
+      reservation_expires_at:"2026-08-28T01:12:00Z"}' > "$home/request.json"
   jq -n '{type:"report-ready", project:"firstmate",
           required_deliverables:["report_path"], completion_policy:"all-required"}' \
     > "$home/expected.json"
@@ -1844,7 +1832,7 @@ test_rechain_refuses_unclaimed_existing_destination() {
   tasks_in "$home" public-followup add public-final-existing-b \
     --request-context-file "$home/request.json" --purpose promised-final \
     --expected-final-file "$home/collision-expected.json" \
-    --expires-at "$REPRO_EXPIRES_AT" >/dev/null || fail "could not seed destination collision"
+    --expires-at 2026-08-28T01:12:00Z >/dev/null || fail "could not seed destination collision"
 
   expect_failure "a first rechain must not adopt an unrelated existing obligation" \
     run_pf "$home" rechain public-final-existing-b --from public-final-existing-a \
@@ -2022,7 +2010,8 @@ test_expiry_escalation_uses_now_override() {
   local home out exp now_closing now_expired registry tmp
   home=$(make_home expiry-window)
   seed_repro_commitment "$home" pf-exp req-exp main work-exp
-  exp=$REPRO_EXPIRES_EPOCH
+  exp=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' '2026-08-28T01:12:00Z' +%s 2>/dev/null) \
+    || exp=$(date -u -d '2026-08-28T01:12:00Z' +%s)
   now_closing=$((exp - 3600))
   now_expired=$((exp + 60))
   out=$(FMX_NOW_OVERRIDE="$now_expired" run_pf "$home" pending)
