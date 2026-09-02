@@ -530,7 +530,7 @@ test_grok_threads_xhigh_reasoning_effort() {
 }
 
 test_cursor_threads_model_workspace_and_omits_effort_axis() {
-  local rec id out status launch
+  local rec id out status launch first_line last_line
   id=profile-cursor-z6c
   rec=$(make_spawn_case profile-cursor cursor "$id")
   read_case_record "$rec"
@@ -541,8 +541,12 @@ test_cursor_threads_model_workspace_and_omits_effort_axis() {
   expect_code 0 "$status" "cursor spawn with a model-qualified reasoning class should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-grok-4.5-high high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "--trust --yolo --model 'cursor-grok-4.5-high' --workspace '$WT_DIR'" \
+  first_line=$(sed -n '1p' "$LAUNCH_LOG")
+  last_line=$(sed -n '$p' "$LAUNCH_LOG")
+  assert_contains "$first_line" "--trust --yolo --model 'cursor-grok-4.5-high' --workspace '$WT_DIR'" \
     "cursor launch did not carry trust, autonomy, model, and exact workspace flags"
+  assert_not_contains "$first_line" "encode launch-brief" \
+    "cursor launch must not rely on positional initial-prompt auto-run"
   # The executable is RESOLVED, never named: `cursor` is not the CLI, so a
   # literal `cursor agent` command cannot run on a machine that has only the
   # real installed names.
@@ -555,12 +559,32 @@ test_cursor_threads_model_workspace_and_omits_effort_axis() {
   assert_not_contains "$launch" " -w " "cursor launch must never allocate a second worktree"
   # An inherited CLAUDECODE would otherwise outrank cursor's own marker.
   assert_contains "$launch" "env -u CLAUDECODE" "cursor launch must clear foreign primary markers"
-  assert_contains "$launch" "encode launch-brief" "cursor launch did not deliver the brief positionally"
+  assert_contains "$last_line" "FIRSTMATE_OP: v1 launch-brief" \
+    "cursor spawn did not submit the encoded launch brief after startup"
   assert_not_contains "$launch" "--effort" "cursor launch must not invent a separate effort flag"
   assert_not_contains "$launch" "--reasoning-effort" "cursor launch must not invent a separate reasoning-effort flag"
   assert_grep 'harness=cursor' "$HOME_DIR/state/$id.meta" "cursor harness was not recorded in meta"
   assert_grep 'model=cursor-grok-4.5-high' "$HOME_DIR/state/$id.meta" "cursor model was recorded as default"
   pass "cursor receives its model-qualified reasoning class and exact task workspace"
+}
+
+test_cursor_spawn_fails_when_seeded_brief_starts_no_turn() {
+  local rec id out status
+  id=profile-cursor-no-turn-z6c2
+  rec=$(make_spawn_case profile-cursor-no-turn cursor "$id")
+  read_case_record "$rec"
+
+  out=$(FM_FAKE_TMUX_COMPOSER=pending FM_CURSOR_SUBMIT_RETRIES=1 \
+    FM_CURSOR_SUBMIT_SLEEP=0 FM_CURSOR_SUBMIT_SETTLE=0 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+      --model cursor-grok-4.5-high --effort high)
+  status=$?
+  expect_code 1 "$status" "cursor spawn must fail when the seeded brief starts no turn"
+  assert_contains "$out" "cursor seeded brief did not start a confirmed first turn" \
+    "cursor no-turn failure did not explain the bounded first-turn failure"
+  assert_grep "failed: cursor seeded brief did not start a confirmed first turn" \
+    "$HOME_DIR/state/$id.status" "cursor no-turn failure did not append a task status"
+  pass "cursor spawn refuses a zero-turn worker instead of reporting spawned"
 }
 
 test_cursor_refuses_model_absent_from_live_catalog() {
@@ -822,6 +846,7 @@ test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_threads_xhigh_reasoning_effort
 test_cursor_threads_model_workspace_and_omits_effort_axis
+test_cursor_spawn_fails_when_seeded_brief_starts_no_turn
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_threads_model_and_ignores_effort_axis
