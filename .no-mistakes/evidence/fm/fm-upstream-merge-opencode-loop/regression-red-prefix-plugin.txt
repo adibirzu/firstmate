@@ -1,0 +1,44 @@
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/primary -> true
+ok - watch-arm: arms the plain primary checkout
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/bin-not-a-dir-checkout -> false
+ok - watch-arm: a root failing the AGENTS.md/bin shape gate stays silent, as the shell owner requires
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/secondmate-linked-home -> true
+ok - watch-arm: arms a treehouse-leased LINKED secondmate home via its marker (regression)
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/crewmate-worktree -> false
+ok - watch-arm: stays silent in a crewmate/scout linked task worktree
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/stray-marker-worktree -> false
+ok - watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/annotated-marker-home -> true
+ok - watch-arm: honours the first-line marker contract when the marker has extra lines
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/blank-first-line-marker-worktree -> false
+ok - watch-arm: a blank first line cannot spoof inclusion via a later line
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/unterminated-marker-worktree -> false
+ok - watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/nbsp-marker-worktree -> false
+ok - watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-opencode-secondmate-arm.FSohKn/symlinked-marker-worktree -> false
+ok - watch-arm: a symlinked marker cannot spoof inclusion, matching the shell owner's [ -L ] rejection
+ok - watch-arm: a marked secondmate home spawns a real arm child on session.idle (regression)
+
+
+
+
+
+
+
+
+ok - watch-arm: empty/healthy/unexplained-cycle closes are idle; real FAILED and wakes keep their kinds
+ok - watch-arm: a healthy-watcher close does not start a model turn
+ok - watch-arm: an empty cycle close does not start a model turn
+ok - watch-arm: an actionable wake still delivers a model turn
+ok - turnend-guard: a loaded watch-arm coordinator suppresses the idle repair turn
+ok - watch-arm: a registered process-event source arms supervision without task.meta
+ok - turnend-guard: a coordinator that declines (read-only) hands the idle to the shell guard
+ok - watch-arm: benign idle cycles leave the failure retry budget intact
+ok - watch-arm: an idle successor close during restoration is retried silently, not accepted as armed
+ok - watch-arm: a watcher that outlived the cycle floor replenishes the idle re-arm budget
+ok - watch-arm: exhausted silent re-arm queues one durable check and never prompts
+ok - watch-arm: empty closes between real failures do not hide the failure
+ok - watch-arm: an unestablishable home re-arms every idle but spends only one model turn
+ok - watch-arm: an exhaustion notice that was not delivered does not retire the attempt
+not ok - a late settle from a spent budget must not retire the current budget's notice: expected exit 0, got 1

@@ -1,0 +1,179 @@
+FM_TEST_BEGIN 2026-09-04T17:27:03Z tests/fm-supervision-instructions.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - renderer prints exactly the selected harness block
+ok - renderer falls back to unknown.md for unverified harness names
+ok - renderer includes read-only, afk, and effective x-mode current-state stanzas
+ok - renderer repair-line mode is harness-aware and honors conditional state
+ok - renderer preserves every harness ordinary-continuation and missing-cycle repair path
+ok - pi-signed keeps its identity while sharing Pi's supervision protocol
+ok - grok supervision is Claude-shaped background notify with passive Stop-hook backstop
+ok - grok rendered command sources the effective x-mode config
+ok - pi supervision snippet renders the effective extension path
+FM_TEST_END 2026-09-04T17:27:04Z tests/fm-supervision-instructions.test.sh exit=0 duration_ms=786 gate_skip=false
+FM_TEST_BEGIN 2026-09-04T17:27:04Z tests/fm-watch-arm.test.sh family=watcher-wake-lock expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-04T17:27:04Z tests/fm-turnend-guard.test.sh family=watcher-wake-lock expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-04T17:27:04Z tests/fm-opencode-secondmate-arm.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/primary -> true
+ok - watch-arm: arms the plain primary checkout
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/bin-not-a-dir-checkout -> false
+ok - watch-arm: a root failing the AGENTS.md/bin shape gate stays silent, as the shell owner requires
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/secondmate-linked-home -> true
+ok - watch-arm: arms a treehouse-leased LINKED secondmate home via its marker (regression)
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/crewmate-worktree -> false
+ok - watch-arm: stays silent in a crewmate/scout linked task worktree
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/stray-marker-worktree -> false
+ok - watch-arm: an empty marker cannot spoof inclusion; linked worktree stays exempt
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/annotated-marker-home -> true
+ok - watch-arm: honours the first-line marker contract when the marker has extra lines
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/blank-first-line-marker-worktree -> false
+ok - watch-arm: a blank first line cannot spoof inclusion via a later line
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/unterminated-marker-worktree -> false
+ok - watch-arm: an unterminated marker is rejected exactly as the shell owner rejects it
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/nbsp-marker-worktree -> false
+ok - watch-arm: strips only ASCII blanks, matching the shell owner under LC_ALL=C
+ok /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-test-run.8EZ5mn/w4/tmp/fm-opencode-secondmate-arm.7FAGAC/symlinked-marker-worktree -> false
+ok - watch-arm: a symlinked marker cannot spoof inclusion, matching the shell owner's [ -L ] rejection
+ok - watch-arm: a marked secondmate home spawns a real arm child on session.idle (regression)
+
+
+
+
+
+
+
+
+ok - watch-arm: empty/healthy/unexplained-cycle closes are idle; real FAILED and wakes keep their kinds
+ok - watch-arm: a healthy-watcher close does not start a model turn
+ok - watch-arm: an empty cycle close does not start a model turn
+ok - watch-arm: an actionable wake still delivers a model turn
+ok - turnend-guard: a loaded watch-arm coordinator suppresses the idle repair turn
+ok - watch-arm: a registered process-event source arms supervision without task.meta
+ok - turnend-guard: a coordinator that declines (read-only) hands the idle to the shell guard
+ok - watch-arm: benign idle cycles leave the failure retry budget intact
+ok - watch-arm: an idle successor close during restoration is retried silently, not accepted as armed
+ok - watch-arm: a watcher that outlived the cycle floor replenishes the idle re-arm budget
+ok - watch-arm: exhausted silent re-arm queues one durable check and never prompts
+ok - watch-arm: empty closes between real failures do not hide the failure
+ok - watch-arm: an unestablishable home re-arms every idle but spends only one model turn
+ok - watch-arm: an exhaustion notice that was not delivered does not retire the attempt
+ok - watch-arm: a notice settling after a replenish cannot silence the current budget
+ok - watch-arm: a replaced session surfaces once on a budget only a completed cycle replenishes
+ok - watch-arm: alternating sessions each surface once and never repay the failure budget
+ok - watch-arm: a failure retry that finds no remaining need does not prompt
+ok - watch-arm: a slow-confirming retry launch is a success, not a watcher failure
+ok - watch-arm: a crewmate/scout worktree stays silent on idle (no arm, no model turn)
+FM_TEST_END 2026-09-04T17:27:26Z tests/fm-opencode-secondmate-arm.test.sh exit=0 duration_ms=22292 gate_skip=false
+ok - fm_supervision_unhealthy: false with no state/*.meta at all
+ok - fm_supervision_unhealthy: true with in-flight task and no beacon ever
+ok - fm_supervision_unhealthy: true with in-flight task and a beacon far outside the grace window
+ok - fm_supervision_unhealthy: false with in-flight task and a fresh beacon
+ok - fm_supervision_status: FM_SUP_QUEUE_PENDING tracks state/.wake-queue
+ok - fm_supervision_needed: X-mode relay poll needs supervision
+ok - fm_supervision_unhealthy: source-only home needs supervision
+ok - fm-turnend-guard: silent no-op with nothing in flight
+ok - fm-turnend-guard: blocks when a fresh beacon has no live watcher lock
+ok - fm-turnend-guard: non-Claude path blocks a source-only home
+ok - fm-turnend-guard: blocks on a dead watcher lock even when the beacon is fresh
+ok - fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon
+ok - fm-turnend-guard: healthy non-Claude harness paths ignore Claude episode contention
+ok - fm-turnend-guard: blocks on a live watcher lock with an ancient beacon
+ok - fm-turnend-guard: blocks with the exact required reason in the primary when unhealthy
+ok - fm-turnend-guard: blocks from active FM_HOME state, not only repo-root state
+ok - fm-turnend-guard: X-mode repair reason sources the cadence config
+ok - fm-turnend-guard: X-mode-only supervision remains guarded in default mode
+ok - fm-turnend-guard: ignores stale repo-root state when FM_HOME is set
+ok - fm-turnend-guard: uses FM_STATE_OVERRIDE ahead of FM_HOME/state
+ok - fm-turnend-guard: stop_hook_active=true always allows the stop (never blocks twice in one turn)
+ok - fm-turnend-guard: blocks a blind turn end in a secondmate's own home (.fm-secondmate-home no longer excludes it)
+ok - fm-turnend-guard: idle-by-default - silent in a secondmate home with nothing in flight
+ok - fm-turnend-guard: stop_hook_active=true allows the stop in a secondmate home (never blocks twice in one turn)
+ok - fm-turnend-guard: secondmate deferred-death recovery - silent while watched, forces re-arm once the watcher exits
+ok - fm-turnend-guard: inert in a secondmate's own child worktree (linked git worktree) even when unhealthy
+ok - fm-turnend-guard: blocks a blind turn end in a treehouse-leased LINKED secondmate home (marker force-include)
+ok - fm-turnend-guard: an invalid (empty) marker cannot spoof inclusion; linked worktree stays exempt
+ok - fm-turnend-guard: a non-ASCII marker cannot spoof inclusion; linked worktree stays exempt
+ok - fm-turnend-guard: inert in a crewmate/scout task worktree (linked git worktree) even when unhealthy
+ok - fm-turnend-guard: fails open (never blocks) when jq is missing
+ok - fm-turnend-guard: silent no-op on empty stdin
+ok - fm-turnend-guard: runs well under the generous timing margin (0s)
+ok - fm-turnend-guard-grok: forces one explicitly marked same-session resume when the shared predicate blocks
+ok - fm-turnend-guard-grok: legacy environment loop guard prevents a nested resume loop
+ok - fm-turnend-guard-grok: native false delegates blocking feedback with zero resume processes
+ok - fm-turnend-guard-grok: native true remains bounded and starts no resume process
+ok - fm-turnend-guard-grok: both spellings are typed and camelCase has deterministic precedence
+ok - fm-turnend-guard-grok: malformed, invalidly typed, and missing-prerequisite payloads start neither path
+ok - fm-turnend-guard-grok: missing jq and no-supervision-needed stops stay silent and bounded
+ok - tracked .claude/settings.json entries: 5 inert under grok, the documented subagent exception still armed, all live under Claude
+ok - .codex/hooks.json: Stop hook uses hook process root when payload cwd is outside
+ok - .codex/hooks.json: Stop hook ignores nested git root guard scripts
+ok - .opencode primary plugin: guard path is anchored to worktree, not directory
+ok - .pi primary extension: no-tool and multi-tool runs each inject exactly one guard follow-up
+ok - .pi primary extension: delivery failure resets the logical-run latch
+ok - fm-turnend-guard --claude: re-blocks a loop-guarded stop while unhealthy and unclaimed (incident regression)
+ok - fm-turnend-guard --claude: X-mode-only homes re-block when auto-arm recovery is absent
+ok - fm-turnend-guard --claude: a live arming epoch advances once and repeated observation is idempotent
+ok - fm-turnend-guard --claude: repeated failed-to-arming races make bounded monotonic progress
+ok - fm-turnend-guard --claude: terminal owner boundary excludes a concurrent start without deadlock
+ok - fm-turnend-guard --claude: fresh rewake epoch prevents a duplicate continuation for the same event
+ok - fm-turnend-guard --claude: an abandoned auto-arm claim no longer allows a blind stop (incident regression)
+ok - fm-turnend-guard --claude: a claim whose pid was reused stops counting as recovery even while its entry reads arming
+ok - fm-turnend-guard --claude: a hung owner frozen at arming with no watcher beat no longer allows a blind stop
+ok - fm-turnend-guard --claude: a live open generation claim owns recovery with no lock held
+ok - fm-turnend-guard --claude: a stuck generation claim no longer allows a blind stop
+ok - fm-turnend-guard --claude: the terminal path clears an abandoned claim instead of stepping aside silently
+ok - fm-turnend-guard --claude: fresh failed epochs preserve and advance monotonic fail-open progression
+ok - fm-turnend-guard --claude: integrated fresh failures reach one bounded fail-open, stop continuation, and reset on recovery
+ok - fm-turnend-guard --claude: reset contention preserves all episode state until retry
+ok - fm-turnend-guard --claude: concurrent auto-arm and guard resets are idempotent and deadlock-free
+ok - fm-turnend-guard --claude: stale rewake epoch does not allow a blind stop
+ok - fm-turnend-guard --claude: budget exhaustion alone cannot permit a blind stop
+ok - fm-turnend-guard --claude: verified fail-open is loud, bounded, attended, and non-repeating
+ok - fm-turnend-guard --claude: fail-open requires both exhausted retries and consumed notice
+ok - fm-turnend-guard --claude: away ownership excludes the Stop-autoarm fail-open
+ok - fm-turnend-guard --claude: positive watcher recovery resets failure episode state
+ok - fm-turnend-guard --claude: bounded claim wait avoids a token-consuming forced continuation
+ok - fm-turnend-guard --claude: secondmate home re-blocks unclaimed and allows auto-arm-claimed stops
+ok - fm-turnend-guard: a live away-mode daemon satisfies supervision with no watcher holding the lock
+ok - fm-turnend-guard: away-mode daemon ownership survives a leftover dead watcher lock
+ok - fm-turnend-guard: away mode with no daemon and no watcher still blocks
+ok - fm-turnend-guard: away mode blocks on a dead away-mode daemon
+ok - fm-turnend-guard: away mode blocks on a pid-reused away-mode daemon lock
+ok - fm-turnend-guard: away-mode daemon ownership never substitutes for a fresh beacon
+ok - fm-turnend-guard: a daemon lock proves nothing while away mode is off
+FM_TEST_END 2026-09-04T17:28:00Z tests/fm-turnend-guard.test.sh exit=0 duration_ms=55907 gate_skip=false
+ok - watch-arm: an attached arm reports the wake its cycle delivered instead of a false failure
+ok - watch-arm: a delivered wake consumed by the handling turn still closes the attached arm cleanly
+ok - watch-arm: a cycle that delivered no wake of its own still fails loudly
+/Users/adrianb/.no-mistakes/worktrees/80e4cf1781af/01M1PNA5W3EPB2SDECMSVN79GG/bin/fm-watch-arm.sh: line 581: 14736 Killed: 9                  "$WATCH" > "$child_out"
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 16813.1788542857.L0V6yI
+ok - watch-arm: re-arm surfaces every queued wake and an open remote decision after downtime
+watcher: recovery state could not be persisted; retaining stale lock evidence
+ok - watch-arm: marker publication failure retains stale-lock recovery evidence
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 42561.1788542871.8dgfcZ
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 3 --recovery-generation 46061.1788542873.Sn0fvW
+ok - watch-arm: a wake queued after handling drain is recovered once at successor arm
+ok - watch-arm: interrupted handling leaves its wake durable for successor re-drain
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 0 --recovery-generation 75640.1788542885.z8EF3l
+ok - watch-arm: malformed recovery state is quarantined without a successor loop
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 83678.1788542888.sAGqeM
+ok - watch-arm: publication after recovery handoff is surfaced
+ok - watch-arm: restart publishes recovery before clearing a reused-pid watcher lock
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 7 --recovery-generation 91001.1788542891.w9kwi5
+ok - watch-arm: markerless legacy queues are adopted and recovered
+ok - watch-arm: a watcher close during handling keeps the printed acknowledgement valid
+ok - watch-arm: a moved recovery generation consumes handled rows and names its remedy
+ok - watch-arm: downtime marker publication does not follow symlinks
+FM_TEST_END 2026-09-04T17:28:31Z tests/fm-watch-arm.test.sh exit=0 duration_ms=87428 gate_skip=false
+FM_TEST_BEGIN 2026-09-04T17:28:31Z tests/fm-documentation-audiences.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - documentation inventory classifies every maintained prose surface exactly once
+ok - classification, setup routing, and maintained-prose scope fail safely
+ok - required documentation owner pointers cannot silently disappear
+ok - local links resolve while dates, versions, commands, and incident prose remain semantically reviewed
+FM_TEST_END 2026-09-04T17:28:32Z tests/fm-documentation-audiences.test.sh exit=0 duration_ms=1193 gate_skip=false
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=89930
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=1979 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=3 duration_ms=165627 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-arm.test.sh duration_ms=87428
+FM_TEST_SLOWEST rank=2 script=tests/fm-turnend-guard.test.sh duration_ms=55907
+FM_TEST_SLOWEST rank=3 script=tests/fm-opencode-secondmate-arm.test.sh duration_ms=22292
+FM_TEST_SLOWEST rank=4 script=tests/fm-documentation-audiences.test.sh duration_ms=1193
+FM_TEST_SLOWEST rank=5 script=tests/fm-supervision-instructions.test.sh duration_ms=786
