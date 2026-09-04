@@ -21,10 +21,14 @@ fm_git_identity fmtest fmtest@example.invalid
 
 PLUGIN="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
 [ -f "$PLUGIN" ] || fail "watch-arm plugin missing: $PLUGIN"
+TURNEND_PLUGIN="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+[ -f "$TURNEND_PLUGIN" ] || fail "turnend-guard plugin missing: $TURNEND_PLUGIN"
 # The predicate lives in lib/ rather than in the plugin module: OpenCode treats
 # every export of a plugin file as a plugin factory, and lib/ is not scanned.
 ELIGIBILITY="$ROOT/.opencode/plugins/lib/fm-watch-arm-eligibility.js"
 [ -f "$ELIGIBILITY" ] || fail "watch-arm eligibility module missing: $ELIGIBILITY"
+CLOSE="$ROOT/.opencode/plugins/lib/fm-watch-arm-close.js"
+[ -f "$CLOSE" ] || fail "watch-arm close classifier missing: $CLOSE"
 # The predicate is imported by a node driver below. Resolve the interpreter up
 # front, like the sibling node-driven suites do, so a shard without node fails
 # as a missing prerequisite instead of reporting every case as an eligibility
@@ -446,6 +450,281 @@ EOF
   pass "watch-arm: a marked secondmate home spawns a real arm child on session.idle (regression)"
 }
 
+# run_close_classifier <stdout> <stderr> <code> <signal> <expected-kind>
+# Drives the public classifyArmClose export. These cases are the regression for
+# empty-cycle-as-failure: healthy, empty, and the shell's unexplained-cycle
+# FAILED line must be idle (no model turn), while a real FAILED and an
+# actionable wake keep their kinds.
+run_close_classifier() {
+  local stdout=$1 stderr=$2 code=$3 signal=$4 expected=$5 out status
+  out=$(CLOSE="$CLOSE" EXPECTED="$expected" CODE="$code" SIGNAL="$signal" \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.CLOSE));
+const signal = process.env.SIGNAL === "" ? null : process.env.SIGNAL;
+const result = mod.classifyArmClose(
+  process.env.FM_CLOSE_STDOUT ?? "",
+  process.env.FM_CLOSE_STDERR ?? "",
+  Number(process.env.CODE),
+  signal,
+);
+if (result.kind !== process.env.EXPECTED) {
+  console.error(`kind=${result.kind} expected=${process.env.EXPECTED} message=${result.message}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  # Pass stdout/stderr through env after the heredoc is written: node reads
+  # process.env, so set them on the same invocation via the caller exports.
+  printf '%s\n' "$out" >&2
+  return "$status"
+}
+
+test_empty_and_healthy_closes_are_idle_not_failure() {
+  local status
+  FM_CLOSE_STDOUT='watcher: healthy pid=1 (beacon 0s)' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 0 "" idle
+  status=$?
+  expect_code 0 "$status" "watcher: healthy must classify as idle, not failure"
+
+  FM_CLOSE_STDOUT='' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 0 "" idle
+  status=$?
+  expect_code 0 "$status" "an empty clean close must classify as idle, not failure"
+
+  FM_CLOSE_STDOUT='watcher: FAILED - cycle ended without an actionable reason' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 1 "" idle
+  status=$?
+  expect_code 0 "$status" "the shell unexplained-cycle FAILED line must classify as idle"
+
+  FM_CLOSE_STDOUT='watcher: FAILED - watcher cycle exited 0 without an actionable reason' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 1 "" idle
+  status=$?
+  expect_code 0 "$status" "the unexpected-clean-exit FAILED line must classify as idle"
+
+  FM_CLOSE_STDOUT='watcher: attached pid=9 (beacon 0s)' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 0 "" idle
+  status=$?
+  expect_code 0 "$status" "an attached clean close must classify as idle"
+
+  FM_CLOSE_STDOUT='signal: demo.status' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 0 "" actionable
+  status=$?
+  expect_code 0 "$status" "an actionable wake line must stay actionable"
+
+  FM_CLOSE_STDOUT='watcher: FAILED - no live watcher with a fresh beacon' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 1 "" failure
+  status=$?
+  expect_code 0 "$status" "a real no-watcher FAILED line must stay failure"
+
+  pass "watch-arm: empty/healthy/unexplained-cycle closes are idle; real FAILED and wakes keep their kinds"
+}
+
+# Drive the real plugin through session.idle over a marked secondmate home whose
+# stub arm prints $FM_ARM_STUB_LINE and exits $FM_ARM_STUB_CODE. Echoes the
+# promptAsync count. The old classifier treated healthy/empty as failure and
+# then promptAsync'd; this is the production loop.
+count_idle_prompts() {  # <dir> <arm-output> <arm-code>
+  local dir=$1 output=$2 code=$3
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+[ -n "${FM_ARM_STUB_LINE:-}" ] && printf '%s\n' "$FM_ARM_STUB_LINE"
+exit "${FM_ARM_STUB_CODE:-0}"
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
+    FM_ARM_STUB_LINE="$output" FM_ARM_STUB_CODE="$code" \
+    FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync } from "node:fs";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
+const client = {
+  session: {
+    promptAsync: async () => {
+      prompts += 1;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-idle-loop" } } });
+for (let i = 0; i < 40; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 25));
+}
+process.stdout.write(String(prompts));
+EOF
+}
+
+prepare_arm_home() {  # <name>
+  local base dir
+  base="$TMP_ROOT/$1-base"
+  dir="$TMP_ROOT/$1-home"
+  fm_git_worktree "$base" "$dir" "fm/opencode-$1"
+  mkdir -p "$dir/bin" "$dir/state" "$dir/config"
+  : > "$dir/AGENTS.md"
+  printf 'sm-oc-idle-1\n' > "$dir/.fm-secondmate-home"
+  : > "$dir/state/task.meta"
+  printf '%s\n' "$dir"
+}
+
+test_healthy_close_does_not_prompt() {
+  local dir count
+  dir=$(prepare_arm_home healthy-close)
+  count=$(count_idle_prompts "$dir" "watcher: healthy pid=1 (beacon 0s)" 0) || \
+    fail "healthy-close plugin drive failed"
+  [ "$count" = 0 ] || fail "watcher: healthy idle close must not promptAsync, got $count"
+  pass "watch-arm: a healthy-watcher close does not start a model turn"
+}
+
+test_empty_cycle_close_does_not_prompt() {
+  local dir count
+  dir=$(prepare_arm_home empty-close)
+  count=$(count_idle_prompts "$dir" "watcher: FAILED - cycle ended without an actionable reason" 1) || \
+    fail "empty-cycle plugin drive failed"
+  [ "$count" = 0 ] || fail "empty-cycle FAILED close must not promptAsync, got $count"
+  dir=$(prepare_arm_home blank-close)
+  count=$(count_idle_prompts "$dir" "" 0) || fail "blank-close plugin drive failed"
+  [ "$count" = 0 ] || fail "empty clean close must not promptAsync, got $count"
+  pass "watch-arm: an empty cycle close does not start a model turn"
+}
+
+test_actionable_close_still_prompts() {
+  local dir count
+  dir=$(prepare_arm_home wake-close)
+  count=$(count_idle_prompts "$dir" "signal: demo.status" 0) || \
+    fail "actionable-close plugin drive failed"
+  [ "$count" -ge 1 ] || fail "an actionable wake close must promptAsync, got $count"
+  pass "watch-arm: an actionable wake still delivers a model turn"
+}
+
+test_turnend_guard_stays_silent_when_watch_arm_loaded() {
+  local dir out status
+  dir=$(prepare_arm_home guard-fallthrough)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'watcher: healthy pid=1 (beacon 0s)\n'
+SH
+  cat > "$dir/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'guard-fired\n' >&2
+exit 2
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh" "$dir/bin/fm-turnend-guard.sh"
+  out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { writeFileSync } from "node:fs";
+
+const arm = await import(pathToFileURL(process.env.PLUGIN).href);
+const guard = await import(pathToFileURL(process.env.TURNEND).href);
+let prompts = 0;
+const client = {
+  session: {
+    promptAsync: async () => {
+      prompts += 1;
+    },
+  },
+};
+const armHooks = await arm.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const guardHooks = await guard.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await armHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-guard" } } });
+await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-guard" } } });
+for (let i = 0; i < 20; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 25));
+}
+if (prompts !== 0) {
+  console.error(`watch-arm plus turnend-guard prompted ${prompts} times on a healthy idle`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "turnend-guard must not prompt when watch-arm is loaded"
+  [ -z "$out" ] || fail "turnend-guard fallthrough test printed output: $out"
+  pass "turnend-guard: a loaded watch-arm coordinator suppresses the idle repair turn"
+}
+
+test_crewmate_idle_stays_silent() {
+  local base dir out status
+  base="$TMP_ROOT/crewmate-idle-base"
+  dir="$TMP_ROOT/crewmate-idle-worktree"
+  make_crewmate_worktree_dir "$base" "$dir" >/dev/null
+  mkdir -p "$dir/config"
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm-ran\n' >> "${FM_ARM_LOG:?}"
+SH
+  cat > "$dir/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'guard-fired\n' >&2
+exit 2
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh" "$dir/bin/fm-turnend-guard.sh"
+  : > "$dir/state/task.meta"
+  out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
+    FM_ARM_LOG="$TMP_ROOT/crewmate-idle-arm.log" "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const arm = await import(pathToFileURL(process.env.PLUGIN).href);
+const guard = await import(pathToFileURL(process.env.TURNEND).href);
+let prompts = 0;
+const client = {
+  session: {
+    promptAsync: async () => {
+      prompts += 1;
+    },
+  },
+};
+const armHooks = await arm.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const guardHooks = await guard.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await armHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-crewmate" } } });
+await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-crewmate" } } });
+await new Promise((settle) => setTimeout(settle, 200));
+if (existsSync(process.env.FM_ARM_LOG) && readFileSync(process.env.FM_ARM_LOG, "utf8").includes("arm-ran")) {
+  console.error("crewmate worktree spawned an arm child");
+  process.exit(1);
+}
+if (prompts !== 0) {
+  console.error(`crewmate idle prompted ${prompts} times`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a crewmate worktree must stay silent on idle"
+  [ -z "$out" ] || fail "crewmate idle test printed output: $out"
+  pass "watch-arm: a crewmate/scout worktree stays silent on idle (no arm, no model turn)"
+}
+
 test_primary_checkout_arms
 test_bin_not_a_dir_stays_silent
 test_secondmate_linked_home_arms
@@ -457,3 +736,9 @@ test_unterminated_marker_matches_shell_owner
 test_nbsp_marker_matches_shell_owner
 test_symlinked_marker_cannot_spoof
 test_secondmate_home_spawns_an_arm_child
+test_empty_and_healthy_closes_are_idle_not_failure
+test_healthy_close_does_not_prompt
+test_empty_cycle_close_does_not_prompt
+test_actionable_close_still_prompts
+test_turnend_guard_stays_silent_when_watch_arm_loaded
+test_crewmate_idle_stays_silent

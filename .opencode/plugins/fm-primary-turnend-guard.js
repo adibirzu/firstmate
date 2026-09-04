@@ -50,8 +50,11 @@ function runGuard(root) {
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
   if (!coordinator?.ensureArmed) return false;
-  const status = await coordinator.ensureArmed(sessionID, client);
-  return status === "armed" || status === "wake" || status === "failed";
+  // Watch-arm owns continuity whenever it is loaded, including not-primary
+  // crewmate/scout worktrees and empty/healthy cycles. Falling through to a
+  // guard LLM turn on those statuses is what spent a model call on every idle.
+  await coordinator.ensureArmed(sessionID, client);
+  return true;
 }
 
 export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => {
