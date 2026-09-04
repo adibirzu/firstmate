@@ -94,7 +94,7 @@ cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__
 | `bin/fm-tmux-lib.sh` | `FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'` + case arm |
 | `bin/fm-composer-lib.sh` + `bin/backends/{herdr,cmux,orca}.sh` | `→` added to the shared agent-glyph classifier and bare-row promotion; shared `FM_COMPOSER_IDLE_RE_DEFAULT` covers the cursor placeholders (tmux + all backends) |
 | `.agents/skills/harness-adapters/SKILL.md` | cursor-agent knowledge section |
-| `tests/fm-cursor-agent-harness.test.sh` | 12 behavior checks (all green) |
+| `tests/fm-cursor-harness.test.sh` | 13 behavior checks (all green) |
 
 ## Remaining acceptance (live end-to-end)
 
