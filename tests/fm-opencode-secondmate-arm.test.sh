@@ -1203,8 +1203,9 @@ EOF
 
 # The failure budget is module state and outlives a session replacement, but a
 # replaced session (/new, /resume) is a fresh context that cannot see the notice
-# the previous one received. It must start on a full budget - retrying and
-# surfacing once - instead of inheriting an exhausted one and staying silent.
+# the previous one received, so it surfaces once on its own account. The budget
+# itself stays spent - only a completed cycle replenishes it - so the replaced
+# session re-arms without re-spending the retries.
 test_replaced_session_gets_its_own_failure_budget() {
   local dir out status
   dir=$(prepare_arm_home replaced-session)
@@ -1250,19 +1251,80 @@ await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses
 for (let i = 0; i < 300 && prompts.length < 2; i += 1) await settle(10);
 await settle(100);
 if (prompts.length !== 2 || prompts[1] !== "session-second") {
-  console.error(`the replaced session inherited an exhausted budget: ${JSON.stringify(prompts)}`);
+  console.error(`the replaced session never surfaced its own notice: ${JSON.stringify(prompts)}`);
   process.exit(1);
 }
-if (cycles() !== armedByFirstSession + 3) {
-  console.error(`the replaced session did not retry on a full budget: ${cycles()} cycles total`);
+if (cycles() !== armedByFirstSession + 1) {
+  console.error(`the replaced session re-spent the failure retry budget: ${cycles()} cycles total`);
   process.exit(1);
 }
 EOF
 )
   status=$?
-  expect_code 0 "$status" "a replaced session must start on a full failure budget"
+  expect_code 0 "$status" "a replaced session must surface its own notice without a fresh retry budget"
   [ -z "$out" ] || fail "replaced-session test printed output: $out"
-  pass "watch-arm: a replaced session retries and surfaces on its own failure budget"
+  pass "watch-arm: a replaced session surfaces once on a budget only a completed cycle replenishes"
+}
+
+# Nothing in the plugin distinguishes a replaced session from a concurrent or
+# child one: both arrive as a different sessionID on session.idle. Keying the
+# exhaustion notice to the session rather than replenishing the whole budget on
+# every sessionID change is what stops two alternating sessions from ping-ponging
+# a fresh budget - and one paid model turn - through an unestablishable home.
+test_alternating_sessions_do_not_repay_the_exhaustion_notice() {
+  local dir out status
+  dir=$(prepare_arm_home alternating-sessions)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/alternating-sessions-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.path.id); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const cycles = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+
+// Two sessions alternating idles on the same home, as a second client or a
+// child session produces.
+for (const sessionID of ["session-a", "session-b", "session-a", "session-b"]) {
+  const before = cycles();
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+  for (let i = 0; i < 300 && cycles() === before; i += 1) await settle(10);
+  await settle(120);
+}
+
+if (prompts.length !== 2) {
+  console.error(`alternating sessions re-spent the exhaustion notice: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+if (prompts[0] !== "session-a" || prompts[1] !== "session-b") {
+  console.error(`each session must surface exactly once, in order: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+if (cycles() < 4) {
+  console.error(`alternating idles stopped re-arming after ${cycles()} cycles`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "alternating sessions must not ping-pong a fresh failure budget"
+  [ -z "$out" ] || fail "alternating-sessions test printed output: $out"
+  pass "watch-arm: alternating sessions each surface once and never repay the failure budget"
 }
 
 # A failure retry that relaunches into a home which no longer needs a watcher
@@ -1456,6 +1518,7 @@ test_alternating_failure_and_empty_closes_still_surface
 test_exhausted_failure_budget_surfaces_once_across_idles
 test_undelivered_exhaustion_notice_stays_retryable
 test_replaced_session_gets_its_own_failure_budget
+test_alternating_sessions_do_not_repay_the_exhaustion_notice
 test_retry_launch_into_a_no_longer_needed_home_is_silent
 test_slow_confirming_retry_launch_does_not_prompt
 test_crewmate_idle_stays_silent

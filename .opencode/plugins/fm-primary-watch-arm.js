@@ -21,9 +21,13 @@ const IDLE_EXHAUSTION_KEY = "opencode-arm:idle-exhausted";
 let child = null;
 let retryTimer = null;
 let retryFailures = 0;
-let retryExhaustionSurfaced = false;
-let retryExhaustionPending = false;
-let activeSessionID = "";
+// The failure budget is process-wide, but a notice can only be seen by the
+// session it was delivered to. Concurrent, child, and replaced sessions each
+// own their own entry here, so every session surfaces at most once and no
+// session change hands out a fresh budget.
+const retryExhaustionSurfaced = new Set();
+const retryExhaustionPending = new Set();
+let retryBudgetToken = 0;
 let idleRetries = 0;
 let idleExhaustionNoticed = false;
 let launchInFlight = null;
@@ -228,19 +232,13 @@ function surfaceFailure(paths, client, sessionID, reason) {
 
 function replenishRetryBudgets() {
   retryFailures = 0;
-  retryExhaustionSurfaced = false;
-  retryExhaustionPending = false;
+  retryExhaustionSurfaced.clear();
+  retryExhaustionPending.clear();
+  // A replenished budget owns its own notice, so an in-flight delivery from the
+  // spent budget can no longer settle onto it.
+  retryBudgetToken += 1;
   idleRetries = 0;
   idleExhaustionNoticed = false;
-}
-
-// A replaced session (/new, /resume) is a fresh context that can no longer see
-// an earlier notice, so it starts on a full budget rather than inheriting an
-// exhausted one and staying silent for its whole life.
-function adoptSession(sessionID) {
-  if (!sessionID || sessionID === activeSessionID) return;
-  activeSessionID = sessionID;
-  replenishRetryBudgets();
 }
 
 function noteIdleExhaustion(paths, reason) {
@@ -306,20 +304,30 @@ function restorationFailure(status) {
 
 async function restoreAfterActionableClose(paths, sessionID, client, predecessorArmPid) {
   let failure = "";
-  for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; attempt += 1) {
+  let deferrals = 0;
+  for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; ) {
     const { status, armChild } = await ensureArm(paths, sessionID, client, predecessorArmPid, true);
     if (status === "armed") return { failure: "", recovery: armRecovery.get(armChild) };
     // An actionable line belongs to this arm's close handler.
     // Do not retire it before that handler can start the successor cycle.
     if (status === "wake") return { failure: "", recovery: armRecovery.get(armChild) };
     if (status === "not-needed") return { failure: "" };
+    // A pending silent re-arm is this plugin's own timer already holding
+    // continuity, not an unready successor. Wait for it on a separate bound
+    // instead of spending an attempt reserved for real successor checks.
+    if (status === "retrying" && deferrals < REARM_RETRY_LIMIT) {
+      deferrals += 1;
+      await waitForRetry(deferrals);
+      continue;
+    }
     failure = restorationFailure(status);
     if (!(await retireArm(armChild))) {
       return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity because the unready successor arm did not exit within ${ARM_RETIRE_TIMEOUT_MS}ms` };
     }
     if (status === "read-only" || status === "not-primary" || status === "skipped") break;
-    if (attempt === REARM_RETRY_LIMIT) break;
-    await waitForRetry(attempt + 1);
+    attempt += 1;
+    if (attempt > REARM_RETRY_LIMIT) break;
+    await waitForRetry(attempt);
   }
   return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries` };
 }
@@ -344,14 +352,16 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
     // budget retryable rather than silencing the home with nothing surfaced.
     if (silent) {
       noteIdleExhaustion(paths, reason);
-    } else if (!retryExhaustionSurfaced && !retryExhaustionPending) {
-      retryExhaustionPending = true;
+    } else if (!retryExhaustionSurfaced.has(sessionID) && !retryExhaustionPending.has(sessionID)) {
+      const budgetToken = retryBudgetToken;
+      retryExhaustionPending.add(sessionID);
       void surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`).then((delivered) => {
-        // A budget replenished mid-delivery clears the pending marker and owns
-        // its own notice, so this settle must not latch over it.
-        if (!retryExhaustionPending) return;
-        retryExhaustionPending = false;
-        retryExhaustionSurfaced = delivered;
+        // Keyed to the budget this attempt was spent from: a budget replenished
+        // mid-delivery already cleared the markers and owns its own notice, so a
+        // late settle must not latch a notice the current budget never sent.
+        if (budgetToken !== retryBudgetToken) return;
+        retryExhaustionPending.delete(sessionID);
+        if (delivered) retryExhaustionSurfaced.add(sessionID);
       });
     }
     return;
@@ -508,7 +518,6 @@ function armAttempt(status, armChild, includeArmChild) {
 }
 
 async function ensureArm(paths, sessionID, client, predecessorArmPid = "", includeArmChild = false) {
-  adoptSession(sessionID);
   let launchResult = null;
   if (!launchInFlight) {
     const launch = beginArm(paths, sessionID, client, predecessorArmPid);
