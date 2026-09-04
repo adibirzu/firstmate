@@ -204,10 +204,12 @@ phase_label() {  # <phases>
 
 # --- start -------------------------------------------------------------------
 
-worker_covers_request() {  # <locked> <lock-pid>
-  local locked=$1 lock_pid=$2
+worker_covers_request() {  # <locked> <lock-pid> <lock-kind> <lock-session>
+  local locked=$1 lock_pid=$2 lock_kind=$3 lock_session=$4
   [ "$locked" != 1 ] && return 0
   [ "$(status_get lock_pid)" = "$lock_pid" ] \
+    && [ "$(status_get lock_kind)" = "$lock_kind" ] \
+    && [ "$(status_get lock_session)" = "$lock_session" ] \
     && [ "$(status_get phases)" = probe,sweeps ]
 }
 
@@ -236,7 +238,7 @@ cmd_start() {  # <locked> <harvest-pid>
 
   fm_lock_acquire_wait "$PUBLISH_LOCK"
   if [ "$(status_get state)" = running ] && worker_alive \
-    && worker_covers_request "$locked" "$lock_pid"; then
+    && worker_covers_request "$locked" "$lock_pid" "$lock_kind" "$lock_session"; then
     # A worker whose phases cover this request is still going. Starting another
     # would duplicate its work and, for a locked request, race the same mutating
     # sweeps, so leave it alone and let harvest report its real state.

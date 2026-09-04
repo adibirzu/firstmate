@@ -559,6 +559,58 @@ EOF
   pass "fm-startup-network: a second start never launches a competing worker"
 }
 
+# A running worker covers a locked request only when it was launched under the
+# SAME lock identity, not merely the same pid: a same-pid successor session must
+# get its own worker, and a worker under the same identity must be reused.
+test_locked_start_reuses_a_worker_only_under_the_same_lock_identity() {
+  local rec home root log generation
+  rec=$(new_world lock-identity-coverage)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  write_lock_binding "$home" "$$"
+  cat > "$home/state/.startup-network.status" <<EOF
+state=running
+pid=$$
+started=$(date +%s)
+locked=1
+phases=probe,sweeps
+generation=prior-session
+lock_pid=$$
+lock_kind=ancestry
+lock_session=prior-session
+EOF
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
+    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  generation=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
+  [ "$generation" != prior-session ] \
+    || fail "a same-pid worker bound to another session was reused for a locked request"
+  run_stage "$home" "$root" wait 30 >/dev/null || fail "the new identity's worker never published"
+  [ "$(grep -c 'network=only' "$log" || true)" -eq 1 ] \
+    || fail "the locked request under a new lock identity did not launch its own worker: $(cat "$log")"
+
+  cat > "$home/state/.startup-network.status" <<EOF
+state=running
+pid=$$
+started=$(date +%s)
+locked=1
+phases=probe,sweeps
+generation=same-identity
+lock_pid=$$
+lock_kind=ancestry
+lock_session=$$
+EOF
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
+    run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  generation=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
+  [ "$generation" = same-identity ] \
+    || fail "a running worker under the same lock identity was not reused (generation=$generation)"
+  [ "$(grep -c 'network=only' "$log" || true)" -eq 1 ] \
+    || fail "a locked request under the same lock identity launched a competing worker: $(cat "$log")"
+  pass "fm-startup-network: worker coverage is bound to the lock identity, not the pid alone"
+}
+
 test_start_reserves_its_generation_before_returning() {
   local rec home root log report
   rec=$(new_world generation-reservation)
@@ -808,6 +860,7 @@ test_the_stage_bound_is_reported_not_swallowed
 test_an_abandoned_run_reads_as_needing_a_rerun
 test_locked_start_is_not_satisfied_by_an_inflight_probe
 test_start_is_single_flight
+test_locked_start_reuses_a_worker_only_under_the_same_lock_identity
 test_start_reserves_its_generation_before_returning
 test_new_lock_owner_does_not_reuse_the_previous_owners_worker
 test_lock_takeover_stays_read_only_while_a_sweep_holds_the_lease

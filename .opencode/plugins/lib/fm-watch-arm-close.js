@@ -3,16 +3,16 @@
 // export of a plugin file as a plugin factory; lib/ is not scanned.
 //
 // An empty watcher cycle and another healthy watcher are attach/idle: the
-// plugin re-arms on the next session.idle without a model turn. Actionable
-// wake lines still deliver. Real FAILED lines (no live watcher, persistence
-// errors) still surface as failure.
+// plugin re-arms through its bounded silent retry and on the next session.idle
+// without a model turn. Actionable wake lines still deliver. Real FAILED lines
+// (no live watcher, persistence errors, a watcher that exited nonzero) still
+// surface as failure.
 
 const ACTIONABLE_RE = /^(signal:|stale:|check:|heartbeat($|:))/;
 const HEALTHY_RE = /^watcher: healthy\b/;
 const OWNED_RE = /^watcher: (?:started|attached)\b/;
 const FAILED_RE = /^watcher: FAILED/;
-const EMPTY_CYCLE_FAILED_RE =
-  /^watcher: FAILED - (?:cycle ended without an actionable reason|watcher cycle exited [0-9]+ without an actionable reason)/;
+const EMPTY_CYCLE_FAILED_RE = /^watcher: FAILED - cycle ended without an actionable reason/;
 
 function firstMatchingLine(text, pattern) {
   return `${text}`.split(/\r?\n/).find((line) => pattern.test(line));

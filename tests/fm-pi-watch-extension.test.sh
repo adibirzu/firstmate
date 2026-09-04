@@ -2641,6 +2641,7 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
   cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/fm-operational-input.js"
+  cp "$ROOT/.opencode/plugins/lib/fm-watch-arm-close.js" "$fixture/plugins/lib/fm-watch-arm-close.js"
   cp "$ROOT/.opencode/plugins/lib/fm-watch-arm-eligibility.js" "$fixture/plugins/lib/fm-watch-arm-eligibility.js"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
@@ -3377,22 +3378,27 @@ const hooks = await mod.FmPrimaryWatchArm({
   directory: process.env.WORKTREE,
   worktree: process.env.WORKTREE,
 });
+const armRows = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !prompt; i += 1) {
+for (let i = 0; i < 250 && armRows().length < 3; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-const rows = existsSync(process.env.FM_ARM_LOG)
-  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
-  : [];
+// The retry delays are 5ms and 10ms here, so an unbounded loop would have
+// launched a fourth cycle well inside this settle window.
+await new Promise((resolve) => setTimeout(resolve, 150));
+const rows = armRows();
 if (rows.length !== 3) throw new Error(`retry limit launched ${rows.length} arm cycles: ${rows.join(" | ")}`);
-if (!prompt.includes("after 2 retries")) throw new Error(`retry exhaustion was not surfaced: ${prompt}`);
+if (prompt) throw new Error(`idle retry exhaustion spent a model turn: ${prompt}`);
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode established clean closes must honor the continuity retry limit"
+  expect_code 0 "$status" "OpenCode established clean closes must honor the continuity retry limit without a model turn"
   [ -z "$out" ] || fail "OpenCode established-empty-close retry test printed output: $out"
-  pass "OpenCode established clean closes stop at the configured retry limit"
+  pass "OpenCode established clean closes stop silently at the configured retry limit"
 }
 
 test_opencode_actionable_close_rechecks_session_lock() {
@@ -3533,7 +3539,7 @@ EOF
   pass "OpenCode watcher plugin coordinates with the turn-end guard"
 }
 
-test_opencode_healthy_arm_output_does_not_suppress_guard() {
+test_opencode_healthy_arm_output_keeps_guard_silent() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
@@ -3583,9 +3589,9 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
-}
+// The guard event resolves once the arm child has closed; give the shell guard
+// the same window it previously used to fire so a regression is observable.
+await new Promise((resolve) => setTimeout(resolve, 300));
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
   process.exit(1);
@@ -3594,20 +3600,20 @@ if (!readFileSync(process.env.FM_ARM_LOG, "utf8").includes("args=--restart")) {
   console.error("watch arm was not asked to restart into an owned child");
   process.exit(1);
 }
-if (!existsSync(process.env.FM_GUARD_LOG)) {
-  console.error("turn-end guard was suppressed by an external healthy watcher");
+if (existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("turn-end guard ran the shell guard after an external healthy watcher");
   process.exit(1);
 }
-if (!promptBody.includes("TURN WOULD END BLIND")) {
-  console.error(`missing blind-turn prompt: ${promptBody}`);
+if (promptBody) {
+  console.error(`external healthy watcher spent a model turn: ${promptBody}`);
   process.exit(1);
 }
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode watch plugin must not treat external healthy output as an owned arm"
+  expect_code 0 "$status" "OpenCode external healthy output must be idle with no guard run and no model turn"
   [ -z "$out" ] || fail "OpenCode external-healthy test printed output: $out"
-  pass "OpenCode healthy arm output does not suppress the turn-end guard"
+  pass "OpenCode healthy arm output keeps the turn-end guard silent"
 }
 
 test_pi_extension_reports_external_healthy_watcher
@@ -3653,4 +3659,4 @@ test_opencode_empty_close_retries_instead_of_disappearing
 test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_coordinates_with_turnend_guard
-test_opencode_healthy_arm_output_does_not_suppress_guard
+test_opencode_healthy_arm_output_keeps_guard_silent

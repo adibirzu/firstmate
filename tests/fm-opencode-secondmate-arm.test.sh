@@ -498,10 +498,10 @@ test_empty_and_healthy_closes_are_idle_not_failure() {
   status=$?
   expect_code 0 "$status" "the shell unexplained-cycle FAILED line must classify as idle"
 
-  FM_CLOSE_STDOUT='watcher: FAILED - watcher cycle exited 0 without an actionable reason' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 1 "" idle
+  FM_CLOSE_STDOUT='watcher: FAILED - watcher cycle exited 1 without an actionable reason' FM_CLOSE_STDERR='' \
+    run_close_classifier "" "" 1 "" failure
   status=$?
-  expect_code 0 "$status" "the unexpected-clean-exit FAILED line must classify as idle"
+  expect_code 0 "$status" "a nonzero watcher exit reported by the arm must stay failure"
 
   FM_CLOSE_STDOUT='watcher: attached pid=9 (beacon 0s)' FM_CLOSE_STDERR='' \
     run_close_classifier "" "" 0 "" idle
