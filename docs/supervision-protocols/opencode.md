@@ -12,6 +12,7 @@ When this session owns supervision and away mode is not active:
    An empty or healthy close re-arms through its own bounded silent retry.
    A watcher that established itself and outlived the cycle-lifetime floor (`FM_WATCH_ARM_ESTABLISHED_MS`, 60s) is a completed cycle: its close replenishes both retry budgets, so a long-running home keeps re-arming, while an instantly-empty watcher stays bounded.
    Idle cycles and failed closes are counted separately, and only a completed cycle resets the failure count, so empty closes between real failures cannot hide the failure.
+   An exhausted failure budget is surfaced once and not again until a completed cycle replenishes it, so a home that can never establish supervision keeps re-arming on `session.idle` without spending a model turn per idle.
    When the silent bound is exhausted the plugin stops without a model turn and appends one durable `check` record (`opencode-arm:idle-exhausted`) to `state/.wake-queue`; it is not repeated while unacknowledged, and `bin/fm-wake-drain.sh` is the only surfacing owner of that record - no arm cycle presents it.
    A retry that relaunches into a home that no longer needs a watcher, or that this session no longer owns, is benign and never prompts.
    The plugin arms on the same need as `bin/fm-supervision-lib.sh` (task metadata, an X-mode relay poll, or a registered process-event source); when it declines because it sees no need or this session does not own the lock, the turn-end guard plugin still runs the shell guard as the backstop.

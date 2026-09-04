@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
-import { classifyArmClose } from "./lib/fm-watch-arm-close.js";
+import { ACTIONABLE_RE, FAILED_RE, HEALTHY_RE, OWNED_RE, classifyArmClose } from "./lib/fm-watch-arm-close.js";
 import { isArmEligibleRoot } from "./lib/fm-watch-arm-eligibility.js";
 
 const COORDINATOR_KEY = "__firstmateOpenCodeWatchArm";
@@ -21,6 +21,7 @@ const IDLE_EXHAUSTION_KEY = "opencode-arm:idle-exhausted";
 let child = null;
 let retryTimer = null;
 let retryFailures = 0;
+let retryExhaustionSurfaced = false;
 let idleRetries = 0;
 let idleExhaustionNoticed = false;
 let launchInFlight = null;
@@ -130,20 +131,21 @@ async function sessionOwnsLock(paths) {
 }
 
 function observeArmOutput(stdout, stderr, settleReadiness) {
-  const combined = `${stdout}\n${stderr}`;
-  if (combined.split(/\r?\n/).some((line) => /^(signal:|stale:|check:|heartbeat($|:))/.test(line))) {
+  const lines = `${stdout}\n${stderr}`.split(/\r?\n/);
+  const carries = (pattern) => lines.some((line) => pattern.test(line));
+  if (carries(ACTIONABLE_RE)) {
     settleReadiness("wake");
     return;
   }
-  if (combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
+  if (carries(OWNED_RE)) {
     settleReadiness("armed");
     return;
   }
-  if (combined.split(/\r?\n/).some((line) => /^watcher: healthy\b/.test(line))) {
+  if (carries(HEALTHY_RE)) {
     settleReadiness("external");
     return;
   }
-  if (combined.split(/\r?\n/).some((line) => /^watcher: FAILED/.test(line))) {
+  if (carries(FAILED_RE)) {
     settleReadiness("failed");
   }
 }
@@ -220,6 +222,7 @@ function surfaceFailure(paths, client, sessionID, reason) {
 
 function replenishRetryBudgets() {
   retryFailures = 0;
+  retryExhaustionSurfaced = false;
   idleRetries = 0;
   idleExhaustionNoticed = false;
 }
@@ -317,9 +320,14 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
   if (silent) idleRetries = attempt;
   else retryFailures = attempt;
   if (attempt > REARM_RETRY_LIMIT) {
+    // Exhaustion is surfaced once per budget, on the close that actually
+    // followed the retries. Later failure closes keep arming on session.idle
+    // but never re-spend a model turn on the same unreplenished budget, so a
+    // home that cannot establish supervision costs one turn, not one per idle.
     if (silent) {
       noteIdleExhaustion(paths, reason);
-    } else {
+    } else if (!retryExhaustionSurfaced) {
+      retryExhaustionSurfaced = true;
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
     }
     return;

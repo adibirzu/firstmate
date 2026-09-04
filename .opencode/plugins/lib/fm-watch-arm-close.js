@@ -8,10 +8,10 @@
 // (no live watcher, persistence errors, a watcher that exited nonzero) still
 // surface as failure.
 
-const ACTIONABLE_RE = /^(signal:|stale:|check:|heartbeat($|:))/;
-const HEALTHY_RE = /^watcher: healthy\b/;
-const OWNED_RE = /^watcher: (?:started|attached)\b/;
-const FAILED_RE = /^watcher: FAILED/;
+export const ACTIONABLE_RE = /^(signal:|stale:|check:|heartbeat($|:))/;
+export const HEALTHY_RE = /^watcher: healthy\b/;
+export const OWNED_RE = /^watcher: (?:started|attached)\b/;
+export const FAILED_RE = /^watcher: FAILED/;
 const EMPTY_CYCLE_FAILED_RE = /^watcher: FAILED - cycle ended without an actionable reason/;
 
 function firstMatchingLine(text, pattern) {

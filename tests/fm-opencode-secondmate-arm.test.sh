@@ -1072,6 +1072,71 @@ EOF
   pass "watch-arm: empty closes between real failures do not hide the failure"
 }
 
+# A home whose watcher can never establish exhausts the failure budget once and
+# surfaces once. The budget is only replenished by a completed cycle, so every
+# later failing close finds it already spent: the plugin must keep re-arming on
+# session.idle without spending another model turn. Before the exhaustion latch
+# the second idle prompted again - with the same "after N retries" text although
+# no retry ran that round - which is one paid model turn per idle forever.
+test_exhausted_failure_budget_surfaces_once_across_idles() {
+  local dir out status
+  dir=$(prepare_arm_home exhausted-failure)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/exhausted-failure-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.body.parts[0].text); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const cycles = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-exhausted" } } });
+for (let i = 0; i < 300 && prompts.length === 0; i += 1) await settle(10);
+await settle(100);
+if (prompts.length !== 1 || !prompts[0].includes("after 2 retries")) {
+  console.error(`the first exhaustion did not surface exactly once: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+const armedBeforeSecondIdle = cycles();
+if (armedBeforeSecondIdle !== 3) {
+  console.error(`expected 1 failure plus 2 retries before the second idle, got ${armedBeforeSecondIdle}`);
+  process.exit(1);
+}
+
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-exhausted" } } });
+for (let i = 0; i < 300 && cycles() === armedBeforeSecondIdle; i += 1) await settle(10);
+await settle(150);
+if (cycles() <= armedBeforeSecondIdle) {
+  console.error("the second idle did not re-arm: an exhausted budget must not stop supervision attempts");
+  process.exit(1);
+}
+if (prompts.length !== 1) {
+  console.error(`an exhausted failure budget prompted again on the next idle: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "an exhausted failure budget must surface once, not once per idle"
+  [ -z "$out" ] || fail "exhausted-failure test printed output: $out"
+  pass "watch-arm: an unestablishable home re-arms every idle but spends only one model turn"
+}
+
 # A failure retry that relaunches into a home which no longer needs a watcher
 # is benign: no failure prompt for supervision that is simply no longer owed.
 test_retry_launch_into_a_no_longer_needed_home_is_silent() {
@@ -1260,6 +1325,7 @@ test_restoration_retries_an_idle_successor_close
 test_established_cycles_replenish_the_idle_budget
 test_idle_exhaustion_queues_one_durable_check_without_a_prompt
 test_alternating_failure_and_empty_closes_still_surface
+test_exhausted_failure_budget_surfaces_once_across_idles
 test_retry_launch_into_a_no_longer_needed_home_is_silent
 test_slow_confirming_retry_launch_does_not_prompt
 test_crewmate_idle_stays_silent
