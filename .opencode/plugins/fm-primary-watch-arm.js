@@ -268,17 +268,21 @@ async function restoreAfterActionableClose(paths, sessionID, client, predecessor
   return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries` };
 }
 
-async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid) {
+async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid, silent = false) {
   if (child || retryTimer) return;
   if (!(await sessionOwnsLock(paths))) {
-    setArmStatus("failed");
-    surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode cannot restore continuity because this session no longer owns the lock\n${reason}`);
+    setArmStatus(silent ? "read-only" : "failed");
+    if (!silent) {
+      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode cannot restore continuity because this session no longer owns the lock\n${reason}`);
+    }
     return;
   }
   retryFailures += 1;
   if (retryFailures > REARM_RETRY_LIMIT) {
-    setArmStatus("failed");
-    surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
+    setArmStatus(silent ? "idle" : "failed");
+    if (!silent) {
+      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
+    }
     return;
   }
   setArmStatus("retrying");
@@ -286,6 +290,7 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
     if (retryTimer === timer) retryTimer = null;
     void ensureArm(paths, sessionID, client, predecessorArmPid).then((status) => {
       if (["armed", "starting", "wake"].includes(status)) return;
+      if (silent) return;
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not launch a continuity retry (${status})`);
     });
   }, retryDelay(retryFailures));
@@ -353,11 +358,13 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settleReadiness(
       classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "armed" : "failed",
     );
+    const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "idle") {
       setArmStatus("armed");
+      if (restorationInFlight) return;
+      void scheduleRetry(paths, sessionID, client, classification.message, predecessor, true);
       return;
     }
-    const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "actionable") {
       if (restorationInFlight) return;
       retryFailures = 0;
