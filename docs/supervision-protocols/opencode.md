@@ -10,7 +10,7 @@ When this session owns supervision and away mode is not active:
    An empty cycle or another healthy watcher is attach/idle, not a model repair turn.
 6. A failed child close (a real `watcher: FAILED` line, a signal, or a nonzero arm exit) enters bounded exponential retry, and an exhausted retry or lost session lock is surfaced as a watcher failure instead of disappearing.
    An empty or healthy close re-arms through its own bounded silent retry.
-   A watcher that established itself and outlived the cycle-lifetime floor (`FM_WATCH_ARM_ESTABLISHED_MS`, 60s) is a completed cycle: its close replenishes both retry budgets, so a long-running home keeps re-arming, while an instantly-empty watcher stays bounded.
+   A completed cycle replenishes both retry budgets: an actionable close, or any close whose watcher established itself and outlived the cycle-lifetime floor (`FM_WATCH_ARM_ESTABLISHED_MS`, 60s), so a long-running home keeps re-arming while an instantly-empty watcher stays bounded.
    Idle cycles and failed closes are counted separately, and only a completed cycle resets the failure count, so empty closes between real failures cannot hide the failure.
    An exhausted failure budget is surfaced once and not again until it is replenished, so a home that can never establish supervision keeps re-arming on `session.idle` without spending a model turn per idle.
    Only a delivered notice retires that attempt; an undelivered one leaves the budget retryable rather than leaving the home silent.
