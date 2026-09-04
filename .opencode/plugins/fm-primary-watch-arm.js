@@ -22,6 +22,8 @@ let child = null;
 let retryTimer = null;
 let retryFailures = 0;
 let retryExhaustionSurfaced = false;
+let retryExhaustionPending = false;
+let activeSessionID = "";
 let idleRetries = 0;
 let idleExhaustionNoticed = false;
 let launchInFlight = null;
@@ -214,17 +216,31 @@ function wakePrompt(reason) {
   return `WATCHER FIRED - drain queued wakes with bin/fm-wake-drain.sh and handle the reported wake. Watcher continuity is plugin-owned.\n\n${reason}`;
 }
 
+// Resolves true only when the notice actually reached the session. Never
+// rejects: continuity restoration never waits on prompting, and callers that
+// ignore the result keep their fire-and-forget shape.
 function surfaceFailure(paths, client, sessionID, reason) {
-  void sendPrompt(paths, client, sessionID, wakePrompt(reason)).catch(() => {
-    // OpenCode owns delivery errors; continuity restoration never waits on prompting.
-  });
+  return sendPrompt(paths, client, sessionID, wakePrompt(reason)).then(
+    () => true,
+    () => false,
+  );
 }
 
 function replenishRetryBudgets() {
   retryFailures = 0;
   retryExhaustionSurfaced = false;
+  retryExhaustionPending = false;
   idleRetries = 0;
   idleExhaustionNoticed = false;
+}
+
+// A replaced session (/new, /resume) is a fresh context that can no longer see
+// an earlier notice, so it starts on a full budget rather than inheriting an
+// exhausted one and staying silent for its whole life.
+function adoptSession(sessionID) {
+  if (!sessionID || sessionID === activeSessionID) return;
+  activeSessionID = sessionID;
+  replenishRetryBudgets();
 }
 
 function noteIdleExhaustion(paths, reason) {
@@ -324,11 +340,19 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
     // followed the retries. Later failure closes keep arming on session.idle
     // but never re-spend a model turn on the same unreplenished budget, so a
     // home that cannot establish supervision costs one turn, not one per idle.
+    // Only a delivered notice retires the attempt: an undelivered one leaves the
+    // budget retryable rather than silencing the home with nothing surfaced.
     if (silent) {
       noteIdleExhaustion(paths, reason);
-    } else if (!retryExhaustionSurfaced) {
-      retryExhaustionSurfaced = true;
-      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
+    } else if (!retryExhaustionSurfaced && !retryExhaustionPending) {
+      retryExhaustionPending = true;
+      void surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`).then((delivered) => {
+        // A budget replenished mid-delivery clears the pending marker and owns
+        // its own notice, so this settle must not latch over it.
+        if (!retryExhaustionPending) return;
+        retryExhaustionPending = false;
+        retryExhaustionSurfaced = delivered;
+      });
     }
     return;
   }
@@ -484,6 +508,7 @@ function armAttempt(status, armChild, includeArmChild) {
 }
 
 async function ensureArm(paths, sessionID, client, predecessorArmPid = "", includeArmChild = false) {
+  adoptSession(sessionID);
   let launchResult = null;
   if (!launchInFlight) {
     const launch = beginArm(paths, sessionID, client, predecessorArmPid);
