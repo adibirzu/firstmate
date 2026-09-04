@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
+import { classifyArmClose } from "./lib/fm-watch-arm-close.js";
 import { isArmEligibleRoot } from "./lib/fm-watch-arm-eligibility.js";
 
 const COORDINATOR_KEY = "__firstmateOpenCodeWatchArm";
@@ -118,37 +119,6 @@ async function sessionOwnsLock(paths) {
     if (!pid || pid === "1") return false;
   }
   return false;
-}
-
-function classifyArmClose(stdout, stderr, code, signal) {
-  const combined = `${stdout}\n${stderr}`;
-  const reason = combined.split(/\r?\n/).find((line) => /^(signal:|stale:|check:|heartbeat($|:))/.test(line));
-  if (reason) return { kind: "actionable", message: reason };
-  const healthy = combined.split(/\r?\n/).find((line) => /^watcher: healthy\b/.test(line));
-  if (healthy) {
-    return {
-      kind: "failure",
-      message: `watcher: FAILED - OpenCode arm child found an external healthy watcher instead of owning wake delivery\n${healthy}`,
-    };
-  }
-  const failed = combined.split(/\r?\n/).find((line) => /^watcher: FAILED/.test(line));
-  if (failed) return { kind: "failure", message: failed };
-  if (signal) {
-    return {
-      kind: "failure",
-      message: `watcher: FAILED - OpenCode arm child ended from ${signal}${combined.trim() ? `\n${combined.trim()}` : ""}`,
-    };
-  }
-  if (code && code !== 0) {
-    return {
-      kind: "failure",
-      message: `watcher: FAILED - fm-watch-arm.sh exited ${code}${combined.trim() ? `\n${combined.trim()}` : ""}`,
-    };
-  }
-  return {
-    kind: "failure",
-    message: "watcher: FAILED - OpenCode arm cycle ended without an actionable reason",
-  };
 }
 
 function observeArmOutput(stdout, stderr, settleReadiness) {
@@ -380,7 +350,13 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     resolveClosed();
     releaseChild();
     const classification = classifyArmClose(stdout, stderr, code, signal);
-    settleReadiness(classification.kind === "actionable" ? "wake" : "failed");
+    settleReadiness(
+      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "armed" : "failed",
+    );
+    if (classification.kind === "idle") {
+      setArmStatus("armed");
+      return;
+    }
     const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "actionable") {
       if (restorationInFlight) return;
