@@ -895,6 +895,222 @@ EOF
   pass "watch-arm: an idle successor close during restoration is retried silently, not accepted as armed"
 }
 
+# The plugin appends its exhaustion notice through the real bin/fm-wake-lib.sh
+# of the root it arms, so a fixture that exercises that path carries the real
+# library alongside its stubbed arm script.
+link_real_bin_scripts() {  # <dir>
+  local f
+  for f in "$ROOT"/bin/*.sh; do
+    [ -e "$1/bin/$(basename "$f")" ] || ln -s "$f" "$1/bin/$(basename "$f")"
+  done
+}
+
+# A watcher that established itself and outlived the cycle-lifetime floor is a
+# completed cycle: its empty close replenishes the silent re-arm budget, so a
+# long-running home whose cycles end empty keeps re-arming instead of going
+# silent after a lifetime count of benign closes.
+test_established_cycles_replenish_the_idle_budget() {
+  local dir out status
+  dir=$(prepare_arm_home established-cycle)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+sleep 0.1
+exit 0
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/established-cycle-arm.log" \
+    FM_WATCH_ARM_ESTABLISHED_MS=50 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
+const client = { session: { promptAsync: async () => { prompts += 1; } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+const rows = () =>
+  existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-established" } } });
+for (let i = 0; i < 300 && rows() < 6; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 20));
+}
+if (rows() < 6) {
+  console.error(`established cycles stopped re-arming after ${rows()} cycles (lifetime budget exhausted)`);
+  process.exit(1);
+}
+if (prompts !== 0) {
+  console.error(`established empty cycles spent ${prompts} model turns`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "established watcher cycles must replenish the silent re-arm budget"
+  [ -z "$out" ] || fail "established-cycle test printed output: $out"
+  pass "watch-arm: a watcher that outlived the cycle floor replenishes the idle re-arm budget"
+}
+
+# Exhausting the silent budget on instantly-empty cycles is terminal for the
+# plugin's own re-arm, so it must leave exactly one durable notice behind and
+# never a model turn: state/.wake-queue is the owned durable wake protocol
+# (<epoch>\t<seq>\t<kind>\t<key>\t<payload>), read here as that contract.
+test_idle_exhaustion_queues_one_durable_check_without_a_prompt() {
+  local dir out status
+  dir=$(prepare_arm_home idle-exhaustion)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+exit 0
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  link_real_bin_scripts "$dir"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/idle-exhaustion-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
+const client = { session: { promptAsync: async () => { prompts += 1; } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+const queue = `${process.env.FM_HOME}/state/.wake-queue`;
+const rows = () =>
+  existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
+const notices = () =>
+  existsSync(queue)
+    ? readFileSync(queue, "utf8").split("\n").filter((line) => line.split("\t")[2] === "check" && line.split("\t")[3] === "opencode-arm:idle-exhausted")
+    : [];
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-exhaustion" } } });
+for (let i = 0; i < 200 && notices().length === 0; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+await new Promise((settle) => setTimeout(settle, 150));
+if (rows() !== 3) {
+  console.error(`expected the initial arm plus 2 silent retries, got ${rows()} cycles`);
+  process.exit(1);
+}
+if (notices().length !== 1) {
+  console.error(`expected exactly one durable exhaustion notice, got ${notices().length}: ${existsSync(queue) ? readFileSync(queue, "utf8") : "(no queue)"}`);
+  process.exit(1);
+}
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-exhaustion" } } });
+for (let i = 0; i < 200 && rows() < 6; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+await new Promise((settle) => setTimeout(settle, 150));
+if (notices().length !== 1) {
+  console.error(`an unacknowledged exhaustion notice was repeated: ${notices().length} records`);
+  process.exit(1);
+}
+if (prompts !== 0) {
+  console.error(`idle exhaustion spent ${prompts} model turns`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "idle exhaustion must leave one durable check record and no model turn"
+  [ -z "$out" ] || fail "idle-exhaustion test printed output: $out"
+  pass "watch-arm: exhausted silent re-arm queues one durable check and never prompts"
+}
+
+# An instantly-empty close is not a completed cycle, so it must not wipe the
+# failure count: a watcher that alternates real FAILED closes with empty ones
+# still reaches the failure bound and surfaces once.
+test_alternating_failure_and_empty_closes_still_surface() {
+  local dir out status
+  dir=$(prepare_arm_home alternating-close)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+[ $((count % 2)) -eq 0 ] && exit 0
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/alternating-close-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.body.parts[0].text); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-alternating" } } });
+for (let i = 0; i < 300 && prompts.length === 0; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+await new Promise((settle) => setTimeout(settle, 150));
+const rows = existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
+if (prompts.length !== 1 || !prompts[0].includes("after 2 retries")) {
+  console.error(`alternating failures did not surface exactly once: ${JSON.stringify(prompts)} (${rows} cycles)`);
+  process.exit(1);
+}
+if (rows !== 5) {
+  console.error(`expected 3 failures interleaved with 2 empty closes, got ${rows} cycles`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "alternating real failures must still reach the failure bound and surface once"
+  [ -z "$out" ] || fail "alternating-close test printed output: $out"
+  pass "watch-arm: empty closes between real failures do not hide the failure"
+}
+
+# A failure retry that relaunches into a home which no longer needs a watcher
+# is benign: no failure prompt for supervision that is simply no longer owed.
+test_retry_launch_into_a_no_longer_needed_home_is_silent() {
+  local dir out status
+  dir=$(prepare_arm_home retry-not-needed)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+rm -f "$FM_HOME/state/task.meta"
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/retry-not-needed-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.body.parts[0].text); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-not-needed" } } });
+await new Promise((settle) => setTimeout(settle, 400));
+const rows = existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
+if (rows !== 1) {
+  console.error(`expected one arm before the need cleared, got ${rows} cycles`);
+  process.exit(1);
+}
+if (prompts.length !== 0) {
+  console.error(`a retry into a no-longer-needed home spent a model turn: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a retry launch into a no-longer-needed home must stay silent"
+  [ -z "$out" ] || fail "retry-not-needed test printed output: $out"
+  pass "watch-arm: a failure retry that finds no remaining need does not prompt"
+}
+
 test_crewmate_idle_stays_silent() {
   local base dir out status
   base="$TMP_ROOT/crewmate-idle-base"
@@ -978,4 +1194,8 @@ test_procevent_source_home_arms_without_task_meta
 test_turnend_guard_runs_when_coordinator_declines_read_only
 test_idle_cycles_do_not_consume_the_failure_retry_budget
 test_restoration_retries_an_idle_successor_close
+test_established_cycles_replenish_the_idle_budget
+test_idle_exhaustion_queues_one_durable_check_without_a_prompt
+test_alternating_failure_and_empty_closes_still_surface
+test_retry_launch_into_a_no_longer_needed_home_is_silent
 test_crewmate_idle_stays_silent

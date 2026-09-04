@@ -15,11 +15,15 @@ const ARM_RETIRE_TIMEOUT_MS = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 
 const REARM_RETRY_BASE_MS = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+const ARM_ESTABLISHED_MS = positiveInteger("FM_WATCH_ARM_ESTABLISHED_MS", 60000);
+const IDLE_EXHAUSTION_KEY = "opencode-arm:idle-exhausted";
+const BENIGN_LAUNCH_STATUSES = ["not-needed", "read-only", "skipped", "not-primary"];
 
 let child = null;
 let retryTimer = null;
 let retryFailures = 0;
 let idleRetries = 0;
+let idleExhaustionNoticed = false;
 let launchInFlight = null;
 let restorationInFlight = null;
 let armClose = new WeakMap();
@@ -215,6 +219,37 @@ function surfaceFailure(paths, client, sessionID, reason) {
   });
 }
 
+function replenishRetryBudgets() {
+  retryFailures = 0;
+  idleRetries = 0;
+  idleExhaustionNoticed = false;
+}
+
+function noteIdleExhaustion(paths, reason) {
+  if (idleExhaustionNoticed) return;
+  idleExhaustionNoticed = true;
+  const payload = `check: OpenCode watch-arm stopped silent re-arming after ${REARM_RETRY_LIMIT} empty watcher cycles; supervision is off until the next arm - ${reason}`;
+  try {
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        '. "$FM_ROOT_OVERRIDE/bin/fm-wake-lib.sh" && { fm_wake_queued_keys check | grep -qx -- "$1" || fm_wake_append check "$1" "$2"; }',
+        "_",
+        IDLE_EXHAUSTION_KEY,
+        payload,
+      ],
+      {
+        cwd: paths.root,
+        encoding: "utf8",
+        env: { ...process.env, FM_HOME: paths.home, FM_STATE_OVERRIDE: paths.state, FM_ROOT_OVERRIDE: paths.root },
+      },
+    );
+  } catch {
+    // The durable queue is best-effort here; exhaustion never spends a model turn.
+  }
+}
+
 function retryDelay(attempt) {
   return Math.min(REARM_RETRY_MAX_MS, REARM_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
 }
@@ -256,6 +291,7 @@ async function restoreAfterActionableClose(paths, sessionID, client, predecessor
     // An actionable line belongs to this arm's close handler.
     // Do not retire it before that handler can start the successor cycle.
     if (status === "wake") return { failure: "", recovery: armRecovery.get(armChild) };
+    if (status === "not-needed") return { failure: "" };
     failure = restorationFailure(status);
     if (!(await retireArm(armChild))) {
       return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity because the unready successor arm did not exit within ${ARM_RETIRE_TIMEOUT_MS}ms` };
@@ -279,7 +315,9 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
   if (silent) idleRetries = attempt;
   else retryFailures = attempt;
   if (attempt > REARM_RETRY_LIMIT) {
-    if (!silent) {
+    if (silent) {
+      noteIdleExhaustion(paths, reason);
+    } else {
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
     }
     return;
@@ -290,7 +328,7 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
       // A launched arm that then fails is owned by its own close handler, which
       // schedules the next bounded retry or surfaces exhaustion exactly once.
       if (["armed", "starting", "wake", "failed", "idle"].includes(status)) return;
-      if (silent) return;
+      if (silent || BENIGN_LAUNCH_STATUSES.includes(status)) return;
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not launch a continuity retry (${status})`);
     });
   }, retryDelay(attempt));
@@ -312,11 +350,13 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     stdio: ["ignore", "pipe", "pipe"],
   });
   child = armChild;
+  const spawnedAt = Date.now();
   let stdout = "";
   let stderr = "";
   let settled = false;
   let resolveClosed = null;
   let readinessSettled = false;
+  let readinessStatus = "";
   let resolveReadiness = null;
   const readiness = new Promise((resolve) => {
     resolveReadiness = resolve;
@@ -325,6 +365,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   const settleReadiness = (status) => {
     if (readinessSettled) return;
     readinessSettled = true;
+    readinessStatus = status;
     resolveReadiness(status);
   };
   const closed = new Promise((resolveClosedChild) => {
@@ -355,20 +396,21 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     releaseChild();
     const classification = classifyArmClose(stdout, stderr, code, signal);
     const acceptedBeforeClose = readinessSettled;
+    const established =
+      (readinessStatus === "armed" || readinessStatus === "external") && Date.now() - spawnedAt >= ARM_ESTABLISHED_MS;
     settleReadiness(
       classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "idle" : "failed",
     );
     const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "idle") {
-      retryFailures = 0;
+      if (established) replenishRetryBudgets();
       if (restorationInFlight && !acceptedBeforeClose) return;
       void scheduleRetry(paths, sessionID, client, classification.message, predecessor, true);
       return;
     }
     if (classification.kind === "actionable") {
       if (restorationInFlight) return;
-      retryFailures = 0;
-      idleRetries = 0;
+      replenishRetryBudgets();
       const restoration = restoreAfterActionableClose(paths, sessionID, client, predecessor);
       restorationInFlight = restoration;
       void restoration.then(async (result) => {
@@ -457,6 +499,7 @@ export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
       idleRetries = 0;
+      idleExhaustionNoticed = false;
       void ensureArm(paths, sessionID, client);
     },
   };
