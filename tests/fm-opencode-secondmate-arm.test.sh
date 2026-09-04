@@ -1137,6 +1137,134 @@ EOF
   pass "watch-arm: an unestablishable home re-arms every idle but spends only one model turn"
 }
 
+# The exhaustion notice is fire-and-forget, so an undelivered one must not
+# retire the attempt. A home that can never establish supervision has no path
+# back to a replenished budget, so latching over a rejected promptAsync leaves
+# it permanently unsupervised with nothing surfaced anywhere - the same
+# swallow-before-confirm shape the durable idle notice already closed.
+test_undelivered_exhaustion_notice_stays_retryable() {
+  local dir out status
+  dir=$(prepare_arm_home undelivered-exhaustion)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/undelivered-exhaustion-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let attempts = 0;
+// The real client rejects when the session was replaced mid-delivery; the
+// plugin's surfaceFailure swallows that rejection by design.
+const client = { session: { promptAsync: async () => { attempts += 1; throw new Error("session gone"); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const cycles = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-undelivered" } } });
+for (let i = 0; i < 300 && attempts === 0; i += 1) await settle(10);
+await settle(100);
+if (attempts !== 1) {
+  console.error(`expected one undelivered exhaustion notice, got ${attempts}`);
+  process.exit(1);
+}
+const armedBeforeSecondIdle = cycles();
+
+// Same session: the budget is still exhausted, so only the failed delivery can
+// make this close surface again.
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-undelivered" } } });
+for (let i = 0; i < 300 && attempts < 2; i += 1) await settle(10);
+await settle(100);
+if (cycles() <= armedBeforeSecondIdle) {
+  console.error("the second idle did not re-arm, so the notice retry was never reachable");
+  process.exit(1);
+}
+if (attempts !== 2) {
+  console.error(`an undelivered exhaustion notice was never retried: attempts=${attempts}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "an undelivered exhaustion notice must stay retryable"
+  [ -z "$out" ] || fail "undelivered-exhaustion test printed output: $out"
+  pass "watch-arm: an exhaustion notice that was not delivered does not retire the attempt"
+}
+
+# The failure budget is module state and outlives a session replacement, but a
+# replaced session (/new, /resume) is a fresh context that cannot see the notice
+# the previous one received. It must start on a full budget - retrying and
+# surfacing once - instead of inheriting an exhausted one and staying silent.
+test_replaced_session_gets_its_own_failure_budget() {
+  local dir out status
+  dir=$(prepare_arm_home replaced-session)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/replaced-session-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.path.id); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const cycles = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-first" } } });
+for (let i = 0; i < 300 && prompts.length === 0; i += 1) await settle(10);
+await settle(100);
+if (prompts.length !== 1 || prompts[0] !== "session-first") {
+  console.error(`the first session did not surface exactly once: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+const armedByFirstSession = cycles();
+if (armedByFirstSession !== 3) {
+  console.error(`expected 1 failure plus 2 retries in the first session, got ${armedByFirstSession}`);
+  process.exit(1);
+}
+
+// Session replacement in the same OpenCode process.
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-second" } } });
+for (let i = 0; i < 300 && prompts.length < 2; i += 1) await settle(10);
+await settle(100);
+if (prompts.length !== 2 || prompts[1] !== "session-second") {
+  console.error(`the replaced session inherited an exhausted budget: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+if (cycles() !== armedByFirstSession + 3) {
+  console.error(`the replaced session did not retry on a full budget: ${cycles()} cycles total`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a replaced session must start on a full failure budget"
+  [ -z "$out" ] || fail "replaced-session test printed output: $out"
+  pass "watch-arm: a replaced session retries and surfaces on its own failure budget"
+}
+
 # A failure retry that relaunches into a home which no longer needs a watcher
 # is benign: no failure prompt for supervision that is simply no longer owed.
 test_retry_launch_into_a_no_longer_needed_home_is_silent() {
@@ -1326,6 +1454,8 @@ test_established_cycles_replenish_the_idle_budget
 test_idle_exhaustion_queues_one_durable_check_without_a_prompt
 test_alternating_failure_and_empty_closes_still_surface
 test_exhausted_failure_budget_surfaces_once_across_idles
+test_undelivered_exhaustion_notice_stays_retryable
+test_replaced_session_gets_its_own_failure_budget
 test_retry_launch_into_a_no_longer_needed_home_is_silent
 test_slow_confirming_retry_launch_does_not_prompt
 test_crewmate_idle_stays_silent
