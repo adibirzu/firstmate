@@ -20,6 +20,7 @@ let child = null;
 let armStatus = "idle";
 let retryTimer = null;
 let retryFailures = 0;
+let idleRetries = 0;
 let launchInFlight = null;
 let restorationInFlight = null;
 let armClose = new WeakMap();
@@ -92,14 +93,23 @@ function effectivePaths(root) {
   return { root: fmRoot, home: fmHome, state, config };
 }
 
-function shouldArm(paths) {
-  if (existsSync(`${paths.state}/.afk`)) return false;
-  if (existsSync(`${paths.config}/x-mode.env`)) return true;
+function hasEntriesEndingWith(dir, suffix) {
   try {
-    return readdirSync(paths.state).some((name) => name.endsWith(".meta"));
+    return readdirSync(dir).some((name) => name.endsWith(suffix));
   } catch {
     return false;
   }
+}
+
+// Mirrors the supervision-need predicate of bin/fm-supervision-lib.sh
+// (fm_supervision_status): in-flight task metadata, an X-mode relay poll, or a
+// registered process-event source all need a watcher.
+function shouldArm(paths) {
+  if (existsSync(`${paths.state}/.afk`)) return false;
+  if (existsSync(`${paths.config}/x-mode.env`)) return true;
+  if (existsSync(`${paths.state}/x-watch.check.sh`)) return true;
+  if (hasEntriesEndingWith(`${paths.state}/procevent`, ".source")) return true;
+  return hasEntriesEndingWith(paths.state, ".meta");
 }
 
 async function sessionOwnsLock(paths) {
@@ -277,8 +287,10 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
     }
     return;
   }
-  retryFailures += 1;
-  if (retryFailures > REARM_RETRY_LIMIT) {
+  const attempt = (silent ? idleRetries : retryFailures) + 1;
+  if (silent) idleRetries = attempt;
+  else retryFailures = attempt;
+  if (attempt > REARM_RETRY_LIMIT) {
     setArmStatus(silent ? "idle" : "failed");
     if (!silent) {
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
@@ -289,11 +301,13 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
   const timer = setTimeout(() => {
     if (retryTimer === timer) retryTimer = null;
     void ensureArm(paths, sessionID, client, predecessorArmPid).then((status) => {
-      if (["armed", "starting", "wake"].includes(status)) return;
+      // A launched arm that then fails is owned by its own close handler, which
+      // schedules the next bounded retry or surfaces exhaustion exactly once.
+      if (["armed", "starting", "wake", "failed"].includes(status)) return;
       if (silent) return;
       surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not launch a continuity retry (${status})`);
     });
-  }, retryDelay(retryFailures));
+  }, retryDelay(attempt));
   timer.unref();
   retryTimer = timer;
 }
@@ -360,6 +374,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     );
     const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "idle") {
+      retryFailures = 0;
       setArmStatus("armed");
       if (restorationInFlight) return;
       void scheduleRetry(paths, sessionID, client, classification.message, predecessor, true);
@@ -368,6 +383,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     if (classification.kind === "actionable") {
       if (restorationInFlight) return;
       retryFailures = 0;
+      idleRetries = 0;
       setArmStatus("wake");
       const restoration = restoreAfterActionableClose(paths, sessionID, client, predecessor);
       restorationInFlight = restoration;
@@ -462,6 +478,7 @@ export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
       if (event.type !== "session.idle") return;
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
+      idleRetries = 0;
       void ensureArm(paths, sessionID, client);
     },
   };

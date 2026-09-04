@@ -662,6 +662,177 @@ EOF
   pass "turnend-guard: a loaded watch-arm coordinator suppresses the idle repair turn"
 }
 
+# A registered process-event source needs supervision without any task.meta
+# (bin/fm-supervision-lib.sh counts state/procevent/*.source). The plugin's arm
+# predicate must agree with that shell owner, or a procevent-only home ends its
+# idle with neither a watcher nor a surfaced warning.
+test_procevent_source_home_arms_without_task_meta() {
+  local dir out status
+  dir=$(prepare_arm_home procevent-need)
+  rm -f "$dir/state/task.meta"
+  mkdir -p "$dir/state/procevent"
+  : > "$dir/state/procevent/proc-1.source"
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm-ran\n' >> "${FM_ARM_LOG:?}"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/procevent-need-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=1 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const client = { session: { promptAsync: async () => {} } };
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-procevent" } } });
+const armed = () =>
+  existsSync(process.env.FM_ARM_LOG) && readFileSync(process.env.FM_ARM_LOG, "utf8").includes("arm-ran");
+for (let i = 0; i < 100 && !armed(); i += 1) {
+  await new Promise((settle) => setTimeout(settle, 20));
+}
+if (!armed()) {
+  console.error("a home with a registered process-event source and no task.meta was left unarmed");
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a procevent-source home must arm without task.meta"
+  [ -z "$out" ] || fail "procevent-need test printed output: $out"
+  pass "watch-arm: a registered process-event source arms supervision without task.meta"
+}
+
+# When the coordinator declines to arm because this session does not own the
+# lock, the shell guard still runs and its verdict is delivered: silence here
+# would leave a home whose previous lock holder died without a watcher blind.
+test_turnend_guard_runs_when_coordinator_declines_read_only() {
+  local dir out status
+  dir=$(prepare_arm_home guard-read-only)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm-ran\n' >> "${FM_ARM_LOG:?}"
+SH
+  cat > "$dir/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'guard-ran\n' >> "${FM_GUARD_LOG:?}"
+printf 'guard verdict: no live watcher\n' >&2
+exit 2
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh" "$dir/bin/fm-turnend-guard.sh"
+  out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
+    FM_ARM_LOG="$TMP_ROOT/guard-read-only-arm.log" FM_GUARD_LOG="$TMP_ROOT/guard-read-only-guard.log" \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const arm = await import(pathToFileURL(process.env.PLUGIN).href);
+const guard = await import(pathToFileURL(process.env.TURNEND).href);
+const prompts = [];
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      prompts.push(request.body.parts[0].text);
+    },
+  },
+};
+await arm.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+const guardHooks = await guard.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999999\n");
+await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-read-only" } } });
+await new Promise((settle) => setTimeout(settle, 200));
+if (existsSync(process.env.FM_ARM_LOG)) {
+  console.error("a session that does not own the lock spawned an arm child");
+  process.exit(1);
+}
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("the shell guard did not run after the coordinator declined (read-only)");
+  process.exit(1);
+}
+if (prompts.length !== 1 || !prompts[0].includes("TURN WOULD END BLIND") || !prompts[0].includes("guard verdict")) {
+  console.error(`guard verdict was not delivered once: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "the shell guard must run and deliver its verdict when the coordinator declines"
+  [ -z "$out" ] || fail "guard read-only fallback test printed output: $out"
+  pass "turnend-guard: a coordinator that declines (read-only) hands the idle to the shell guard"
+}
+
+# Benign empty cycles are counted apart from failures: after the idle budget has
+# been spent on empties, a real FAILED close must still get its full bounded
+# retry before anything is surfaced.
+test_idle_cycles_do_not_consume_the_failure_retry_budget() {
+  local dir out status
+  dir=$(prepare_arm_home retry-budget)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+[ "$count" -le 2 ] && exit 0
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/retry-budget-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      prompts.push(request.body.parts[0].text);
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-retry-budget" } } });
+for (let i = 0; i < 200 && prompts.length === 0; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+await new Promise((settle) => setTimeout(settle, 100));
+const rows = existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+  : [];
+if (rows.length !== 5) {
+  console.error(`expected 2 idle cycles plus 1 failure and 2 failure retries, got ${rows.length} arm cycles`);
+  process.exit(1);
+}
+if (prompts.length !== 1 || !prompts[0].includes("after 2 retries")) {
+  console.error(`failure exhaustion was not surfaced exactly once: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "empty cycles must not spend the failure retry budget"
+  [ -z "$out" ] || fail "retry-budget test printed output: $out"
+  pass "watch-arm: benign idle cycles leave the failure retry budget intact"
+}
+
 test_crewmate_idle_stays_silent() {
   local base dir out status
   base="$TMP_ROOT/crewmate-idle-base"
@@ -741,4 +912,7 @@ test_healthy_close_does_not_prompt
 test_empty_cycle_close_does_not_prompt
 test_actionable_close_still_prompts
 test_turnend_guard_stays_silent_when_watch_arm_loaded
+test_procevent_source_home_arms_without_task_meta
+test_turnend_guard_runs_when_coordinator_declines_read_only
+test_idle_cycles_do_not_consume_the_failure_retry_budget
 test_crewmate_idle_stays_silent

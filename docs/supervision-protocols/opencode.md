@@ -9,7 +9,9 @@ When this session owns supervision and away mode is not active:
 5. Ordinary wake: do not ask the model to re-arm because continuity is plugin-owned.
    An empty cycle or another healthy watcher is attach/idle, not a model repair turn.
 6. A failed child close (a real `watcher: FAILED` line, a signal, or a nonzero arm exit) enters bounded exponential retry, and an exhausted retry or lost session lock is surfaced as a watcher failure instead of disappearing.
-   An empty or healthy close re-arms through the same bounded retry silently; when that bound is exhausted the plugin stops without a model turn and arms again on the next `session.idle`.
+   An empty or healthy close re-arms through its own bounded silent retry; when that bound is exhausted the plugin stops without a model turn and arms again on the next `session.idle`.
+   Idle cycles and failed closes are counted separately, and a completed cycle resets the failure count, so benign empty cycles never spend the retry budget a real failure needs.
+   The plugin arms on the same need as `bin/fm-supervision-lib.sh` (task metadata, an X-mode relay poll, or a registered process-event source); when it declines because it sees no need or this session does not own the lock, the turn-end guard plugin still runs the shell guard as the backstop.
 7. Failure or missing cycle only: if the plugin reports a watcher failure, drain queued wakes, inspect the failure text, and use `bin/fm-watch-arm.sh` manually only as a short recovery probe.
 8. Never use shell `&` for watcher supervision.
    The arm mechanism above is plugin-owned, not a model tool call, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the PreToolUse seatbelt (`.opencode/plugins/fm-primary-pretool-check.js`, `bin/fm-arm-pretool-check.sh`).
