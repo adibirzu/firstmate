@@ -17,7 +17,6 @@ const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
 const ARM_ESTABLISHED_MS = positiveInteger("FM_WATCH_ARM_ESTABLISHED_MS", 60000);
 const IDLE_EXHAUSTION_KEY = "opencode-arm:idle-exhausted";
-const BENIGN_LAUNCH_STATUSES = ["not-needed", "read-only", "skipped", "not-primary"];
 
 let child = null;
 let retryTimer = null;
@@ -227,10 +226,9 @@ function replenishRetryBudgets() {
 
 function noteIdleExhaustion(paths, reason) {
   if (idleExhaustionNoticed) return;
-  idleExhaustionNoticed = true;
   const payload = `check: OpenCode watch-arm stopped silent re-arming after ${REARM_RETRY_LIMIT} empty watcher cycles; supervision is off until the next arm - ${reason}`;
   try {
-    spawnSync(
+    const result = spawnSync(
       "bash",
       [
         "-c",
@@ -245,6 +243,10 @@ function noteIdleExhaustion(paths, reason) {
         env: { ...process.env, FM_HOME: paths.home, FM_STATE_OVERRIDE: paths.state, FM_ROOT_OVERRIDE: paths.root },
       },
     );
+    // Only a durably recorded notice retires the attempt; a failed append stays
+    // retryable so the record is not lost silently. Cross-process dedupe is the
+    // in-bash queued-key guard above, never this flag.
+    if (result.status === 0) idleExhaustionNoticed = true;
   } catch {
     // The durable queue is best-effort here; exhaustion never spends a model turn.
   }
@@ -324,12 +326,19 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
   }
   const timer = setTimeout(() => {
     if (retryTimer === timer) retryTimer = null;
-    void ensureArm(paths, sessionID, client, predecessorArmPid).then((status) => {
-      // A launched arm that then fails is owned by its own close handler, which
-      // schedules the next bounded retry or surfaces exhaustion exactly once.
-      if (["armed", "starting", "wake", "failed", "idle"].includes(status)) return;
-      if (silent || BENIGN_LAUNCH_STATUSES.includes(status)) return;
-      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not launch a continuity retry (${status})`);
+    // No relaunch outcome is surfaced here: a live arm - however slowly it
+    // confirms readiness - is owned by its own close handler, a pending retry by
+    // its timer, and a coordinator decline means this home no longer needs or
+    // owns supervision from this session. Only a relaunch that could not run at
+    // all leaves nobody holding continuity.
+    void ensureArm(paths, sessionID, client, predecessorArmPid).catch((error) => {
+      if (silent) return;
+      surfaceFailure(
+        paths,
+        client,
+        sessionID,
+        `watcher: FAILED - OpenCode could not launch a continuity retry\n${String(error?.message ?? error)}`,
+      );
     });
   }, retryDelay(attempt));
   timer.unref();
@@ -402,8 +411,8 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
       classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "idle" : "failed",
     );
     const predecessor = String(armChild.pid ?? "");
+    if (established) replenishRetryBudgets();
     if (classification.kind === "idle") {
-      if (established) replenishRetryBudgets();
       if (restorationInFlight && !acceptedBeforeClose) return;
       void scheduleRetry(paths, sessionID, client, classification.message, predecessor, true);
       return;
