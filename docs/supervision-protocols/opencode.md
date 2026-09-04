@@ -14,7 +14,8 @@ When this session owns supervision and away mode is not active:
    Idle cycles and failed closes are counted separately, and only a completed cycle resets the failure count, so empty closes between real failures cannot hide the failure.
    An exhausted failure budget is surfaced once and not again until it is replenished, so a home that can never establish supervision keeps re-arming on `session.idle` without spending a model turn per idle.
    Only a delivered notice retires that attempt; an undelivered one leaves the budget retryable rather than leaving the home silent.
-   The budget is replenished by a completed cycle and by a replaced session (`/new`, `/resume`), because a fresh context can no longer see the notice the previous session received.
+   Only a completed cycle replenishes that budget; a different `sessionID` never does, so two sessions alternating idles on one home cannot ping-pong a fresh budget between them.
+   The notice itself is tracked per session, so a replaced session (`/new`, `/resume`) - a fresh context that can no longer see what the previous one received - still surfaces it once on an already-spent budget.
    When the silent bound is exhausted the plugin stops without a model turn and appends one durable `check` record (`opencode-arm:idle-exhausted`) to `state/.wake-queue`; it is not repeated while unacknowledged, and `bin/fm-wake-drain.sh` is the only surfacing owner of that record - no arm cycle presents it.
    A retry that relaunches into a home that no longer needs a watcher, or that this session no longer owns, is benign and never prompts.
    The plugin arms on the same need as `bin/fm-supervision-lib.sh` (task metadata, an X-mode relay poll, or a registered process-event source); when it declines because it sees no need or this session does not own the lock, the turn-end guard plugin still runs the shell guard as the backstop.
