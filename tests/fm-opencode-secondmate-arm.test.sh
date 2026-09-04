@@ -457,7 +457,8 @@ EOF
 # actionable wake keep their kinds.
 run_close_classifier() {
   local stdout=$1 stderr=$2 code=$3 signal=$4 expected=$5 out status
-  out=$(CLOSE="$CLOSE" EXPECTED="$expected" CODE="$code" SIGNAL="$signal" \
+  out=$(CLOSE="$CLOSE" FM_CLOSE_STDOUT="$stdout" FM_CLOSE_STDERR="$stderr" \
+    EXPECTED="$expected" CODE="$code" SIGNAL="$signal" \
     "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.CLOSE));
@@ -475,46 +476,37 @@ if (result.kind !== process.env.EXPECTED) {
 EOF
 )
   status=$?
-  # Pass stdout/stderr through env after the heredoc is written: node reads
-  # process.env, so set them on the same invocation via the caller exports.
   printf '%s\n' "$out" >&2
   return "$status"
 }
 
 test_empty_and_healthy_closes_are_idle_not_failure() {
   local status
-  FM_CLOSE_STDOUT='watcher: healthy pid=1 (beacon 0s)' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 0 "" idle
+  run_close_classifier 'watcher: healthy pid=1 (beacon 0s)' '' 0 '' idle
   status=$?
   expect_code 0 "$status" "watcher: healthy must classify as idle, not failure"
 
-  FM_CLOSE_STDOUT='' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 0 "" idle
+  run_close_classifier '' '' 0 '' idle
   status=$?
   expect_code 0 "$status" "an empty clean close must classify as idle, not failure"
 
-  FM_CLOSE_STDOUT='watcher: FAILED - cycle ended without an actionable reason' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 1 "" idle
+  run_close_classifier 'watcher: FAILED - cycle ended without an actionable reason' '' 1 '' idle
   status=$?
   expect_code 0 "$status" "the shell unexplained-cycle FAILED line must classify as idle"
 
-  FM_CLOSE_STDOUT='watcher: FAILED - watcher cycle exited 1 without an actionable reason' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 1 "" failure
+  run_close_classifier 'watcher: FAILED - watcher cycle exited 1 without an actionable reason' '' 1 '' failure
   status=$?
   expect_code 0 "$status" "a nonzero watcher exit reported by the arm must stay failure"
 
-  FM_CLOSE_STDOUT='watcher: attached pid=9 (beacon 0s)' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 0 "" idle
+  run_close_classifier 'watcher: attached pid=9 (beacon 0s)' '' 0 '' idle
   status=$?
   expect_code 0 "$status" "an attached clean close must classify as idle"
 
-  FM_CLOSE_STDOUT='signal: demo.status' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 0 "" actionable
+  run_close_classifier 'signal: demo.status' '' 0 '' actionable
   status=$?
   expect_code 0 "$status" "an actionable wake line must stay actionable"
 
-  FM_CLOSE_STDOUT='watcher: FAILED - no live watcher with a fresh beacon' FM_CLOSE_STDERR='' \
-    run_close_classifier "" "" 1 "" failure
+  run_close_classifier 'watcher: FAILED - no live watcher with a fresh beacon' '' 1 '' failure
   status=$?
   expect_code 0 "$status" "a real no-watcher FAILED line must stay failure"
 
@@ -833,6 +825,76 @@ EOF
   pass "watch-arm: benign idle cycles leave the failure retry budget intact"
 }
 
+# During actionable-wake restoration the successor arm can itself close on the
+# shell's empty-cycle line. A closed arm is not a ready successor: restoration
+# must retry silently and leave a live arm behind the delivered wake instead of
+# reporting continuity intact over a home with no watcher.
+test_restoration_retries_an_idle_successor_close() {
+  local dir out status
+  dir=$(prepare_arm_home restore-idle)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+case "$count" in
+  1) printf 'signal: demo.status\n'; exit 0 ;;
+  2) printf 'watcher: FAILED - cycle ended without an actionable reason\n'; exit 1 ;;
+esac
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/restore-idle-arm.log" \
+    FM_STOP_FILE="$TMP_ROOT/restore-idle.stop" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      prompts.push(request.body.parts[0].text);
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-restore-idle" } } });
+for (let i = 0; i < 300 && prompts.length === 0; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+const rows = existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+  : [];
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+if (prompts.length !== 1) {
+  console.error(`expected exactly one delivered wake, got ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+if (rows.length !== 3) {
+  console.error(`the idle successor close was accepted as a ready successor: ${rows.length} arm cycles ran`);
+  process.exit(1);
+}
+if (prompts[0].includes("FAILED")) {
+  console.error(`a silently restored successor surfaced a failure: ${prompts[0]}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "restoration must retry an idle successor close silently and deliver the wake over a live arm"
+  [ -z "$out" ] || fail "restoration idle-close test printed output: $out"
+  pass "watch-arm: an idle successor close during restoration is retried silently, not accepted as armed"
+}
+
 test_crewmate_idle_stays_silent() {
   local base dir out status
   base="$TMP_ROOT/crewmate-idle-base"
@@ -915,4 +977,5 @@ test_turnend_guard_stays_silent_when_watch_arm_loaded
 test_procevent_source_home_arms_without_task_meta
 test_turnend_guard_runs_when_coordinator_declines_read_only
 test_idle_cycles_do_not_consume_the_failure_retry_budget
+test_restoration_retries_an_idle_successor_close
 test_crewmate_idle_stays_silent
