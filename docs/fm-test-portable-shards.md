@@ -64,10 +64,13 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The 139 current hints are the slowest measurements retained from the `fm-test-timing-portable-serial-*` artifacts of three green CI runs on 2026-09-01, [33558082172](https://github.com/kunchenguid/firstmate/actions/runs/33558082172), [33523597838](https://github.com/kunchenguid/firstmate/actions/runs/33523597838), and [33463326167](https://github.com/kunchenguid/firstmate/actions/runs/33463326167).
-Those per-script maxima total 3825047 ms of conservative balance weight.
-Taking the slowest of several runs rather than a single run keeps the balance honest on a slow runner: individual scripts varied by up to 20% between those three runs.
-A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default; the current 140-script lane has one such script, bringing its assignment weight to 3852047 ms.
+The 172 current hints cover every script in the lane.
+The 171 measured from CI are the slowest values retained from the `fm-test-timing-portable-serial-*` artifacts of six green runs: three on `kunchenguid/firstmate` main on 2026-09-04, [33862577219](https://github.com/kunchenguid/firstmate/actions/runs/33862577219), [33846795055](https://github.com/kunchenguid/firstmate/actions/runs/33846795055), and [33845785209](https://github.com/kunchenguid/firstmate/actions/runs/33845785209), plus three on `adibirzu/firstmate` main on 2026-08-30 and 2026-08-31, [33366802354](https://github.com/adibirzu/firstmate/actions/runs/33366802354), [33358754618](https://github.com/adibirzu/firstmate/actions/runs/33358754618), and [33334002105](https://github.com/adibirzu/firstmate/actions/runs/33334002105).
+Both sources are needed because the fork-only suites - federation, harness adapters, quota, and OpenCode - never run on upstream's CI and so appear only in the fork's artifacts.
+The one remaining hint, `tests/fm-opencode-secondmate-arm.test.sh` at 23074 ms, is a local measurement: that suite grew from 459 to 1625 lines on this branch, so its 1016 ms fork-CI value predates the growth by more than twenty times and the next green run's artifact should replace it.
+Those per-script maxima total 4815614 ms of conservative balance weight.
+Taking the slowest of several runs rather than a single run keeps the balance honest on a slow runner: the shared scripts' maxima run about 15% above any single one of those runs.
+A script with no hint would get the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default; the current 172-script lane has none, so its assignment weight is the measured 4815614 ms.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.
 That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scripts and from ~42 to ~63 minutes, 17 scripts were still unmeasured, and several hints were low by 2-5x, so shard 3 of 4 ran 17-20 minutes against its 20-minute cap while shard 1 ran 11.5 minutes and run [33574154856](https://github.com/kunchenguid/firstmate/actions/runs/33574154856) timed out seconds after a passing test.
@@ -76,23 +79,27 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of5` | 27 | 770410 ms (~12.84 min) |
-| `portable-serial-2of5` | 29 | 770416 ms (~12.84 min) |
-| `portable-serial-3of5` | 30 | 770417 ms (~12.84 min) |
-| `portable-serial-4of5` | 26 | 770405 ms (~12.84 min) |
-| `portable-serial-5of5` | 28 | 770399 ms (~12.84 min) |
-| imbalance | | 18 ms |
+| `portable-serial-1of5` | 34 | 963132 ms (~16.05 min) |
+| `portable-serial-2of5` | 34 | 963113 ms (~16.05 min) |
+| `portable-serial-3of5` | 34 | 963113 ms (~16.05 min) |
+| `portable-serial-4of5` | 35 | 963128 ms (~16.05 min) |
+| `portable-serial-5of5` | 35 | 963128 ms (~16.05 min) |
+| imbalance | | 19 ms |
 
-The current table is generated from the runner's retained maxima plus its default for the one unhinted script.
-The last complete replay against the three source runs put the then-current partition's worst shard at 12.54 min, 63% of the 20-minute job cap.
+The current table is generated from the runner's retained maxima, with no unhinted script left to fall back on the default.
+Replaying this partition against each of the three upstream source runs puts its worst shard at 14.91, 15.36, and 15.41 min, so 77% of the 20-minute job cap at the worst.
+That margin is thinner than the 63% this lane carried before the upstream merge, and the lane grows by scripts rather than by minutes per script, so the next few additions are the ones to watch for a shard-count increase.
 
-The single longest script, `tests/fm-watch-triage.test.sh` at 262626 ms, is the floor for any shard count.
+The single longest script, `tests/fm-watch-triage.test.sh` at 358232 ms, is the floor for any shard count.
 
 Refresh the hints by downloading the per-shard timing artifacts from several green CI runs, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`, and updating the table above:
 
 ```sh
-for run in <run-id> <run-id> <run-id>; do
+for run in <upstream-run-id> <upstream-run-id> <upstream-run-id>; do
   gh run download "$run" -R kunchenguid/firstmate --pattern 'fm-test-timing-portable-serial-*' -D "/tmp/fm-serial/$run"
+done
+for run in <fork-run-id> <fork-run-id> <fork-run-id>; do
+  gh run download "$run" -R adibirzu/firstmate --pattern 'fm-test-timing-portable-serial-*' -D "/tmp/fm-serial/$run"
 done
 jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*/*.json \
   | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
@@ -125,7 +132,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-5 | job `timeout-minutes: 20` | Each balanced shard carries about 12.84 minutes of conservative assignment weight, leaving roughly 1.6x hang-tripwire margin for job setup and runner-speed spread. |
+| portable serial 1-5 | job `timeout-minutes: 20` | Each balanced shard carries about 16.05 minutes of conservative assignment weight, leaving roughly 1.25x hang-tripwire margin for job setup and runner-speed spread. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
