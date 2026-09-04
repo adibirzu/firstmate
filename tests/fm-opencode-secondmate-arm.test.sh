@@ -1111,6 +1111,65 @@ EOF
   pass "watch-arm: a failure retry that finds no remaining need does not prompt"
 }
 
+# A relaunched arm that is slow to confirm readiness is still a successful
+# launch: the readiness budget can expire while the child is alive and about to
+# print `watcher: started`. Reporting that as a launch failure spends a model
+# turn on a home that is in fact supervised.
+test_slow_confirming_retry_launch_does_not_prompt() {
+  local dir out status
+  dir=$(prepare_arm_home slow-retry)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$count" = 1 ]; then
+  printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+  exit 1
+fi
+sleep 0.3
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+sleep 0.3
+exit 0
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/slow-retry-arm.log" \
+    FM_OPENCODE_ARM_READY_TIMEOUT_MS=50 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = { session: { promptAsync: async (request) => { prompts.push(request.body.parts[0].text); } } };
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const rows = () =>
+  existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-slow-retry" } } });
+for (let i = 0; i < 600 && rows() < 2; i += 1) {
+  await new Promise((settle) => setTimeout(settle, 10));
+}
+if (rows() < 2) {
+  console.error(`the failed cycle never produced a retry launch, got ${rows()} cycles`);
+  process.exit(1);
+}
+// Past the readiness budget of the slow retry: this is where a launch mislabeled
+// as a failure would have prompted.
+await new Promise((settle) => setTimeout(settle, 250));
+if (prompts.length !== 0) {
+  console.error(`a slow-confirming retry launch spent a model turn: ${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a retry launch that confirms readiness late must not prompt: $out"
+  [ -z "$out" ] || fail "slow-retry test printed output: $out"
+  pass "watch-arm: a slow-confirming retry launch is a success, not a watcher failure"
+}
+
 test_crewmate_idle_stays_silent() {
   local base dir out status
   base="$TMP_ROOT/crewmate-idle-base"
@@ -1198,4 +1257,5 @@ test_established_cycles_replenish_the_idle_budget
 test_idle_exhaustion_queues_one_durable_check_without_a_prompt
 test_alternating_failure_and_empty_closes_still_surface
 test_retry_launch_into_a_no_longer_needed_home_is_silent
+test_slow_confirming_retry_launch_does_not_prompt
 test_crewmate_idle_stays_silent
