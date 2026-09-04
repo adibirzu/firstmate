@@ -48,7 +48,9 @@
 # Usage: fm-startup-network.sh start --locked <0|1> --harvest-pid <pid>
 #          Launch the detached worker and return immediately. Single-flight: a
 #          running worker is reused only when its phases cover this request and,
-#          for locked work, it belongs to the same lock owner. A probe-only
+#          for locked work, it was launched under the same lock identity - pid,
+#          kind, and session together, never the pid alone, so a same-pid
+#          successor session gets its own worker. A probe-only
 #          worker therefore cannot satisfy a later locked request; the later
 #          request gets a distinct generation and runs the locked phases. A new
 #          owner also gets a distinct generation. --locked 1 asks

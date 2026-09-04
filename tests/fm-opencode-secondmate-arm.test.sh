@@ -1201,6 +1201,106 @@ EOF
   pass "watch-arm: an exhaustion notice that was not delivered does not retire the attempt"
 }
 
+# The exhaustion notice is delivered fire-and-forget while the plugin keeps
+# arming, so a completed cycle can replenish the budget while an earlier
+# notice is still in flight. That late settle belongs to the budget it was
+# spent from: if it latches the current budget's marker instead, the current
+# budget's own delivery can fail unnoticed and the home is left permanently
+# unsupervised with nothing delivered anywhere.
+test_late_settle_cannot_latch_a_replenished_budgets_notice() {
+  local dir out status
+  dir=$(prepare_arm_home late-settle)
+  cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+if [ "$(cat "${FM_ARM_MODE:?}" 2>/dev/null)" = established ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  sleep 0.15
+  exit 0
+fi
+printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
+exit 1
+SH
+  chmod +x "$dir/bin/fm-watch-arm.sh"
+  printf 'fail\n' > "$TMP_ROOT/late-settle-mode"
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/late-settle-arm.log" \
+    FM_ARM_MODE="$TMP_ROOT/late-settle-mode" FM_WATCH_ARM_ESTABLISHED_MS=50 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+// Exhaustion notices are held open so the driver decides the order in which a
+// spent budget's delivery and the current budget's delivery settle.
+const notices = [];
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      const text = request.body.parts[0].text;
+      if (!text.includes("could not restore watcher continuity after")) return;
+      await new Promise((resolve, reject) => notices.push({ resolve, reject }));
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const cycles = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+const until = async (ready, budgetMs) => {
+  for (let i = 0; i < budgetMs / 10 && !ready(); i += 1) await settle(10);
+  return ready();
+};
+
+// 1. The failing home spends its budget; its notice is still in flight.
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-late" } } });
+if (!(await until(() => notices.length === 1, 6000))) {
+  console.error("the first exhaustion never reached delivery");
+  process.exit(1);
+}
+
+// 2. A completed cycle replenishes the budget underneath that in-flight notice.
+const beforeEstablished = cycles();
+writeFileSync(process.env.FM_ARM_MODE, "established\n");
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-late" } } });
+if (!(await until(() => cycles() >= beforeEstablished + 2, 8000))) {
+  console.error("no established cycle completed, so the budget was never replenished");
+  process.exit(1);
+}
+
+// 3. The replenished budget is spent in turn and starts its own delivery.
+writeFileSync(process.env.FM_ARM_MODE, "fail\n");
+if (!(await until(() => notices.length === 2, 12000))) {
+  console.error("the replenished budget never spent its own exhaustion notice");
+  process.exit(1);
+}
+
+// 4. The spent budget's delivery finally succeeds, then the current budget's
+//    own delivery fails - the ordering that lets a stale settle stand in for a
+//    notice this budget never delivered.
+notices[0].resolve();
+await settle(200);
+notices[1].reject(new Error("session gone"));
+await settle(200);
+
+// 5. Nothing was delivered on this budget, so the next failure close must try
+//    again rather than leaving the home silent.
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-late" } } });
+if (!(await until(() => notices.length === 3, 8000))) {
+  console.error("a late settle from the spent budget retired the current budget's notice: the home is silent with nothing delivered");
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "a late settle from a spent budget must not retire the current budget's notice"
+  [ -z "$out" ] || fail "late-settle test printed output: $out"
+  pass "watch-arm: a notice settling after a replenish cannot silence the current budget"
+}
+
 # The failure budget is module state and outlives a session replacement, but a
 # replaced session (/new, /resume) is a fresh context that cannot see the notice
 # the previous one received, so it surfaces once on its own account. The budget
@@ -1517,6 +1617,7 @@ test_idle_exhaustion_queues_one_durable_check_without_a_prompt
 test_alternating_failure_and_empty_closes_still_surface
 test_exhausted_failure_budget_surfaces_once_across_idles
 test_undelivered_exhaustion_notice_stays_retryable
+test_late_settle_cannot_latch_a_replenished_budgets_notice
 test_replaced_session_gets_its_own_failure_budget
 test_alternating_sessions_do_not_repay_the_exhaustion_notice
 test_retry_launch_into_a_no_longer_needed_home_is_silent
