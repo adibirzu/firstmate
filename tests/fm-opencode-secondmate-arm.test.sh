@@ -494,6 +494,10 @@ test_empty_and_healthy_closes_are_idle_not_failure() {
   status=$?
   expect_code 0 "$status" "the shell unexplained-cycle FAILED line must classify as idle"
 
+  run_close_classifier 'watcher: FAILED - cycle reason could not be read' '' 1 '' failure
+  status=$?
+  expect_code 0 "$status" "an unreadable delivery ledger must stay failure, not a benign empty cycle"
+
   run_close_classifier 'watcher: FAILED - watcher cycle exited 1 without an actionable reason' '' 1 '' failure
   status=$?
   expect_code 0 "$status" "a nonzero watcher exit reported by the arm must stay failure"

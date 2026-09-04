@@ -32,6 +32,8 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
+#   watcher: FAILED - cycle reason could not be read     - the terminal-delivery ledger was locked
+#                                                          past its bound, so the close is unresolved
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
@@ -280,6 +282,13 @@ fail_unexplained_cycle() {
   return 1
 }
 
+# The ledger itself was unreadable, so whether the closing watcher published a
+# reason is unknown. That is a persistence failure, not an empty cycle.
+fail_unreadable_cycle_reason() {
+  echo "watcher: FAILED - cycle reason could not be read"
+  return 1
+}
+
 # Close a cycle whose reason line this arm could not read against the bounded
 # terminal-delivery ledger the watcher publishes before releasing its lock.
 close_unobserved_cycle() {
@@ -288,7 +297,7 @@ close_unobserved_cycle() {
   i=0
   while ! fm_lock_try_acquire "$WATCH_DELIVERY_LOCK"; do
     [ "$i" -lt 20 ] || {
-      fail_unexplained_cycle
+      fail_unreadable_cycle_reason
       return 1
     }
     sleep 0.02
