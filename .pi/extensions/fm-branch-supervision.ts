@@ -976,6 +976,8 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
+        const eventId = wakeTaskScope?.rows.join(",") || "";
+        if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         if (!actingAsOwner(toolGeneration)) {
           return {
