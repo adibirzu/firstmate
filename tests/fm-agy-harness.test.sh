@@ -32,6 +32,16 @@ test_agy_launch_template_is_pinned() {
   pass "fm-spawn: agy launch template is the verified argv-seed line"
 }
 
+test_existing_launch_templates_untouched() {
+  grep -Fq "claude --dangerously-skip-permissions --settings" "$SPAWN" \
+    || fail "claude launch template changed"
+  grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
+    || fail "grok launch template changed"
+  grep -Fq '__KIMIBIN__ __MODELFLAG__--auto' "$SPAWN" \
+    || fail "kimi launch template changed"
+  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
+}
+
 test_agy_is_a_known_bare_adapter_name() {
   # Assert an executable case-pattern line, not the usage comment that spells
   # the same allowlist - a comment-only match would keep this fence green after
