@@ -521,6 +521,7 @@ export default function (pi: ExtensionAPI) {
   // during a heartbeat review, which is not scoped by task.
   let wakeTaskScope: { rows: string[]; tasks: Set<string>; taskRows: Record<string, string[]> } | null = null;
   let wakeReportIdentity: string | null = null;
+  let wakeReportCounts = new Map<string, number>();
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -978,7 +979,10 @@ export default function (pi: ExtensionAPI) {
         }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
         const taskRows = wakeTaskScope?.taskRows[task] ?? [];
-        const eventId = wakeReportIdentity ? `${wakeReportIdentity}:${task}:${taskRows.join(",")}` : "";
+        const reportKey = `${task}:${taskRows.join(",")}`;
+        const reportNumber = (wakeReportCounts.get(reportKey) ?? 0) + 1;
+        wakeReportCounts.set(reportKey, reportNumber);
+        const eventId = wakeReportIdentity ? `${wakeReportIdentity}:${reportKey}:${reportNumber}` : "";
         if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         if (!actingAsOwner(toolGeneration)) {
@@ -1246,6 +1250,7 @@ ${context.command}
         wakeReportIdentity = heartbeat
           ? `heartbeat:${scope.eligibleSeqs.join(",")}`
           : `rows:${scope.eligibleSeqs.join(",")}`;
+        wakeReportCounts = new Map();
         try {
           await session.prompt(
             `FIRSTMATE SUPERVISION WAKE: ${message}\n\nHandle this per your operating procedure and finish with fm_branch_report.`,
