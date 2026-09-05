@@ -259,11 +259,10 @@ recover_unpublished_append() { # <task> <verdict> <summary> <wake> <silent>
   [ -s "$STORE" ] || return 1
   row=$(jq -c -s --arg task "$task" --arg verdict "$verdict" \
     --arg summary "$summary" --arg wake "$wake" --argjson silent "$silent" '
-    if length == 0 then empty
-    elif .[-1].task == $task and .[-1].verdict == $verdict
-      and .[-1].summary == $summary and .[-1].wake == $wake
-      and ((.[-1].silent // false) == $silent) then .[-1]
-    else empty end' "$STORE" 2>/dev/null) || return 1
+    map(select(.task == $task and .verdict == $verdict
+      and .summary == $summary and .wake == $wake
+      and ((.silent // false) == $silent)))
+    | if length == 0 then empty else .[0] end' "$STORE" 2>/dev/null) || return 1
   [ -n "$row" ] || return 1
   seq=$(printf '%s\n' "$row" | jq -er '.seq') || return 1
   endpoint=$(printf '%s\n' "$row" | jq -er '.statusEndpoint // 0') || return 1
@@ -477,6 +476,11 @@ case "$CMD" in
       fm_lock_release "$LOCK"
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
       exit 1
+    fi
+    if RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT"); then
+      fm_lock_release "$LOCK"
+      printf '%s\n' "$RECOVERED"
+      exit 0
     fi
     if [ ! -e "$OUTCOME_INDEX_READY" ]; then
       if ! rebuild_outcome_indexes; then
