@@ -239,8 +239,8 @@ fm_pane_is_busy() {  # <target> [harness]
 # fm_tmux_submit_enter_core caller, or a pane already busy before typing) an
 # `unknown` verdict is preserved untouched: busy conversion without the
 # transition evidence could mark an undelivered message delivered.
-fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle]
-  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} i=0 j state busy_state
+fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [confirmation-callback]
+  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} callback=${5:-} i=0 j state busy_state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
@@ -252,6 +252,7 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
           j=0
           while [ "$j" -lt "$retries" ]; do
             if fm_pane_is_busy "$target"; then
+              if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
               printf 'empty'
               return 0
             fi
@@ -262,7 +263,14 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
         printf 'unknown'
         return 0
         ;;
-      *) printf '%s' "$state"; return 0 ;;
+      *)
+        if [ "$state" = empty ] && [ -n "$callback" ] && ! "$callback"; then
+          printf 'confirmation-failed'
+        else
+          printf '%s' "$state"
+        fi
+        return 0
+        ;;
     esac
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || break
@@ -275,7 +283,11 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
   # Busy conversion is owned by fm_composer_queued_enter_verdict.
   busy_state=idle
   fm_pane_is_busy "$target" && busy_state=busy
-  fm_composer_queued_enter_verdict "$state" "$busy_state"
+  if [ "$busy_state" = busy ] && [ -n "$callback" ] && ! "$callback"; then
+    printf 'confirmation-failed'
+  else
+    fm_composer_queued_enter_verdict "$state" "$busy_state"
+  fi
 }
 
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [confirmation-callback]
@@ -288,9 +300,6 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [con
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
   local verdict
-  verdict=$(fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle")
-  if [ -n "$callback" ]; then
-    "$callback" || { printf 'confirmation-failed'; return 0; }
-  fi
+  verdict=$(fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle" "$callback")
   printf '%s' "$verdict"
 }

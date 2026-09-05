@@ -775,7 +775,11 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
     cmux) verdict=$(fm_backend_cmux_send_text_submit "$@") ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; return 1 ;;
   esac
-  printf '%s' "$verdict"
+  if [ -n "$callback" ] && [ "$verdict" = empty ] && ! "$callback"; then
+    printf 'confirmation-failed'
+  else
+    printf '%s' "$verdict"
+  fi
 }
 
 # fm_backend_kill: remove the task's session endpoint (best-effort; a
