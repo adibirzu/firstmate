@@ -599,6 +599,34 @@ test_cursor_failed_catalog_probe_does_not_block_spawn() {
   pass "cursor preserves the requested model when its live catalog is unreachable"
 }
 
+# Crewmate/scout OpenCode overlay: Claude Code compatibility off, skill catalog
+# not widened by OPENCODE_CONFIG_CONTENT. Observed from the typed launch line
+# (fake tmux send-keys payload), never from fm-spawn.sh source bytes.
+OPENCODE_CREW_SKILL_OVERLAY='{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}'
+OPENCODE_SECONDMATE_PERMISSION_OVERLAY='{"permission":{"*":"allow"}}'
+
+assert_opencode_crew_launch_env() {
+  local launch=$1
+  assert_contains "$launch" "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1" \
+    "opencode crew launch missing OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1"
+  assert_contains "$launch" "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1" \
+    "opencode crew launch missing OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1"
+  assert_contains "$launch" "OPENCODE_CONFIG_CONTENT='$OPENCODE_CREW_SKILL_OVERLAY'" \
+    "opencode crew launch missing the skill-allowlist OPENCODE_CONFIG_CONTENT overlay"
+}
+
+assert_opencode_secondmate_launch_env() {
+  local launch=$1
+  assert_contains "$launch" "OPENCODE_CONFIG_CONTENT='$OPENCODE_SECONDMATE_PERMISSION_OVERLAY'" \
+    "opencode secondmate launch lost the previous permission-only overlay"
+  assert_not_contains "$launch" "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT" \
+    "opencode secondmate launch unexpectedly disabled Claude Code prompts"
+  assert_not_contains "$launch" "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS" \
+    "opencode secondmate launch unexpectedly disabled Claude Code skills"
+  assert_not_contains "$launch" "$OPENCODE_CREW_SKILL_OVERLAY" \
+    "opencode secondmate launch picked up the crewmate skill allowlist overlay"
+}
+
 test_opencode_threads_model_and_ignores_effort_axis() {
   local rec id out status launch
   id=profile-opencode-z7
@@ -615,7 +643,47 @@ test_opencode_threads_model_and_ignores_effort_axis() {
   assert_not_contains "$launch" "--effort" "opencode launch must not pass unsupported --effort"
   assert_not_contains "$launch" "--variant" "opencode launch must not pass run-only --variant"
   assert_not_contains "$launch" "--thinking" "opencode launch must not pass pi thinking flag"
+  assert_opencode_crew_launch_env "$launch"
   pass "opencode receives --model and omits the unsupported effort axis"
+}
+
+test_opencode_scout_launch_disables_claude_code_catalog() {
+  local rec id out status launch
+  id=profile-opencode-scout-z7b
+  rec=$(make_spawn_case profile-opencode-scout opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout --model vllm/qwen3.8-flash)
+  status=$?
+  expect_code 0 "$status" "opencode scout spawn should succeed"
+  assert_contains "$out" "spawned $id harness=opencode" "opencode scout spawn did not report opencode"
+  assert_grep "kind=scout" "$HOME_DIR/state/$id.meta" "opencode scout meta missing kind=scout"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "opencode --model 'vllm/qwen3.8-flash' --prompt" \
+    "opencode scout launch did not thread model"
+  assert_opencode_crew_launch_env "$launch"
+  pass "opencode scout launch disables Claude Code compatibility and keeps the skill allowlist"
+}
+
+test_opencode_secondmate_launch_keeps_permission_only_overlay() {
+  local rec id sm out status launch
+  id=profile-opencode-secondmate-z7c
+  rec=$(make_spawn_case profile-opencode-secondmate codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' opencode > "$HOME_DIR/config/secondmate-harness"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  sm=$(cd "$sm" && pwd -P)
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "opencode secondmate spawn should succeed"
+  assert_contains "$out" "spawned $id harness=opencode kind=secondmate" \
+    "opencode secondmate spawn did not report opencode"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "opencode --prompt" "opencode secondmate launch lost --prompt"
+  assert_opencode_secondmate_launch_env "$launch"
+  pass "opencode secondmate launch keeps the previous permission-only overlay"
 }
 
 test_pi_threads_model_and_max_effort() {
@@ -825,6 +893,8 @@ test_cursor_threads_model_workspace_and_omits_effort_axis
 test_cursor_refuses_model_absent_from_live_catalog
 test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_threads_model_and_ignores_effort_axis
+test_opencode_scout_launch_disables_claude_code_catalog
+test_opencode_secondmate_launch_keeps_permission_only_overlay
 test_pi_threads_model_and_max_effort
 test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata

@@ -97,6 +97,105 @@ lab_pid_is_safe() {
   esac
 }
 
+process_environ() {
+  local pid=$1
+  if [ -r "/proc/$pid/environ" ]; then
+    tr '\0' '\n' < "/proc/$pid/environ"
+    return 0
+  fi
+  ps eww -p "$pid" 2>/dev/null || true
+}
+
+# Crewmate-shaped OpenCode env: Claude Code catalog off, skill overlay exact.
+# Observed from opencode's resolved config and a live process environment, not
+# from fm-spawn.sh source bytes. Isolated HOME so the captain's global config
+# cannot mask the overlay.
+run_crewmate_launch_env_regression() {
+  local iso="$LAB/crew-launch-iso"
+  local home="$iso/home"
+  local proj="$iso/proj"
+  local cfg skill_default skill_disabled envdump pid i
+  local overlay='{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}'
+
+  mkdir -p \
+    "$home/.config" "$home/.local/share" \
+    "$home/.claude/skills/crew-probe-claude" \
+    "$home/.agents/skills/crew-probe-agents" \
+    "$proj"
+  printf '# Tiny project\n' > "$proj/AGENTS.md"
+  printf '# LifeOS stand-in\nThis file must not load for a crewmate.\n' > "$home/.claude/CLAUDE.md"
+  printf '%s\n' '---' 'name: crew-probe-claude' 'description: Claude-compat probe skill for catalog tests' '---' '# probe' \
+    > "$home/.claude/skills/crew-probe-claude/SKILL.md"
+  printf '%s\n' '---' 'name: crew-probe-agents' 'description: Agents-dir probe skill for catalog tests' '---' '# probe' \
+    > "$home/.agents/skills/crew-probe-agents/SKILL.md"
+  git -C "$proj" init -q
+  git -C "$proj" add AGENTS.md
+  git -C "$proj" -c user.email=t@t -c user.name=t commit -qm init
+
+  cfg=$(
+    cd "$proj" &&
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+        OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 \
+        OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
+        OPENCODE_CONFIG_CONTENT="$overlay" \
+        opencode debug config
+  ) || fail "opencode debug config failed under the crewmate launch env"
+  printf '%s\n' "$cfg" | jq -e '.permission["*"] == "allow"' >/dev/null \
+    || fail "crewmate OPENCODE_CONFIG_CONTENT lost permission.* allow: $cfg"
+  printf '%s\n' "$cfg" | jq -e '.permission.skill["*"] == "deny"' >/dev/null \
+    || fail "crewmate OPENCODE_CONFIG_CONTENT lost permission.skill.* deny: $cfg"
+  printf '%s\n' "$cfg" | jq -e '.permission.skill["no-mistakes"] == "allow"' >/dev/null \
+    || fail "crewmate OPENCODE_CONFIG_CONTENT lost permission.skill.no-mistakes allow: $cfg"
+
+  skill_default=$(
+    cd "$proj" &&
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+        OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 \
+        opencode debug skill
+  ) || fail "opencode debug skill failed without Claude Code skill disable"
+  printf '%s\n' "$skill_default" | grep -Fq '"name": "crew-probe-claude"' \
+    || fail "isolated HOME did not discover the planted Claude Code skill before disable"
+
+  skill_disabled=$(
+    cd "$proj" &&
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+        OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 \
+        OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
+        OPENCODE_CONFIG_CONTENT="$overlay" \
+        opencode debug skill
+  ) || fail "opencode debug skill failed under the crewmate launch env"
+  printf '%s\n' "$skill_disabled" | grep -Fq '"name": "crew-probe-claude"' \
+    && fail "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 still discovered ~/.claude/skills"
+
+  (
+    cd "$proj" &&
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+        OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_LSP_DOWNLOAD=1 \
+        OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 \
+        OPENCODE_CONFIG_CONTENT="$overlay" \
+        opencode debug wait
+  ) &
+  pid=$!
+  envdump=
+  i=0
+  while [ "$i" -lt 40 ]; do
+    if kill -0 "$pid" 2>/dev/null; then
+      envdump=$(process_environ "$pid")
+      printf '%s\n' "$envdump" | grep -Fq "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1" && break
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  printf '%s\n' "$envdump" | grep -Fq "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1" \
+    || fail "live opencode process missing OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1"
+  printf '%s\n' "$envdump" | grep -Fq "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1" \
+    || fail "live opencode process missing OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1"
+  printf '%s\n' "$envdump" | grep -Fq "OPENCODE_CONFIG_CONTENT=$overlay" \
+    || fail "live opencode process missing the skill-allowlist OPENCODE_CONFIG_CONTENT overlay"
+}
+
 cleanup() {
   local watcher_pid arm_pid
   watcher_pid=$(cat "$HOME_DIR/state/.watch.lock/pid" 2>/dev/null || true)
@@ -292,6 +391,7 @@ run_native_ahoy_regressions() {
 }
 
 mkdir -p "$LAB"
+run_crewmate_launch_env_regression
 run_ahoy_transcript_regressions
 run_native_ahoy_regressions
 git clone -q "$ROOT" "$PROJECT"

@@ -15,7 +15,9 @@ Verified on 2026-06-11 across versions 1.15.7 through 1.17.6, with busy-queue be
 | Effort flag | None for Firstmate's interactive `opencode --prompt` launch verified on 1.17.6; `opencode run` has `--variant`, but that is not this path. |
 | Model discovery | Run `opencode models [provider]` to list available provider/model identifiers. |
 | Trust dialog | None. |
+| Crewmate/scout launch | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1`, and `OPENCODE_CONFIG_CONTENT` with `permission.skill` deny except `no-mistakes`, so a 32K local slot is not filled by `~/.claude/CLAUDE.md` and discovered skill descriptions. Secondmate launches keep the previous permission-only overlay. `../../../bin/fm-spawn.sh` owns the template. |
 
+The GB10 local LLM client contract in `Gb10LocalLlm.md` owns why that 32K slot cannot absorb the Claude Code compatibility catalog.
 OpenCode can auto-upgrade in the background, and the running TUI can exit mid-task.
 That behavior was observed live during an upgrade from 1.15.7 to 1.17.3.
 If the pane shows the exit banner, use the verified resume path above.
