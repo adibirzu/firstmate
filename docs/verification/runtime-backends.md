@@ -224,6 +224,15 @@ A supervised smoke scout completed its brief, all four requested steps, report w
 That smoke did not exercise an OpenRouter-backed worker launch.
 It remains unverified whether a command-scoped `OPENROUTER_API_KEY` reaches a worker through the long-lived backend daemon, which is the same credential-propagation hazard documented for Muse.
 
+Crewmate and scout launches were re-verified on 2026-09-05 at OpenCode 1.18.20 against the GB10 `vllm/qwen3.8-flash` lane (`LiteLLM http://100.85.233.75:4000/v1` returned HTTP 200).
+The previous spawn overlay `OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow"}}` still loaded the Claude Code skill catalog: `opencode debug skill` listed 198 skills (119 under `~/.claude/skills`, 78 under `~/.agents/skills`, 1 built-in) and `opencode run --print-logs --log-level DEBUG` logged `init count=198` plus 124 `duplicate skill name` warnings from `~/.claude/skills`.
+Those 198 skill descriptions alone were about 77,648 characters (about 19k tokens at chars/4), which is already above the 16k budget the 32K slot leaves for work.
+The crewmate overlay `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 OPENCODE_CONFIG_CONTENT={"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}` dropped Claude Code skills: the same debug dump listed 82 skills (0 under `~/.claude/skills`, 81 under `~/.agents/skills`, 1 built-in), the debug log recorded `init count=82` and zero duplicate-skill warnings, and skill-description text fell to about 21,330 characters (about 5.3k tokens at chars/4).
+A tmux-captured TUI under that overlay reached the one-line prompt and `esc interrupt` generating state instead of the Compaction overlay.
+Secondmate OpenCode launches were left on the previous permission-only overlay.
+Refresh: `FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh` (crewmate env regression at the start of that guard) plus the portable spawn launch-line assertions in `tests/fm-spawn-dispatch-profile.test.sh`.
+The GB10 local LLM client contract in `Gb10LocalLlm.md` owns the 32K-slot numbers this overlay is sized for.
+
 ## Composer classification matrix
 
 The shared composer classifier (`bin/fm-composer-lib.sh`, `fm_composer_classify_screen`) owns every composer shape fleet-wide; each backend contributes only a capture and a capability descriptor.

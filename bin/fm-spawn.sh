@@ -1357,7 +1357,23 @@ launch_template() {
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    opencode)
+      # Crewmate and scout launches disable Claude Code prompt and skills
+      # compatibility so a 32K local slot is not filled by ~/.claude/CLAUDE.md
+      # and discovered skill descriptions before any work starts.
+      # OPENCODE_CONFIG_CONTENT is a merge overlay, not a full config:
+      # permission.* allow keeps tools unattended, while permission.skill
+      # deny-except-no-mistakes prevents that overlay from widening the skill
+      # catalog (OpenCode documents deny as hidden from the agent).
+      # Secondmate launches keep the previous permission-only overlay: a
+      # secondmate is a firstmate instance whose own AGENTS.md already exceeds
+      # a 32K slot.
+      if [ "$kind" = secondmate ]; then
+        printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     pi|pi-signed)
       if [ "$kind" = secondmate ]; then
         printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
