@@ -260,8 +260,12 @@ recover_unpublished_append() { # <task> <verdict> <summary> <wake> <silent>
   local task=$1 verdict=$2 summary=$3 wake=$4 silent=$5 event_id=${6:-} row seq endpoint ident
   [ -n "$event_id" ] || return 1
   [ -s "$STORE" ] || return 1
-  row=$(jq -c -s --arg event_id "$event_id" '
-    map(select(.eventId == $event_id))
+  row=$(jq -c -s --arg event_id "$event_id" --arg task "$task" \
+    --arg verdict "$verdict" --arg summary "$summary" --arg wake "$wake" \
+    --argjson silent "$silent" '
+    map(select(.eventId == $event_id and .task == $task and .verdict == $verdict
+      and .summary == $summary and .wake == $wake
+      and ((.silent // false) == $silent)))
     | if length == 0 then empty else .[0] end' "$STORE" 2>/dev/null) || return 1
   [ -n "$row" ] || return 1
   seq=$(printf '%s\n' "$row" | jq -er '.seq') || return 1
