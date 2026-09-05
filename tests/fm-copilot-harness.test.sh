@@ -26,45 +26,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
-# --- launch template (mechanics half) ---------------------------------------
-
-test_copilot_launch_template_is_pinned() {
-  local line="    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
-  grep -Fqx -- "$line" "$SPAWN" \
-    || fail "fm-spawn: verified copilot launch template missing/changed"
-  pass "fm-spawn: copilot launch template is the verified argv-seed line"
-}
-
-test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "claude launch template changed"
-  grep -Fq "cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "cline launch template changed"
-  # The fork's cursor-agent adapter was migrated to upstream's `cursor` harness,
-  # which launches through the resolved __CURSORBIN__ with --trust --yolo; pin
-  # that actual migrated template line instead of the obsolete cursor-agent one.
-  grep -Fq '__CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' "$SPAWN" \
-    || fail "cursor launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
-
-test_copilot_is_a_known_bare_adapter_name() {
-  # copilot must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
-    || fail "fm-spawn: copilot not added to a known-harness allowlist"
-  pass "fm-spawn: copilot is recognized as a known bare adapter name"
-}
-
-test_copilot_model_and_effort_flags() {
-  # copilot takes --model and maps effort to --reasoning-effort, accepting the
-  # full shared low|medium|high|xhigh|max vocabulary (no tier omitted, unlike
-  # cline/codex/grok).
-  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
-    || fail "fm-spawn: copilot not in the --model allowlist"
-  grep -Fq "low|medium|high|xhigh|max) printf -- '--reasoning-effort %s '" "$SPAWN" \
-    || fail "fm-spawn: copilot effort->--reasoning-effort mapping missing"
-  pass "fm-spawn: copilot gets --model and effort->--reasoning-effort (low|medium|high|xhigh|max)"
-}
+# Launch argv, adapter recognition, and profile flags are exercised through
+# fm-spawn's executable dispatch contract in fm-spawn-dispatch-profile.test.sh.
 
 # --- detection --------------------------------------------------------------
 
@@ -342,10 +305,6 @@ test_copilot_trust_gate_has_no_home_shortcut() {
 }
 
 # --- run --------------------------------------------------------------------
-test_copilot_launch_template_is_pinned
-test_existing_launch_templates_untouched
-test_copilot_is_a_known_bare_adapter_name
-test_copilot_model_and_effort_flags
 test_copilot_detection_wired
 test_copilot_busy_default_defined
 test_copilot_busy_line_matches

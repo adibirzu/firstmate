@@ -34,9 +34,11 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 
 The primary integration was verified on 2026-07-08 with OpenCode 1.17.6.
 `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
-Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `../../../bin/fm-turnend-guard.sh` returns 2.
-The follow-up was verified in the interactive TUI.
-`opencode run` can exit before displaying a queued follow-up, so the adapter steps aside in headless mode.
+Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive.
+When the companion `.opencode/plugins/fm-primary-watch-arm.js` is loaded and acts on the home, it owns the idle path and its armed, wake, idle, empty-cycle, healthy-watcher, retrying, and not-primary outcomes do not invoke the shell guard or spend a model turn.
+A genuine failed arm result still reaches the shell guard and its bounded `client.session.promptAsync` fail-safe when the guard returns 2.
+When the coordinator declines to arm because there is no supervision need or this session does not own the lock, or when it is not loaded, the turn-end plugin uses the shell guard and prompts only for that guard failure.
+The headless `opencode run` path remains fail-open because it can exit before displaying a queued follow-up.
 
 The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher supervision, wakes it with `client.session.promptAsync`, and coordinates with the guard before a blind-turn follow-up.
 The PreToolUse-equivalent watcher-arm seatbelt blocks by throwing from `tool.execute.before`.

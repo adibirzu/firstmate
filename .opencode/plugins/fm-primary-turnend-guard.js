@@ -49,9 +49,17 @@ function runGuard(root) {
 
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
-  if (!coordinator?.ensureArmed) return false;
+  if (!coordinator?.ensureArmed) return "guard";
+  // Watch-arm owns continuity whenever it acts on the home, including
+  // not-primary crewmate/scout worktrees and empty/healthy cycles. Falling
+  // through to a guard LLM turn on those statuses is what spent a model call on
+  // every idle. When the coordinator declines to arm - it sees no supervision
+  // need, or this session does not own the lock - the shell guard is the owner
+  // of the supervision-need predicate and decides on its own evidence.
   const status = await coordinator.ensureArmed(sessionID, client);
-  return status === "armed" || status === "wake" || status === "failed";
+  return ["retrying", "existing", "not-needed", "healthy", "armed", "not-primary"].includes(status)
+    ? "silent"
+    : "guard";
 }
 
 export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => {
@@ -69,7 +77,8 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
 
-      if (await letWatchArmRun(sessionID, client)) return;
+      const watchArmDecision = await letWatchArmRun(sessionID, client);
+      if (watchArmDecision !== "guard") return;
 
       const result = await runGuard(root);
       if (result.code !== 2) return;

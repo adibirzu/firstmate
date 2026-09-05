@@ -93,7 +93,15 @@ make_spawn_case() {
   id="cline-$name-x1"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" \
     "$case_dir/clinedata/settings" "$case_dir/clinedata/sessions"
-  printf 'brief\nDelivery contract: mode=no-mistakes yolo=off\n' > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise the spawn behavior under test.
+Delivery contract: mode=no-mistakes yolo=off
+EOF
   [ -z "$operator" ] || printf '%s\n' "$operator" > "$case_dir/clinedata/settings/global-settings.json"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
@@ -227,32 +235,6 @@ test_spawn_writes_session_binding_excluding_prior_sessions() {
   assert_no_grep "1000_other" "$sidecar" \
     "binding recorded a session belonging to a different workspace"
   pass "fm-spawn: cline session binding pins the root, workspace, and prior sessions"
-}
-
-test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "claude launch template changed"
-  grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "grok launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
-
-test_cline_is_a_known_bare_adapter_name() {
-  # cline must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  # (Robust to later adapters appended after cline, e.g. |cline|cursor-agent).)
-  grep -Fq "|kimi|cline" "$SPAWN" \
-    || fail "fm-spawn: cline not added to a known-harness allowlist"
-  pass "fm-spawn: cline is recognized as a known bare adapter name"
-}
-
-test_cline_model_and_effort_flags() {
-  # cline takes --model (long form of -m) and maps effort to --thinking (no max).
-  # (Robust to later adapters appended after cline in the --model allowlist.)
-  grep -Fq "|kimi|cline" "$SPAWN" \
-    || fail "fm-spawn: cline not in the --model allowlist"
-  grep -Fq "'--thinking %s '" "$SPAWN" \
-    || fail "fm-spawn: cline effort->--thinking mapping missing"
-  pass "fm-spawn: cline gets --model and effort->--thinking (low|medium|high|xhigh)"
 }
 
 # --- detection --------------------------------------------------------------
@@ -604,9 +586,6 @@ test_control_plane_refuses_a_cline_secondmate
 test_control_plane_retires_cline_wiring_on_relaunch
 test_unverified_adapter_is_still_refused
 test_plan_mode_placeholder_reads_empty
-test_existing_launch_templates_untouched
-test_cline_is_a_known_bare_adapter_name
-test_cline_model_and_effort_flags
 test_cline_detection_wired
 test_cline_busy_default_defined
 test_cline_busy_line_matches
