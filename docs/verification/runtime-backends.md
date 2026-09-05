@@ -987,9 +987,9 @@ This row is a delivery guard for submit acknowledgement only; recorded worker st
 
 ### End-to-end
 
-A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux` on a real cursor worker and driven to completion:
+A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux` on a real cursor worker and driven to completion.
 
-1. the launch delivered its brief positionally and the agent executed it;
+1. the bare launch started the TUI, then the backend submit path delivered its encoded brief and the agent executed it;
 2. `state/<id>.cursor-session` was written with the task worktree;
 3. the transcript fold read `busy` mid-turn and `idle` after it;
 4. `bin/fm-send.sh` delivered a steer through the then-current typed path and exited 0;
@@ -1019,9 +1019,9 @@ Measured as an A/B on the same live pane, the pre-fix classifier returned `pendi
 The idle fix alone did not confirm typed delivery, because the composer branch reads the mid-turn row instead.
 With the rendered-footer transition in place, a typed-plane `bin/fm-send.sh` invocation exited 0 and the steer executed in the pane; the same send previously exited 1 with `delivery unconfirmed; verdict=pending` on a message that had actually landed.
 
-The rest of the lifecycle was driven end to end on that worker:
+The rest of the lifecycle was driven end to end on that worker.
 
-1. `bin/fm-spawn.sh --scout --backend herdr` placed the worker and it executed its brief;
+1. `bin/fm-spawn.sh --scout --backend herdr` placed the worker, submitted its encoded brief through the backend confirmation path, and it executed the brief;
 2. the transcript fold read `busy` mid-turn and `idle` after, unchanged from tmux, so the recorded worker state is backend-agnostic;
 3. `bin/fm-control.sh <id> interrupt` reported `cancel=unconfirmed` by design and the pane showed `Cancelled`, with the footer and the fold both returning to idle;
 4. `bin/fm-control.sh <id> exit` stopped the agent through the slash popup and the pane returned to its shell;
@@ -1032,9 +1032,10 @@ All seven live panes of the running default session - one Pi, four Claude, two p
 
 **Typed-submit confirmation is verified on tmux and Herdr only.**
 Zellij, cmux, and Orca share a submit core that never consults the busy footer, so a typed-plane Cursor send there lands but `fm-send` reports delivery unconfirmed and exits non-zero; ordinary text steers ride the durable inbox and exit 0 at enqueue.
-Teaching that shared core the same transition is deliberately separate work, because it changes the submit path for every harness on those three backends and needs its own live validation on each.
+Cursor spawn rejects those backends before reporting a worker as started because they cannot provide the required first-turn confirmation.
+Teaching those backends the same transition is deliberately separate work, because it changes the submit path for every harness on those three backends and needs its own live validation on each.
 
-The portable regression is `tests/fm-cursor-harness.test.sh`, the composer captures are pinned in `tests/fm-composer-lib.test.sh`, and the Herdr submit and footer behavior is pinned in `tests/fm-backend-herdr.test.sh`.
+The portable regression is `tests/fm-cursor-harness.test.sh` plus the Cursor spawn checks in `tests/fm-spawn-dispatch-profile.test.sh`, the composer captures are pinned in `tests/fm-composer-lib.test.sh`, and the Herdr submit and footer behavior is pinned in `tests/fm-backend-herdr.test.sh`.
 Refresh this harness-dependent proof before accepting a cursor upgrade:
 
 ```sh

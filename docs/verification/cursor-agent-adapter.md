@@ -76,7 +76,7 @@ Interactive mode shows a BLOCKING trust dialog on an untrusted directory:
 
 ## Launch (mechanics half)
 
-2026-09-02 update: the spawn template no longer relies on positional prompt auto-run.
+2026-09-05 update: the spawn template no longer relies on positional prompt auto-run.
 Live tmux probing showed `cursor-agent --trust --yolo --model cursor-grok-4.6-low --workspace <dir> "<prompt>"` can start a turn directly, so the prompt is not generally parsed as the `--workspace` value and the model catalog accepts that id.
 However, two supervised Cursor dispatches reached the startup render with the seeded brief visible and no transcript/status append, while OpenCode workers using the same brief scaffold progressed normally.
 The root-cause fix is to launch Cursor bare with the model and workspace flags, then submit the encoded launch brief through the backend submit-confirmation path used for ordinary delivery.
