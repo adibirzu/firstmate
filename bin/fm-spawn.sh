@@ -2713,7 +2713,6 @@ cursor_spawn_fail() {  # <detail>
 
 cursor_first_turn_started() {
   local transcript turn_state
-  sleep "${FM_CURSOR_FIRST_TURN_SETTLE:-0.5}"
   transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) || return 1
   turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null) || return 1
   case "$turn_state" in
@@ -3537,7 +3536,7 @@ fi
 spawn_send_key "$T" Enter
 if [ "$HARNESS" = cursor ]; then
   CURSOR_SUBMIT_RETRIES=${FM_CURSOR_SUBMIT_RETRIES:-3}
-  CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.5}
+  CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.8}
   CURSOR_SUBMIT_SETTLE=${FM_CURSOR_SUBMIT_SETTLE:-0.3}
   CURSOR_BRIEF=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || {
     cursor_spawn_fail "cursor seeded brief could not be encoded"
