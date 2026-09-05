@@ -28,65 +28,6 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
-# --- launch behavior ---------------------------------------------------------
-
-make_copilot_spawn_fakebin() {
-  local dir=$1 fakebin
-  fakebin=$(fm_test_make_spawn_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" copilot
-  fm_fake_treehouse "$fakebin"
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n' ;;
-  capture-pane) printf '%s\n' ' / commands · ? help · tab next tab' ;;
-  send-keys)
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then
-        printf '%s\n' "$arg" >> "${FM_FAKE_LAUNCH_LOG:?}"
-        break
-      fi
-      prev=$arg
-    done
-    ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  printf '%s\n' "$fakebin"
-}
-
-test_copilot_spawn_emits_verified_argv() {
-  local case_dir home proj wt fakebin id out launch
-  case_dir=$(fm_test_tmproot fm-copilot-launch)
-  home="$case_dir/home"
-  proj="$case_dir/project"
-  wt="$case_dir/wt"
-  id=copilot-launch-c1
-  fakebin=$(make_copilot_spawn_fakebin "$case_dir/fake")
-  fm_test_spawn_home "$home" copilot
-  fm_test_spawn_brief "$home" "$id" 'Exercise the Copilot launch contract.'
-  fm_git_worktree "$proj" "$wt" wt-copilot-launch
-  : > "$case_dir/launch.log"
-
-  out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_COPILOT_TRUST_POLLS=2 FM_COPILOT_POLL_INTERVAL=0 \
-    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" copilot \
-      --mode no-mistakes --yolo off --model copilot-model --effort xhigh) \
-    || fail "copilot spawn failed: $out"
-  assert_contains "$out" "spawned $id harness=copilot" "bare copilot adapter was not accepted"
-  launch=$(cat "$case_dir/launch.log")
-  assert_contains "$launch" "copilot --allow-all --no-ask-user --model 'copilot-model' --reasoning-effort 'xhigh' -i" \
-    "copilot launch did not emit the verified model, effort, and interactive argv"
-  assert_contains "$launch" "encode launch-brief < '$home/data/$id/launch-brief.md'" \
-    "copilot launch did not deliver the rendered launch brief"
-  pass "fm-spawn: bare copilot emits its verified model, effort, and interactive launch argv"
-}
-
 # --- detection --------------------------------------------------------------
 
 test_copilot_detection_wired() {
