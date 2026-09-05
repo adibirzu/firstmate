@@ -2859,7 +2859,10 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
         busy)
-          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
           printf 'empty'; return 0
           ;;
         unknown) printf 'unknown'; return 0 ;;
@@ -2869,7 +2872,10 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       verdict=$(fm_backend_herdr_composer_state "$target")
       case "$verdict" in
         empty)
-          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
           printf 'empty'; return 0
           ;;
         pending|pending-unproven) ;;
@@ -2885,11 +2891,17 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       fi
       case "$verdict" in
         busy)
-          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
           printf 'empty'; return 0
           ;;
         empty)
-          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
           printf 'empty'; return 0
           ;;
         unknown) printf 'unknown'; return 0 ;;

@@ -252,7 +252,12 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
           j=0
           while [ "$j" -lt "$retries" ]; do
             if fm_pane_is_busy "$target"; then
-              if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+              if [ -n "$callback" ] && ! "$callback"; then
+                j=$((j + 1))
+                [ "$j" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+                sleep "$sleep_s"
+                continue
+              fi
               printf 'empty'
               return 0
             fi
@@ -265,10 +270,11 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
         ;;
       *)
         if [ "$state" = empty ] && [ -n "$callback" ] && ! "$callback"; then
-          printf 'confirmation-failed'
-        else
-          printf '%s' "$state"
+          i=$((i + 1))
+          [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+          continue
         fi
+        printf '%s' "$state"
         return 0
         ;;
     esac
