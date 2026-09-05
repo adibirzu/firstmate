@@ -756,15 +756,13 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label] [confirmation-callback]
   local backend=$1 callback='' verdict
   shift
+  # The optional callback follows the historical expected-label argument at
+  # this boundary.  Backend adapters retain their pre-callback arity: tmux and
+  # Herdr never consume expected-label, while other adapters still do.
+  callback=${7:-}
   case "$backend" in
-    tmux|herdr)
-      callback=${7:-}
-      set -- "${@:1:5}"
-      ;;
-    *)
-      callback=${8:-}
-      set -- "${@:1:7}"
-      ;;
+    tmux|herdr) set -- "${@:1:5}" ;;
+    *) set -- "${@:1:6}" ;;
   esac
   fm_backend_source "$backend" || return 1
   case "$backend" in
