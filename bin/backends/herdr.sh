@@ -2826,8 +2826,8 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
   fi
 }
 
-fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
+fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [confirmation-callback]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 callback=${6:-} i=0 verdict baseline confirm_sleep
   local raw_status footer_baseline='' allow_rendered=0 enter_sent=0
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
@@ -2858,14 +2858,26 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
       # Native stayed idle. Composer empty is positive delivery (a landed
       # Claude turn that never flipped agent_status). Proven pending retries.
       verdict=$(fm_backend_herdr_composer_state "$target")
       case "$verdict" in
-        empty) printf 'empty'; return 0 ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         pending|pending-unproven) ;;
         *) printf '%s' "$verdict"; return 0 ;;
       esac
@@ -2878,8 +2890,20 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         verdict=busy
       fi
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
-        empty) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
     fi

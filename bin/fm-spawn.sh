@@ -1384,8 +1384,12 @@ launch_template() {
     # legacy alias agent), and the foreign primary markers are cleared so an
     # inherited CLAUDECODE cannot outrank cursor's own marker in a process that
     # only reads the environment. Cursor exposes no effort flag, so the shared
-    # effort axis is deliberately omitted and stays in task metadata only.
-    cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # effort axis is deliberately omitted and stays in task metadata only. The
+    # launch brief is NOT passed positionally: Cursor's TUI may render a seeded
+    # argv prompt without opening a turn, especially under Herdr. Spawn starts the
+    # bare TUI, then submits the encoded brief through the backend's verified
+    # submit-confirmation primitive below, failing loudly on a zero-turn worker.
+    cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -2702,6 +2706,21 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+cursor_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
+cursor_first_turn_started() {
+  local transcript turn_state
+  transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) || return 1
+  turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null) || return 1
+  case "$turn_state" in
+    busy|settled) return 0 ;;
+  esac
+  return 1
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   if [ "$REUSE_WORKTREE" = 1 ]; then
     # In-place relaunch: keep the existing worktree; never run treehouse get.
@@ -3515,6 +3534,32 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = cursor ]; then
+  case "$BACKEND" in
+    tmux|herdr) ;;
+    *)
+      cursor_spawn_fail "cursor first-turn confirmation is unavailable on backend $BACKEND"
+      exit 1
+      ;;
+  esac
+  CURSOR_SUBMIT_RETRIES=${FM_CURSOR_SUBMIT_RETRIES:-3}
+  CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.8}
+  CURSOR_SUBMIT_SETTLE=${FM_CURSOR_SUBMIT_SETTLE:-0.3}
+  CURSOR_BRIEF=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || {
+    cursor_spawn_fail "cursor seeded brief could not be encoded"
+    exit 1
+  }
+  CURSOR_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
+    "$BACKEND" "$T" "$CURSOR_BRIEF" "$CURSOR_SUBMIT_RETRIES" \
+    "$CURSOR_SUBMIT_SLEEP" "$CURSOR_SUBMIT_SETTLE" "$W" cursor_first_turn_started) || {
+    cursor_spawn_fail "cursor seeded brief could not be submitted"
+    exit 1
+  }
+  if [ "$CURSOR_SUBMIT_VERDICT" != empty ]; then
+    cursor_spawn_fail "cursor seeded brief did not start a confirmed first turn (submit verdict: $CURSOR_SUBMIT_VERDICT)"
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = copilot ]; then
   if ! copilot_wait_for_trust_clear; then
     copilot_spawn_fail "copilot did not clear the folder-trust gate to a ready or working pane"
