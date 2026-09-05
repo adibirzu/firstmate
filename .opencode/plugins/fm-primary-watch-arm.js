@@ -549,8 +549,6 @@ export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
       if (event.type !== "session.idle") return;
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
-      idleRetries = 0;
-      idleExhaustionNoticed = false;
       void ensureArm(paths, sessionID, client);
     },
   };
