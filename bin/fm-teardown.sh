@@ -2872,9 +2872,15 @@ elif [ "$BACKEND" = herdr ] \
   # cleanup has already advanced the endpoint identity.  The journal is still
   # safe to retire only after the exact recorded pane is positively absent;
   # never infer absence from a failed or malformed query.
+  HERDR_JOURNAL_SESSION=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
   HERDR_JOURNAL_PANE=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] && [ -n "$HERDR_JOURNAL_PANE" ] \
-     && [ "$(fm_backend_herdr_pane_presence_state "$HERDR_PRESENTATION_SESSION" "$HERDR_JOURNAL_PANE")" = dead ]; then
+  # Metadata may have advanced past the endpoint binding by the time the
+  # close confirmation runs. The journal is the durable, read-only binding for
+  # this exact projection, so use its session as the fallback rather than
+  # leaving a confirmed-dead projection journal quarantined.
+  [ -n "$HERDR_JOURNAL_SESSION" ] || HERDR_JOURNAL_SESSION=$HERDR_PRESENTATION_SESSION
+  if [ -n "$HERDR_JOURNAL_SESSION" ] && [ -n "$HERDR_JOURNAL_PANE" ] \
+     && [ "$(fm_backend_herdr_pane_presence_state "$HERDR_JOURNAL_SESSION" "$HERDR_JOURNAL_PANE")" = dead ]; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
   else
     echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
