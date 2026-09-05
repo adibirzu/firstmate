@@ -3535,6 +3535,13 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
 fi
 spawn_send_key "$T" Enter
 if [ "$HARNESS" = cursor ]; then
+  case "$BACKEND" in
+    tmux|herdr) ;;
+    *)
+      cursor_spawn_fail "cursor first-turn confirmation is unavailable on backend $BACKEND"
+      exit 1
+      ;;
+  esac
   CURSOR_SUBMIT_RETRIES=${FM_CURSOR_SUBMIT_RETRIES:-3}
   CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.8}
   CURSOR_SUBMIT_SETTLE=${FM_CURSOR_SUBMIT_SETTLE:-0.3}
