@@ -3548,7 +3548,7 @@ if [ "$HARNESS" = cursor ]; then
     cursor_spawn_fail "cursor seeded brief could not be submitted"
     exit 1
   }
-  if [ "$CURSOR_SUBMIT_VERDICT" = confirmation-failed ]; then
+  if [ "$CURSOR_SUBMIT_VERDICT" != empty ]; then
     cursor_spawn_fail "cursor seeded brief did not start a confirmed first turn (submit verdict: $CURSOR_SUBMIT_VERDICT)"
     exit 1
   fi

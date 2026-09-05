@@ -2858,14 +2858,20 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
       # Native stayed idle. Composer empty is positive delivery (a landed
       # Claude turn that never flipped agent_status). Proven pending retries.
       verdict=$(fm_backend_herdr_composer_state "$target")
       case "$verdict" in
-        empty) printf 'empty'; return 0 ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          printf 'empty'; return 0
+          ;;
         pending|pending-unproven) ;;
         *) printf '%s' "$verdict"; return 0 ;;
       esac
@@ -2878,8 +2884,14 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         verdict=busy
       fi
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
-        empty) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          printf 'empty'; return 0
+          ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then printf 'confirmation-failed'; return 0; fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
     fi
@@ -2894,9 +2906,6 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       return 0
     fi
   done
-  if [ -n "$callback" ]; then
-    "$callback" || { printf 'confirmation-failed'; return 0; }
-  fi
 }
 
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
