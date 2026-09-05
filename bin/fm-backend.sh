@@ -754,7 +754,7 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 # retrying only the submission (never retyping). Echoes the backend's
 # proof-carrying verdict; callers require exact empty for confirmed delivery.
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label] [confirmation-callback]
-  local backend=$1 callback= verdict
+  local backend=$1 callback='' verdict
   shift
   case "$backend" in
     tmux|herdr)
