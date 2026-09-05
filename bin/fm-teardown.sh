@@ -2902,6 +2902,20 @@ if [ "$BACKEND" = herdr ]; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
   fi
+  # Endpoint confirmation is the final destructive-operation boundary. A
+  # transient presence lookup above may have quarantined the projection
+  # journal even though the authoritative endpoint check now proves teardown
+  # complete. Retire only the journal's exact pane, and only after a positive
+  # dead result; malformed or unqueryable journals remain recoverable.
+  if { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; } \
+    && declare -F fm_backend_herdr_projection_journal_field >/dev/null 2>&1; then
+    journal_session=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
+    journal_pane=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
+    if [ -n "$journal_session" ] && [ -n "$journal_pane" ] \
+      && [ "$(fm_backend_herdr_pane_presence_state "$journal_session" "$journal_pane")" = dead ]; then
+      rm -f "$HERDR_PRESENTATION_JOURNAL"
+    fi
+  fi
 fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
