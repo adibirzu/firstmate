@@ -519,9 +519,8 @@ export default function (pi: ExtensionAPI) {
   // `fleet` included, so a report typed from memory about a task the wake
   // never named is never stored or delivered. Null outside a wake prompt and
   // during a heartbeat review, which is not scoped by task.
-  let wakeTaskScope: { rows: string[]; tasks: Set<string> } | null = null;
+  let wakeTaskScope: { rows: string[]; tasks: Set<string>; taskRows: Record<string, string[]> } | null = null;
   let wakeReportIdentity: string | null = null;
-  let nextWakeReportIdentity = 0;
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -978,7 +977,8 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
-        const eventId = wakeReportIdentity ? `${wakeReportIdentity}:${task}` : "";
+        const taskRows = wakeTaskScope?.taskRows[task] ?? [];
+        const eventId = wakeReportIdentity ? `${wakeReportIdentity}:${task}:${taskRows.join(",")}` : "";
         if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         if (!actingAsOwner(toolGeneration)) {
@@ -1238,8 +1238,14 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        wakeTaskScope = heartbeat ? null : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
-        wakeReportIdentity = `wake-${++nextWakeReportIdentity}`;
+        wakeTaskScope = heartbeat ? null : {
+          rows: [...scope.eligibleSeqs],
+          tasks: new Set(scope.eligibleTasks),
+          taskRows: scope.eligibleTaskSeqs,
+        };
+        wakeReportIdentity = heartbeat
+          ? `heartbeat:${scope.eligibleSeqs.join(",")}`
+          : `rows:${scope.eligibleSeqs.join(",")}`;
         try {
           await session.prompt(
             `FIRSTMATE SUPERVISION WAKE: ${message}\n\nHandle this per your operating procedure and finish with fm_branch_report.`,
