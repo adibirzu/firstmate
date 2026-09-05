@@ -121,14 +121,27 @@ case "${1:-}" in
     ;;
   has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
+    payload=
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = "-l" ]; then
+        payload=$a
+        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      fi
+      prev=$a
+    done
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" != pending ] &&
+       printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
+      session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+      if [ -n "$session" ]; then
+        root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        project="$root/fake-cursor-project"
+        mkdir -p "$project/agent-transcripts/fake-conversation"
+        printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+        printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+          > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+      fi
     fi
     exit 0
     ;;
