@@ -124,7 +124,14 @@ make_case() {
   touch "$home/state/.last-watcher-beat"
   for id in "$@"; do
     mkdir -p "$home/data/$id"
-    printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+    cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise the spawn behavior under test.
+EOF
   done
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin"
 }

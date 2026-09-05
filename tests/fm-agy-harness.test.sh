@@ -33,7 +33,7 @@ test_agy_launch_template_is_pinned() {
 }
 
 test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
+  grep -Fq "claude --dangerously-skip-permissions --settings" "$SPAWN" \
     || fail "claude launch template changed"
   grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
     || fail "grok launch template changed"

@@ -602,7 +602,7 @@ test_actionable_close_still_prompts() {
 }
 
 test_turnend_guard_stays_silent_when_watch_arm_loaded() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home guard-fallthrough)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -663,7 +663,7 @@ EOF
 # predicate must agree with that shell owner, or a procevent-only home ends its
 # idle with neither a watcher nor a surfaced warning.
 test_procevent_source_home_arms_without_task_meta() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home procevent-need)
   rm -f "$dir/state/task.meta"
   mkdir -p "$dir/state/procevent"
@@ -710,7 +710,7 @@ EOF
 # lock, the shell guard still runs and its verdict is delivered: silence here
 # would leave a home whose previous lock holder died without a watcher blind.
 test_turnend_guard_runs_when_coordinator_declines_read_only() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home guard-read-only)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -773,7 +773,7 @@ EOF
 # been spent on empties, a real FAILED close must still get its full bounded
 # retry before anything is surfaced.
 test_idle_cycles_do_not_consume_the_failure_retry_budget() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home retry-budget)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -834,7 +834,7 @@ EOF
 # must retry silently and leave a live arm behind the delivered wake instead of
 # reporting continuity intact over a home with no watcher.
 test_restoration_retries_an_idle_successor_close() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home restore-idle)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -914,7 +914,7 @@ link_real_bin_scripts() {  # <dir>
 # long-running home whose cycles end empty keeps re-arming instead of going
 # silent after a lifetime count of benign closes.
 test_established_cycles_replenish_the_idle_budget() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home established-cycle)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -963,7 +963,7 @@ EOF
 # never a model turn: state/.wake-queue is the owned durable wake protocol
 # (<epoch>\t<seq>\t<kind>\t<key>\t<payload>), read here as that contract.
 test_idle_exhaustion_queues_one_durable_check_without_a_prompt() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home idle-exhaustion)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1028,7 +1028,7 @@ EOF
 # failure count: a watcher that alternates real FAILED closes with empty ones
 # still reaches the failure bound and surfaces once.
 test_alternating_failure_and_empty_closes_still_surface() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home alternating-close)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1079,7 +1079,7 @@ EOF
 # the second idle prompted again - with the same "after N retries" text although
 # no retry ran that round - which is one paid model turn per idle forever.
 test_exhausted_failure_budget_surfaces_once_across_idles() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home exhausted-failure)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1143,7 +1143,7 @@ EOF
 # it permanently unsupervised with nothing surfaced anywhere - the same
 # swallow-before-confirm shape the durable idle notice already closed.
 test_undelivered_exhaustion_notice_stays_retryable() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home undelivered-exhaustion)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1152,9 +1152,8 @@ printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
 exit 1
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/undelivered-exhaustion-arm.log" \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-1.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1194,7 +1193,9 @@ if (attempts !== 2) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/undelivered-exhaustion-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "an undelivered exhaustion notice must stay retryable"
   [ -z "$out" ] || fail "undelivered-exhaustion test printed output: $out"
@@ -1208,7 +1209,7 @@ EOF
 # budget's own delivery can fail unnoticed and the home is left permanently
 # unsupervised with nothing delivered anywhere.
 test_late_settle_cannot_latch_a_replenished_budgets_notice() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home late-settle)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1223,10 +1224,8 @@ exit 1
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
   printf 'fail\n' > "$TMP_ROOT/late-settle-mode"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/late-settle-arm.log" \
-    FM_ARM_MODE="$TMP_ROOT/late-settle-mode" FM_WATCH_ARM_ESTABLISHED_MS=50 \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-2.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1294,7 +1293,10 @@ if (!(await until(() => notices.length === 3, 8000))) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/late-settle-arm.log" \
+    FM_ARM_MODE="$TMP_ROOT/late-settle-mode" FM_WATCH_ARM_ESTABLISHED_MS=50 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a late settle from a spent budget must not retire the current budget's notice"
   [ -z "$out" ] || fail "late-settle test printed output: $out"
@@ -1307,7 +1309,7 @@ EOF
 # itself stays spent - only a completed cycle replenishes it - so the replaced
 # session re-arms without re-spending the retries.
 test_replaced_session_gets_its_own_failure_budget() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home replaced-session)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1316,9 +1318,8 @@ printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
 exit 1
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/replaced-session-arm.log" \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-3.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1359,7 +1360,9 @@ if (cycles() !== armedByFirstSession + 1) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/replaced-session-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a replaced session must surface its own notice without a fresh retry budget"
   [ -z "$out" ] || fail "replaced-session test printed output: $out"
@@ -1372,7 +1375,7 @@ EOF
 # every sessionID change is what stops two alternating sessions from ping-ponging
 # a fresh budget - and one paid model turn - through an unestablishable home.
 test_alternating_sessions_do_not_repay_the_exhaustion_notice() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home alternating-sessions)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1381,9 +1384,8 @@ printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
 exit 1
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/alternating-sessions-arm.log" \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-4.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1420,7 +1422,9 @@ if (cycles() < 4) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/alternating-sessions-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "alternating sessions must not ping-pong a fresh failure budget"
   [ -z "$out" ] || fail "alternating-sessions test printed output: $out"
@@ -1430,7 +1434,7 @@ EOF
 # A failure retry that relaunches into a home which no longer needs a watcher
 # is benign: no failure prompt for supervision that is simply no longer owed.
 test_retry_launch_into_a_no_longer_needed_home_is_silent() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home retry-not-needed)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1440,9 +1444,8 @@ printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
 exit 1
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/retry-not-needed-arm.log" \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-5.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1463,7 +1466,9 @@ if (prompts.length !== 0) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/retry-not-needed-arm.log" \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a retry launch into a no-longer-needed home must stay silent"
   [ -z "$out" ] || fail "retry-not-needed test printed output: $out"
@@ -1475,7 +1480,7 @@ EOF
 # print `watcher: started`. Reporting that as a launch failure spends a model
 # turn on a home that is in fact supervised.
 test_slow_confirming_retry_launch_does_not_prompt() {
-  local dir out status
+  local dir out status snippet
   dir=$(prepare_arm_home slow-retry)
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1491,10 +1496,8 @@ sleep 0.3
 exit 0
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/slow-retry-arm.log" \
-    FM_OPENCODE_ARM_READY_TIMEOUT_MS=50 \
-    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
-    "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-6.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1522,7 +1525,10 @@ if (prompts.length !== 0) {
 }
 process.exit(0);
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$dir" FM_HOME="$dir" FM_ARM_LOG="$TMP_ROOT/slow-retry-arm.log" \
+    FM_OPENCODE_ARM_READY_TIMEOUT_MS=50 \
+    FM_WATCH_REARM_RETRY_LIMIT=2 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 \
+    "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a retry launch that confirms readiness late must not prompt: $out"
   [ -z "$out" ] || fail "slow-retry test printed output: $out"
@@ -1530,7 +1536,7 @@ EOF
 }
 
 test_crewmate_idle_stays_silent() {
-  local base dir out status
+  local base dir out status snippet
   base="$TMP_ROOT/crewmate-idle-base"
   dir="$TMP_ROOT/crewmate-idle-worktree"
   make_crewmate_worktree_dir "$base" "$dir" >/dev/null
@@ -1547,8 +1553,8 @@ exit 2
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh" "$dir/bin/fm-turnend-guard.sh"
   : > "$dir/state/task.meta"
-  out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
-    FM_ARM_LOG="$TMP_ROOT/crewmate-idle-arm.log" "$NODE_BIN" --input-type=module 2>&1 <<'EOF'
+  snippet="$TMP_ROOT/node-snippet-7.mjs"
+  cat > "$snippet" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1585,7 +1591,8 @@ if (prompts !== 0) {
   process.exit(1);
 }
 EOF
-)
+  out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
+    FM_ARM_LOG="$TMP_ROOT/crewmate-idle-arm.log" "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a crewmate worktree must stay silent on idle"
   [ -z "$out" ] || fail "crewmate idle test printed output: $out"

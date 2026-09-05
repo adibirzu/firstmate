@@ -151,7 +151,14 @@ setup_case() {  # <name> <id> <config-body> <status-body>
   git -C "$CASE_WT" add feature.txt
   git -C "$CASE_WT" commit -qm 'task work'
   printf 'uncommitted\n' > "$CASE_WT/dirty.txt"
-  printf '# brief for %s\n' "$id" > "$CASE_HOME/data/$id/brief.md"
+  cat > "$CASE_HOME/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise the spawn behavior under test.
+EOF
   if [ -n "$config_body" ]; then
     printf '%s\n' "$config_body" > "$CASE_HOME/config/crew-dispatch.json"
   fi

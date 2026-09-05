@@ -3619,12 +3619,16 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 # The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Returning it from here after this point would pull the lease out from under a
-# live task.
+# Disarm lease-abort and provisional-record rollback before the side-band
+# home-summary refresh: an interrupt during that refresh must not roll the
+# published record back or return a live task's lease.
 TREEHOUSE_LEASE_ABORT_CLEANUP=0
+SPAWN_REFRESH_SAVED_PENDING=$SPAWN_FRESH_COMMIT_PENDING
+SPAWN_FRESH_COMMIT_PENDING=0
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+SPAWN_FRESH_COMMIT_PENDING=$SPAWN_REFRESH_SAVED_PENDING
+[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")

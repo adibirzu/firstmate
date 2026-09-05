@@ -425,6 +425,7 @@ Both `use` and the optional top-level `default` accept either one profile object
 The single-object form stays fully backward-compatible, and every profile needs `harness`.
 Profile `provider`, `model`, `effort`, and `quotaWindow` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
+OpenRouter Auto Router is requested as the model id `openrouter/auto` on a harness that forwards `--model`, typically opencode; LiteLLM catalogs may expose the same router as `or-auto`.
 `quotaWindow` names the one `windows[].id` in that provider's `quota-axi --json` telemetry that this route actually draws on, so a provider whose pools are billed separately is priced on the pool it uses instead of on its worst pool.
 Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
 An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.

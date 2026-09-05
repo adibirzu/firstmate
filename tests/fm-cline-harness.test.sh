@@ -93,7 +93,15 @@ make_spawn_case() {
   id="cline-$name-x1"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" \
     "$case_dir/clinedata/settings" "$case_dir/clinedata/sessions"
-  printf 'brief\nDelivery contract: mode=no-mistakes yolo=off\n' > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise the spawn behavior under test.
+Delivery contract: mode=no-mistakes yolo=off
+EOF
   [ -z "$operator" ] || printf '%s\n' "$operator" > "$case_dir/clinedata/settings/global-settings.json"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
@@ -230,7 +238,7 @@ test_spawn_writes_session_binding_excluding_prior_sessions() {
 }
 
 test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
+  grep -Fq "claude --dangerously-skip-permissions --settings" "$SPAWN" \
     || fail "claude launch template changed"
   grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
     || fail "grok launch template changed"
