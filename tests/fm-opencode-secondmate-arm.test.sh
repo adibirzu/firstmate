@@ -1161,7 +1161,7 @@ import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 let attempts = 0;
 // The real client rejects when the session was replaced mid-delivery; the
-// plugin's surfaceFailure swallows that rejection by design.
+// The plugin surfaceFailure path swallows that rejection by design.
 const client = { session: { promptAsync: async () => { attempts += 1; throw new Error("session gone"); } } };
 const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
@@ -1232,7 +1232,7 @@ import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 // Exhaustion notices are held open so the driver decides the order in which a
-// spent budget's delivery and the current budget's delivery settle.
+// spent-budget delivery and current-budget delivery settle.
 const notices = [];
 const client = {
   session: {
@@ -1278,7 +1278,7 @@ if (!(await until(() => notices.length === 2, 12000))) {
   process.exit(1);
 }
 
-// 4. The spent budget's delivery finally succeeds, then the current budget's
+// 4. The spent-budget delivery finally succeeds, then the current-budget
 //    own delivery fails - the ordering that lets a stale settle stand in for a
 //    notice this budget never delivered.
 notices[0].resolve();
@@ -1290,7 +1290,7 @@ await settle(200);
 //    again rather than leaving the home silent.
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-late" } } });
 if (!(await until(() => notices.length === 3, 8000))) {
-  console.error("a late settle from the spent budget retired the current budget's notice: the home is silent with nothing delivered");
+  console.error("a late settle from the spent budget retired the current budget notice: the home is silent with nothing delivered");
   process.exit(1);
 }
 EOF

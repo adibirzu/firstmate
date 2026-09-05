@@ -1078,7 +1078,7 @@ await tool.execute("tool-call-hung-successor", {}, undefined, undefined, {});
 // Wall-clock deadline, not an iteration count. This path deliberately burns one
 // whole arm-ready window per attempt (successor + two retries), so a fixed
 // 500x10ms budget can expire before the wake is even due once the window is
-// wide enough to survive a loaded runner's process-start latency.
+// wide enough to survive process-start latency on a loaded runner.
 const promptDeadline = Date.now() + 60000;
 while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1123,7 +1123,7 @@ if [ "$count" -eq 0 ]; then
   printf 'signal: synthetic wake\n'
   exit 0
 fi
-trap '' TERM INT
+trap "" TERM INT
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.1; done
 SH
@@ -3089,7 +3089,7 @@ await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses
 // Wall-clock deadline, not an iteration count. This path deliberately burns one
 // whole arm-ready window per attempt (successor + two retries), so a fixed
 // 500x10ms budget can expire before the wake is even due once the window is
-// wide enough to survive a loaded runner's process-start latency.
+// wide enough to survive process-start latency on a loaded runner.
 const promptDeadline = Date.now() + 60000;
 while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -3136,7 +3136,7 @@ if [ "$count" -eq 0 ]; then
   printf 'signal: synthetic wake\n'
   exit 0
 fi
-trap '' TERM INT
+trap "" TERM INT
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.1; done
 SH

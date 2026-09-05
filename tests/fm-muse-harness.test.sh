@@ -104,12 +104,15 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  cp "$(command -v bash)" "$fakebin/muse-bin-test-version"
   cat > "$fakebin/muse" <<'SH'
 #!/usr/bin/env bash
 set -u
 [ -n "${FM_FAKE_HARNESS_RESULT:-}" ] || exit 0
-exec "$FM_FAKE_MUSE_VERSIONED" -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
+# Keep the versioned launcher identity under BSD ps without executing a copied
+# system shell (which macOS can terminate for signature reasons). This has the
+# same argv[0] shape as the real Muse launcher and leaves the probe a child of
+# that versioned process.
+exec -a muse-bin-test-version /bin/bash -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
 SH
   chmod +x "$fakebin/muse"
   fm_fake_exit0 "$fakebin" gh-axi gh
@@ -163,7 +166,6 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
     TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$home/launch.log" \
     FM_FAKE_MUSE_EXECUTABLE="$fakebin/muse" \
-    FM_FAKE_MUSE_VERSIONED="$fakebin/muse-bin-test-version" \
     FM_FAKE_HARNESS_PROBE="$HARNESS" \
     FM_FAKE_EXECUTE_MUSE_LAUNCH="${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" \
     FM_FAKE_HARNESS_RESULT="${FM_FAKE_HARNESS_RESULT:-}" \
@@ -180,8 +182,11 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 # The installed muse launcher execs a VERSION-SUFFIXED binary
 # (~/.local/bin/muse-bin-<version>), so the name in the process tree changes on
 # every auto-update. Detection must follow a real running process rather than a
-# string, so each case launches an actual renamed executable and asks
-# fm-harness.sh from a child of it.
+# string, so each case launches a real child process with its argv[0] set to
+# the versioned executable name and asks fm-harness.sh from that child. Bash's
+# exec -a makes BSD ps report that identity; copying bash under a new filename
+# does not, so the latter would test a shell implementation detail instead of
+# the Muse process-name contract.
 #
 # The foreign env markers, including Cursor's, are cleared because muse is
 # markerless and the marker layer deliberately outranks ancestry: with one
@@ -192,14 +197,12 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 # name the walk is supposed to find. Real muse keeps its TUI process alive and
 # runs tools as children, so forcing a fork is what reproduces that shape.
 test_detects_versioned_process_ancestor() {
-  local dir bin out
-  dir="$TMP_ROOT/detect"
-  mkdir -p "$dir"
+  local bin out
   for bin in muse-bin-0.1.0-R708.1 muse-bin-9.9.9-RZZZ.9 muse; do
-    cp "$(command -v bash)" "$dir/$bin"
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
       -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
-      "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
+      /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
+      _ "$bin" "$HARNESS")
     [ "$out" = muse ] || fail "fm-harness.sh under process '$bin' reported '$out', expected muse"
   done
   pass "muse is detected through any versioned muse-bin ancestor"
@@ -208,14 +211,12 @@ test_detects_versioned_process_ancestor() {
 # The match must be anchored: an unrelated command whose name merely CONTAINS
 # muse is a different program and must not be claimed by this adapter.
 test_detection_is_anchored() {
-  local dir bin out
-  dir="$TMP_ROOT/detect-neg"
-  mkdir -p "$dir"
+  local bin out
   for bin in musescore amuse notmuse-bin muse-binary muse-bind; do
-    cp "$(command -v bash)" "$dir/$bin"
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
       -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
-      "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
+      /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
+      _ "$bin" "$HARNESS")
     [ "$out" != muse ] || fail "fm-harness.sh misdetected unrelated process '$bin' as muse"
   done
   pass "muse detection does not claim unrelated muse-containing commands"
