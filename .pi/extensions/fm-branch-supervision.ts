@@ -978,7 +978,7 @@ export default function (pi: ExtensionAPI) {
         if (scopeRefusal) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
-        if (wakeTaskScope && (!/^[0-9]+$/.test(wakeRow) || !wakeTaskScope.rows.includes(wakeRow))) {
+        if (wakeTaskScope && (!/^[0-9]+$/.test(wakeRow) || !wakeTaskScope.rows.includes(wakeRow) || (!wakeTaskScope.heartbeat && !wakeTaskScope.taskRows[task]?.includes(wakeRow)))) {
           return { content: [{ type: "text", text: "report refused: name the durable wake row being handled" }], details: undefined, isError: true };
         }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
