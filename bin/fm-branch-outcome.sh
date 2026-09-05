@@ -617,6 +617,14 @@ case "$CMD" in
       echo "error: refusing processed advancement because seq $THROUGH is not an unprocessed captain outcome" >&2
       exit 1
     fi
+    NEXT_CAPTAIN=$(jq -r --argjson processed "$PROCESSED_SEQ" --argjson cursor "$CURSOR_SEQ" '
+      select(.seq > $processed and .seq <= $cursor and .verdict == "captain") | .seq
+    ' "$STORE" | head -n 1)
+    if [ "$NEXT_CAPTAIN" != "$THROUGH" ]; then
+      fm_lock_release "$LOCK"
+      echo "error: refusing processed advancement over an earlier unprocessed captain outcome" >&2
+      exit 1
+    fi
     write_processed "$THROUGH"
     fm_lock_release "$LOCK"
     ;;
