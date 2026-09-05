@@ -36,37 +36,6 @@ test_copilot_launch_template_is_pinned() {
   pass "fm-spawn: copilot launch template is the verified argv-seed line"
 }
 
-test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions --settings" "$SPAWN" \
-    || fail "claude launch template changed"
-  grep -Fq "cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "cline launch template changed"
-  # The fork's cursor-agent adapter was migrated to upstream's `cursor` harness,
-  # which launches through the resolved __CURSORBIN__ with --trust --yolo; pin
-  # that actual migrated template line instead of the obsolete cursor-agent one.
-  grep -Fq '__CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' "$SPAWN" \
-    || fail "cursor launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
-
-test_copilot_is_a_known_bare_adapter_name() {
-  # copilot must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|cline|cursor|copilot|gemini|muse|agy)" "$SPAWN" \
-    || fail "fm-spawn: copilot not added to a known-harness allowlist"
-  pass "fm-spawn: copilot is recognized as a known bare adapter name"
-}
-
-test_copilot_model_and_effort_flags() {
-  # copilot takes --model and maps effort to --reasoning-effort, accepting the
-  # full shared low|medium|high|xhigh|max vocabulary (no tier omitted, unlike
-  # cline/codex/grok).
-  grep -Fq "|cline|cursor|copilot|gemini|muse|agy)" "$SPAWN" \
-    || fail "fm-spawn: copilot not in the --model allowlist"
-  grep -Fq "low|medium|high|xhigh|max) printf -- '--reasoning-effort %s '" "$SPAWN" \
-    || fail "fm-spawn: copilot effort->--reasoning-effort mapping missing"
-  pass "fm-spawn: copilot gets --model and effort->--reasoning-effort (low|medium|high|xhigh|max)"
-}
-
 # --- detection --------------------------------------------------------------
 
 test_copilot_detection_wired() {

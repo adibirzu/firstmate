@@ -969,6 +969,43 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+test_opencode_plugin_stays_silent_for_non_primary_sessions() {
+  local plugin dir marker out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  dir="$TMP_ROOT/opencode-non-primary"
+  marker="$dir/guard-ran"
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/fm-turnend-guard.sh" <<EOF
+#!/usr/bin/env bash
+touch "$marker"
+exit 2
+EOF
+  chmod +x "$dir/bin/fm-turnend-guard.sh"
+  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" DIRECTORY="$dir" WORKTREE="$dir" MARKER="$marker" node 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+globalThis.__firstmateOpenCodeWatchArm = {
+  ensureArmed: async () => "not-primary",
+};
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
+const client = { session: { promptAsync: async () => { prompts += 1; } } };
+const hooks = await mod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.DIRECTORY,
+  worktree: process.env.WORKTREE,
+});
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "non-primary" } } });
+if (prompts !== 0) throw new Error(`non-primary idle prompted: ${prompts}`);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "non-primary OpenCode idle must not prompt or run the shell guard"
+  [ -z "$out" ] || fail "non-primary OpenCode idle produced output: $out"
+  [ ! -e "$marker" ] || fail "non-primary OpenCode idle ran the shell guard"
+  pass ".opencode primary plugin: non-primary sessions stay silent"
+}
+
 test_pi_extension_injects_once_per_logical_agent_run() {
   local repo home ext log out status
   repo="$TMP_ROOT/pi-logical-run-root"
@@ -1952,6 +1989,7 @@ test_tracked_claude_entries_inert_under_grok
 test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_stays_silent_for_non_primary_sessions
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
