@@ -512,7 +512,7 @@ case "$CMD" in
     printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
-      "$(json_escape "$CAPTURED_STATUS_IDENT")"$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi) >> "$STORE"
+      "$(json_escape "$CAPTURED_STATUS_IDENT")""$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi)" >> "$STORE"
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would
     # recreate the footprint teardown removed. The outcome itself is still
