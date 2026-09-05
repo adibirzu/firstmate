@@ -753,18 +753,27 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 # fm_backend_send_text_submit: type text once, then submit and verify,
 # retrying only the submission (never retyping). Echoes the backend's
 # proof-carrying verdict; callers require exact empty for confirmed delivery.
-fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local backend=$1
+fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label] [confirmation-callback]
+  local backend=$1 callback= verdict
   shift
+  if [ "$#" -ge 7 ]; then
+    callback=$7
+    set -- "${@:1:6}"
+  fi
   fm_backend_source "$backend" || return 1
   case "$backend" in
-    tmux) fm_backend_tmux_send_text_submit "$@" ;;
-    herdr) fm_backend_herdr_send_text_submit "$@" ;;
-    zellij) fm_backend_zellij_send_text_submit "$@" ;;
-    orca) fm_backend_orca_send_text_submit "$@" ;;
-    cmux) fm_backend_cmux_send_text_submit "$@" ;;
+    tmux) verdict=$(fm_backend_tmux_send_text_submit "$@") ;;
+    herdr) verdict=$(fm_backend_herdr_send_text_submit "$@") ;;
+    zellij) verdict=$(fm_backend_zellij_send_text_submit "$@") ;;
+    orca) verdict=$(fm_backend_orca_send_text_submit "$@") ;;
+    cmux) verdict=$(fm_backend_cmux_send_text_submit "$@") ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; return 1 ;;
   esac
+  if [ -n "$callback" ] && ! "$callback"; then
+    printf 'confirmation-failed'
+  else
+    printf '%s' "$verdict"
+  fi
 }
 
 # fm_backend_kill: remove the task's session endpoint (best-effort; a

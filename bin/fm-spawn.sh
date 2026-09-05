@@ -3544,11 +3544,11 @@ if [ "$HARNESS" = cursor ]; then
   }
   CURSOR_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
     "$BACKEND" "$T" "$CURSOR_BRIEF" "$CURSOR_SUBMIT_RETRIES" \
-    "$CURSOR_SUBMIT_SLEEP" "$CURSOR_SUBMIT_SETTLE" "$W") || {
+    "$CURSOR_SUBMIT_SLEEP" "$CURSOR_SUBMIT_SETTLE" "$W" cursor_first_turn_started) || {
     cursor_spawn_fail "cursor seeded brief could not be submitted"
     exit 1
   }
-  if ! cursor_first_turn_started; then
+  if [ "$CURSOR_SUBMIT_VERDICT" = confirmation-failed ]; then
     cursor_spawn_fail "cursor seeded brief did not start a confirmed first turn (submit verdict: $CURSOR_SUBMIT_VERDICT)"
     exit 1
   fi
