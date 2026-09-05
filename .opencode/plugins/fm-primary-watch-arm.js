@@ -148,7 +148,7 @@ function observeArmOutput(stdout, stderr, settleReadiness) {
     return;
   }
   if (carries(HEALTHY_RE)) {
-    settleReadiness("external");
+    settleReadiness("healthy");
     return;
   }
   if (carries(FAILED_RE)) {
@@ -448,9 +448,9 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     const classification = classifyArmClose(stdout, stderr, code, signal);
     const acceptedBeforeClose = readinessSettled;
     const established =
-      (readinessStatus === "armed" || readinessStatus === "external") && Date.now() - spawnedAt >= ARM_ESTABLISHED_MS;
+      (readinessStatus === "armed" || readinessStatus === "healthy") && Date.now() - spawnedAt >= ARM_ESTABLISHED_MS;
     settleReadiness(
-      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "idle" : "failed",
+      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "healthy" : "failed",
     );
     const predecessor = String(armChild.pid ?? "");
     if (established) replenishRetryBudgets();
