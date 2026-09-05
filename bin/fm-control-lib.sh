@@ -63,7 +63,7 @@ fm_control_verb_allowed() {  # <verb>
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harness_supported() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|cline|copilot|agy) return 0 ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|cline|copilot|agy) return 0 ;;
   esac
   return 1
 }
@@ -86,6 +86,7 @@ fm_control_harness_family() {  # <recorded-harness>
     grok*) printf 'grok' ;;
     kimi*) printf 'kimi' ;;
     cursor*) printf 'cursor' ;;
+    gemini*) printf 'gemini' ;;
     muse*) printf 'muse' ;;
     cline*) printf 'cline' ;;
     copilot*) printf 'copilot' ;;
@@ -94,7 +95,7 @@ fm_control_harness_family() {  # <recorded-harness>
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse, cline, copilot, and agy
+# Which task kinds an adapter is verified to run. muse, gemini, cline, copilot, and agy
 # are crewmate/scout adapters only: none has a primary supervision protocol, and
 # bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control plane
 # asks this BEFORE it stops anything, so an incompatible relaunch target is
@@ -104,7 +105,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|cline|copilot|agy) [ "$kind" != secondmate ] || return 1 ;;
+    muse|gemini|cline|copilot|agy) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -114,9 +115,11 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # the exact inverse of grok and the reason this pair of tables cannot be
 # collapsed: its Escape cancels the turn while its Ctrl+C EXITS the TUI, so
 # borrowing grok's interrupt key here would stop the agent instead of its turn.
+# gemini names its own key in the running turn's status row
+# (`(esc to cancel, <n>s)`), and a single Escape was verified to cancel it.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|kimi|cursor|muse|cline|agy) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|kimi|cursor|gemini|muse|cline|agy) printf 'Escape' ;;
     grok|copilot) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -127,7 +130,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|grok|kimi|cursor|muse|cline|copilot|agy) printf '1' ;;
+    claude|codex|pi|pi-signed|grok|kimi|cursor|gemini|muse|cline|copilot|agy) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -139,13 +142,16 @@ fm_control_interrupt_repeat() {  # <harness>
 # make the next submitted line - a steer, or this plane's own exit command -
 # concatenate onto it. cursor was checked for exactly that behaviour and does
 # NOT repollute: after a single Escape its composer shows only the `Add a
-# follow-up` placeholder, so it needs no clear key. Prints the key or nothing;
+# follow-up` placeholder, so it needs no clear key. gemini was checked the
+# same way and also does not repollute: after a single Escape it prints
+# `Request cancelled.` and its composer shows only the `Type your message
+# or @path/to/file` placeholder. Prints the key or nothing;
 # a harness with no verified mechanics returns nonzero, matching the tables
 # above.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline|copilot|agy) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|cline|copilot|agy) ;;
     *) return 1 ;;
   esac
 }
@@ -157,7 +163,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # after an interrupt was measured as variable - sometimes seconds, sometimes
     # not within 20 - so a cancellation claim built on it would be unreliable.
     # Normal turn completion is prompt, which is what the busy fold depends on.
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|cline|copilot|agy) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|cline|copilot|agy) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -174,7 +180,7 @@ fm_control_interrupt_ack_source() {  # <harness>
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|cursor|muse|copilot|agy) printf '/exit' ;;
-    codex|pi|pi-signed) printf '/quit' ;;
+    codex|pi|pi-signed|gemini) printf '/quit' ;;
     cline) ;;
     *) return 1 ;;
   esac
@@ -188,7 +194,7 @@ fm_control_exit_command() {  # <harness>
 fm_control_exit_key() {  # <harness>
   case "${1-}" in
     cline) printf 'C-c' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse|copilot|agy) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|copilot|agy) ;;
     *) return 1 ;;
   esac
 }
@@ -261,6 +267,12 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
       printf '%s\n' "$state/$id.cline-session"
       printf '%s\n' "$state/$id.cline-settings.json"
       ;;
+    # gemini's busy-state and turn-end hooks live in a firstmate-owned
+    # settings file the launch reaches through GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+    # so retiring that one file retires the whole incarnation's wiring. Nothing
+    # is written into the worktree, whose own .gemini/settings.json belongs to
+    # the project, and nothing global is installed.
+    gemini) printf '%s\n' "$state/$id.gemini-settings.json" ;;
   esac
 }
 
