@@ -57,7 +57,7 @@ async function letWatchArmRun(sessionID, client) {
   // need, or this session does not own the lock - the shell guard is the owner
   // of the supervision-need predicate and decides on its own evidence.
   const status = await coordinator.ensureArmed(sessionID, client);
-  return ["retrying", "not-needed", "healthy", "not-primary", "read-only"].includes(status)
+  return ["retrying", "not-needed", "healthy", "armed", "not-primary", "read-only"].includes(status)
     ? "silent"
     : "guard";
 }
