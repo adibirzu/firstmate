@@ -183,8 +183,10 @@ last_seq() {
         keys == ["epoch", "seq", "summary", "task", "verdict", "wake"]
         or (keys == ["epoch", "seq", "silent", "summary", "task", "verdict", "wake"] and (.silent | type) == "boolean")
         or (
-          keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
+          (keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
+            or keys == ["epoch", "seq", "eventId", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"])
           and (.silent | type) == "boolean"
+          and (.eventId == null or ((.eventId | type) == "string" and (.eventId | test("[\\t\\n]") | not) and (.eventId | length) > 0))
           and ((.statusEndpoint | type) == "number" and .statusEndpoint >= 0 and .statusEndpoint <= 9007199254740991 and .statusEndpoint == (.statusEndpoint | floor))
           and ((.statusIdent | type) == "string" and (.statusIdent | test("[\\t\\n]") | not))
         )
@@ -255,13 +257,11 @@ publish_outcome_index_ready() { # <seq>
 }
 
 recover_unpublished_append() { # <task> <verdict> <summary> <wake> <silent>
-  local task=$1 verdict=$2 summary=$3 wake=$4 silent=$5 row seq endpoint ident
+  local task=$1 verdict=$2 summary=$3 wake=$4 silent=$5 event_id=${6:-} row seq endpoint ident
+  [ -n "$event_id" ] || return 1
   [ -s "$STORE" ] || return 1
-  row=$(jq -c -s --arg task "$task" --arg verdict "$verdict" \
-    --arg summary "$summary" --arg wake "$wake" --argjson silent "$silent" '
-    map(select(.task == $task and .verdict == $verdict
-      and .summary == $summary and .wake == $wake
-      and ((.silent // false) == $silent)))
+  row=$(jq -c -s --arg event_id "$event_id" '
+    map(select(.eventId == $event_id))
     | if length == 0 then empty else .[0] end' "$STORE" 2>/dev/null) || return 1
   [ -n "$row" ] || return 1
   seq=$(printf '%s\n' "$row" | jq -er '.seq') || return 1
@@ -447,6 +447,7 @@ case "$CMD" in
     SUMMARY=''
     WAKE=''
     SILENT=false
+    EVENT_ID=''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -454,6 +455,7 @@ case "$CMD" in
         --summary) SUMMARY=${2:-}; shift 2 || usage ;;
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
+        --event-id) EVENT_ID=${2:-}; shift 2 || usage ;;
         *) usage ;;
       esac
     done
@@ -462,6 +464,7 @@ case "$CMD" in
     [ -n "$SUMMARY" ] || usage
     case "$VERDICT" in routine|captain) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
+    case "$EVENT_ID" in *$'\t'*|*$'\n'*) usage ;; esac
     if [ "$SILENT" = true ] && { [ "$TASK" != fleet ] || [ "$VERDICT" != routine ]; }; then
       echo "error: silent outcomes must be routine fleet outcomes" >&2
       exit 2
@@ -477,7 +480,7 @@ case "$CMD" in
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
       exit 1
     fi
-    if RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT"); then
+    if [ -n "$EVENT_ID" ] && RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT" "$EVENT_ID"); then
       fm_lock_release "$LOCK"
       printf '%s\n' "$RECOVERED"
       exit 0
@@ -493,7 +496,7 @@ case "$CMD" in
         echo "error: refusing append because the outcome store is malformed or non-sequential" >&2
         exit 1
       fi
-      if RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT"); then
+      if [ -n "$EVENT_ID" ] && RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT" "$EVENT_ID"); then
         fm_lock_release "$LOCK"
         printf '%s\n' "$RECOVERED"
         exit 0
@@ -505,7 +508,7 @@ case "$CMD" in
     printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
-      "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
+      "$(json_escape "$CAPTURED_STATUS_IDENT")"$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi) >> "$STORE"
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would
     # recreate the footprint teardown removed. The outcome itself is still
