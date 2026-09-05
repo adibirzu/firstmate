@@ -2712,19 +2712,13 @@ cursor_spawn_fail() {  # <detail>
 }
 
 cursor_first_turn_started() {
-  local transcript turn_state i=0
-  local max=${FM_CURSOR_FIRST_TURN_POLLS:-10}
-  local interval=${FM_CURSOR_FIRST_TURN_POLL_INTERVAL:-0.5}
-  while [ "$i" -lt "$max" ]; do
-    if transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) &&
-       turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null); then
-      case "$turn_state" in
-        busy|settled) return 0 ;;
-      esac
-    fi
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
+  local transcript turn_state
+  sleep "${FM_CURSOR_FIRST_TURN_SETTLE:-0.5}"
+  transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) || return 1
+  turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null) || return 1
+  case "$turn_state" in
+    busy|settled) return 0 ;;
+  esac
   return 1
 }
 
@@ -3555,7 +3549,7 @@ if [ "$HARNESS" = cursor ]; then
     cursor_spawn_fail "cursor seeded brief could not be submitted"
     exit 1
   }
-  if [ "$CURSOR_SUBMIT_VERDICT" != empty ] || ! cursor_first_turn_started; then
+  if ! cursor_first_turn_started; then
     cursor_spawn_fail "cursor seeded brief did not start a confirmed first turn (submit verdict: $CURSOR_SUBMIT_VERDICT)"
     exit 1
   fi
