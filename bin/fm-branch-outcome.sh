@@ -457,6 +457,18 @@ case "$CMD" in
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
       exit 1
     fi
+    if [ ! -e "$OUTCOME_INDEX_READY" ]; then
+      if ! rebuild_outcome_indexes; then
+        fm_lock_release "$LOCK"
+        echo "error: refusing append because the outcome indexes are not recoverable" >&2
+        exit 1
+      fi
+      if ! LAST_SEQ=$(last_seq); then
+        fm_lock_release "$LOCK"
+        echo "error: refusing append because the outcome store is malformed or non-sequential" >&2
+        exit 1
+      fi
+    fi
     SEQ=$(( LAST_SEQ + 1 ))
     capture_status_position "$TASK"
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
