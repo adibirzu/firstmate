@@ -131,16 +131,44 @@ fm_parent_channel_clean_note() {  # <text>
 
 # Append <line> to <path> unless that exact line is already there.
 fm_parent_channel_append_once() {  # <path> <line>
-  local path=$1 line=$2
+  local path=$1 line=$2 lock pid owner_pid
   if [ -e "$path" ] || [ -L "$path" ]; then
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
   else
     mkdir -p "$(dirname "$path")" || return 1
   fi
+  lock="$path.lock"
+  while ! mkdir "$lock" 2>/dev/null; do
+    if [ -r "$lock/pid" ]; then
+      pid=$(cat "$lock/pid" 2>/dev/null || true)
+      case "$pid" in
+        ''|*[!0-9]*) ;;
+        *)
+          if ! kill -0 "$pid" 2>/dev/null; then
+            rm -rf -- "$lock"
+            continue
+          fi
+          ;;
+      esac
+    fi
+    # A lock without a readable owner may be freshly acquired. Never remove it
+    # based only on that observation, or a concurrent publisher could be split.
+    sleep 0.01
+  done
+  owner_pid=$$
+  if ! printf '%s\n' "$owner_pid" > "$lock/pid"; then
+    rm -rf -- "$lock"
+    return 1
+  fi
   if grep -Fqx -- "$line" "$path" 2>/dev/null; then
+    rm -rf -- "$lock"
     return 0
   fi
-  printf '%s\n' "$line" >> "$path"
+  if ! printf '%s\n' "$line" >> "$path"; then
+    rm -rf -- "$lock"
+    return 1
+  fi
+  rm -rf -- "$lock"
 }
 
 # Publish one parent-facing line from <home>. See the return codes above.

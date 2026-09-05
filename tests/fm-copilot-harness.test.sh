@@ -26,7 +26,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
-# --- launch template (mechanics half) ---------------------------------------
+# Launch argv, adapter recognition, and profile flags are exercised through
+# fm-spawn's executable dispatch contract in fm-spawn-dispatch-profile.test.sh.
 
 test_copilot_launch_template_is_pinned() {
   local line="    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
@@ -342,10 +343,6 @@ test_copilot_trust_gate_has_no_home_shortcut() {
 }
 
 # --- run --------------------------------------------------------------------
-test_copilot_launch_template_is_pinned
-test_existing_launch_templates_untouched
-test_copilot_is_a_known_bare_adapter_name
-test_copilot_model_and_effort_flags
 test_copilot_detection_wired
 test_copilot_busy_default_defined
 test_copilot_busy_line_matches
