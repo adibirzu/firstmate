@@ -254,6 +254,27 @@ publish_outcome_index_ready() { # <seq>
   mv -f -- "$tmp" "$OUTCOME_INDEX_READY"
 }
 
+recover_unpublished_append() { # <task> <verdict> <summary> <wake> <silent>
+  local task=$1 verdict=$2 summary=$3 wake=$4 silent=$5 row seq endpoint ident
+  [ -s "$STORE" ] || return 1
+  row=$(jq -c -s --arg task "$task" --arg verdict "$verdict" \
+    --arg summary "$summary" --arg wake "$wake" --argjson silent "$silent" '
+    if length == 0 then empty
+    elif .[-1].task == $task and .[-1].verdict == $verdict
+      and .[-1].summary == $summary and .[-1].wake == $wake
+      and ((.[-1].silent // false) == $silent) then .[-1]
+    else empty end' "$STORE" 2>/dev/null) || return 1
+  [ -n "$row" ] || return 1
+  seq=$(printf '%s\n' "$row" | jq -er '.seq') || return 1
+  endpoint=$(printf '%s\n' "$row" | jq -er '.statusEndpoint // 0') || return 1
+  ident=$(printf '%s\n' "$row" | jq -er '.statusIdent // "-"') || return 1
+  if [ -e "$STATE/$task.meta" ] || [ -e "$STATE/$task.status" ]; then
+    write_outcome_index "$task" "$seq" "$endpoint" "$ident" || return 1
+  fi
+  publish_outcome_index_ready "$seq" || return 1
+  printf '%s\n' "$seq"
+}
+
 rebuild_outcome_indexes() {
   local rows task seq epoch endpoint ident f mtime
   rm -f -- "$OUTCOME_INDEX_READY" || return 1
@@ -467,6 +488,11 @@ case "$CMD" in
         fm_lock_release "$LOCK"
         echo "error: refusing append because the outcome store is malformed or non-sequential" >&2
         exit 1
+      fi
+      if RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT"); then
+        fm_lock_release "$LOCK"
+        printf '%s\n' "$RECOVERED"
+        exit 0
       fi
     fi
     SEQ=$(( LAST_SEQ + 1 ))

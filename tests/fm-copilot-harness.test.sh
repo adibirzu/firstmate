@@ -29,13 +29,6 @@ classify() { fm_composer_classify_content "$@"; }
 # Launch argv, adapter recognition, and profile flags are exercised through
 # fm-spawn's executable dispatch contract in fm-spawn-dispatch-profile.test.sh.
 
-test_copilot_launch_template_is_pinned() {
-  local line="    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
-  grep -Fqx -- "$line" "$SPAWN" \
-    || fail "fm-spawn: verified copilot launch template missing/changed"
-  pass "fm-spawn: copilot launch template is the verified argv-seed line"
-}
-
 # --- detection --------------------------------------------------------------
 
 test_copilot_detection_wired() {
