@@ -21,6 +21,8 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
 FAKE_CLAUDE="$FAKEBIN/claude"
 export FAKE_CLAUDE
+export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=fm-autoarm-test
+unset CLAUDE_PID
 
 # Copy the hook and its sourced dependencies into a fixture checkout.
 install_autoarm_scripts() {

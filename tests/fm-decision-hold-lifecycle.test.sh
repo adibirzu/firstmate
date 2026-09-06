@@ -63,6 +63,7 @@ test_uninventoried_report_decision_refuses_completion() {
 ## Done
 EOF
   fm_write_meta "$home/state/$id.meta" \
+    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-scratch" \
     "project=$home/projects/sample" \
@@ -91,7 +92,7 @@ EOF
   set -e
   [ "$rc" -ne 0 ] || fail "completed investigation teardown erased a report-only unresolved decision"
   assert_present "$home/state/$id.meta" "refused completion must preserve investigation metadata"
-  assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit"
+  assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit: $(cat "$home/teardown.err")"
   pass "report-only unresolved decision is reproduced and completion refuses before loss"
 }
 
@@ -112,6 +113,7 @@ run_decisions() {  # <home> <command args...>
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
+    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-$id" \
     "project=$home/projects/sample" \
@@ -444,6 +446,10 @@ EOF
   fakebin=$(fm_fakebin "$mate")
   fm_fake_exit0 "$fakebin" tmux no-mistakes gh gh-axi
   fm_fake_treehouse "$fakebin"
+  printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
+    "$mate" > "$parent/data/secondmates.md"
+  fm_write_secondmate_meta "$parent/state/sample-mate.meta" "$mate" \
+    "firstmate:fm-sample-mate" sample
   origin=sample-mate-review
   mkdir -p "$mate/data/$origin"
   tasks_in "$mate" add "$origin" "Investigate secondmate sample" --kind scout --repo sample --start >/dev/null

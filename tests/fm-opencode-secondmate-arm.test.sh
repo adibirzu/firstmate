@@ -1547,9 +1547,8 @@ printf 'arm-ran\n' >> "${FM_ARM_LOG:?}"
 SH
   cat > "$dir/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
-cat >/dev/null
-printf 'guard-fired\n' >&2
-exit 2
+# Exercise the real shell scope boundary for a non-primary worktree.
+FM_ROOT_OVERRIDE="$FM_HOME" exec "${FM_REAL_GUARD:?}"
 SH
   chmod +x "$dir/bin/fm-watch-arm.sh" "$dir/bin/fm-turnend-guard.sh"
   : > "$dir/state/task.meta"
@@ -1592,7 +1591,7 @@ if (prompts !== 0) {
 }
 EOF
   out=$(PLUGIN="$PLUGIN" TURNEND="$TURNEND_PLUGIN" WORKTREE="$dir" FM_HOME="$dir" \
-    FM_ARM_LOG="$TMP_ROOT/crewmate-idle-arm.log" "$NODE_BIN" "$snippet" 2>&1)
+    FM_REAL_GUARD="$ROOT/bin/fm-turnend-guard.sh" FM_ARM_LOG="$TMP_ROOT/crewmate-idle-arm.log" "$NODE_BIN" "$snippet" 2>&1)
   status=$?
   expect_code 0 "$status" "a crewmate worktree must stay silent on idle"
   [ -z "$out" ] || fail "crewmate idle test printed output: $out"

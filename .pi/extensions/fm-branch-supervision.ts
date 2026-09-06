@@ -1036,7 +1036,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function wakeScopeRefusal(task: string): string {
-    if (!wakeTaskScope || (wakeTaskScope.heartbeat && task === "fleet") || wakeTaskScope.tasks.has(task)) return "";
+    if (!wakeTaskScope || wakeTaskScope.heartbeat || wakeTaskScope.tasks.has(task)) return "";
     const named = [...wakeTaskScope.tasks].sort().join(", ");
     const rows = wakeTaskScope.rows.join(", ");
     return `report refused: the wake being handled (row ${rows}) names ${named}, not ${task}; report only that task, never fleet or a task from memory`;
