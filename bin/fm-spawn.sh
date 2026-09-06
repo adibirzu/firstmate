@@ -3933,9 +3933,12 @@ spawn_write_meta_locked() {
   else
     : > "$tmp"
     # A fresh spawn owns the backlog In-flight commit deferred to the final
-    # commit point; mark it pending so an abort before that point rolls the
-    # provisional record and busy state back.
-    SPAWN_FRESH_COMMIT_PENDING=1
+    # commit point only when this task has a backlog transition. Without one,
+    # metadata publication is already the final ownership handoff, so an
+    # interrupt during a later best-effort refresh must preserve that record.
+    if [ "$BACKLOG_TRANSITION" = 1 ]; then
+      SPAWN_FRESH_COMMIT_PENDING=1
+    fi
   fi
   {
     echo "window=$META_WINDOW"

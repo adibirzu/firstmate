@@ -862,7 +862,10 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # single immediate read can observe the requested tab before the queued
   # removal moves focus again, leaving the captain in a different workspace.
   # Re-focus and verify a short bounded settle window instead.
-  while [ "$attempt" -lt 3 ]; do
+  # The UI may apply removal just after the focus command.  Keep restoring for
+  # one bounded second so that queued teardown work cannot leave a different
+  # workspace active after this operation returns.
+  while [ "$attempt" -lt 10 ]; do
     fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
       echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
       return 1

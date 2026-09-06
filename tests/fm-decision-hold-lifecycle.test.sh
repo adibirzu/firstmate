@@ -429,6 +429,10 @@ test_secondmate_hold_stays_in_authoritative_home() {
   mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects" "$mate/bin"
   cp "$ROOT/.tasks.toml" "$mate/.tasks.toml"
   printf '# Synthetic secondmate home\n' > "$mate/AGENTS.md"
+  # A seeded secondmate must carry its durable parent route before it can
+  # publish its final child outcome during teardown.
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$mate/.fm-secondmate-parent"
   printf 'sample-mate\n' > "$mate/.fm-secondmate-home"
   cat > "$mate/data/backlog.md" <<'EOF'
 ## In flight

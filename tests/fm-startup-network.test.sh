@@ -366,7 +366,7 @@ test_deferred_invalid_secondmate_markers_queue_durable_findings() {
     IFS='|' read -r home root log <<EOF
 $rec
 EOF
-    printf '%s\n' $$ > "$home/state/.lock"
+    write_lock_binding "$home" "$$"
     if [ "$kind" = malformed ]; then
       printf '../other-home\n' > "$home/.fm-secondmate-home"
     else
