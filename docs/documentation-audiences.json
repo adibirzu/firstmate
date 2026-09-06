@@ -557,6 +557,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/claude-worker-mcp.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/runtime-backends.md",
       "audience": "maintainer-verification"
     },

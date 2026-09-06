@@ -128,7 +128,7 @@ assert_meta_profile() {
 }
 
 test_no_profile_keeps_claude_profile_defaults() {
-  local rec id out status expected launch
+  local rec id out status launch
   id=profile-off-z1
   rec=$(make_spawn_case profile-off claude "$id")
   read_case_record "$rec"
@@ -140,8 +140,9 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
-  [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}'" "default MCP must be empty and strict"
+  assert_contains "$launch" "--settings " "plugin overrides must be supplied"
+  assert_contains "$launch" "--no-chrome" "browser MCP must be disabled"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
 
@@ -802,6 +803,29 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex default default
   pass "active crew-dispatch profile does not block secondmate launches"
 }
+
+test_claude_mcp_optin_and_secondmate() {
+  local rec id out launch sm
+  id=claude-mcp-optin
+  rec=$(make_spawn_case claude-mcp-optin claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"mcpServers":{"approved":{"command":"approved-mcp"}}}' > "$HOME_DIR/config/crew-mcp.json"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR") || fail "$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{\"approved\":{\"command\":\"approved-mcp\"}}}'" "opt-in must retain strict isolation"
+  id=claude-mcp-secondmate
+  rec=$(make_spawn_case claude-mcp-secondmate claude "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate) || fail "$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}'" "secondmate MCP must default empty"
+  assert_contains "$launch" "--settings " "secondmate must disable plugins"
+  pass "Claude opt-in remains strict and secondmates default to no MCP"
+}
+
+test_claude_mcp_optin_and_secondmate
 
 test_no_profile_keeps_claude_profile_defaults
 test_non_cursor_launch_clears_inherited_cursor_markers

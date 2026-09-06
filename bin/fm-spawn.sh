@@ -25,6 +25,10 @@
 #   launch-only prompt file while leaving data/<id>/brief.md untouched.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
+#   Claude launches use strict MCP isolation and disable inherited plugins.
+#   config/crew-mcp.json opts in only its explicit mcpServers set; the default
+#   is empty. bin/fm-claude-worker-config.sh builds launch-only JSON, preserving
+#   the login store and existing hooks for both crew and secondmates.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -1349,7 +1353,7 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__--strict-mcp-config --mcp-config __CLAUDEMCP__ --settings __CLAUDESETTINGS__ --no-chrome "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -1461,6 +1465,11 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+CLAUDE_MCP=
+if [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" = 0 ]; then
+  CLAUDE_MCP=$("$SCRIPT_DIR/fm-claude-worker-config.sh" mcp "$CONFIG") || exit 1
+fi
 
 # A subscription routing provider only makes sense for a verified adapter whose
 # credit identity the dispatcher can enforce; a raw escape-hatch command carries
@@ -3267,6 +3276,12 @@ spawn_record_traceparent() {
   fi
   return "$status"
 }
+
+if [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" = 0 ]; then
+  CLAUDE_SETTINGS=$("$SCRIPT_DIR/fm-claude-worker-config.sh" settings "$WT") || exit 1
+  LAUNCH=${LAUNCH//__CLAUDEMCP__/"$(shell_quote "$CLAUDE_MCP")"}
+  LAUNCH=${LAUNCH//__CLAUDESETTINGS__/"$(shell_quote "$CLAUDE_SETTINGS")"}
+fi
 
 # spawn_write_meta serializes the whole read-modify-write against every other
 # metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,

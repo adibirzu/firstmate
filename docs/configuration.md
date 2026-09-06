@@ -1024,3 +1024,35 @@ Only after those retries exhaust does it remove the lock, and only when it is pr
 A live lock, a missing `lsof`, any failed check, or any other fetch failure keeps today's behavior.
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Claude worker MCP isolation
+
+Claude crewmates, scouts, and secondmates start with no inherited MCP servers or plugins.
+The launch retains the existing Claude login store, project tools, and supervision hooks.
+The primary's settings and running servers are not modified.
+All configured user, project, and local plugin entries are disabled for the worker invocation because plugins can start their own MCP processes.
+Browser integration is disabled too.
+This applies across every runtime backend through the shared Claude launch template in `bin/fm-spawn.sh`; raw custom launch commands remain an explicit escape hatch.
+
+For a task that needs MCP, the launching home's optional `config/crew-mcp.json` supplies the complete approved server set.
+The file uses Claude's MCP configuration shape:
+
+```json
+{
+  "mcpServers": {
+    "project-tools": {
+      "type": "http",
+      "url": "http://127.0.0.1:9999/mcp"
+    }
+  }
+}
+```
+
+Absence means an empty server set, and malformed configuration refuses launch.
+Only explicitly listed servers are passed to Claude; this never enables inherited or plugin servers.
+The file applies to subsequent Claude launches from that home, including relaunches and secondmates, and is not propagated into secondmate homes.
+Remove it after the task to restore the empty default.
+Do not put offensive MCP servers in worker configuration.
+Organization-managed policy can override CLI plugin settings; validate that policy with the credentialed guard before relying on worker isolation on a managed machine.
+The executable JSON contract belongs to `bin/fm-claude-worker-config.sh`.
+See [Claude worker verification](verification/claude-worker-mcp.md) for portable and credentialed checks.
