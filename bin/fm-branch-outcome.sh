@@ -184,7 +184,7 @@ last_seq() {
         or (keys == ["epoch", "seq", "silent", "summary", "task", "verdict", "wake"] and (.silent | type) == "boolean")
         or (
           (keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
-            or keys == ["epoch", "seq", "eventId", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"])
+            or keys == ["epoch", "eventId", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"])
           and (.silent | type) == "boolean"
           and (.eventId == null or ((.eventId | type) == "string" and (.eventId | test("[\\t\\n]") | not) and (.eventId | length) > 0))
           and ((.statusEndpoint | type) == "number" and .statusEndpoint >= 0 and .statusEndpoint <= 9007199254740991 and .statusEndpoint == (.statusEndpoint | floor))
@@ -509,10 +509,10 @@ case "$CMD" in
     SEQ=$(( LAST_SEQ + 1 ))
     capture_status_position "$TASK"
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
-    printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
+    printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"%s}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
-      "$(json_escape "$CAPTURED_STATUS_IDENT")""$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi)" >> "$STORE"
+      "$(json_escape "$CAPTURED_STATUS_IDENT")" "$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi)" >> "$STORE"
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would
     # recreate the footprint teardown removed. The outcome itself is still

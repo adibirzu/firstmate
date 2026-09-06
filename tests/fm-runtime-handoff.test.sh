@@ -174,7 +174,7 @@ setup_case() {
   git -C "$CASE_WT" add feature.txt
   git -C "$CASE_WT" commit -qm 'task work'
   printf 'uncommitted\n' > "$CASE_WT/dirty.txt"
-  printf '# brief for %s\n' "$id" > "$CASE_HOME/data/$id/brief.md"
+  printf '# Task\nCaptain: Exercise runtime handoff for %s.\n' "$id" > "$CASE_HOME/data/$id/brief.md"
   fakebin=$(make_fakebin "$CASE_DIR")
   export FM_HOME="$CASE_HOME"
   export FM_FAKE_PANE_PATH="$CASE_WT"
@@ -595,7 +595,7 @@ setup_case() {
   prompt=$(cat "$CASE_HOME/state/task-h1.handoff-prompt")
   assert_contains "$prompt" "Codex quota exhausted" "progress note in handoff prompt"
   assert_contains "$prompt" "no-mistakes axi status" "pipeline re-attach instruction"
-  assert_contains "$prompt" "brief for task-h1" "original brief content embedded"
+  assert_contains "$prompt" "$(cat "$CASE_HOME/data/task-h1/brief.md")" "original brief content embedded"
   if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
     fail "handoff must not call treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
   fi

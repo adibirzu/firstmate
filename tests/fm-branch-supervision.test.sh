@@ -69,7 +69,7 @@ test_outcome_store_is_append_only_with_cursor_reads() {
   store="$home/state/branch-outcomes.jsonl"
 
   seq1=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
-    --task task-1 --verdict routine --summary 'worker healthy, "quoted" text kept' --wake 'signal: working') \
+    --task task-1 --verdict routine --summary 'worker healthy, "quoted" text kept' --wake 'signal: working' --event-id 'heartbeat:1') \
     || fail "first append failed"
   [ "$seq1" = 1 ] || fail "first outcome seq was $seq1, not 1"
   seq2=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
@@ -85,6 +85,7 @@ assert [row["seq"] for row in rows] == [1, 2], rows
 assert rows[0]["verdict"] == "routine" and rows[1]["verdict"] == "captain", rows
 assert rows[0]["summary"] == 'worker healthy, "quoted" text kept', rows[0]
 assert rows[0]["silent"] is False and rows[1]["silent"] is False, rows
+assert rows[0]["eventId"] == "heartbeat:1", rows[0]
 PY
 
   # mark-read moves only the cursor sidecar; the log bytes never change.

@@ -50,14 +50,11 @@ function runGuard(root) {
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
   if (!coordinator?.ensureArmed) return "guard";
-  // Watch-arm owns continuity whenever it acts on the home, including
-  // not-primary crewmate/scout worktrees and empty/healthy cycles. Falling
-  // through to a guard LLM turn on those statuses is what spent a model call on
-  // every idle. When the coordinator declines to arm - it sees no supervision
-  // need, or this session does not own the lock - the shell guard is the owner
-  // of the supervision-need predicate and decides on its own evidence.
-  const status = await coordinator.ensureArmed(sessionID, client);
-  return ["retrying", "existing", "not-needed", "healthy", "armed", "not-primary"].includes(status)
+  // Pending re-arms and empty or healthy cycles need no guard turn.
+  // Normalize the legacy external outcome to the same healthy state.
+  const outcome = await coordinator.ensureArmed(sessionID, client);
+  const status = outcome === "external" ? "healthy" : outcome;
+  return ["retrying", "not-needed", "healthy"].includes(status)
     ? "silent"
     : "guard";
 }

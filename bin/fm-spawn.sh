@@ -3059,7 +3059,7 @@ if [ "$KIND" != secondmate ]; then
           echo "error: failed to arm the busy-state contract for $ID" >&2
           exit 1
         }
-        [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
+        [ "$REUSE_WORKTREE" != 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
       fi
       ;;
     kimi*)

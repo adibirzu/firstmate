@@ -63,6 +63,7 @@ test_uninventoried_report_decision_refuses_completion() {
 ## Done
 EOF
   fm_write_meta "$home/state/$id.meta" \
+    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-scratch" \
     "project=$home/projects/sample" \
@@ -90,7 +91,7 @@ EOF
   set -e
   [ "$rc" -ne 0 ] || fail "completed investigation teardown erased a report-only unresolved decision"
   assert_present "$home/state/$id.meta" "refused completion must preserve investigation metadata"
-  assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit"
+  assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit: $(cat "$home/teardown.err")"
   pass "report-only unresolved decision is reproduced and completion refuses before loss"
 }
 
@@ -111,6 +112,7 @@ run_decisions() {  # <home> <command args...>
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
+    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-$id" \
     "project=$home/projects/sample" \
@@ -166,8 +168,7 @@ EOF
 
   FM_STATE_OVERRIDE="$home/state" bash -c '
     . "$1"
-    sig=$(fm_wake_signal_sig "$3") || exit 1
-    printf "%s" "$sig" > "$(fm_wake_signal_seen_path "$2" "$3")"
+    fm_wake_status_mark_current "$2" "$3"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state" "$home/state/$id.status" \
     || fail "could not prime the announced decision baseline"
   run_decisions "$home" complete "$id" route access >/dev/null \
@@ -428,6 +429,8 @@ test_secondmate_hold_stays_in_authoritative_home() {
   mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects" "$mate/bin"
   cp "$ROOT/.tasks.toml" "$mate/.tasks.toml"
   printf '# Synthetic secondmate home\n' > "$mate/AGENTS.md"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$mate/.fm-secondmate-parent"
   printf 'sample-mate\n' > "$mate/.fm-secondmate-home"
   cat > "$mate/data/backlog.md" <<'EOF'
 ## In flight
@@ -439,6 +442,10 @@ EOF
   fakebin=$(fm_fakebin "$mate")
   fm_fake_exit0 "$fakebin" tmux no-mistakes gh gh-axi
   fm_fake_treehouse "$fakebin"
+  printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
+    "$mate" > "$parent/data/secondmates.md"
+  fm_write_secondmate_meta "$parent/state/sample-mate.meta" "$mate" \
+    "firstmate:fm-sample-mate" sample
   origin=sample-mate-review
   mkdir -p "$mate/data/$origin"
   tasks_in "$mate" add "$origin" "Investigate secondmate sample" --kind scout --repo sample --start >/dev/null
@@ -454,10 +461,6 @@ EOF
     || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
   tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
 
-  printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
-    "$mate" > "$parent/data/secondmates.md"
-  fm_write_secondmate_meta "$parent/state/sample-mate.meta" "$mate" \
-    "firstmate:fm-sample-mate" sample
   json=$(run_bearings "$parent") || fail "parent Bearings could not read secondmate hold"
   printf '%s' "$json" | jq -e --arg hold "$hold" '
     .decisions_open | any(.owner == "sample-mate" and .verb == "captain-hold" and (.id | endswith($hold)))
