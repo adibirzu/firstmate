@@ -65,6 +65,15 @@
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
+#     usage:{harness,model,context_pct,quota} is the fleet-wide usage-bar
+#     fallback row (bin/fm-crew-usage-lib.sh, data/fm-harness-usage-bar/report.md
+#     section 4): harness/model come straight from meta, context_pct is always
+#     "n/a" (no harness exposes a live context percentage on firstmate's
+#     external observation channel - a recorded finding, not a bug), and
+#     quota is quota-axi's spendPriority for the harness's mapped provider -
+#     "n/a" unless the caller sets FM_CREW_USAGE_ENABLE_QUOTA=1, since that
+#     field is a live per-account network call and stays opt-in so the
+#     canonical snapshot's default performance and determinism never change.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
@@ -207,6 +216,12 @@ esac
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"  # fm_run_timed: the shared hard bound
+# shellcheck source=bin/fm-accounts-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-accounts-lib.sh"  # fm_account_quota_provider: harness -> quota-axi provider
+# shellcheck source=bin/fm-crew-usage-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-crew-usage-lib.sh"  # fm_crew_usage_json: harness/model/context%/quota row
 
 usage() {
   cat <<'EOF'
@@ -688,7 +703,8 @@ prefetch_task_current_states() {
 }
 
 task_json_lines() {
-  local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
+  local meta original_meta id kind harness model mode yolo project worktree home projects spawn_gen backend target status_log report_path
+  local usage_json
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
@@ -702,6 +718,7 @@ task_json_lines() {
     kind=$(meta_value "$meta" kind)
     [ -n "$kind" ] || kind=ship
     harness=$(meta_value "$meta" harness)
+    model=$(meta_value "$meta" model)
     mode=$(meta_value "$meta" mode)
     yolo=$(meta_value "$meta" yolo)
     project=$(meta_value "$meta" project)
@@ -738,6 +755,7 @@ task_json_lines() {
       return 1
     }
     event_json=$(status_event_json "$status_log" "$STATE/$id.status")
+    usage_json=$(fm_crew_usage_json "$harness" "$model")
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     read -r current_state current_source < <(
       printf '%s' "$current_json" | jq -r '[.state // "", .source // ""] | @tsv'
@@ -820,6 +838,7 @@ task_json_lines() {
       --arg observed_at "$SNAPSHOT_NOW" \
       --arg last_event_raw "$last_event_raw" \
       --argjson current_state "$current_json" \
+      --argjson usage "$usage_json" \
       --argjson meta_path "$meta_json" \
       --argjson status_log "$status_json" \
       --argjson report "$report_json" \
@@ -848,6 +867,7 @@ task_json_lines() {
           report:$report
         },
         secondmate_projects:($projects | if . == "" then [] else split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(. != "")) end),
+        usage:$usage,
         current_state:($current_state + {observed_at:$observed_at,freshness:"fresh"}),
         endpoint:{target:($target | if . == "" then null else . end),exists:$endpoint_exists,agent_alive:$agent_alive,
           status:(if $endpoint_exists == false then "absent"
@@ -988,7 +1008,8 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
          | {id,kind,state:.current_state.state,
             repo:(($work.repo // .project // null) | if . == null then null else trunc(120) end),
             source:.current_state.source,
-            doing:((.current_state.detail // "") | trunc(120))} ]) as $active_all
+            doing:((.current_state.detail // "") | trunc(120)),
+            usage:(.usage // {harness:"",model:"",context_pct:"n/a",quota:"n/a"})} ]) as $active_all
     | ($captain_holds_all
        + ([ $tasks[] as $t | ($t.hints.open_decisions // [])[]
             | {id:$t.id,key,verb,summary:(.summary | trunc(160)),reason:null,source:"status"} ])) as $decisions_all

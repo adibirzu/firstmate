@@ -454,7 +454,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         state: .current_state.state,
         repo:(.backlog.repo // .project // null),
         doing: ((.current_state.detail // "") as $d
-                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
+                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
+        usage_harness: (.usage.harness // ""),
+        usage_model: (.usage.model // ""),
+        usage_context_pct: (.usage.context_pct // "n/a"),
+        usage_quota: (.usage.quota // "n/a")
       } ]
      + [ $secondmate_views[] as $m
          | $m.active_children[]?
@@ -462,7 +466,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             kind:(.kind // "secondmate"),
             state:(.state // "working"),
             repo:(.repo // null),
-            doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
+            doing:((.doing // .state) | trunc(90)),
+            usage_harness: (.usage.harness // ""),
+            usage_model: (.usage.model // ""),
+            usage_context_pct: (.usage.context_pct // "n/a"),
+            usage_quota: (.usage.quota // "n/a")} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)

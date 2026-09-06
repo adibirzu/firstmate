@@ -585,6 +585,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/fm-harness-usage-bar.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/runtime-backends.md",
       "audience": "maintainer-verification"
     },
