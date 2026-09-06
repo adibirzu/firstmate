@@ -235,7 +235,6 @@ The crewmate overlay `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLA
 That after count is well under 16K, so a 32K slot still has room for work.
 Secondmate OpenCode launches were left on the previous permission-only overlay.
 Refresh: `FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh` (crewmate env regression at the start of that guard) plus the portable spawn launch-line assertions in `tests/fm-spawn-dispatch-profile.test.sh`.
-The GB10 local LLM client contract in `Gb10LocalLlm.md` owns the 32K-slot numbers this overlay is sized for.
 
 ## Claude workspace trust
 
