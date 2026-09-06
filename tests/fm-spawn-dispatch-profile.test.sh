@@ -542,7 +542,6 @@ test_cursor_threads_model_workspace_and_omits_effort_axis() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" cursor cursor-grok-4.5-high high
   launch=$(cat "$LAUNCH_LOG")
   first_line=$(sed -n '1p' "$LAUNCH_LOG")
-  last_line=$(sed -n '$p' "$LAUNCH_LOG")
   assert_contains "$first_line" "--trust --yolo --model 'cursor-grok-4.5-high' --workspace '$WT_DIR'" \
     "cursor launch did not carry trust, autonomy, model, and exact workspace flags"
   assert_not_contains "$first_line" "encode launch-brief" \

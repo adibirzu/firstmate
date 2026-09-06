@@ -14,6 +14,14 @@ TMP_ROOT=$(fm_test_tmproot fm-claude-trust)
 
 TRUST="$ROOT/bin/fm-claude-trust.sh"
 
+make_claude_spawn_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(make_spawn_fakebin "$dir")
+  fm_fake_exit0 "$fakebin" claude
+  fm_fake_treehouse "$fakebin"
+  printf '%s\n' "$fakebin"
+}
+
 # make_case <name>: a project with one linked worktree plus an isolated Claude
 # config directory. Echoes "<case>|<proj>|<wt>|<config>".
 make_case() {
@@ -388,7 +396,7 @@ test_refused_spawn_leaves_no_task_state() {
   fi
   mkdir -p "$config"
   ln -s /etc/passwd "$config/.claude.json"
-  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fakebin=$(make_claude_spawn_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" claude
   fm_git_worktree "$proj" "$wt" wt-refused
   fm_test_spawn_brief "$home" "$id"
@@ -418,7 +426,7 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   config="$case_dir/claude-config"
   launch_log="$case_dir/launch.log"
   mkdir -p "$config"
-  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fakebin=$(make_claude_spawn_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" claude
   fm_git_worktree "$proj" "$wt" wt-spawn
   fm_test_spawn_brief "$home" trustspawn
