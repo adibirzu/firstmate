@@ -144,6 +144,7 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_contains "$launch" "--settings " "plugin overrides must be supplied"
   assert_contains "$launch" "--no-chrome" "browser MCP must be disabled"
   assert_contains "$launch" "CLAUDE_CODE_SEND_FEEDBACK=0" "feedback drafts must remain disabled"
+  assert_contains "$launch" "--setting-sources project,local" "primary user automation must be excluded"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
 
@@ -1215,9 +1216,25 @@ test_claude_mcp_optin_and_secondmate() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}'" "secondmate MCP must default empty"
   assert_contains "$launch" "--settings " "secondmate must disable plugins"
+  assert_contains "$launch" "--setting-sources project,local" "secondmate must exclude user automation"
   pass "Claude opt-in remains strict and secondmates default to no MCP"
 }
 
+test_claude_user_settings_optin() {
+  local rec id out launch
+  id=claude-user-settings
+  rec=$(make_spawn_case claude-user-settings claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --claude-user-settings) || fail "$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--setting-sources user,project,local" "explicit opt-in must restore user settings"
+  assert_contains "$launch" "--strict-mcp-config" "user-settings opt-in must preserve MCP isolation"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" reject-user-settings "$PROJ_DIR" --harness codex --claude-user-settings) && fail "non-Claude opt-in accepted"
+  assert_contains "$out" "--claude-user-settings requires the managed Claude launch template" "wrong-harness opt-in refusal unclear"
+  pass "user automation requires an explicit Claude-only opt-in"
+}
+
+test_claude_user_settings_optin
 test_claude_mcp_optin_and_secondmate
 
 test_worker_launch_delivers_role_scope

@@ -17,15 +17,16 @@ Output:
 ok - 2.1.257 (Claude Code): spawned worker authenticated, Read and Bash succeeded, MCP servers=0, plugins=0, MCP/node descendants=0
 ```
 
-The guard executes the actual command emitted by `fm-spawn.sh` with the installed Claude binary and existing credentials.
-Pane allocation is simulated; the real worker runs in bounded print mode with the same isolation flags.
-The guard checks the initialization protocol, successful Read and Bash tool calls, completion, primary settings checksum, and the descendant tree captured by `ps -axo pid=,ppid=,comm=` inside the worker.
-The launch includes `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --settings '<per-launch plugin overrides>' --no-chrome`.
+The initial MCP-only evidence above used the actual command emitted by `fm-spawn.sh` with the installed Claude binary and existing credentials in bounded print mode.
+The guard now uses an interactive PTY to exercise status-line behavior too, while pane allocation remains simulated.
+It checks Read and Bash, owned completion hooks, primary settings checksum, and descendant process samples captured externally with `ps -axo pid=,ppid=,args=`.
+The expanded interactive verification must pass before certifying the user-automation isolation guarantee.
+The launch includes `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --settings '<per-launch plugin overrides>' --setting-sources project,local --no-chrome`.
 The settings override explicitly maps configured plugin identifiers to false, rather than relying on an empty object to replace merged settings.
 No credential directory is created or copied.
 An additional process snapshot during the initial credentialed probe showed zero worker MCP descendants while 56 unrelated MCP processes remained present.
 This establishes the worker boundary without terminating primary or other worker processes.
-Interactive presentation, organization-managed policy, and other Claude versions require their own credentialed verification.
+Organization-managed policy and other Claude versions require their own credentialed verification.
 
 ## Portable checks
 
@@ -70,3 +71,12 @@ The documentation and test coverage checks reported:
 fm-doc-audience-check: ok surfaces=122 local_links=337
 FM_TEST_COVERAGE ok total=205 parallel=24 serial=170 serial_shards=4 herdr=11
 ```
+
+
+## User-profile automation isolation
+
+The default launch excludes the user settings source, removing the primary profile's status-line command and per-event hooks without blanket hook disablement.
+Project and local hooks remain enabled.
+The dispatch regression verifies the `--claude-user-settings` opt-in and the default on secondmate launches.
+The interactive guard rejects any observed descendant or debug entry naming `LIFEOS_StatusLine.sh` or the primary `.claude/hooks/` directory.
+Its owned Stop marker and Bash proof artifact verify that task supervision remains functional.

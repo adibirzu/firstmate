@@ -55,6 +55,10 @@
 #   config/crew-mcp.json opts in only its explicit mcpServers set; the default
 #   is empty. bin/fm-claude-worker-config.sh builds launch-only JSON, preserving
 #   the login store and existing hooks for both crew and secondmates.
+#   --claude-user-settings opts this invocation into the user settings layer,
+#   including its status line and event hooks. Claude defaults to project,local
+#   settings only, keeping worker supervision hooks and login credentials.
+#   The opt-in must be repeated on relaunch; MCP/plugin isolation still applies.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -429,6 +433,7 @@ HARNESS_ARG=
 PROVIDER=
 MODEL=
 EFFORT=
+CLAUDE_USER_SETTINGS=0
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -468,6 +473,7 @@ for a in "$@"; do
     continue
   fi
   case "$a" in
+    --claude-user-settings) CLAUDE_USER_SETTINGS=1 ;;
     --scout) KIND=scout; KIND_SET=1 ;;
     --secondmate) KIND=secondmate; KIND_SET=1 ;;
     # Two spellings of one in-place relaunch, with deliberately different
@@ -1186,6 +1192,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$PROVIDER" ] || shared_args+=(--provider "$PROVIDER")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ "$CLAUDE_USER_SETTINGS" = 0 ] || shared_args+=(--claude-user-settings)
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
@@ -1523,7 +1530,7 @@ launch_template() {
     # under a managed Claude settings policy: CLAUDE_CODE_SEND_FEEDBACK=0 is read
     # directly and is not subject to managed-settings precedence. It is per-launch,
     # scoped to this invocation only, and never touches the captain's global settings.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__--strict-mcp-config --mcp-config __CLAUDEMCP__ --settings __CLAUDESETTINGS__ --no-chrome "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__--strict-mcp-config --mcp-config __CLAUDEMCP__ --settings __CLAUDESETTINGS__ --setting-sources __CLAUDESOURCES__ --no-chrome "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -1721,6 +1728,13 @@ case "$ARG3" in
     ;;
 esac
 
+if [ "$CLAUDE_USER_SETTINGS" = 1 ] && { [ "$HARNESS" != claude ] || [ "$RAW_LAUNCH" = 1 ]; }; then
+  echo "error: --claude-user-settings requires the managed Claude launch template" >&2
+  exit 1
+fi
+CLAUDE_SOURCES=project,local
+[ "$CLAUDE_USER_SETTINGS" = 0 ] || CLAUDE_SOURCES=user,project,local
+LAUNCH=${LAUNCH//__CLAUDESOURCES__/$CLAUDE_SOURCES}
 CLAUDE_MCP=
 if [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" = 0 ]; then
   CLAUDE_MCP=$("$SCRIPT_DIR/fm-claude-worker-config.sh" mcp "$CONFIG") || exit 1
