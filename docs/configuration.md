@@ -1108,7 +1108,7 @@ Claude crewmates, scouts, and secondmates start with no inherited MCP servers or
 The launch retains the existing Claude login store, project tools, and supervision hooks.
 By default it loads only project and local settings, excluding the primary user profile's status line and per-event automation.
 The user settings layer's other preferences and environment settings are also excluded; OAuth credentials remain in their original store.
-Pass `--claude-user-settings` to `bin/fm-spawn.sh` only when that exact launch needs user-profile automation.
+Pass `--claude-user-settings` to `bin/fm-spawn.sh` only when that exact launch needs user-profile automation, including remote secondmate launches.
 The flag is Claude-only, is forwarded through batch spawns, and must be repeated on relaunch.
 It restores user settings while preserving strict MCP and plugin isolation.
 Project and local hooks, including Firstmate's task lifecycle hooks, remain active in both modes.
