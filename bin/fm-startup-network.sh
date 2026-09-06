@@ -535,11 +535,17 @@ EOF
   # owners only so fm_run_timed can govern them as one process group.
   if [ "$sweep_locked" -eq 1 ]; then
     # shellcheck disable=SC2016  # Child-shell variables expand inside the bound.
-    fm_run_timed "$budget" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    fm_run_timed "$budget" env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
       FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_NETWORK_LOCK_PID="$lock_pid" \
       bash -c '
         script_dir=$1
-        "$script_dir/fm-inactive-reconcile.sh" scan --startup >/dev/null 2>&1 || true
+        # Keep the scan in the same configured code root as this worker.  In
+        # particular, test and isolated installations may provide a sibling
+        # reconcile implementation.  Its durable wake remains the result;
+        # preserve any diagnostic output in the stage report instead of
+        # silently swallowing a malformed-marker failure.
+        "$script_dir/fm-inactive-reconcile.sh" scan --startup || \
+          printf "warning: deferred inactive-outcome reconciliation did not complete\n" >&2
         exec "$script_dir/fm-bootstrap.sh"
       ' _ "$SCRIPT_DIR" >"$out" 2>&1 || rc=$?
   else
