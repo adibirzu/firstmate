@@ -166,8 +166,8 @@ FM_SECONDMATE_CHARTER='Own iOS delivery on the build Mac.' \
 # --- disabled: the remote route must stay byte-identically untraced ----------
 freeze_parent_session
 : > "$HERDR_LOG"
-remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >/dev/null 2>&1 \
-  || fail "default-off remote secondmate spawn failed"
+remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >"$TMP_ROOT/default-spawn.out" 2>&1 \
+  || fail "default-off remote secondmate spawn failed: $(cat "$TMP_ROOT/default-spawn.out")"
 assert_present "$PARENT/state/ios.meta" "default-off remote spawn published no parent metadata"
 ! grep -q '^traceparent=' "$PARENT/state/ios.meta" \
   || fail "default-off remote spawn must not record a traceparent= line"
@@ -306,5 +306,54 @@ try_flag 'requires a non-empty value' \
   "an empty carrier must be refused rather than silently ignored" \
   --secondmate --traceparent=
 pass "delivery: a parent-supplied carrier is accepted only for a secondmate launch and only as a strict W3C value"
+
+for trace_mode in off on; do
+  if [ "$trace_mode" = on ]; then
+    : > "$PARENT/config/trace-context"
+  else
+    rm -f "$PARENT/config/trace-context"
+  fi
+  freeze_parent_session
+  for settings_mode in opt-in default; do
+    reset_remote_herdr_fixture "$HERDR_STATE"
+    : > "$HERDR_LOG"
+    settings_args=()
+    sources=project,local
+    if [ "$settings_mode" = opt-in ]; then
+      settings_args+=(--claude-user-settings)
+      sources=user,project,local
+    fi
+    remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate --harness claude "${settings_args[@]}" \
+      >"$TMP_ROOT/claude-spawn.out" 2>&1 || fail "remote Claude $settings_mode spawn failed with tracing $trace_mode: $(cat "$TMP_ROOT/claude-spawn.out")"
+    assert_grep "--setting-sources $sources " "$HERDR_LOG" "remote Claude must receive the invocation's settings sources"
+    assert_grep '--strict-mcp-config --mcp-config' "$HERDR_LOG" "remote opt-in must retain strict MCP isolation"
+    assert_grep '--no-chrome' "$HERDR_LOG" "remote opt-in must retain browser isolation"
+    [ "$(remote_launch_snapshot)" = "$trace_mode" ] || fail "settings opt-in changed remote tracing"
+    if [ "$trace_mode" = on ]; then
+      [ "$(remote_injected_traceparent)" = "$(meta_traceparent "$PARENT/state/ios.meta")" ] \
+        || fail "settings opt-in shifted the trace carrier"
+    else
+      ! grep -q 'export TRACEPARENT=' "$HERDR_LOG" || fail "settings opt-in enabled tracing"
+    fi
+  done
+done
+pass "remote Claude settings opt-in reaches the launch with tracing on or off and resets on relaunch"
+
+for selection in explicit configured; do
+  printf 'codex\n' > "$PARENT/config/secondmate-harness"
+  harness_args=()
+  [ "$selection" != explicit ] || harness_args+=(--harness codex)
+  : > "$HERDR_LOG"
+  if out=$(remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate "${harness_args[@]}" --claude-user-settings 2>&1); then
+    fail "remote non-Claude settings opt-in was accepted ($selection)"
+  fi
+  assert_contains "$out" 'requires the managed Claude launch template' "remote parent must reject non-Claude opt-in"
+  [ ! -s "$HERDR_LOG" ] || fail "rejected opt-in reached the remote backend"
+done
+if out=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh launch ios codex - - herdr '' --claude-user-settings 2>&1); then
+  fail "remote control accepted non-Claude settings opt-in"
+fi
+assert_contains "$out" 'requires the managed Claude launch template' "remote control must validate the opt-in independently"
+pass "remote parent and remote control reject the Claude settings opt-in for other harnesses"
 
 echo "ALL TESTS PASSED"
