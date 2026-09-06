@@ -348,7 +348,9 @@ test_interrupt_during_the_post_publication_refresh_keeps_the_lease() {
 set -u
 lock=${FM_FAKE_JQ_KILL_ON_LOCK:-}
 once=${FM_FAKE_JQ_KILL_ONCE:-}
+require_meta=${FM_FAKE_JQ_REQUIRE_META:-}
 if [ -n "$lock" ] && [ -n "$once" ] && [ ! -e "$once" ] \
+  && { [ -z "$require_meta" ] || [ -f "$require_meta" ]; } \
   && { [ -e "$lock" ] || [ -L "$lock" ]; }; then
   : > "$once"
   pid=$PPID
@@ -367,6 +369,7 @@ SH
   status=0
   out=$(FM_FAKE_JQ_KILL_ON_LOCK="$HOME_DIR/state/.home-summary-refresh.lock" \
     FM_FAKE_JQ_KILL_ONCE="$CASE_DIR/interrupt-delivered" \
+    FM_FAKE_JQ_REQUIRE_META="$HOME_DIR/state/$id.meta" \
     FM_FAKE_REAL_JQ="$real_jq" \
     run_settle_spawn "$id") || status=$?
 

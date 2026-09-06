@@ -120,6 +120,12 @@ detect_own() {
       echo gemini
       return
     fi
+    # On platforms where ps reports an interpreter as comm, preserve Muse's
+    # versioned launcher identity from argv[0]. The match is still anchored so
+    # an unrelated argument containing "muse" cannot claim this harness.
+    case "$(basename -- "$argv0")" in
+      muse|muse-bin-*) echo muse; return ;;
+    esac
     case "$(basename -- "$comm")" in
       # gemini precedes claude here for the same precedence reason as the
       # marker layer above, so a gemini worker under a claude primary is never

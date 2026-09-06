@@ -817,7 +817,7 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
   while IFS= read -r code; do
     [ -n "$code" ] || continue
     case "$code" in
-      SC1091|SC2034|SC2153|SC2329) ;;
+      SC1091|SC2034|SC2153|SC2154|SC2329) ;;
       *) unexpected="${unexpected}${unexpected:+ }$code" ;;
     esac
   done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)

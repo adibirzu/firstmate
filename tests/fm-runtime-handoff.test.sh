@@ -93,17 +93,15 @@ case "${1:-}" in
       if [ "$prev" = -l ]; then payload=$arg; fi
       prev=$arg
     done
-    if printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
-      session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
-      if [ -n "$session" ]; then
-        root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
-        workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
-        project="$root/fake-cursor-project"
-        mkdir -p "$project/agent-transcripts/fake-conversation"
-        printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
-        printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
-          > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
-      fi
+    session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+    if [ -n "$session" ] && [ -n "$payload" ]; then
+      root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+      workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+      project="$root/fake-cursor-project"
+      mkdir -p "$project/agent-transcripts/fake-conversation"
+      printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+      printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+        > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
     fi
     exit 0
     ;;

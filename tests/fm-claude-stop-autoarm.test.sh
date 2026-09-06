@@ -628,7 +628,7 @@ test_single_flight_admits_exactly_one_owner() {
   dir=$(make_primary_dir "$TMP_ROOT/single-flight")
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" slow-actionable
-  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+  CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-autoarm FM_HOME="$dir" "$FAKE_CLAUDE" -c '
     printf "%s\n" "$$" > "$FM_HOME/state/.lock"
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err1" &
     p1=$!

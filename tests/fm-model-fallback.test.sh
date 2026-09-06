@@ -151,7 +151,9 @@ setup_case() {  # <name> <id> <config-body> <status-body>
   git -C "$CASE_WT" add feature.txt
   git -C "$CASE_WT" commit -qm 'task work'
   printf 'uncommitted\n' > "$CASE_WT/dirty.txt"
-  printf '# brief for %s\n' "$id" > "$CASE_HOME/data/$id/brief.md"
+  printf '%s\n' '# Task' '' "## Captain's intent" '' "Preserve the existing worktree for $id." '' \
+    '## Firstmate spec' '' 'Relaunch in place with the recorded endpoint.' \
+    > "$CASE_HOME/data/$id/brief.md"
   if [ -n "$config_body" ]; then
     printf '%s\n' "$config_body" > "$CASE_HOME/config/crew-dispatch.json"
   fi

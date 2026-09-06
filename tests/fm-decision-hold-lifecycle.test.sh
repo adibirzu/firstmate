@@ -117,7 +117,8 @@ write_origin_meta() {  # <home> <id> [kind]
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=$kind" \
-    "mode=$kind"
+    "mode=$kind" \
+    "spawn_gen=sfixture.$id"
 }
 
 test_structured_holds_survive_teardown_and_route_resolution() {
