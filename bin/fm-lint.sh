@@ -163,23 +163,33 @@ fm_lint_run_workflows() {
 OPENROUTER_KEY_PATTERN='sk-or-v1-[A-Za-z0-9_-]{20,}'
 fm_lint_run_key_guard() {
   [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
-  local tracked path line found=0
+  local tracked matches path line found=0
   tracked=$(mktemp "${TMPDIR:-/tmp}/fm-lint-tracked.XXXXXX") || return 2
-  if ! git ls-files -z > "$tracked" 2>/dev/null; then
+  matches=$(mktemp "${TMPDIR:-/tmp}/fm-lint-matches.XXXXXX") || {
     rm -f "$tracked"
+    return 2
+  }
+  if ! git ls-files -z > "$tracked" 2>/dev/null; then
+    rm -f "$tracked" "$matches"
     printf 'fm-lint.sh: could not enumerate tracked files; the OpenRouter key guard cannot run.\n' >&2
     return 2
   fi
+  # shellcheck disable=SC2094 # $tracked and $matches are distinct mktemp files; the loop only reads the former.
   while IFS= read -r -d '' path; do
     [ -f "$path" ] || continue
-    while IFS= read -r line; do
+    : > "$matches" || {
+      rm -f "$tracked" "$matches"
+      return 2
+    }
+    grep -I -n -E -e "$OPENROUTER_KEY_PATTERN" -- "$path" 2>/dev/null | cut -d: -f1 > "$matches" || true
+    while IFS=: read -r line _; do
       [ -n "$line" ] || continue
       printf 'fm-lint.sh: OpenRouter key literal (sk-or-v1-) in tracked file %s:%s; remove it before push.\n' \
         "$path" "$line" >&2
       found=1
-    done < <(grep -I -n -E -e "$OPENROUTER_KEY_PATTERN" -- "$path" 2>/dev/null | cut -d: -f1)
+    done < "$matches"
   done < "$tracked"
-  rm -f "$tracked"
+  rm -f "$tracked" "$matches"
   [ "$found" -eq 0 ] || return 1
   printf 'fm-lint.sh: no OpenRouter key literal in tracked files\n'
   return 0

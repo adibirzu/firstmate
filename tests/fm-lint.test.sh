@@ -590,6 +590,39 @@ test_changed_mode_invokes_shellcheck_once_per_root() {
   pass "fm-lint.sh changed mode invokes ShellCheck once per root"
 }
 
+test_key_guard_does_not_leak_descriptors_per_tracked_file() {
+  local tmp fakebin log diff_file ls_file fixture out rc i
+  tmp=$(fm_test_tmproot fm-lint-key-guard-fds)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  fm_lint_stub_actionlint "$fakebin"
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  : > "$diff_file"
+  ls_file="$tmp/ls-files.nul"
+  fixture="$ROOT/tests/lib.sh"
+  i=0
+  while [ "$i" -lt 128 ]; do
+    printf '%s\0' "$fixture" >> "$ls_file"
+    i=$((i + 1))
+  done
+
+  rc=0
+  out=$( (
+    ulimit -n 64
+    PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
+      FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT"
+  ) 2>&1 ) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "key guard failed under bounded descriptors (exit $rc)"$'\n'"$out"
+  assert_not_contains "$out" "redirection error" \
+    "key guard leaked descriptors while scanning tracked files"
+  assert_contains "$out" "no OpenRouter key literal in tracked files" \
+    "key guard did not complete its tracked-file scan"
+  pass "fm-lint.sh key guard keeps descriptor use bounded per tracked file"
+}
+
 test_ci_keeps_external_sources_without_local_exclusions() {
   local tmp fakebin log flag_log mode_log fixture out
   tmp=$(fm_test_tmproot fm-lint-ci-follow)
@@ -1422,6 +1455,7 @@ test_zero_changed_files_exits_clean
 test_list_files_respects_changed_mode
 test_changed_mode_drops_external_sources_and_excludes_cross_file_codes
 test_changed_mode_invokes_shellcheck_once_per_root
+test_key_guard_does_not_leak_descriptors_per_tracked_file
 test_ci_keeps_external_sources_without_local_exclusions
 test_main_branch_keeps_external_sources
 test_merge_base_less_keeps_external_sources
