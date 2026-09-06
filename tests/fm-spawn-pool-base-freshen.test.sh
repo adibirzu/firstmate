@@ -8,8 +8,8 @@
 # unreachable.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-pool-base-freshen)
@@ -56,6 +56,10 @@ make_case() {
   publisher="$case_dir/publisher"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
 
+  # Callers capture the final record with command substitution. Keep all fixture
+  # setup output on stderr: a local Git hook is allowed to print a diagnostic,
+  # but that diagnostic must never become a path field in the captured record.
+  {
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   fm_test_spawn_brief "$home" "$id"
@@ -64,7 +68,7 @@ make_case() {
   git init --quiet -b "$default" "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
-  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >&2
   git clone --quiet --bare "$project" "$origin"
   git -C "$project" remote add origin "file://$origin"
   initial=$(git -C "$project" rev-parse HEAD)
@@ -73,8 +77,9 @@ make_case() {
   git clone --quiet "file://$origin" "$publisher"
   printf 'must survive a newly spawned branch\n' > "$publisher/advanced-main.txt"
   git -C "$publisher" add advanced-main.txt
-  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-main
+  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-main >&2
   git -C "$publisher" push --quiet origin "$default"
+  } >&2
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$initial|$default"
 }
@@ -147,14 +152,12 @@ test_linked_spawning_home_rejects_primary_before_refresh() {
         || fail "spawn did not refresh the genuine scout copy"
     else
       [ "$status" -ne 0 ] || fail "linked spawning home accepted $returned as a disposable copy"
-      # None of these is an isolated copy, so the worktree poll never adopts one
-      # and the wait runs out instead: the spawning directory fails the poll's
-      # own project comparison, and the repository primary (named directly or
-      # through a symlink) fails the isolation screen the poll shares with the
-      # guard. The refusal names the last path the pane reported.
-      assert_contains "$out" "did not enter an isolated worktree" \
+      # None of these is a leaseable isolated copy. The lease result is screened
+      # before it can be sent to the pane, so the spawning directory and the
+      # repository primary (including its symlink) fail before any refresh or
+      # worktree settlement can touch them.
+      assert_contains "$out" "did not yield an isolated worktree" \
         "spawn did not explain its isolation refusal"
-      assert_contains "$out" "last seen" "refusal did not name the path the pane reported"
       [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
       [ ! -e "$primary/.git/FETCH_HEAD" ] || fail "refused spawn fetched before proving isolation"
     fi
@@ -325,6 +328,9 @@ make_submodule_case() {  # <name> <id>
   sub="$case_dir/sub-origin"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
 
+  # This record is likewise captured by its callers. Quarantine all setup
+  # diagnostics on stderr so a hook cannot corrupt a parsed path field.
+  {
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   fm_test_spawn_brief "$home" "$id"
@@ -333,10 +339,10 @@ make_submodule_case() {  # <name> <id>
   git init --quiet -b main "$sub"
   printf 'pin one\n' > "$sub/lib.txt"
   git -C "$sub" add lib.txt
-  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm sub-one
+  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm sub-one >&2
   subpin1=$(git -C "$sub" rev-parse HEAD)
   printf 'pin two\n' > "$sub/lib.txt"
-  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam sub-two
+  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam sub-two >&2
   subpin2=$(git -C "$sub" rev-parse HEAD)
   git -C "$sub" checkout --quiet "$subpin1"
 
@@ -345,7 +351,7 @@ make_submodule_case() {  # <name> <id>
   git -C "$project" add README.md
   git -C "$project" -c protocol.file.allow=always -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
     submodule --quiet add "file://$sub" ui
-  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >&2
   git clone --quiet --bare "$project" "$origin"
   git -C "$project" remote add origin "file://$origin"
   git -C "$project" worktree add --quiet --detach "$pool" HEAD
@@ -355,9 +361,10 @@ make_submodule_case() {  # <name> <id>
   git clone --quiet "file://$origin" "$publisher"
   git -C "$publisher" -c protocol.file.allow=always submodule --quiet update --init
   git -C "$publisher/ui" checkout --quiet "$subpin2"
-  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam advance-pin
+  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam advance-pin >&2
   git -C "$publisher" push --quiet origin main
   advanced=$(git -C "$publisher" rev-parse HEAD)
+  } >&2
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$subpin1|$subpin2|$advanced"
 }
