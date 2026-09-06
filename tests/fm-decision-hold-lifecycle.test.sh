@@ -68,7 +68,8 @@ EOF
     "project=$home/projects/sample" \
     "harness=codex" \
     "kind=scout" \
-    "mode=scout"
+    "mode=scout" \
+    "spawn_gen=sfixture.omitted-decision"
   printf 'done: report and visual review complete\n' > "$home/state/$id.status"
   cat > "$home/data/$id/report.md" <<'EOF'
 # Sample route review

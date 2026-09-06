@@ -640,7 +640,7 @@ run_classify() {  # <text>
 
 {
   setup_case apply-real apply-r1 "$AGY_CHAIN_CONFIG" "$DEPLETED_LINE"
-  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
   : > "$FM_FAKE_TREEHOUSE_LOG"
   head_before=$(git -C "$CASE_WT" rev-parse HEAD)

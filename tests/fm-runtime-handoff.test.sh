@@ -85,7 +85,29 @@ case "${1:-}" in
     esac
     exit 0
     ;;
-  has-session|new-session|set-window-option|send-keys) exit 0 ;;
+  has-session|new-session|set-window-option) exit 0 ;;
+  send-keys)
+    payload=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then payload=$arg; fi
+      prev=$arg
+    done
+    if printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
+      session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+      if [ -n "$session" ]; then
+        root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        project="$root/fake-cursor-project"
+        mkdir -p "$project/agent-transcripts/fake-conversation"
+        printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+        printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+          > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+      fi
+    fi
+    exit 0
+    ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   new-window)
     # -P -F '#{window_id}'
     printf '@9\n'

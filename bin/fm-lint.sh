@@ -11,7 +11,7 @@
 # with full dataflow over the whole canonical set. An ordinary local branch
 # (changed-file mode, including the no-mistakes lint step) drops
 # --external-sources, keeps dataflow, and excludes SC1091, SC2034, SC2153,
-# and SC2329, the codes that need library context. Those codes still run in
+# SC2154, and SC2329, the codes that need library context. Those codes still run in
 # CI over the whole set. Explicit paths keep --external-sources with the
 # selected dataflow mode.
 # Tests stop source analysis at imported production modules because CI analyzes
@@ -31,7 +31,7 @@
 #     only the canonical-set files changed since that merge-base, including
 #     uncommitted local edits, via plain local `git diff` (no network, no
 #     `gh`). That local pass drops --external-sources and excludes SC1091,
-#     SC2034, SC2153, and SC2329. A branch with zero matching changed files
+#     SC2034, SC2153, SC2154, and SC2329. A branch with zero matching changed files
 #     skips ShellCheck and prints a "no changed lint targets" note, then
 #     still validates workflows.
 # Explicit paths always bypass this file-set selection and lint exactly the
