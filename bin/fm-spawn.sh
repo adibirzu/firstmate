@@ -51,6 +51,10 @@
 #   the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
+#   Claude launches use strict MCP isolation and disable inherited plugins.
+#   config/crew-mcp.json opts in only its explicit mcpServers set; the default
+#   is empty. bin/fm-claude-worker-config.sh builds launch-only JSON, preserving
+#   the login store and existing hooks for both crew and secondmates.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -1517,13 +1521,9 @@ launch_template() {
     # feedback flow (the SendFeedback tool), deliberately layered so a fleet-launched
     # agent never queues or submits a bug-report draft on the captain's behalf even
     # under a managed Claude settings policy: CLAUDE_CODE_SEND_FEEDBACK=0 is read
-    # directly and is not subject to managed-settings precedence, while --settings
-    # '{"feedbackDrafts":"off"}' sets the documented settings key (Claude Code
-    # changelog 2.1.247) that a managed policy CAN override back on. Either control
-    # alone disables the feature; keep both so a managed override of one still
-    # leaves the other in force. Both are per-launch, scoped to this invocation only,
-    # and never touch the captain's global ~/.claude/settings.json.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '\''{"feedbackDrafts":"off"}'\'' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # directly and is not subject to managed-settings precedence. It is per-launch,
+    # scoped to this invocation only, and never touches the captain's global settings.
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__--strict-mcp-config --mcp-config __CLAUDEMCP__ --settings __CLAUDESETTINGS__ --no-chrome "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -1720,6 +1720,11 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+CLAUDE_MCP=
+if [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" = 0 ]; then
+  CLAUDE_MCP=$("$SCRIPT_DIR/fm-claude-worker-config.sh" mcp "$CONFIG") || exit 1
+fi
 
 # A subscription routing provider only makes sense for a verified adapter whose
 # credit identity the dispatcher can enforce; a raw escape-hatch command carries
@@ -3861,6 +3866,12 @@ spawn_record_traceparent() {
   fi
   return "$status"
 }
+
+if [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" = 0 ]; then
+  CLAUDE_SETTINGS=$("$SCRIPT_DIR/fm-claude-worker-config.sh" settings "$WT") || exit 1
+  LAUNCH=${LAUNCH//__CLAUDEMCP__/"$(shell_quote "$CLAUDE_MCP")"}
+  LAUNCH=${LAUNCH//__CLAUDESETTINGS__/"$(shell_quote "$CLAUDE_SETTINGS")"}
+fi
 
 # spawn_write_meta serializes the whole read-modify-write against every other
 # metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,
