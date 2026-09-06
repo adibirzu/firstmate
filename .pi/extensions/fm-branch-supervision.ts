@@ -519,8 +519,7 @@ export default function (pi: ExtensionAPI) {
   // `fleet` included, so a report typed from memory about a task the wake
   // never named is never stored or delivered. Null outside a wake prompt and
   // during a heartbeat review, which is not scoped by task.
-  let wakeTaskScope: { rows: string[]; tasks: Set<string>; taskRows: Record<string, string[]>; heartbeat: boolean } | null = null;
-  let wakeReportIdentity: string | null = null;
+  let wakeTaskScope: { rows: string[]; tasks: Set<string> } | null = null;
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -931,7 +930,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function wakeScopeRefusal(task: string): string {
-    if (!wakeTaskScope || (wakeTaskScope.heartbeat && task === "fleet") || wakeTaskScope.tasks.has(task)) return "";
+    if (!wakeTaskScope || wakeTaskScope.tasks.has(task)) return "";
     const named = [...wakeTaskScope.tasks].sort().join(", ");
     const rows = wakeTaskScope.rows.join(", ");
     return `report refused: the wake being handled (row ${rows}) names ${named}, not ${task}; report only that task, never fleet or a task from memory`;
@@ -957,7 +956,6 @@ export default function (pi: ExtensionAPI) {
         silent: Type.Optional(Type.Boolean({
           description: "True only when a fleet-wide heartbeat review found literally nothing worth reporting; omit or use false whenever any action was taken or any routine result is worth a note",
         })),
-        wakeRow: Type.Optional(Type.String({ description: "The durable wake-queue sequence this report handles" })),
       }),
       execute: async (_toolCallId, params) => {
         const task = String((params as { task: unknown }).task || "").trim();
@@ -965,7 +963,6 @@ export default function (pi: ExtensionAPI) {
         const summary = String((params as { summary: unknown }).summary || "").trim();
         const wake = String((params as { wake?: unknown }).wake ?? "").trim();
         const silent = (params as { silent?: unknown }).silent === true;
-        const wakeRow = String((params as { wakeRow?: unknown }).wakeRow ?? "").trim();
         if (!task || !summary || (verdictRaw !== "routine" && verdictRaw !== "captain") || (silent && (task !== "fleet" || verdictRaw !== "routine"))) {
           return {
             content: [{ type: "text", text: "invalid report: task, verdict (routine|captain), and summary are required" }],
@@ -978,12 +975,7 @@ export default function (pi: ExtensionAPI) {
         if (scopeRefusal) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
-        if (wakeTaskScope && (!/^[0-9]+$/.test(wakeRow) || !wakeTaskScope.rows.includes(wakeRow) || (!wakeTaskScope.heartbeat && !wakeTaskScope.taskRows[task]?.includes(wakeRow)))) {
-          return { content: [{ type: "text", text: "report refused: name the durable wake row being handled" }], details: undefined, isError: true };
-        }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
-        const eventId = wakeReportIdentity && wakeRow ? `${wakeReportIdentity}:${wakeRow}` : "";
-        if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         if (!actingAsOwner(toolGeneration)) {
           return {
@@ -1242,22 +1234,13 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        wakeTaskScope = {
-          rows: [...scope.eligibleSeqs],
-          tasks: new Set(scope.eligibleTasks),
-          taskRows: scope.eligibleTaskSeqs,
-          heartbeat,
-        };
-        wakeReportIdentity = heartbeat
-          ? `heartbeat:${scope.eligibleSeqs.join(",")}`
-          : `rows:${scope.eligibleSeqs.join(",")}`;
+        wakeTaskScope = heartbeat ? null : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
         try {
           await session.prompt(
             `FIRSTMATE SUPERVISION WAKE: ${message}\n\nHandle this per your operating procedure and finish with fm_branch_report.`,
           );
         } finally {
           wakeTaskScope = null;
-          wakeReportIdentity = null;
         }
         const providerError = settledPromptProviderError(sessionManager, entryOffset);
         if (providerError) {
