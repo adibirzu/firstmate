@@ -96,6 +96,8 @@ fm_test_fake_gh_axi() {
 # firstmate, window ops succeed, send-keys succeed. When FM_FAKE_LAUNCH_LOG is
 # set, each send-keys -l payload is appended one per line. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
+# FM_FAKE_TMUX_COMPOSER=pending makes submit-confirmation reads show an unsent
+# composer; otherwise they show an empty composer.
 #
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
@@ -107,6 +109,7 @@ fm_test_fake_tmux_spawn() {
 set -u
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -118,14 +121,35 @@ case "${1:-}" in
     ;;
   has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
+    payload=
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = "-l" ]; then
+        payload=$a
+        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      fi
+      prev=$a
+    done
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" != pending ] &&
+       printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
+      session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+      if [ -n "$session" ]; then
+        root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        project="$root/fake-cursor-project"
+        mkdir -p "$project/agent-transcripts/fake-conversation"
+        printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+        printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+          > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+      fi
+    fi
+    exit 0
+    ;;
+  capture-pane)
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
+      printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0
     ;;

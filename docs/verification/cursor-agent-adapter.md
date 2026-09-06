@@ -76,13 +76,19 @@ Interactive mode shows a BLOCKING trust dialog on an untrusted directory:
 
 ## Launch (mechanics half)
 
-`cursor-agent --force "<prompt>"` seeds and auto-runs the prompt once trust is
-cleared (verified: pane reached `⠠⠛ Working` on the seeded PONG task, produced
-`PONG`). Effort is a `--model` bracket param (`claude-opus-4-8[effort=high]`), not a
-flag. Final template:
+2026-09-05 update: the spawn template no longer relies on positional prompt auto-run.
+Live tmux probing showed `cursor-agent --trust --yolo --model cursor-grok-4.6-low --workspace <dir> "<prompt>"` can start a turn directly, so the prompt is not generally parsed as the `--workspace` value and the model catalog accepts that id.
+However, two supervised Cursor dispatches reached the startup render with the seeded brief visible and no transcript/status append, while OpenCode workers using the same brief scaffold progressed normally.
+The root-cause fix is to launch Cursor bare with the model and workspace flags, then submit the encoded launch brief through the backend submit-confirmation path used for ordinary delivery.
+If the confirmed transition is not observed within the bounded submit window, spawn appends a failed status instead of reporting a zero-turn worker as spawned.
+
+Historical note: `cursor-agent --force "<prompt>"` was previously verified to seed and auto-run the prompt once trust was cleared.
+That is no longer the Firstmate launch contract.
+Effort is a `--model` bracket param (`claude-opus-4-8[effort=high]`), not a flag.
+Current template:
 
 ```
-cursor-agent --force __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"
+cursor-agent --trust --yolo __MODELFLAG__--workspace __WORKTREE__
 ```
 
 ## Recorded in
