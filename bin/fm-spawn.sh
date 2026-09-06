@@ -127,8 +127,12 @@
 #   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
-#   new adapters. pi-signed launches that exact executable name from PATH and
-#   refuses before endpoint creation when it is unavailable; it never falls back to pi.
+#   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
+#   name from PATH once, probes that concrete path with --help, and launches the
+#   same path. It adds --tui-mode regular only when that help advertises the flag;
+#   a failed or inconclusive probe omits it so older Pi versions remain launchable.
+#   A missing selected executable refuses before endpoint creation, and pi-signed
+#   never falls back to pi.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -207,6 +211,8 @@
 #   See docs/configuration.md for provider/Git setup and supported limits.
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
+#     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
@@ -1462,6 +1468,29 @@ if [ -z "$BACKEND" ]; then
   exit 1
 fi
 
+# Resolve one concrete Pi-family executable before launch. That pin makes the
+# capability probe and the pane command agree even if PATH later changes.
+resolve_pi_executable() {
+  local candidate dir
+  candidate=$(type -P -- "$1" 2>/dev/null) || return 1
+  [ -x "$candidate" ] || return 1
+  case "$candidate" in
+    /*) printf '%s\n' "$candidate" ;;
+    *)
+      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || return 1
+      printf '%s/%s\n' "$dir" "$(basename "$candidate")"
+      ;;
+  esac
+}
+
+# Pi's TUI mode is version-dependent. A failed or inconclusive capability probe
+# leaves the flag out so older Pi versions stay launchable.
+pi_supports_tui_mode() {
+  local executable=$1 help
+  help=$("$executable" --help 2>&1) || return 1
+  printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
+}
+
 # The verified launch command per adapter. The knowledge half of each adapter
 # (busy-state source, exit command, dialogs, quirks) lives in the harness-adapters skill.
 launch_template() {
@@ -1513,10 +1542,11 @@ launch_template() {
       fi
       ;;
     pi|pi-signed)
+      printf '%s' '__PIBIN____PITUIMODE__'
       if [ "$kind" = secondmate ]; then
-        printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s%s' "$harness" ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -1742,7 +1772,18 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
 fi
 
 case "$HARNESS" in
-  pi|pi-signed) LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH" ;;
+  pi|pi-signed)
+    PI_BIN=$(resolve_pi_executable "$HARNESS") || {
+      echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
+      exit 1
+    }
+    PI_TUI_MODE=
+    if pi_supports_tui_mode "$PI_BIN"; then
+      PI_TUI_MODE=' --tui-mode regular'
+    fi
+    LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
+    LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH"
+    ;;
   cursor)
     # `cursor` is not the CLI name, and the legacy alias `agent` is far too
     # generic to launch on its name alone, so resolution runs through the
@@ -1760,15 +1801,6 @@ case "$HARNESS" in
     fi
     ;;
 esac
-
-# pi-signed is an explicitly selected executable identity, not an alias that may
-# silently fall back to pi. Resolve it from PATH before creating an endpoint and
-# retain the literal name in the launch command and task metadata.
-if [ "$HARNESS" = pi-signed ] && ! command -v pi-signed >/dev/null 2>&1; then
-  echo "error: pi-signed executable not found on PATH; install the signed Pi wrapper or select a different verified harness" >&2
-  exit 1
-fi
-
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
@@ -3946,6 +3978,7 @@ LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
+  pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
   cline) LAUNCH=${LAUNCH//__CLINESETTINGS__/"$(shell_quote "$STATE/$ID.cline-settings.json")"} ;;
   gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
