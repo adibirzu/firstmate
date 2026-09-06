@@ -199,6 +199,7 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 test_detects_versioned_process_ancestor() {
   local bin out
   for bin in muse-bin-0.1.0-R708.1 muse-bin-9.9.9-RZZZ.9 muse; do
+    # shellcheck disable=SC2016 # The inner bash, not this test shell, expands $1, $2, and $r.
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
       -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
       /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
@@ -213,6 +214,7 @@ test_detects_versioned_process_ancestor() {
 test_detection_is_anchored() {
   local bin out
   for bin in musescore amuse notmuse-bin muse-binary muse-bind; do
+    # shellcheck disable=SC2016 # The inner bash, not this test shell, expands $1, $2, and $r.
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
       -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
       /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
