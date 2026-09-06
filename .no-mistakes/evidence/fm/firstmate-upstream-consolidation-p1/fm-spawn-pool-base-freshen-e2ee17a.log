@@ -1,0 +1,175 @@
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/publisher"
+# evidence begin: linked-home spawn, returned=primary
+$ bin/fm-spawn.sh pool-linked-primary-r12 /private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/secondmate --scout
+error: treehouse get --lease did not yield an isolated worktree (resolved '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/project'; worktree root '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/project'; spawning project '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary/secondmate'); refusing to launch to avoid tangling the primary checkout. Inspect target firstmate:fm-pool-linked-primary-r12
+exit=1
+primary HEAD before=05ade48a0ff761b40f17f9d534731a155564e59a after=05ade48a0ff761b40f17f9d534731a155564e59a
+primary reflog before:
+05ade48 HEAD@{0}: commit (initial): initial
+primary reflog after:
+05ade48 HEAD@{0}: commit (initial): initial
+FETCH_HEAD absent
+task metadata absent
+# evidence end
+ok - linked spawning home: primary preserves the primary before any refresh
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/publisher"
+# evidence begin: linked-home spawn, returned=primary-alias
+$ bin/fm-spawn.sh pool-linked-primary-alias-r12 /private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/secondmate --scout
+error: treehouse get --lease did not yield an isolated worktree (resolved '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/primary-alias'; worktree root '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/project'; spawning project '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-primary-alias/secondmate'); refusing to launch to avoid tangling the primary checkout. Inspect target firstmate:fm-pool-linked-primary-alias-r12
+exit=1
+primary HEAD before=935fb7adfb710dd1014207dda8be2b58a069e8db after=935fb7adfb710dd1014207dda8be2b58a069e8db
+primary reflog before:
+935fb7a HEAD@{0}: commit (initial): initial
+primary reflog after:
+935fb7a HEAD@{0}: commit (initial): initial
+FETCH_HEAD absent
+task metadata absent
+# evidence end
+ok - linked spawning home: primary-alias preserves the primary before any refresh
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/publisher"
+# evidence begin: linked-home spawn, returned=spawning
+$ bin/fm-spawn.sh pool-linked-spawning-r12 /private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/secondmate --scout
+error: treehouse get --lease did not yield an isolated worktree (resolved '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/secondmate'; worktree root '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/secondmate'; spawning project '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-spawning/secondmate'); refusing to launch to avoid tangling the primary checkout. Inspect target firstmate:fm-pool-linked-spawning-r12
+exit=1
+primary HEAD before=2b4057138365ca8c8fb9ed99e15f31c6d3585ba2 after=2b4057138365ca8c8fb9ed99e15f31c6d3585ba2
+primary reflog before:
+2b40571 HEAD@{0}: commit (initial): initial
+primary reflog after:
+2b40571 HEAD@{0}: commit (initial): initial
+FETCH_HEAD absent
+task metadata absent
+# evidence end
+ok - linked spawning home: spawning preserves the primary before any refresh
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/publisher"
+# evidence begin: linked-home spawn, returned=scout
+$ bin/fm-spawn.sh pool-linked-scout-r12 /private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/secondmate --scout
+spawned pool-linked-scout-r12 harness=codex kind=scout window=firstmate:fm-pool-linked-scout-r12 worktree=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/pool
+exit=0
+primary HEAD before=efa7d53069a1b9a67bbe6ae5cb8fc35d3a315d50 after=efa7d53069a1b9a67bbe6ae5cb8fc35d3a315d50
+primary reflog before:
+efa7d53 HEAD@{0}: commit (initial): initial
+primary reflog after:
+efa7d53 HEAD@{0}: commit (initial): initial
+FETCH_HEAD absent
+saved task metadata:
+window=firstmate:fm-pool-linked-scout-r12
+endpoint_task_id=pool-linked-scout-r12
+worktree=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/pool
+project=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/linked-scout/secondmate
+harness=codex
+kind=scout
+mode=
+yolo=
+tasktmp=/tmp/fm-501-pool-linked-scout-r12
+model=default
+effort=default
+spawn_gen=s1788713704.48262.105
+worker HEAD=f70ba4dff5aea2fc61e1bc61273387286e09326f origin/main=f70ba4dff5aea2fc61e1bc61273387286e09326f
+# evidence end
+ok - linked spawning home: scout preserves the primary before any refresh
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/publisher"
+# observed spawn: spawned pool-current-base-r1 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-pool-current-base-r1 worktree=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-base/pool
+# observed base: HEAD=a098320b83da45ba8c61517fadbb690ea8277fc4 origin/main=a098320b83da45ba8c61517fadbb690ea8277fc4 advanced-main=must survive a newly spawned branch
+ok - a stale pooled worktree refreshes to current origin/main before a crew branch is created
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-trunk/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-trunk/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-trunk/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-trunk/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/current-trunk/publisher"
+ok - a stale pooled worktree resolves and refreshes a non-main default branch
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/publisher"
+# observed direct-pr spawn: spawned pool-direct-pr-r3 harness=codex kind=ship mode=direct-PR yolo=off window=firstmate:fm-pool-direct-pr-r3 worktree=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/direct-pr/pool
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/publisher"
+# observed scout spawn: spawned pool-scout-r3 harness=codex kind=scout window=firstmate:fm-pool-scout-r3 worktree=/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/scout/pool
+ok - direct-PR ships and scouts both refresh stale pooled worktrees before launch
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/publisher"
+# observed dirty refusal: error: pooled worktree '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/dirty-refusal/pool' is not clean; refusing to discard uncommitted work while refreshing its base; preserved=keep this local work
+ok - a dirty pooled worktree is refused without discarding its local work
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/publisher"
+# observed unresolved-default refusal: error: could not resolve origin's current default branch for pooled worktree '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unresolved-default/pool'; refusing to launch from a potentially stale base
+ok - an unresolved remote default branch refuses the pooled worktree
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/publisher"
+# observed unreachable-origin refusal: error: could not fetch origin for pooled worktree '/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/unreachable-origin/pool'; refusing to launch from a potentially stale base
+ok - an unreachable origin refuses a potentially stale pooled worktree
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/stale-pin/publisher"
+# observed stale-pin refusal: error: submodule 'ui' is checked out at 5f69c03eabc9cce7403d926aff40e28138896db7, but this base records c0df16863b4d42c9b804d6a02b8dc9365759eee2
+ok - two consecutive spawns across a moved submodule pin end in a refusal naming both pins and no remedy
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/pool/ui"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-unpushed/pool/ui"
+ok - an unpushed submodule commit keeps the uncommitted-work refusal and survives it
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-work/publisher"
+ok - work inside a submodule is still refused as uncommitted work, not called stale
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/sub-origin"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/publisher"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-pool-base-freshen.jeg0p0/sub-both/publisher"
