@@ -839,7 +839,7 @@ fm_backend_herdr_projection_focus_snapshot() {  # <session>
 # A single tab.focus on the exact response-independent pre-operation tab id
 # restores both the workspace and tab atomically.
 fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation>
-  local session=$1 before=$2 operation=$3 workspace tab after info restored
+  local session=$1 before=$2 operation=$3 workspace tab after info restored attempt=0
   [ -n "$before" ] || {
     echo "warning: herdr presentation $operation had no unambiguous pre-operation focus snapshot" >&2
     return 1
@@ -858,16 +858,22 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
     echo "warning: herdr presentation $operation changed focus and the exact prior tab response was ambiguous" >&2
     return 1
   fi
-  fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
-    echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
-    return 1
-  }
-  restored=$(fm_backend_herdr_projection_focus_snapshot "$session") || restored=
-  if [ "$restored" != "$before" ]; then
-    echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
-    return 1
-  fi
-  return 0
+  # Herdr applies workspace removal and focus commands asynchronously.  A
+  # single immediate read can observe the requested tab before the queued
+  # removal moves focus again, leaving the captain in a different workspace.
+  # Re-focus and verify a short bounded settle window instead.
+  while [ "$attempt" -lt 3 ]; do
+    fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
+      echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
+      return 1
+    }
+    sleep 0.1
+    restored=$(fm_backend_herdr_projection_focus_snapshot "$session") || restored=
+    [ "$restored" = "$before" ] && return 0
+    attempt=$((attempt + 1))
+  done
+  echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
+  return 1
 }
 
 # fm_backend_herdr_projection_close_pane_focus_preserving: close one exact

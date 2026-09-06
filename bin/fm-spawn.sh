@@ -3994,6 +3994,11 @@ spawn_write_meta_locked() {
     SPAWN_META_PUBLISH_FAILED=1
     return 1
   fi
+  # Publication transfers worktree ownership to fm-teardown.sh.  Disarm the
+  # spawn-only lease cleanup in this same critical section: an interrupt after
+  # the atomic publish but before the caller regains control must never return
+  # the leased worktree underneath the now-live task record.
+  TREEHOUSE_LEASE_ABORT_CLEANUP=0
 }
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PUBLISH_FAILED=0

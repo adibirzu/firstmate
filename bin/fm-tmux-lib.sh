@@ -248,6 +248,15 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     case "$state" in
       pending|pending-unproven) ;;
       unknown)
+        # Some native adapters deliberately render no reliable composer state
+        # while a turn starts.  A caller-supplied durable confirmation is
+        # stronger than that ambiguous screen read (Cursor verifies its own
+        # conversation transcript), so accept it before treating the pane as
+        # an unconfirmed submission.
+        if [ -n "$callback" ] && "$callback"; then
+          printf 'empty'
+          return 0
+        fi
         if [ "$baseline_idle" = 1 ]; then
           j=0
           while [ "$j" -lt "$retries" ]; do

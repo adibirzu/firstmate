@@ -378,7 +378,9 @@ EOF
     # The stage may have already written its normal cadence marker while it
     # initialized this fixture. Force this diagnostic pass to scan now so the
     # malformed-marker contract is tested rather than elapsed wall-clock time.
-    FM_INACTIVE_RECONCILE_SECS=0 FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" run --locked 1
+    # --startup bypasses the normal cadence, so it performs this diagnostic
+    # pass immediately without an out-of-range cadence override.
+    FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" run --locked 1
     assert_grep $'check\tinactive-reconcile-diagnostic:invalid-secondmate-home\t' "$home/state/.wake-queue" \
       "$kind marker finding was swallowed by the deferred startup stage"
     report=$(run_stage "$home" "$root" report)
