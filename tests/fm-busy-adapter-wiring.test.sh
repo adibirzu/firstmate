@@ -11,6 +11,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-busy-lib.sh"
@@ -40,6 +42,7 @@ SH
   # stdout. An exit-0-with-no-output stub reads as treehouse failing to produce a
   # worktree at all, which aborts the spawn before any adapter is wired.
   fm_fake_exit0 "$fakebin" pi opencode claude codex
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -53,8 +56,7 @@ make_spawn_case() {  # <name> <harness> <id>
   fm_test_spawn_home "$home" "$harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   touch "$home/state/.last-watcher-beat"
-  mkdir -p "$home/data/$id"
-  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  fm_test_spawn_brief "$home" "$id" "Exercise the $harness busy-state wiring."
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin"
 }
 

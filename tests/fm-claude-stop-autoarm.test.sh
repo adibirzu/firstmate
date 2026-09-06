@@ -255,7 +255,7 @@ test_reclaims_stale_session_lock_before_arming() {
   printf '9999999\n' > "$dir/state/.lock"
   write_arm_fixture "$dir" actionable
   out=$(printf '%s\n' '{"session_id":"stale"}' \
-    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=stale FM_HOME="$dir" "$FAKE_CLAUDE" -c '
         printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1); status=$?
@@ -341,7 +341,7 @@ test_resolves_outermost_claude_pid_in_nested_bgspare_chain() {
   # so bash cannot tail-exec-collapse it into the outer pid, which would
   # collapse the two-hop chain this test depends on down to one hop.
   out=$(printf '%s\n' '{"session_id":"nested"}' \
-    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=nested FM_HOME="$dir" "$FAKE_CLAUDE" -c '
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FAKE_CLAUDE" -c "
           printf \"%s\n\" \"\$\$\" > \"\$FM_HOME/state/inner-pid\"

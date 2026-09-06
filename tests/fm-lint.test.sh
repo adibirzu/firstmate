@@ -162,6 +162,7 @@ test_help_reports_the_complete_interface() {
   assert_contains "$help" "SC1091" "fm-lint.sh --help omitted the local SC1091 exclusion"
   assert_contains "$help" "SC2034" "fm-lint.sh --help omitted the local SC2034 exclusion"
   assert_contains "$help" "SC2153" "fm-lint.sh --help omitted the local SC2153 exclusion"
+  assert_contains "$help" "SC2154" "fm-lint.sh --help omitted the local SC2154 exclusion"
   assert_contains "$help" "SC2329" "fm-lint.sh --help omitted the local SC2329 exclusion"
   pass "fm-lint.sh --help reports the complete executable interface"
 }
@@ -552,7 +553,7 @@ test_changed_mode_drops_external_sources_and_excludes_cross_file_codes() {
     || fail "changed-mode lint did not run ShellCheck on exactly the changed file"$'\n'"logged: $(cat "$log")"
   [ "$(cat "$mode_log")" = on ] \
     || fail "changed-mode local lint disabled dataflow analysis"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
   assert_contains "$out" "source following disabled" \
     "changed-mode local lint did not disclose dropped source following"
   assert_grep $'analysis_mode\tlocal' "$telemetry" \
@@ -586,7 +587,7 @@ test_changed_mode_invokes_shellcheck_once_per_root() {
   invocation_count=$(grep -c '^external-sources=' "$flag_log" || true)
   [ "$invocation_count" -eq 2 ] \
     || fail "changed-mode lint used $invocation_count ShellCheck calls for two roots"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
   pass "fm-lint.sh changed mode invokes ShellCheck once per root"
 }
 

@@ -164,6 +164,7 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   fm_fake_treehouse "$fakebin"
+  fm_fake_exit0 "$fakebin" codex
   printf '%s\n' "$fakebin"
 }
 
@@ -171,7 +172,17 @@ SH
 run_spawn() {
   local cwd=$1 home=$2 id=$3 proj=$4 pane=$5 fakebin=$6; shift 6
   mkdir -p "$home/data/$id"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+# Task
+
+## Captain's intent
+
+Exercise the normal spawn path.
+
+## Firstmate spec
+
+Verify the isolated launch outcome.
+EOF
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
       "FM_ROOT_OVERRIDE=" "FM_HOME=$home" \
       "FM_STATE_OVERRIDE=$home/state" "FM_DATA_OVERRIDE=$home/data" \
