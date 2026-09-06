@@ -56,6 +56,6 @@ On Claude 2.1.217 the tool presents as `Agent`, and both `Agent` and `Task` work
 
 ## Worker MCP isolation
 
-Crew and secondmate launches preserve the Claude login store while disabling inherited MCP and plugin servers.
+Crew and secondmate launches preserve the Claude login store while disabling inherited MCP and plugin servers and excluding user-profile status-line and event automation by default.
 [Claude worker MCP isolation](../../../../../docs/configuration.md#claude-worker-mcp-isolation) owns the configuration, explicit server opt-in, and managed-policy boundary.
 [The credentialed verification](../../../../../docs/verification/claude-worker-mcp.md) checks the real launch arguments, brief reading, built-in tools, and process descendants.
