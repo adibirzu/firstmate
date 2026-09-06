@@ -1002,6 +1002,7 @@ fm_busy_native_stale() {  # <state-dir> <id>
       ;;
   esac
   [ $((now - since)) -ge "$max" ]
+}
 
 # fm_busy_rovo_tail_busy: the Rovo-only temporary rendered-tail fallback.
 # Consumes the tail on stdin; 0 when Rovo's verified animated busy line
