@@ -27,9 +27,10 @@ fm_test_spawn_brief "$home" mcp-live "Verify this isolated test worktree: read t
 FM_FAKE_LAUNCH_LOG="$TMP_ROOT/launch" fm_test_run_spawn "$home" "$wt" "$fakebin" mcp-live "$proj" --mode no-mistakes --yolo off --backend tmux --model sonnet --effort low > "$TMP_ROOT/spawn-output"
 # The real worker keeps its normal interactive mode, so status-line execution
 # is exercised too. Its generated local hook publishes the completion marker.
-python3 - "$TMP_ROOT" "$version" <<'PYLIVE'
-import fcntl, os, pathlib, pty, re, select, signal, struct, subprocess, sys, termios, time
+python3 - "$TMP_ROOT" "$version" "$(dirname "${BASH_SOURCE[0]}")/fm-claude-mcp-process-tree.py" <<'PYLIVE'
+import fcntl, json, os, pathlib, pty, re, select, signal, struct, subprocess, sys, termios, time
 d=pathlib.Path(sys.argv[1])
+tree_tool=sys.argv[3]
 master, slave=pty.openpty()
 fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",40,160,0,0))
 env=os.environ.copy()
@@ -42,7 +43,7 @@ p=subprocess.Popen(['bash','-c',launch],cwd=d/'wt',env=env,stdin=slave,stdout=sl
 os.close(slave)
 transcript=b''
 samples=[]
-inventory_samples=[]
+inventory_descendants=[]
 deadline=time.monotonic()+100
 trusted=False
 bypass=False
@@ -68,6 +69,10 @@ def inventory_is_empty(text):
     return any(marker in compact for marker in (
         'no mcp servers', 'no configured mcp servers', '0 mcp servers',
         '0 servers configured', 'mcp servers: 0'))
+
+def worker_descendants():
+    out=subprocess.check_output([sys.executable, tree_tool, '--json', str(p.pid)], text=True)
+    return json.loads(out)['descendants']
 
 def terminate_group():
     if p.poll() is None:
@@ -121,8 +126,7 @@ try:
                 except OSError: break
             if inventory_is_empty(normalized_text()):
                 inventory_checked=True
-                rows=process_rows()
-                inventory_samples=[(pid, parent, cmd) for pid,(parent,pgid,cmd) in rows.items() if pgid==p.pid]
+                inventory_descendants=worker_descendants()
                 break
 finally:
     try: terminate_group()
@@ -135,8 +139,7 @@ assert samples, 'no descendant process samples'
 bad=[cmd for cmd in samples if 'LIFEOS_StatusLine.sh' in cmd or '/.claude/hooks/' in cmd]
 assert not bad, bad
 assert inventory_checked, f"{sys.argv[2]}: /mcp did not report an empty server inventory: {normalized_text()[-5000:]!r}"
-assert len(inventory_samples) <= 2, inventory_samples
-assert all(pid == p.pid or parent == p.pid for pid,parent,_ in inventory_samples), inventory_samples
+assert not inventory_descendants, f"{sys.argv[2]}: empty MCP inventory has worker descendants: {inventory_descendants}"
 debug=(d/'debug').read_text()
 # A real Read tool event, a Bash proof artifact, and the owned Stop hook prove
 # that removing user settings did not disable the built-in tools or all hooks.
