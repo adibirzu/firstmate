@@ -4330,9 +4330,9 @@ async function timedDelivery(callId, params) {
   return { result, wallMs, ticks: probe.ticks, worstGapMs: probe.worstGapMs };
 }
 
-const routine = await timedDelivery("live-routine", { task: "branch-driver", verdict: "routine", summary: "routine outcome during a live loop" });
+const routine = await timedDelivery("live-routine", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "routine outcome during a live loop" });
 if (routine.result.isError) throw new Error(`routine delivery failed: ${JSON.stringify(routine.result)}`);
-const captain = await timedDelivery("live-captain", { task: "branch-driver", verdict: "captain", summary: "captain outcome during a live loop" });
+const captain = await timedDelivery("live-captain", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "captain", summary: "captain outcome during a live loop" });
 if (captain.result.isError) throw new Error(`captain delivery failed: ${JSON.stringify(captain.result)}`);
 probe.stop();
 

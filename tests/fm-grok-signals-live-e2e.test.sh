@@ -13,6 +13,9 @@
 # upgrade.
 set -u
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
 GROK_BIN=$(command -v grok 2>/dev/null || true)
 LAB=
 VERSION=
@@ -31,10 +34,7 @@ pass() {
   printf 'ok - grok %s: %s\n' "$VERSION" "$1"
 }
 
-if [ "${FM_GROK_SIGNALS_LIVE:-0}" != 1 ]; then
-  echo "skip: set FM_GROK_SIGNALS_LIVE=1 to run the real grok signal drift guard"
-  exit 0
-fi
+fm_live_gate opt-in FM_GROK_SIGNALS_LIVE grok
 
 [ -x "$GROK_BIN" ] || fail "FM_GROK_SIGNALS_LIVE=1 but no real grok executable is installed on PATH"
 

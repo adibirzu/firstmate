@@ -137,7 +137,11 @@ SH
   fm_test_spawn_brief "$home" "$id"
   mkdir -p "$home/user-home/.config/gh"
   : > "$home/user-home/.gitconfig"
-  out=$(FM_TREEHOUSE_ENV_LOG="$dir/lease-env" FM_TREEHOUSE_WORKTREE="$wt" fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  out=$( (
+    unset GIT_CONFIG_GLOBAL GH_CONFIG_DIR
+    FM_TREEHOUSE_ENV_LOG="$dir/lease-env" FM_TREEHOUSE_WORKTREE="$wt" \
+      fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off
+  ) ); rc=$?
   expect_code 0 "$rc" "spawn with leased worktree should succeed: $out"
   assert_grep "git=$home/user-home/.gitconfig" "$dir/lease-env" "lease did not receive the real Git config"
   assert_grep "gh=$home/user-home/.config/gh" "$dir/lease-env" "lease did not receive the real GH config"

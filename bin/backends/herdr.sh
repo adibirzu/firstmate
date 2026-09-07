@@ -865,7 +865,11 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # Pane-death workspace removal may arrive several seconds after the close
   # request. Keep re-focusing until the original tab has remained active for a
   # bounded window; a one-shot matching snapshot can otherwise race that event.
-  [ "$operation" != "pane close" ] || settle_samples=40
+  # The live 0.7.4 server can publish the workspace-removal focus transition
+  # several seconds after reporting the pane closed. Keep the original tab
+  # stable across that delayed transition rather than accepting the first four
+  # seconds of apparently restored focus.
+  [ "$operation" != "pane close" ] || settle_samples=100
   while [ "$attempt" -lt "$settle_samples" ]; do
     fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
       echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2

@@ -1514,7 +1514,7 @@ test_projection_close_restores_exact_prior_focus() {
   # Focus restoration requires a bounded stable window after an asynchronous
   # close, so keep the fake server's exact focus snapshot stable throughout it.
   local response
-  for response in $(seq 13 3 127); do
+  for response in $(seq 13 3 307); do
     cp "$resp/10.out" "$resp/$response.out"
     cp "$resp/11.out" "$resp/$((response + 1)).out"
     cp "$resp/12.out" "$resp/$((response + 2)).out"
@@ -2072,7 +2072,7 @@ test_projection_close_death_still_restores_a_stolen_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/14.out"
   local response
-  for response in $(seq 15 3 129); do
+  for response in $(seq 15 3 309); do
     cp "$resp/11.out" "$resp/$response.out"
     cp "$resp/13.out" "$resp/$((response + 1)).out"
     cp "$resp/14.out" "$resp/$((response + 2)).out"
