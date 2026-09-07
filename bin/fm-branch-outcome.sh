@@ -6,8 +6,11 @@
 #   - Store: $STATE/branch-outcomes.jsonl, strictly APPEND-ONLY. One JSON
 #     object per line: {"seq":N,"epoch":N,"task":"...","wake":"...",
 #     "verdict":"routine"|"captain","summary":"...","silent":true|false,
-#     "statusEndpoint":N,"statusIdent":"..."}. Legacy rows without `silent`
-#     or status provenance remain valid and are treated as visible.
+#     "statusEndpoint":N,"statusIdent":"...","eventId":"..."}. `eventId` is
+#     optional and binds a retry to one logical wake-row report: a matching
+#     interrupted append returns its existing sequence after rebuilding any
+#     missing bounded index. Legacy rows without `silent`, status provenance,
+#     or `eventId` remain valid and are treated as visible.
 #     Every read and append validates the complete log as a gap-free sequence;
 #     malformed, duplicate, or reordered rows fail closed.
 #     Existing lines are never rewritten, reordered, or deleted by any
@@ -29,9 +32,9 @@
 #     tool) is main's. A captain row between the two markers is "unprocessed":
 #     delivered and shown, not yet acted on. Routine rows never wait on this
 #     marker. It only advances through an explicit sequence-bound
-#     acknowledgement naming a currently unprocessed captain row at or below
-#     the read cursor; a routine, unread, or already-processed target is
-#     refused. It never moves past the read cursor or backwards, so an
+#     acknowledgement naming the earliest currently unprocessed captain row at
+#     or below the read cursor; a routine, unread, already-processed, or later
+#     captain target is refused. It never moves past the read cursor or backwards, so an
 #     unrelated or empty model answer cannot move it. An absent marker reads as
 #     0 (every delivered captain row is unprocessed, the safe direction);
 #     processed-init is the one-time migration that sets an absent marker to
@@ -59,7 +62,7 @@
 #
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
-#       --summary <text> [--wake <text>] [--silent true|false]
+#       --summary <text> [--wake <text>] [--silent true|false] [--event-id <id>]
 #     Append one outcome record; prints the assigned seq.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
@@ -107,7 +110,7 @@ OUTCOME_INDEX_MAX_BYTES=512
 OUTCOME_INDEX_READY="$STATE/.branch-outcome-index-ready"
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | processed-init [--held-lock] | list [--recent <n>] | startup-replay" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--event-id <id>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | processed-init [--held-lock] | list [--recent <n>] | startup-replay" >&2
   exit 2
 }
 

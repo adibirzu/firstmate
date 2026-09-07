@@ -129,7 +129,8 @@ fm_parent_channel_clean_note() {  # <text>
   printf '%s' "$1" | LC_ALL=C tr '\t\r\n' '   ' | cut -c1-1200
 }
 
-# Append <line> to <path> unless that exact line is already there.
+# Append <line> to <path> unless that exact line is already there, serializing
+# the check and append per channel so concurrent publishers cannot duplicate it.
 fm_parent_channel_append_once() {  # <path> <line>
   local path=$1 line=$2 lock pid owner_pid
   if [ -e "$path" ] || [ -L "$path" ]; then

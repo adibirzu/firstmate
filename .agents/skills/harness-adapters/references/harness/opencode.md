@@ -36,10 +36,8 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 The primary integration was verified on 2026-07-08 with OpenCode 1.17.6.
 `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
 Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive.
-When the companion `.opencode/plugins/fm-primary-watch-arm.js` is loaded and acts on the home, it owns the idle path and its armed, wake, idle, empty-cycle, healthy-watcher, retrying, and not-primary outcomes do not invoke the shell guard or spend a model turn.
-A genuine failed arm result still reaches the shell guard and its bounded `client.session.promptAsync` fail-safe when the guard returns 2.
+[`docs/turnend-guard.md`](../../../../../docs/turnend-guard.md#harness-integrations) owns the watch-arm handoff, including its exact silent outcomes and the failed-arm fail-safe.
 The follow-up was verified in the interactive TUI.
-When the coordinator declines to arm because there is no supervision need or this session does not own the lock, or when it is not loaded, the turn-end plugin uses the shell guard and prompts only for that guard failure.
 The headless `opencode run` path remains fail-open because it can exit before displaying a queued follow-up.
 On native Windows, the operational-input adapter runs its Bash helper through `bash`; macOS and Linux invoke it directly.
 
