@@ -274,7 +274,7 @@ fm_pending_reply_embed_corr() {  # <message> <corr_id> <result-var>
 # Does not deliver anything. Fails if parent paths cannot be prepared.
 fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text>
   local parent_home=$1 state=$2 task_id=$3 request_text=$4
-  local dir rec corr now summary status_path tmp
+  local dir rec corr now summary status_path tmp grace attempt candidate
   [ -n "$parent_home" ] && [ -n "$state" ] && [ -n "$task_id" ] || return 2
   dir=$(fm_pending_reply_dir "$state")
   mkdir -p "$dir" || return 1
@@ -300,38 +300,42 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
     /*) ;;
     *) parent_home=$(cd "$parent_home" 2>/dev/null && pwd) || parent_home=$1 ;;
   esac
-  tmp="$dir/.${corr}.tmp.$$"
-  cat > "$tmp" <<EOF
-schema=$FM_PENDING_REPLY_SCHEMA
-corr_id=$corr
-task_id=$task_id
-parent_home=$parent_home
-parent_status=$status_path
-parent_status_scan_signature=
-request_summary=$summary
-created_epoch=$now
-delivered_epoch=
-phase=awaiting_report
-turn_seen_busy=0
-request_turn_completed_epoch=
-recovery_attempted_epoch=
-recovery_sender_pid=
-recovery_sender_identity=
-recovery_sent_epoch=
-recovery_delivery_outcome=
-recovery_turn_seen_busy=0
-recovery_turn_completed_epoch=
-escalated_epoch=
-resolved_epoch=
-resolved_via=
-wrong_home_hits=0
-wrong_home_first_sighting=
-wrong_home_sightings=
-wrong_home_scan_signature=
-grace_secs=$(fm_pending_reply_grace_secs)
-EOF
+  grace=$(fm_pending_reply_grace_secs)
+  tmp=
+  attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    attempt=$((attempt + 1))
+    candidate="$dir/.${corr}.tmp.${BASHPID:-$$}.${RANDOM}"
+    if (umask 077; set -C; : > "$candidate") 2>/dev/null; then
+      tmp=$candidate
+      break
+    fi
+  done
+  [ -n "$tmp" ] || return 1
+  if ! {
+    printf 'schema=%s\n' "$FM_PENDING_REPLY_SCHEMA"
+    printf 'corr_id=%s\n' "$corr"
+    printf 'task_id=%s\n' "$task_id"
+    printf 'parent_home=%s\n' "$parent_home"
+    printf 'parent_status=%s\n' "$status_path"
+    printf '%s\n' 'parent_status_scan_signature='
+    printf 'request_summary=%s\n' "$summary"
+    printf 'created_epoch=%s\n' "$now"
+    printf '%s\n' 'delivered_epoch=' 'phase=awaiting_report' 'turn_seen_busy=0'
+    printf '%s\n' 'request_turn_completed_epoch=' 'recovery_attempted_epoch='
+    printf '%s\n' 'recovery_sender_pid=' 'recovery_sender_identity='
+    printf '%s\n' 'recovery_sent_epoch=' 'recovery_delivery_outcome='
+    printf '%s\n' 'recovery_turn_seen_busy=0' 'recovery_turn_completed_epoch='
+    printf '%s\n' 'escalated_epoch=' 'resolved_epoch=' 'resolved_via='
+    printf '%s\n' 'wrong_home_hits=0' 'wrong_home_first_sighting='
+    printf '%s\n' 'wrong_home_sightings=' 'wrong_home_scan_signature='
+    printf 'grace_secs=%s\n' "$grace"
+  } > "$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   chmod 600 "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "$rec" || return 1
+  mv -f "$tmp" "$rec" || { rm -f -- "$tmp"; return 1; }
   printf '%s' "$corr"
 }
 
