@@ -1456,9 +1456,6 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
   # named AND the harness whose per-task wiring must be retired before the
   # replacement's is armed, which is needed even when the harness changes.
   REUSE_PRESERVE_HARNESS=$(fm_meta_get "$REUSE_META" harness)
-  if [ "$ACCOUNT_SET" -ne 1 ]; then
-    ACCOUNT=$(fm_meta_get "$REUSE_META" account)
-  fi
   if [ "$HARNESS_SET" -ne 1 ] && [ -n "$REUSE_PRESERVE_HARNESS" ]; then
     HARNESS_ARG=$REUSE_PRESERVE_HARNESS
     HARNESS_SET=1
