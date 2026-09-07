@@ -41,9 +41,23 @@ via `herdr agent read`:
  gpt-5.6-terra high · /Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-92a512/18/firstmate
 ```
 
-Observed: The interactive Codex TUI renders the configured statusline footer showing model,
-reasoning effort (high), and current working directory, confirming the statusline hook
-operates in live interactive sessions without error.
+Comparison with Claude live pane (`w4B:p1` via `herdr agent read`):
+
+```text
+  LIFEOS ◉46%
+ ◈main 1h │ ✿—→
+ ◎ 📁195 ✦30 ⊕0
+ ⏵⏵ auto mode on (shift+tab to cycle) · ← 5 agents
+```
+
+Finding: Unlike Claude Code (which executes `LIFEOS_StatusLine.sh` and displays the
+multi-line  LIFEOS bar live in its TUI), Codex CLI 0.153.4’s interactive TUI renders
+only its native statusline footer (model effort · cwd) and does not display the external
+statusline proxy output in its live interactive pane. The proxy `~/.codex/statusline.sh`
+executes and renders the LifeOS bar when run directly from shell via stdin, but Codex’s
+live TUI does not render it. Therefore, Codex crews rely on Firstmate’s fleet-wide usage
+row fallback (Slice 1 in `/bearings` and `fm-fleet-snapshot.sh`) for live token usage and
+context visibility.
 
 Grok's proxy (`~/.grok/statusline.sh`) is the identical delegate pattern; captain
 instruction excluded Grok from Slice 0 verification for this task.
