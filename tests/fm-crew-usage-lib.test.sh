@@ -62,6 +62,17 @@ test_context_pct_reads_supported_statusline() {
   pass "context percentage reads supported statusline output"
 }
 
+test_context_pct_rejects_out_of_range() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/context-range" '')
+  statusline="$TMP_ROOT/statusline-range"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "status=ok source=codex context_pct=999\\n"' > "$statusline"
+  chmod +x "$statusline"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "n/a" ] || fail "out-of-range context_pct: expected n/a, got '$out'"
+  pass "context percentage rejects values outside 0 through 100"
+}
+
 test_quota_disabled_by_default() {
   local fb out
   fb=$(make_fakebin "$TMP_ROOT/disabled" '#!/usr/bin/env bash
@@ -177,6 +188,7 @@ test_usage_json_row_defaults_quota_to_na() {
 }
 
 test_context_pct_reads_supported_statusline
+test_context_pct_rejects_out_of_range
 test_quota_disabled_by_default
 test_quota_unmapped_harness_returns_empty
 test_quota_enabled_reads_spend_priority

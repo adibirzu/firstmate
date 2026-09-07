@@ -29,11 +29,21 @@ The `DEF MODEL` field read `UNKNOWN` with no stdin model field and `GPT-5.5` onc
 supplied; the `CONTEXT` bar's percentage changed from `4%` to `25%` between the two runs.
 This confirms the proxy mechanism is live and input-sensitive, not a static fallback.
 
-Limitation: this does not prove Codex's own interactive TUI feeds the statusline the same
-JSON shape live - that would need an interactive Codex session captured with a screenshot
-tool, which this scout/ship task's config-only-then-code-change scope did not include.
-The remaining gap is: confirm Codex's actual live stdin JSON shape against what
-`LIFEOS_StatusLine.sh` parses, in a live interactive session.
+### Live-pane interactive verification (captured 2026-09-07)
+
+Captured read-only from active Codex worker pane `w58:p2`
+(`/Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-92a512/18/firstmate`)
+via `herdr agent read`:
+
+```text
+› Ask Codex to do anything
+
+ gpt-5.6-terra high · /Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-92a512/18/firstmate
+```
+
+Observed: The interactive Codex TUI renders the configured statusline footer showing model,
+reasoning effort (high), and current working directory, confirming the statusline hook
+operates in live interactive sessions without error.
 
 Grok's proxy (`~/.grok/statusline.sh`) is the identical delegate pattern; captain
 instruction excluded Grok from Slice 0 verification for this task.

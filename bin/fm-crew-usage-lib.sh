@@ -115,7 +115,10 @@ fm_crew_usage_context_pct() {  # harness target
     printf 'n/a'; return 0;
   }
   context=$(printf '%s\n' "$status" | sed -nE 's/.*(^| )context_pct=([0-9]+).*/\2/p' | tail -n1)
-  case "$context" in ''|*[!0-9]*) printf 'n/a' ;; *) printf '%s' "$context" ;; esac
+  case "$context" in
+    ''|*[!0-9]*) printf 'n/a' ;;
+    *) if [ "$context" -le 100 ]; then printf '%s' "$context"; else printf 'n/a'; fi ;;
+  esac
 }
 
 # The full usage row as JSON: {harness, model, context_pct, quota}. quota and
