@@ -58,14 +58,14 @@ inventory_checked=False
 
 def process_rows():
     rows={}
-    for line in subprocess.check_output(['ps','-axo','pid=,ppid=,pgid=,args='],text=True).splitlines():
-        a=line.strip().split(None,3)
-        if len(a)==4: rows[int(a[0])]=(int(a[1]),int(a[2]),a[3])
+    for line in subprocess.check_output(['ps','-axo','pid=,ppid=,pgid=,state=,args='],text=True).splitlines():
+        a=line.strip().split(None,4)
+        if len(a)==5: rows[int(a[0])]=(int(a[1]),int(a[2]),a[3],a[4])
     return rows
 
 def process_group(rows):
-    return {pid:cmd for pid,(_,pgid,cmd) in rows.items()
-            if pgid==p.pid and not (cmd.startswith('(') and cmd.endswith(')'))}
+    return {pid:cmd for pid,(_,pgid,state,cmd) in rows.items()
+            if pgid==p.pid and state != 'Z' and not (cmd.startswith('(') and cmd.endswith(')'))}
 
 def normalized_text():
     return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', transcript.decode(errors='replace'))
@@ -110,7 +110,7 @@ try:
             except OSError: break
         (d/'transcript').write_bytes(transcript)
         text=normalized_text()
-        if not trusted and ('Yes,Itrustthisfolder' in ''.join(text.split()) or 'Yes,Itrustthisproject' in ''.join(text.split())):
+        if not trusted and re.search(r'Yes,Itrust(?:this)?(?:folder|project)', ''.join(text.split())):
             os.write(master,b'\x1b[B')
             time.sleep(0.3)
             os.write(master,b'\r')
@@ -121,10 +121,10 @@ try:
         rows=process_rows()
         descendants={p.pid}
         while True:
-            expanded=descendants|{pid for pid,(parent,_,_) in rows.items() if parent in descendants}
+            expanded=descendants|{pid for pid,(parent,_,_,_) in rows.items() if parent in descendants}
             if expanded==descendants: break
             descendants=expanded
-        samples.extend(cmd for pid,(_,_,cmd) in rows.items() if pid in descendants and pid!=p.pid)
+        samples.extend(cmd for pid,(_,_,_,cmd) in rows.items() if pid in descendants and pid!=p.pid)
         if (d/'wt/tool-proof.txt').exists() and (d/'home/state/mcp-live.turn-ended').exists():
             completed=True
             break

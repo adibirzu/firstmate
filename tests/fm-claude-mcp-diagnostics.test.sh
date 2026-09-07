@@ -7,6 +7,21 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-claude-mcp-diagnostics.XXXXXX")
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
 version='Claude Code test-version'
 
+python3 - "$DIAGNOSTICS" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location('diagnostics', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    module.require('Claude Code imported-version', False, 'imported failure')
+except AssertionError as error:
+    assert str(error) == 'Claude Code imported-version: imported failure'
+else:
+    raise AssertionError('imported diagnostic did not fail')
+PY
+
 if output=$(python3 "$DIAGNOSTICS" --version "$version" --fail 'forced failure' 2>&1); then
   echo 'not ok - forced diagnostic unexpectedly passed' >&2
   exit 1
