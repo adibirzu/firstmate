@@ -61,6 +61,62 @@ Therefore, Codex crews rely on Firstmate’s fleet-wide usage row fallback in `/
 Grok's proxy (`~/.grok/statusline.sh`) is the identical delegate pattern; captain
 instruction excluded Grok from Slice 0 verification for this task.
 
+### What a live Codex row can and cannot carry (verified 2026-09-07)
+
+Read-only follow-up on the finding above, captured with `bin/fm-peek.sh` against
+three independently running Codex panes in the reference home
+(`firstmate-capacity-disk-r11`, `firstmate-upstream-consolidation-p1`,
+`firstmate-pr37-repair-r10`), plus `bin/fm-statusline-quota.sh` on the same targets.
+
+Observed footer, identical in shape on all three (effort varied, `high` and `xhigh`):
+
+```text
+> Ask Codex to do anything
+
+  gpt-5.6-terra high - ~/.fm-pools/.../firstmate
+```
+
+Two separate conclusions follow, and they differ:
+
+- **model IS available and is now recovered.** Every one of those live tasks recorded
+  `model=default` in `state/<id>.meta`, because `bin/fm-spawn.sh` writes
+  `model=${MODEL:-default}` when no model was chosen. `default` is a placeholder, not a
+  model, so the row no longer prints it. For Codex, `fm_crew_usage_model_from_pane`
+  (`bin/fm-crew-usage-lib.sh`) recovers the real model from that native footer. Verified
+  end to end on the three panes above: the default supervision path reports the model
+  unrecorded and captures nothing, while the opted-in read returns `gpt-5.6-terra`.
+- **context percentage is NOT available for Codex, and is not synthesized.**
+  `bin/fm-statusline-quota.sh` returns `status=unknown source=none` for these panes, and
+  the footer above carries no percentage of any kind. Codex's TUI does not render the
+  configured external proxy (finding above), so there is nothing to read. Codex rows
+  therefore keep `context_pct:"n/a"`. This is the recorded boundary, not a gap to close
+  by inferring a number from token counts printed in the transcript.
+
+Both reads are opt-in (`FM_CREW_USAGE_ENABLE_CONTEXT=1`) and bounded
+(`FM_CREW_USAGE_CONTEXT_TIMEOUT`), and only `bin/fm-bearings-snapshot.sh` opts in.
+
+### Why these reads are opt-in: the supervision-path contention regression
+
+An earlier revision of this work read the statusline for every task on every canonical
+snapshot. `bin/fm-watch.sh` backgrounds two snapshot consumers on EVERY poll -
+`fm-home-summary-refresh.sh` (`--secondmate-home-summary`) and
+`fm-secondmate-reconcile.sh process-requests` (`--json`) - so that turned the canonical
+snapshot into a second pane reader racing the watcher's own capture.
+
+The watcher proves pane churn by comparing consecutive captures, and uses that proof to
+absorb a bare turn-end. A competing capture destroys the evidence, so the watcher
+resurfaced a wake it had proof to absorb. Reproduced deterministically against
+`tests/fm-watch-triage.test.sh`: "pane churn resets prior wedge escalation state before
+the stale-path poll" failed on every run with the snapshot change present and passed with
+it reverted, isolated to `bin/fm-fleet-snapshot.sh` by reverting each changed file in turn.
+
+A timeout does not fix this - a fast extra capture is still an extra capture - so the
+live reads are gated off by default instead. Guarded by
+`tests/fm-crew-usage-lib.test.sh` ("never captures a pane by default", "a default usage
+row reads meta only", "only the human-facing bearings reader opts into the live context
+read").
+
+
 ## Slice 2: opencode/pi/cline usage-data confirmation
 
 Per the captain's instruction, an adapter in `bin/fm-crew-usage-lib.sh` is added only

@@ -191,6 +191,13 @@ command -v jq >/dev/null 2>&1 || { echo "fm-bearings-snapshot: jq not found" >&2
 "$SCRIPT_DIR/fm-afk-return.sh" guard || exit $?
 
 NOW=${FM_BEARINGS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+# Bearings is the human-facing reader that RENDERS the usage bar, and it is an
+# on-demand read, never a poll. It is therefore the one caller that opts into
+# the live per-task context read (bin/fm-crew-usage-lib.sh). Every
+# supervision-path snapshot consumer - notably the two fm-watch.sh backgrounds
+# on each poll - deliberately leaves it off so the canonical snapshot never
+# competes with the watcher for a task's pane capture.
+export FM_CREW_USAGE_ENABLE_CONTEXT=${FM_CREW_USAGE_ENABLE_CONTEXT:-1}
 if [ "$ALL_LANDED" = 1 ] || [ "$ALL_SECONDMATES" = 1 ]; then
   if [ "$ALL_LANDED" = 1 ]; then
     SNAP=$(FM_SNAPSHOT_NOW="$NOW" FM_SNAPSHOT_SECONDMATES=0 FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 "$FLEET" --json) || exit $?

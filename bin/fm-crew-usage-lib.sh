@@ -5,7 +5,13 @@
 #
 # Scope, deliberately narrow:
 #   - harness, model: the caller reads these straight from state/<id>.meta;
-#     this file does not re-parse meta and takes them as arguments.
+#     this file does not re-parse meta and takes them as arguments. It does
+#     normalize model: bin/fm-spawn.sh records the placeholders "default" and
+#     "-" when no model was chosen, and those are reported as unrecorded (the
+#     empty string) rather than rendered as a model name. For codex only, and
+#     only under the same opt-in as the context read below, an unrecorded model
+#     is recovered from the pane's own native footer - see
+#     fm_crew_usage_model_from_pane.
 #   - context percentage: firstmate reads the verified Codex/Claude statusline
 #     diagnostic when its pane format carries Context N% left. Confirmed absent
 #     for opencode (`opencode
@@ -16,6 +22,21 @@
 #     this is a recorded finding, not a gap to route around with pane-scraping, which
 #     firstmate-coding-guidelines' "Harness-dependent checks" section would
 #     require two-test live proof for and this task's scope does not cover.
+#     Like quota below, the live read is OFF by default and gated behind
+#     FM_CREW_USAGE_ENABLE_CONTEXT=1, because reading it CAPTURES THE TASK'S
+#     PANE. bin/fm-watch.sh backgrounds two snapshot consumers on every single
+#     poll - fm-home-summary-refresh.sh (--secondmate-home-summary) and
+#     fm-secondmate-reconcile.sh process-requests (--json) - so an
+#     unconditional read here turns the canonical snapshot into a second pane
+#     reader racing the watcher's own capture. The watcher's bare-turn-end
+#     absorption proves churn by comparing consecutive pane captures, so a
+#     competing capture costs churn evidence and resurfaces a wake the watcher
+#     had proof to absorb (tests/fm-watch-triage.test.sh, "pane churn resets
+#     prior wedge escalation state before the stale-path poll"). A bound alone
+#     cannot fix that: a fast extra capture is still an extra capture. Only the
+#     human-facing reader that renders the usage bar opts in
+#     (bin/fm-bearings-snapshot.sh), so every supervision-path caller keeps
+#     main's capture behaviour exactly.
 #   - quota: quota-axi's per-provider spendPriority, read only under the task's
 #     recorded account isolation; an absent or unsupported account is unavailable.
 #     It is the same comparable
@@ -108,9 +129,12 @@ fm_crew_usage_quota_spend_priority() {  # harness account
 }
 
 # Context percentage for a live task, as read from its verified statusline
-# diagnostic where that pane contract is supported.
+# diagnostic where that pane contract is supported. Opt-in only
+# (FM_CREW_USAGE_ENABLE_CONTEXT=1): this captures the task's pane, and the
+# watcher runs snapshot consumers on its own poll loop (see the header).
 fm_crew_usage_context_pct() {  # harness target
   local harness=$1 target=$2 status context
+  [ "${FM_CREW_USAGE_ENABLE_CONTEXT:-0}" = 1 ] || { printf 'n/a'; return 0; }
   case "$harness" in codex|claude) ;; *) printf 'n/a'; return 0 ;; esac
   [ -n "$target" ] || { printf 'n/a'; return 0; }
   status=$(fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" "${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
@@ -123,11 +147,62 @@ fm_crew_usage_context_pct() {  # harness target
   esac
 }
 
+# bin/fm-spawn.sh records model=default (and the secondmate path model=-) when
+# no explicit model was chosen, so meta's model is frequently a PLACEHOLDER
+# rather than a model name. Rendering "default" in a usage bar states a model
+# firstmate never verified, so these sentinels are treated as "not recorded".
+fm_crew_usage_model_is_placeholder() {  # model
+  case "${1:-}" in ''|default|-|unknown|n/a) return 0 ;; *) return 1 ;; esac
+}
+
+# Codex's interactive TUI does not render the configured external statusline
+# proxy (docs/verification/fm-harness-usage-bar.md, Slice 0), so its usage row
+# has no model from that path. Its NATIVE footer does carry one, verified live
+# on three running panes: "  gpt-5.6-terra high - <cwd>" (also xhigh). This
+# recovers exactly that, and only that.
+#
+# Deliberately conservative, because a pane tail also contains transcript the
+# crew may have printed: a line is accepted only from the bounded footer tail,
+# only when it is <model> <effort> followed by the footer's middle-dot
+# separator, and only when <effort> is one of Codex's own effort tokens. A
+# pasted or echoed model name without that exact footer shape is ignored rather
+# than reported as this crew's model.
+#
+# Opt-in behind the SAME gate as the context read, because it is the same cost:
+# a pane capture. It also runs only when meta has no usable model, so an
+# ordinary opted-in row adds no capture at all.
+fm_crew_usage_model_from_pane() {  # harness target
+  local harness=$1 target=$2 tail_out line model effort
+  [ "${FM_CREW_USAGE_ENABLE_CONTEXT:-0}" = 1 ] || return 0
+  [ -n "$target" ] || return 0
+  case "$harness" in codex) ;; *) return 0 ;; esac
+  tail_out=$(fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" \
+    "${FM_CREW_USAGE_PEEK_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-peek.sh}" \
+    "$target" 6 2>/dev/null) || return 0
+  while IFS= read -r line; do
+    # <model> <effort> <middle-dot> <cwd>
+    if [[ $line =~ ^[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]+(minimal|low|medium|high|xhigh)[[:space:]]+·[[:space:]] ]]; then
+      model=${BASH_REMATCH[1]}
+      effort=${BASH_REMATCH[2]}
+      [ -n "$effort" ] || continue
+      printf '%s' "$model"
+      return 0
+    fi
+  done <<< "$tail_out"
+  return 0
+}
+
 # The full usage row as JSON: {harness, model, context_pct, quota}. quota and
 # context_pct are the string "n/a" when unavailable, never null, so a
-# consumer can render the field directly without a null check.
+# consumer can render the field directly without a null check. model is the
+# empty string when neither meta nor the harness's own footer records one, so
+# the bearings renderer's "append when non-empty" rule omits it instead of
+# printing a placeholder as a model name.
 fm_crew_usage_json() {  # <harness> <model> <target> <account>
   local harness=$1 model=${2:-} target=${3:-} account=${4:-} ctx quota
+  if fm_crew_usage_model_is_placeholder "$model"; then
+    model=$(fm_crew_usage_model_from_pane "$harness" "$target")
+  fi
   ctx=$(fm_crew_usage_context_pct "$harness" "$target")
   quota=$(fm_crew_usage_quota_spend_priority "$harness" "$account")
   [ -n "$quota" ] || quota="n/a"

@@ -67,13 +67,19 @@
 #     without a probe, and other tasks use "not_checked".
 #     usage:{harness,model,context_pct,quota} is the fleet-wide usage-bar
 #     fallback row (bin/fm-crew-usage-lib.sh): harness/model come straight from
-#     meta, context_pct is the
-#     validated live Codex/Claude statusline percentage where available (for
-#     example "40") and "n/a" when unavailable or unsupported, and
-#     quota is quota-axi's spendPriority for the harness's mapped provider -
-#     "n/a" unless the caller sets FM_CREW_USAGE_ENABLE_QUOTA=1, since that
-#     field is a live per-account network call and stays opt-in so the
-#     canonical snapshot's default performance and determinism never change.
+#     meta and are always populated. context_pct and quota are BOTH live reads
+#     and BOTH opt-in, so this snapshot's default cost, determinism, and
+#     side effects are exactly main's for every caller that does not ask:
+#       - context_pct is the validated Codex/Claude statusline percentage (for
+#         example "40") only when the caller sets FM_CREW_USAGE_ENABLE_CONTEXT=1,
+#         because reading it captures the task's pane and bin/fm-watch.sh runs
+#         snapshot consumers on its own poll loop; "n/a" otherwise, and also
+#         whenever the harness or pane does not carry it.
+#       - quota is quota-axi's spendPriority for the harness's mapped provider
+#         only when the caller sets FM_CREW_USAGE_ENABLE_QUOTA=1, since that is
+#         a live per-account network call; "n/a" otherwise.
+#     bin/fm-bearings-snapshot.sh is the human-facing reader that opts into the
+#     context read; supervision-path callers deliberately do not.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json

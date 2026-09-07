@@ -53,11 +53,11 @@ test_context_pct_reads_supported_statusline() {
   statusline="$TMP_ROOT/statusline"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "status=ok source=codex context_pct=40\\n"' > "$statusline"
   chmod +x "$statusline"
-  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
   [ "$out" = "40" ] || fail "context_pct for codex: expected 40, got '$out'"
-  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct claude task-1")
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct claude task-1")
   [ "$out" = "40" ] || fail "context_pct for claude: expected 40, got '$out'"
-  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct pi task-1")
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct pi task-1")
   [ "$out" = "n/a" ] || fail "context_pct for unsupported harness: expected n/a, got '$out'"
   pass "context percentage reads supported statusline output"
 }
@@ -68,7 +68,7 @@ test_context_pct_rejects_out_of_range() {
   statusline="$TMP_ROOT/statusline-range"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "status=ok source=codex context_pct=999\\n"' > "$statusline"
   chmod +x "$statusline"
-  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
   [ "$out" = "n/a" ] || fail "out-of-range context_pct: expected n/a, got '$out'"
   pass "context percentage rejects values outside 0 through 100"
 }
@@ -79,7 +79,7 @@ test_context_pct_times_out() {
   statusline="$TMP_ROOT/statusline-timeout"
   printf '%s\n' '#!/usr/bin/env bash' 'sleep 2' 'printf "status=ok source=codex context_pct=40\\n"' > "$statusline"
   chmod +x "$statusline"
-  out=$(FM_CREW_USAGE_CONTEXT_TIMEOUT=1 with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  out=$(FM_CREW_USAGE_CONTEXT_TIMEOUT=1 with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
   [ "$out" = "n/a" ] || fail "timed-out context_pct: expected n/a, got '$out'"
   pass "context percentage returns n/a after diagnostic timeout"
 }
@@ -200,9 +200,167 @@ test_usage_json_row_defaults_quota_to_na() {
   pass "usage row defaults quota to n/a when the quota gate is off or the harness is unmapped"
 }
 
+# --- the watcher-contention regression -------------------------------------
+# bin/fm-watch.sh backgrounds fm-home-summary-refresh.sh and
+# fm-secondmate-reconcile.sh on EVERY poll, and both read the canonical
+# snapshot. The statusline diagnostic captures the task's pane, so an
+# unconditional read here races the watcher's own churn capture and costs it
+# the evidence it uses to absorb a bare turn-end
+# (tests/fm-watch-triage.test.sh, "pane churn resets prior wedge escalation
+# state before the stale-path poll"). A bound is not enough - a fast extra
+# capture is still an extra capture - so the read must not happen at all
+# unless a caller opts in. These guard that it never fires by default.
+test_context_pct_disabled_by_default() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/context-off" '')
+  statusline="$TMP_ROOT/statusline-off"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'echo "the statusline diagnostic must never run when the context gate is off" >&2' \
+    'exit 1' > "$statusline"
+  chmod +x "$statusline"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "n/a" ] || fail "context_pct must be n/a with the gate off, got '$out'"
+  pass "context percentage never captures a pane by default (FM_CREW_USAGE_ENABLE_CONTEXT unset)"
+}
+
+test_usage_json_makes_no_live_read_by_default() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/row-off" '#!/usr/bin/env bash
+echo "quota-axi must not run on a default snapshot row" >&2
+exit 1
+')
+  statusline="$TMP_ROOT/statusline-row-off"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'echo "the statusline diagnostic must not run on a default snapshot row" >&2' \
+    'exit 1' > "$statusline"
+  chmod +x "$statusline"
+  make_account codex-account codex
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_json codex gpt-5.5 task-1 codex-account")
+  printf '%s' "$out" | jq -e '
+    .harness == "codex" and .model == "gpt-5.5"
+      and .context_pct == "n/a" and .quota == "n/a"
+  ' >/dev/null || fail "a default usage row must carry meta only, no live reads: $out"
+  pass "a default usage row reads meta only: no pane capture and no quota call"
+}
+
+test_context_pct_opt_in_is_explicit() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/context-optin" '')
+  statusline="$TMP_ROOT/statusline-optin"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "status=ok source=codex context_pct=40\\n"' > "$statusline"
+  chmod +x "$statusline"
+  # Only the exact opt-in value enables it; anything else stays off.
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=0 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "n/a" ] || fail "explicit 0 must stay off, got '$out'"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=yes FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "n/a" ] || fail "a non-1 gate value must stay off, got '$out'"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "40" ] || fail "the opt-in must still read live, got '$out'"
+  pass "the live context read turns on only for the exact opt-in value"
+}
+
+test_bearings_is_the_context_opt_in_caller() {
+  grep -q 'FM_CREW_USAGE_ENABLE_CONTEXT' "$ROOT/bin/fm-bearings-snapshot.sh" \
+    || fail "fm-bearings-snapshot.sh must opt into the live context read it renders"
+  grep -q 'FM_CREW_USAGE_ENABLE_CONTEXT' "$ROOT/bin/fm-home-summary-refresh.sh" \
+    && fail "the supervision-path home summary refresh must never opt into a pane capture"
+  grep -q 'FM_CREW_USAGE_ENABLE_CONTEXT' "$ROOT/bin/fm-secondmate-reconcile.sh" \
+    && fail "the supervision-path reconcile must never opt into a pane capture"
+  pass "only the human-facing bearings reader opts into the live context read"
+}
+
+# --- model placeholders and the codex native-footer fallback ----------------
+# bin/fm-spawn.sh writes model=default (and model=- on the secondmate path)
+# whenever no model was chosen, so meta's model is often a placeholder. Live
+# evidence in docs/verification/fm-harness-usage-bar.md: every running codex
+# task in the reference home carried model=default while its own pane footer
+# read "gpt-5.6-terra high". The row must never present a placeholder as a
+# model name, and the footer recovery must never accept transcript text.
+test_model_placeholders_are_not_reported_as_models() {
+  local fb out m
+  fb=$(make_fakebin "$TMP_ROOT/model-placeholder" '')
+  for m in default - unknown "n/a" ""; do
+    out=$(with_libs "$fb" "fm_crew_usage_json codex '$m' '' ''")
+    printf '%s' "$out" | jq -e '.model == ""' >/dev/null \
+      || fail "placeholder model '$m' must report as unrecorded, got: $out"
+  done
+  out=$(with_libs "$fb" "fm_crew_usage_json codex 'gpt-5.6-terra' '' ''")
+  printf '%s' "$out" | jq -e '.model == "gpt-5.6-terra"' >/dev/null \
+    || fail "a real model must pass through unchanged: $out"
+  pass "model placeholders are reported as unrecorded, real models pass through"
+}
+
+test_model_footer_fallback_is_opt_in_and_shape_anchored() {
+  local fb peek out
+  fb=$(make_fakebin "$TMP_ROOT/model-footer" '')
+  peek="$TMP_ROOT/peek-footer"
+  # The exact live-captured codex footer shape.
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'printf "\xe2\x80\xba Ask Codex to do anything\n\n  gpt-5.6-terra high \xc2\xb7 ~/work/repo\n"'
+  } > "$peek"
+  chmod +x "$peek"
+  # Off by default: same gate as the context read, because it is the same capture.
+  out=$(with_libs "$fb" "FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json codex default task-1 ''")
+  printf '%s' "$out" | jq -e '.model == ""' >/dev/null \
+    || fail "the footer fallback must not capture a pane by default: $out"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json codex default task-1 ''")
+  printf '%s' "$out" | jq -e '.model == "gpt-5.6-terra"' >/dev/null \
+    || fail "the opted-in footer fallback must recover the live model: $out"
+  pass "the codex footer model fallback is opt-in and recovers the live model"
+}
+
+test_model_footer_fallback_ignores_transcript_lookalikes() {
+  local fb peek out
+  fb=$(make_fakebin "$TMP_ROOT/model-spoof" '')
+  peek="$TMP_ROOT/peek-spoof"
+  # A crew that printed model-ish text, but never the footer's own shape.
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'printf "using evil-model high in the plan\n  evil-model turbo \xc2\xb7 ~/x\n+ echo gpt-9 high\n"'
+  } > "$peek"
+  chmod +x "$peek"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json codex default task-1 ''")
+  printf '%s' "$out" | jq -e '.model == ""' >/dev/null \
+    || fail "transcript lookalikes must not be reported as the crew's model: $out"
+  pass "the footer fallback rejects transcript text that is not the footer shape"
+}
+
+test_model_footer_fallback_is_codex_only_and_bounded() {
+  local fb peek out
+  fb=$(make_fakebin "$TMP_ROOT/model-bound" '')
+  peek="$TMP_ROOT/peek-bound"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'printf "  gpt-5.6-terra high \xc2\xb7 ~/work/repo\n"'
+  } > "$peek"
+  chmod +x "$peek"
+  # Claude renders its own statusline; only codex needs the footer recovery.
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json claude default task-1 ''")
+  printf '%s' "$out" | jq -e '.model == ""' >/dev/null \
+    || fail "the footer fallback must stay codex-only: $out"
+  # A hung pane read must expire into "unrecorded", never stall the row.
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'sleep 5'
+  } > "$peek"
+  out=$(FM_CREW_USAGE_CONTEXT_TIMEOUT=1 with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json codex default task-1 ''")
+  printf '%s' "$out" | jq -e '.model == ""' >/dev/null \
+    || fail "a hung pane read must expire to unrecorded: $out"
+  pass "the footer fallback is codex-only and expires on a hung pane read"
+}
+
 test_context_pct_reads_supported_statusline
 test_context_pct_rejects_out_of_range
 test_context_pct_times_out
+test_context_pct_disabled_by_default
+test_context_pct_opt_in_is_explicit
+test_usage_json_makes_no_live_read_by_default
+test_bearings_is_the_context_opt_in_caller
+test_model_placeholders_are_not_reported_as_models
+test_model_footer_fallback_is_opt_in_and_shape_anchored
+test_model_footer_fallback_ignores_transcript_lookalikes
+test_model_footer_fallback_is_codex_only_and_bounded
 test_quota_disabled_by_default
 test_quota_unmapped_harness_returns_empty
 test_quota_enabled_reads_spend_priority
