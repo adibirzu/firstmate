@@ -869,7 +869,9 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # several seconds after reporting the pane closed. Keep the original tab
   # stable across that delayed transition rather than accepting the first four
   # seconds of apparently restored focus.
-  [ "$operation" != "pane close" ] || settle_samples=100
+  case "$operation" in
+    "pane close"|"task kill") settle_samples=100 ;;
+  esac
   while [ "$attempt" -lt "$settle_samples" ]; do
     fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
       echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2

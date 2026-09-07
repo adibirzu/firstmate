@@ -138,7 +138,10 @@ SH
   mkdir -p "$home/user-home/.config/gh"
   : > "$home/user-home/.gitconfig"
   out=$( (
-    unset GIT_CONFIG_GLOBAL GH_CONFIG_DIR
+    # The real configuration layout here is HOME/.config.  A runner-provided
+    # XDG_CONFIG_HOME would point the lease at the runner instead and make this
+    # fixture depend on ambient CI state rather than its synthetic operator.
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GH_CONFIG_DIR
     FM_TREEHOUSE_ENV_LOG="$dir/lease-env" FM_TREEHOUSE_WORKTREE="$wt" \
       fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off
   ) ); rc=$?

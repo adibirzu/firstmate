@@ -4366,6 +4366,7 @@ const many = await Promise.all(
     `interleaved-${index}`,
     {
       task: "branch-driver",
+      wakeRow: globalThis.__fmCurrentWakeRow,
       verdict: index % 2 === 0 ? "routine" : "captain",
       summary: `interleaved outcome ${index}`,
     },
