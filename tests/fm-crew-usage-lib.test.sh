@@ -55,6 +55,8 @@ test_context_pct_reads_supported_statusline() {
   chmod +x "$statusline"
   out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
   [ "$out" = "40" ] || fail "context_pct for codex: expected 40, got '$out'"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct claude task-1")
+  [ "$out" = "40" ] || fail "context_pct for claude: expected 40, got '$out'"
   out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct pi task-1")
   [ "$out" = "n/a" ] || fail "context_pct for unsupported harness: expected n/a, got '$out'"
   pass "context percentage reads supported statusline output"

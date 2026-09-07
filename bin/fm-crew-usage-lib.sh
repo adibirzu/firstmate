@@ -108,14 +108,12 @@ fm_crew_usage_quota_spend_priority() {  # harness account
 # Context percentage for a live task, as read from its verified statusline
 # diagnostic where that pane contract is supported.
 fm_crew_usage_context_pct() {  # harness target
-  local harness=$1 target=$2 status source context
+  local harness=$1 target=$2 status context
   case "$harness" in codex|claude) ;; *) printf 'n/a'; return 0 ;; esac
   [ -n "$target" ] || { printf 'n/a'; return 0; }
   status=$("${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
     printf 'n/a'; return 0;
   }
-  source=$(printf '%s\n' "$status" | sed -nE 's/.*(^| )source=([^ ]+).*/\2/p' | tail -n1)
-  [ "$source" = "$harness" ] || { printf 'n/a'; return 0; }
   context=$(printf '%s\n' "$status" | sed -nE 's/.*(^| )context_pct=([0-9]+).*/\2/p' | tail -n1)
   case "$context" in ''|*[!0-9]*) printf 'n/a' ;; *) printf '%s' "$context" ;; esac
 }

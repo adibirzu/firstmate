@@ -142,7 +142,7 @@ Every `/bearings` chat response renders EXACTLY these four sections, in THIS ord
 2. **Recently Landed** - the bounded current recent-completions baseline: merged PRs, completed scouts, and finished local-only merges across the main fleet and every registered secondmate home.
    Empty-state: "No recent completions are in the current baseline."
 3. **Underway** - live work progressing on its own, one line of current state per direct report.
-   The snapshot's `usage_harness`/`usage_model`/`usage_context_pct`/`usage_quota` fields (`bin/fm-crew-usage-lib.sh`, data/fm-harness-usage-bar/report.md section 4) are the fleet-wide usage-bar fallback for harnesses with no in-app statusline: append harness and model in parentheses when non-empty, and quota only when it is not `"n/a"` (the default, since it is a live opt-in read); `usage_context_pct` stays `"n/a"` for every harness today, so never render it.
+   The snapshot's `usage_harness`/`usage_model`/`usage_context_pct`/`usage_quota` fields (`bin/fm-crew-usage-lib.sh`, data/fm-harness-usage-bar/report.md section 4) are the fleet-wide usage-bar fallback for harnesses with no in-app statusline: append harness and model in parentheses when non-empty, context percentage when it is not `"n/a"`, and quota only when it is not `"n/a"` (the default, since it is a live opt-in read).
    Empty-state: "Nothing is underway."
 4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred or aged captain-hold safety gates, plus action-free fleet-integrity warnings.
    Empty-state: "Nothing is queued."
