@@ -37,7 +37,7 @@ firstmate is not a model, not a harness, not a skill, not an MCP server, and not
 firstmate is an agent distro for running a crew of agents.
 An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
 There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
-Launching a supported harness inside it instantiates your first mate - and makes you the captain.
+Launching a supported harness inside it for your primary session instantiates your first mate - and makes you the captain.
 
 ## Features
 
@@ -174,8 +174,8 @@ Claude and grok use the slash form shown here; codex uses the same names with `$
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine notifications in bash, escalates captain-relevant events and bounded declared-external-wait rechecks as batched digests, and actively alerts if delivery gets stuck while you step away |
 | `/ahoy`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real captain message |
-| `/bearings`        | Generate a concise four-section chat digest from bounded local fleet and registered-secondmate state; use `/bearings file` to also replace today's dated report in `data/`, `/bearings lavish` to also build and arm the interactive fleet board, and add `include PRs` when live PR enrichment is wanted |
-| `/updatefirstmate` | Self-update the running firstmate and its secondmates to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge secondmates |
+| `/bearings`        | Generate a concise four-section chat digest from bounded fleet state, including registered remote-home ledgers; use `/bearings file` to also replace today's dated report in `data/`, `/bearings lavish` to also build and arm the interactive fleet board, and add `include PRs` when live PR enrichment is wanted |
+| `/updatefirstmate` | Fast-forward the running firstmate and its secondmates, then persist and restart every live mate successfully left on the target commit - including already-current homes - with an honest re-read nudge only when restart cannot be proven |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered second mates, and report what is safe to reset |
 
 Bearings invocation examples:
@@ -224,7 +224,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi and `pi-signed`, Grok, Cursor, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [docs/documentation-audiences.md](docs/documentation-audiences.md) - documentation audiences and the machine-checked placement boundary.
-- [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
+- [`AGENTS.md`](AGENTS.md) - the supervisor contract, role boundary, and routing index for conditional procedures.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
 
 ## Contributing

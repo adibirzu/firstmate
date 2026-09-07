@@ -14,10 +14,13 @@
 #   - treehouse is invoked under the pool HOME firstmate resolved
 #   - a worktree split from its object store is refused, because git blocks in
 #     read_gitfile_gently there and the validation pipeline hangs forever
+#   - the pane can transiently report the repository primary checkout while a
+#     slot is being prepared, but this is diagnosed and cannot substitute for
+#     the exact path the lease returned
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 LIB="$ROOT/bin/fm-treehouse-lib.sh"
@@ -105,7 +108,14 @@ make_settle_case() {
   fm_git_worktree "$proj" "$wt" "wt-$name"
   fm_git_init_commit "$stale"
   mkdir -p "$home/data/$id"
-  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+Exercise settled-worktree detection for $id.
+
+## Firstmate spec
+Record only the pane's stable worktree.
+EOF
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$stale|$fakebin|$countfile|$stale_reads"
 }
@@ -157,25 +167,88 @@ test_single_stale_first_read_is_not_accepted() {
   pass "a single transient stale pane_current_path read is not accepted as the worktree"
 }
 
-# A pane that reports the real worktree from the very first read still only
-# costs the loop's existing one-second inter-poll sleep to confirm - not an
-# extra full cycle on top of that.
-test_already_settled_pane_costs_one_confirm_sleep() {
-  local rec id out status start end elapsed
+# The lease identifies the exact destination, so a pane that reports it on its
+# first read needs no second generic-path confirmation. Counting pane reads
+# proves the lease-aware settlement contract without wall-clock drift.
+test_already_settled_pane_is_accepted_on_first_read() {
+  local rec id out status reads
   id=settle-already-settled-z2
   rec=$(make_settle_case settle-already-settled "$id" 0)
   read_settle_record "$rec"
 
-  start=$(date +%s)
   out=$(run_settle_spawn "$id")
   status=$?
-  end=$(date +%s)
-  elapsed=$((end - start))
-  expect_code 0 "$status" "spawn should succeed when the pane is already settled"
+  expect_code 0 "$status" "spawn should succeed when the pane is already settled"$'\n'"$out"
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
-  [ "$elapsed" -le 5 ] || fail "already-settled pane took ${elapsed}s to confirm - expected close to the single inter-poll sleep"
-  pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
+  reads=$(cat "$COUNTFILE")
+  [ "$reads" -eq 1 ] || fail "already-settled pane took $reads reads - expected the first matching lease path"
+  pass "an already-settled pane is accepted on the first exact lease-path read"
+}
+
+# make_primary_case <name> <id> <stale_reads> builds the linked-home shape: the
+# spawning project is itself a LINKED worktree of the repository, and the path
+# the pane transiently reports is that repository's PRIMARY checkout. `treehouse
+# get` can leave the pane reporting the repository primary while it is still
+# preparing a slot. Firstmate has already received the leased path, so the
+# primary must be treated as an unaccepted transient and the settled path is a
+# second linked worktree of the same repository.
+make_primary_case() {
+  local name=$1 id=$2 stale_reads=$3 case_dir home primary proj wt fakebin countfile
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  primary="$case_dir/primary"
+  proj="$case_dir/mate"
+  wt="$case_dir/slot"
+  countfile="$case_dir/pane-call-count"
+  fakebin=$(make_settle_fakebin "$case_dir/fake")
+  fm_test_spawn_home "$home" codex
+  fm_git_worktree "$primary" "$proj" "mate-$name"
+  git -C "$primary" worktree add --quiet -b "slot-$name" "$wt"
+  fm_test_spawn_brief "$home" "$id" "Exercise primary-checkout transient detection for $id."
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$primary|$fakebin|$countfile|$stale_reads"
+}
+
+# The exact incident: the pane reports the repository primary for the first
+# reads, then settles into the slot treehouse actually created. The primary must
+# never be adopted as the worktree, so the spawn lands on the settled slot.
+test_transient_primary_checkout_is_not_accepted() {
+  local rec id out status
+  id=settle-primary-transient-z3
+  rec=$(make_primary_case settle-primary-transient "$id" 3)
+  read_settle_record "$rec"
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "spawn should succeed once the pane leaves the primary checkout"$'\n'"$out"
+  assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
+    "meta did not record the settled worktree"
+  assert_no_grep "worktree=$STALE_DIR" "$HOME_DIR/state/$id.meta" \
+    "meta wrongly recorded the repository primary checkout as the worktree"
+  pass "a transient primary-checkout pane read is not accepted as the worktree"
+}
+
+# A pane that never leaves the primary checkout must still fail at the deadline
+# rather than waiting forever or recording the primary.
+test_primary_checkout_that_never_settles_fails_at_the_deadline() {
+  local rec id out status
+  id=settle-primary-stuck-z4
+  rec=$(make_primary_case settle-primary-stuck "$id" 100000)
+  read_settle_record "$rec"
+  fm_test_fake_sleep_noop "$FAKEBIN_DIR"
+
+  out=$(FM_SPAWN_SETTLE_POLLS=2 run_settle_spawn "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn accepted a pane that never left the primary checkout"$'\n'"$out"
+  assert_contains "$out" "did not enter the leased worktree" \
+    "spawn did not explain that the pane never reached the leased worktree"
+  assert_contains "$out" "$STALE_DIR" \
+    "the refusal did not name the path the pane kept reporting"
+  assert_contains "$out" "repository's primary checkout" \
+    "the refusal did not say why that path was rejected"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  pass "a pane stuck on the primary checkout fails loudly at the deadline"
 }
 
 # The crew agent inherits whatever the pane's shell has. An interactive
@@ -275,7 +348,9 @@ test_interrupt_during_the_post_publication_refresh_keeps_the_lease() {
 set -u
 lock=${FM_FAKE_JQ_KILL_ON_LOCK:-}
 once=${FM_FAKE_JQ_KILL_ONCE:-}
+require_meta=${FM_FAKE_JQ_REQUIRE_META:-}
 if [ -n "$lock" ] && [ -n "$once" ] && [ ! -e "$once" ] \
+  && { [ -z "$require_meta" ] || [ -f "$require_meta" ]; } \
   && { [ -e "$lock" ] || [ -L "$lock" ]; }; then
   : > "$once"
   pid=$PPID
@@ -294,6 +369,7 @@ SH
   status=0
   out=$(FM_FAKE_JQ_KILL_ON_LOCK="$HOME_DIR/state/.home-summary-refresh.lock" \
     FM_FAKE_JQ_KILL_ONCE="$CASE_DIR/interrupt-delivered" \
+    FM_FAKE_JQ_REQUIRE_META="$HOME_DIR/state/$id.meta" \
     FM_FAKE_REAL_JQ="$real_jq" \
     run_settle_spawn "$id") || status=$?
 
@@ -459,7 +535,9 @@ test_mount_point_resolves_to_a_real_ancestor() {
 }
 
 test_single_stale_first_read_is_not_accepted
-test_already_settled_pane_costs_one_confirm_sleep
+test_already_settled_pane_is_accepted_on_first_read
+test_transient_primary_checkout_is_not_accepted
+test_primary_checkout_that_never_settles_fails_at_the_deadline
 test_pane_is_sent_a_cd_and_never_a_home_changing_command
 test_treehouse_is_leased_under_the_resolved_pool_home
 test_pane_that_never_lands_fails_the_spawn

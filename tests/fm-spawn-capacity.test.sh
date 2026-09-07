@@ -124,7 +124,8 @@ make_case() {
   touch "$home/state/.last-watcher-beat"
   for id in "$@"; do
     mkdir -p "$home/data/$id"
-    printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+    printf '%s\n' '# Task' '' "## Captain's intent" '' "Capacity fixture for $id." '' \
+      '## Firstmate spec' '' 'Exercise spawn admission only.' > "$home/data/$id/brief.md"
   done
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin"
 }
@@ -490,6 +491,16 @@ fleet_totals() {
   ( . "$ROOT/bin/fm-capacity-lib.sh"; fm_capacity_fleet_totals "$1" "$2" )
 }
 
+test_fleet_probe_registry_covers_verified_crewmate_adapters() {
+  local worker
+  for worker in cline cursor-agent copilot muse agy; do
+    if ! ( . "$ROOT/bin/fm-capacity-lib.sh"; case " $FM_CAPACITY_WORKER_NAMES " in *" $worker "*) exit 0 ;; *) exit 1 ;; esac ); then
+      fail "the fleet probe omits verified crewmate adapter '$worker' from its process-tree registry"
+    fi
+  done
+  pass "the fleet probe counts every verified crewmate-only adapter"
+}
+
 test_fleet_probe_counts_interpreter_launched_harnesses() {
   local comm argv out
   # An npm-installed adapter's own command name is the interpreter, not the
@@ -565,6 +576,7 @@ test_absent_swap_is_an_answer_not_an_unknown
 test_operator_can_raise_the_limits
 test_operator_can_switch_the_guard_off
 test_malformed_settings_refuse_rather_than_silently_defaulting
+test_fleet_probe_registry_covers_verified_crewmate_adapters
 test_fleet_probe_counts_interpreter_launched_harnesses
 test_fleet_probe_reports_unknown_when_processes_cannot_be_read
 test_capacity_report_shows_the_numbers_without_failing

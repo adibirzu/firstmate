@@ -104,12 +104,15 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  cp "$(command -v bash)" "$fakebin/muse-bin-test-version"
   cat > "$fakebin/muse" <<'SH'
 #!/usr/bin/env bash
 set -u
 [ -n "${FM_FAKE_HARNESS_RESULT:-}" ] || exit 0
-exec "$FM_FAKE_MUSE_VERSIONED" -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
+# Keep the versioned launcher identity under BSD ps without executing a copied
+# system shell (which macOS can terminate for signature reasons). This has the
+# same argv[0] shape as the real Muse launcher and leaves the probe a child of
+# that versioned process.
+exec -a muse-bin-test-version /bin/bash -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
 SH
   chmod +x "$fakebin/muse"
   fm_fake_exit0 "$fakebin" gh-axi gh
@@ -139,9 +142,15 @@ make_spawn_case() {
   id="muse-$name-x1"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" \
     "$home/xdgconfig" "$home/xdgdata"
-  # A ship brief records its delivery contract; fm-spawn warns on stderr when
-  # one does not, and these cases assert on stderr. Scaffold the real shape.
-  printf 'brief\nDelivery contract: mode=no-mistakes yolo=off\n' > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise Muse dispatch.
+
+## Firstmate spec
+Verify the Muse harness behavior under test.
+Delivery contract: mode=no-mistakes yolo=off
+EOF
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$id"
@@ -157,7 +166,6 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
     TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$home/launch.log" \
     FM_FAKE_MUSE_EXECUTABLE="$fakebin/muse" \
-    FM_FAKE_MUSE_VERSIONED="$fakebin/muse-bin-test-version" \
     FM_FAKE_HARNESS_PROBE="$HARNESS" \
     FM_FAKE_EXECUTE_MUSE_LAUNCH="${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" \
     FM_FAKE_HARNESS_RESULT="${FM_FAKE_HARNESS_RESULT:-}" \
@@ -174,8 +182,11 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 # The installed muse launcher execs a VERSION-SUFFIXED binary
 # (~/.local/bin/muse-bin-<version>), so the name in the process tree changes on
 # every auto-update. Detection must follow a real running process rather than a
-# string, so each case launches an actual renamed executable and asks
-# fm-harness.sh from a child of it.
+# string, so each case launches a real child process with its argv[0] set to
+# the versioned executable name and asks fm-harness.sh from that child. Bash's
+# exec -a makes BSD ps report that identity; copying bash under a new filename
+# does not, so the latter would test a shell implementation detail instead of
+# the Muse process-name contract.
 #
 # The foreign env markers, including Cursor's, are cleared because muse is
 # markerless and the marker layer deliberately outranks ancestry: with one
@@ -186,14 +197,13 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
 # name the walk is supposed to find. Real muse keeps its TUI process alive and
 # runs tools as children, so forcing a fork is what reproduces that shape.
 test_detects_versioned_process_ancestor() {
-  local dir bin out
-  dir="$TMP_ROOT/detect"
-  mkdir -p "$dir"
+  local bin out
   for bin in muse-bin-0.1.0-R708.1 muse-bin-9.9.9-RZZZ.9 muse; do
-    cp "$(command -v bash)" "$dir/$bin"
+    # shellcheck disable=SC2016 # The inner bash, not this test shell, expands $1, $2, and $r.
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
-      "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
+      /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
+      _ "$bin" "$HARNESS")
     [ "$out" = muse ] || fail "fm-harness.sh under process '$bin' reported '$out', expected muse"
   done
   pass "muse is detected through any versioned muse-bin ancestor"
@@ -202,14 +212,13 @@ test_detects_versioned_process_ancestor() {
 # The match must be anchored: an unrelated command whose name merely CONTAINS
 # muse is a different program and must not be claimed by this adapter.
 test_detection_is_anchored() {
-  local dir bin out
-  dir="$TMP_ROOT/detect-neg"
-  mkdir -p "$dir"
+  local bin out
   for bin in musescore amuse notmuse-bin muse-binary muse-bind; do
-    cp "$(command -v bash)" "$dir/$bin"
+    # shellcheck disable=SC2016 # The inner bash, not this test shell, expands $1, $2, and $r.
     out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
-      "$dir/$bin" -c "r=\$(\"$HARNESS\"); printf '%s' \"\$r\"")
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI \
+      /bin/bash -c 'exec -a "$1" /bin/bash -c "r=\$(\"$2\"); printf '\''%s'\'' \"\$r\""' \
+      _ "$bin" "$HARNESS")
     [ "$out" != muse ] || fail "fm-harness.sh misdetected unrelated process '$bin' as muse"
   done
   pass "muse detection does not claim unrelated muse-containing commands"
@@ -921,6 +930,35 @@ test_muse_trusts_no_record_sources() {
   pass "muse trusts no busy record source"
 }
 
+test_spawn_environment_allowlist_credential_preflight() {
+  local setting rec case_dir home proj wt fakebin id out status
+  for setting in withheld allowed stored; do
+    rec=$(make_spawn_case "allowlist-$setting")
+    IFS='|' read -r case_dir home proj wt fakebin id <<EOF
+$rec
+EOF
+    : > "$home/config/launch-env-allowlist"
+    case "$setting" in
+      allowed) printf 'META_API_KEY\n' > "$home/config/launch-env-allowlist" ;;
+      stored)
+        mkdir -p "$home/xdgconfig/muse"
+        printf '{"schema_version":1}\n' > "$home/xdgconfig/muse/auth.json"
+        ;;
+    esac
+    out=$(run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --mode no-mistakes --yolo off)
+    status=$?
+    if [ "$setting" = withheld ]; then
+      expect_code 1 "$status" "withheld Muse key must not satisfy preflight"
+      assert_contains "$out" "no worker-reachable credential" "missing credential explanation"
+      assert_absent "$home/state/$id.meta" "withheld Muse key still launched a worker"
+    else
+      expect_code 0 "$status" "Muse $setting credential must remain usable: $out"
+    fi
+  done
+  pass "Muse preflight respects the allowlist while retaining stored authentication"
+}
+
+test_spawn_environment_allowlist_credential_preflight
 test_detects_versioned_process_ancestor
 test_detection_is_anchored
 test_spawn_clears_inherited_foreign_harness_markers

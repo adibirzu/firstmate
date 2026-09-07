@@ -839,7 +839,7 @@ fm_backend_herdr_projection_focus_snapshot() {  # <session>
 # A single tab.focus on the exact response-independent pre-operation tab id
 # restores both the workspace and tab atomically.
 fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation>
-  local session=$1 before=$2 operation=$3 workspace tab after info restored
+  local session=$1 before=$2 operation=$3 workspace tab after info restored attempt=0 stable=0 settle_samples=1
   [ -n "$before" ] || {
     echo "warning: herdr presentation $operation had no unambiguous pre-operation focus snapshot" >&2
     return 1
@@ -858,16 +858,31 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
     echo "warning: herdr presentation $operation changed focus and the exact prior tab response was ambiguous" >&2
     return 1
   fi
-  fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
-    echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
-    return 1
-  }
-  restored=$(fm_backend_herdr_projection_focus_snapshot "$session") || restored=
-  if [ "$restored" != "$before" ]; then
-    echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
-    return 1
-  fi
-  return 0
+  # Herdr applies workspace removal and focus commands asynchronously.  A
+  # single immediate read can observe the requested tab before the queued
+  # removal moves focus again, leaving the captain in a different workspace.
+  # Re-focus and verify a short bounded settle window instead.
+  # Pane-death workspace removal may arrive several seconds after the close
+  # request. Keep re-focusing until the original tab has remained active for a
+  # bounded window; a one-shot matching snapshot can otherwise race that event.
+  [ "$operation" != "pane close" ] || settle_samples=40
+  while [ "$attempt" -lt "$settle_samples" ]; do
+    fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
+      echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
+      return 1
+    }
+    sleep 0.1
+    restored=$(fm_backend_herdr_projection_focus_snapshot "$session") || restored=
+    if [ "$restored" = "$before" ]; then
+      stable=$((stable + 1))
+      [ "$stable" -ge "$settle_samples" ] && return 0
+    else
+      stable=0
+    fi
+    attempt=$((attempt + 1))
+  done
+  echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
+  return 1
 }
 
 # fm_backend_herdr_projection_close_pane_focus_preserving: close one exact
@@ -1492,12 +1507,19 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
-# call. Bounded poll for the server to report running.
+# call. The server outlives its launcher and passes its startup environment to
+# every later pane, so remove home, harness identity, and supervision selection
+# inherited from whichever agent happened to start it. Bounded poll for the
+# server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
-  ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+  (
+    unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
+      CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
+    fm_backend_herdr_cli "$session" server >/dev/null 2>&1 &
+  ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
     [ "$running" = "true" ] && return 0
@@ -2826,8 +2848,8 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
   fi
 }
 
-fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
+fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [confirmation-callback]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 callback=${6:-} i=0 verdict baseline confirm_sleep
   local raw_status footer_baseline='' allow_rendered=0 enter_sent=0
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
@@ -2858,14 +2880,26 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
       # Native stayed idle. Composer empty is positive delivery (a landed
       # Claude turn that never flipped agent_status). Proven pending retries.
       verdict=$(fm_backend_herdr_composer_state "$target")
       case "$verdict" in
-        empty) printf 'empty'; return 0 ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         pending|pending-unproven) ;;
         *) printf '%s' "$verdict"; return 0 ;;
       esac
@@ -2878,8 +2912,20 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         verdict=busy
       fi
       case "$verdict" in
-        busy) printf 'empty'; return 0 ;;
-        empty) printf 'empty'; return 0 ;;
+        busy)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
+        empty)
+          if [ -n "$callback" ] && ! "$callback"; then
+            i=$((i + 1)); [ "$i" -lt "$retries" ] || { printf 'confirmation-failed'; return 0; }
+            continue
+          fi
+          printf 'empty'; return 0
+          ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
     fi

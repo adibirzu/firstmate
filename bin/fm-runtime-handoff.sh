@@ -13,8 +13,8 @@
 #      than guess when either cannot be proven safe.
 #   2. Cleanly exit the current agent using the recorded harness's verified
 #      exit command (harness-adapters owns those facts).
-#   3. Remove only the dead endpoint (pane/window), never the worktree or lease.
-#   4. Relaunch the chosen verified harness in the EXISTING worktree with the
+#   3. Keep the recorded, agent-free endpoint (pane/window) intact.
+#   4. Relaunch the chosen verified harness in the EXISTING worktree and endpoint with the
 #      existing brief plus a concise progress note (brief file is not rewritten).
 #   5. Rewrite harness=/model=/effort= (and the new endpoint fields)
 #      in state/<id>.meta while preserving every other meta line (pr=, x_*, ...).
@@ -22,7 +22,7 @@
 # Hard refusals:
 #   - missing meta, missing/unreadable worktree, missing original brief
 #   - kind=secondmate (secondmate recovery is a different owner)
-#   - live or ambiguous endpoint ownership after exit attempt
+#   - missing, live, or ambiguous endpoint ownership after exit attempt
 #   - unverified target harness (no launch template)
 #   - --backend naming a different provider than the one recorded in meta, whose
 #     endpoint string only the recorded backend can read
@@ -75,7 +75,7 @@ usage: fm-runtime-handoff.sh <task-id> --harness <name> [options]
   --progress-note <text>        concise progress for the replacement agent
   --progress-note-file <path>   same, read from a file
   --skip-exit                   skip the old harness exit command (endpoint
-                                must already be dead/missing)
+                                must already be dead and available for reuse)
   --backend <name>              must match the recorded backend; omit to keep it
 EOF
   exit 2
@@ -164,8 +164,6 @@ esac
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 OLD_HARNESS=$(fm_meta_get "$META" harness)
-RECORDED_MODE=$(fm_meta_get "$META" mode)
-RECORDED_YOLO=$(fm_meta_get "$META" yolo)
 [ -n "$WT" ] || { echo "error: meta for $ID is missing worktree=" >&2; exit 1; }
 [ -n "$PROJ" ] || { echo "error: meta for $ID is missing project=" >&2; exit 1; }
 [ -d "$WT" ] || { echo "error: recorded worktree for $ID does not exist: $WT" >&2; exit 1; }
@@ -250,8 +248,12 @@ wait_for_non_alive() {
 
 STATE_NOW=$(agent_state_of)
 case "$STATE_NOW" in
-  dead|missing)
+  dead)
     :
+    ;;
+  missing)
+    echo "error: recorded endpoint for $ID is missing; refusing handoff rather than creating a replacement identity" >&2
+    exit 1
     ;;
   alive)
     if [ "$SKIP_EXIT" = 1 ]; then
@@ -282,7 +284,11 @@ case "$STATE_NOW" in
     esac
     STATE_NOW=$(wait_for_non_alive)
     case "$STATE_NOW" in
-      dead|missing) : ;;
+      dead) : ;;
+      missing)
+        echo "error: recorded endpoint for $ID disappeared after the exit attempt; refusing handoff rather than creating a replacement identity" >&2
+        exit 1
+        ;;
       *)
         echo "error: endpoint for $ID is still '$STATE_NOW' after exit attempt; refusing handoff rather than splitting ownership" >&2
         exit 1
@@ -295,20 +301,6 @@ case "$STATE_NOW" in
     exit 1
     ;;
 esac
-
-# Remove a dead endpoint husk so spawn can recreate the same window name.
-# Never touch the worktree or treehouse lease.
-if [ -n "$TARGET" ]; then
-  case "$(agent_state_of)" in
-    dead|missing)
-      fm_backend_kill "$BACKEND" "$TARGET" 2>/dev/null || true
-      ;;
-    *)
-      echo "error: endpoint for $ID became non-dead before kill; refusing handoff" >&2
-      exit 1
-      ;;
-  esac
-fi
 
 # Build a launch-only handoff prompt. Never rewrite the original brief file.
 HANDOFF_PROMPT="$STATE/$ID.handoff-prompt"
@@ -363,8 +355,6 @@ case "$HARNESS" in
     fi
     ;;
 esac
-[ -z "$RECORDED_MODE" ] || SPAWN_ARGS+=(--mode "$RECORDED_MODE")
-[ -z "$RECORDED_YOLO" ] || SPAWN_ARGS+=(--yolo "$RECORDED_YOLO")
 [ -z "$MODEL" ] || SPAWN_ARGS+=(--model "$MODEL")
 [ -z "$EFFORT" ] || SPAWN_ARGS+=(--effort "$EFFORT")
 [ -z "$BACKEND_ARG" ] || SPAWN_ARGS+=(--backend "$BACKEND_ARG")

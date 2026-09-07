@@ -15,6 +15,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 HARNESS="$ROOT/bin/fm-harness.sh"
@@ -26,44 +28,63 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 
 classify() { fm_composer_classify_content "$@"; }
 
-# --- launch template (mechanics half) ---------------------------------------
+# --- launch behavior ---------------------------------------------------------
 
-test_copilot_launch_template_is_pinned() {
-  local line="    copilot) printf '%s' 'copilot --allow-all --no-ask-user __MODELFLAG____EFFORTFLAG__-i \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
-  grep -Fqx -- "$line" "$SPAWN" \
-    || fail "fm-spawn: verified copilot launch template missing/changed"
-  pass "fm-spawn: copilot launch template is the verified argv-seed line"
+make_copilot_spawn_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_test_make_spawn_fakebin "$dir")
+  fm_fake_exit0 "$fakebin" copilot
+  fm_fake_treehouse "$fakebin"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n' ;;
+  capture-pane) printf '%s\n' ' / commands · ? help · tab next tab' ;;
+  send-keys)
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then
+        printf '%s\n' "$arg" >> "${FM_FAKE_LAUNCH_LOG:?}"
+        break
+      fi
+      prev=$arg
+    done
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  printf '%s\n' "$fakebin"
 }
 
-test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "claude launch template changed"
-  grep -Fq "cline -i --tui --auto-approve true __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "cline launch template changed"
-  # The fork's cursor-agent adapter was migrated to upstream's `cursor` harness,
-  # which launches through the resolved __CURSORBIN__ with --trust --yolo; pin
-  # that actual migrated template line instead of the obsolete cursor-agent one.
-  grep -Fq '__CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' "$SPAWN" \
-    || fail "cursor launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
+test_copilot_spawn_emits_verified_argv() {
+  local case_dir home proj wt fakebin id out launch
+  case_dir=$(fm_test_tmproot fm-copilot-launch)
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  id=copilot-launch-c1
+  fakebin=$(make_copilot_spawn_fakebin "$case_dir/fake")
+  fm_test_spawn_home "$home" copilot
+  fm_test_spawn_brief "$home" "$id" 'Exercise the Copilot launch contract.'
+  fm_git_worktree "$proj" "$wt" wt-copilot-launch
+  : > "$case_dir/launch.log"
 
-test_copilot_is_a_known_bare_adapter_name() {
-  # copilot must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
-    || fail "fm-spawn: copilot not added to a known-harness allowlist"
-  pass "fm-spawn: copilot is recognized as a known bare adapter name"
-}
-
-test_copilot_model_and_effort_flags() {
-  # copilot takes --model and maps effort to --reasoning-effort, accepting the
-  # full shared low|medium|high|xhigh|max vocabulary (no tier omitted, unlike
-  # cline/codex/grok).
-  grep -Fq "|cline|cursor|copilot)" "$SPAWN" \
-    || fail "fm-spawn: copilot not in the --model allowlist"
-  grep -Fq "low|medium|high|xhigh|max) printf -- '--reasoning-effort %s '" "$SPAWN" \
-    || fail "fm-spawn: copilot effort->--reasoning-effort mapping missing"
-  pass "fm-spawn: copilot gets --model and effort->--reasoning-effort (low|medium|high|xhigh|max)"
+  out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_COPILOT_TRUST_POLLS=2 FM_COPILOT_POLL_INTERVAL=0 \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" copilot \
+      --mode no-mistakes --yolo off --model copilot-model --effort xhigh) \
+    || fail "copilot spawn failed: $out"
+  assert_contains "$out" "spawned $id harness=copilot" "bare copilot adapter was not accepted"
+  launch=$(cat "$case_dir/launch.log")
+  assert_contains "$launch" "copilot --allow-all --no-ask-user --model 'copilot-model' --reasoning-effort 'xhigh' -i" \
+    "copilot launch did not emit the verified model, effort, and interactive argv"
+  assert_contains "$launch" "encode launch-brief < '$home/data/$id/launch-brief.md'" \
+    "copilot launch did not deliver the rendered launch brief"
+  pass "fm-spawn: bare copilot emits its verified model, effort, and interactive launch argv"
 }
 
 # --- detection --------------------------------------------------------------
@@ -342,10 +363,7 @@ test_copilot_trust_gate_has_no_home_shortcut() {
 }
 
 # --- run --------------------------------------------------------------------
-test_copilot_launch_template_is_pinned
-test_existing_launch_templates_untouched
-test_copilot_is_a_known_bare_adapter_name
-test_copilot_model_and_effort_flags
+test_copilot_spawn_emits_verified_argv
 test_copilot_detection_wired
 test_copilot_busy_default_defined
 test_copilot_busy_line_matches

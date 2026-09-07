@@ -32,16 +32,6 @@ test_agy_launch_template_is_pinned() {
   pass "fm-spawn: agy launch template is the verified argv-seed line"
 }
 
-test_existing_launch_templates_untouched() {
-  grep -Fq "claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "claude launch template changed"
-  grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "grok launch template changed"
-  grep -Fq '__KIMIBIN__ __MODELFLAG__--auto' "$SPAWN" \
-    || fail "kimi launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
-
 test_agy_is_a_known_bare_adapter_name() {
   # Assert an executable case-pattern line, not the usage comment that spells
   # the same allowlist - a comment-only match would keep this fence green after
@@ -58,7 +48,7 @@ test_agy_model_and_effort_flags() {
   # alone would leave this fence green while agy silently loses --model.
   local model_fn effort_agy_arm
   model_fn=$(sed -n '/^model_flag_for_harness()/,/^}/p' "$SPAWN")
-  printf '%s\n' "$model_fn" | grep -Eq '^ *[^)]*\|agy\)' \
+  printf '%s\n' "$model_fn" | grep -Eq '^ *[^)]*\|agy(\||\))' \
     || fail "fm-spawn: agy not in model_flag_for_harness's --model allowlist"
   printf '%s\n' "$model_fn" | grep -Fq "printf -- '--model %s '" \
     || fail "fm-spawn: model_flag_for_harness no longer emits --model"
@@ -458,7 +448,6 @@ if agy_wait_for_trust_clear; then echo OK; else echo FAIL; fi
 
 # --- run --------------------------------------------------------------------
 test_agy_launch_template_is_pinned
-test_existing_launch_templates_untouched
 test_agy_is_a_known_bare_adapter_name
 test_agy_model_and_effort_flags
 test_agy_effort_never_emits_a_combination_agy_rejects

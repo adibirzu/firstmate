@@ -12,24 +12,31 @@
 # success. Nothing else - not a later agent turn, not a printed reminder - is
 # load-bearing for the pairing.
 #   bin/fm-spawn.sh      meta published => `tasks-axi start`
-#   bin/fm-teardown.sh   meta removed => `tasks-axi done`
+#   bin/fm-teardown.sh   meta removed => `tasks-axi done`, or `tasks-axi reopen`
+#                        with the deliverable recorded when the row is still an
+#                        open captain call (bin/fm-captain-hold.sh `open`), so
+#                        cleanup never retires the captain's own question
 #   bin/fm-bootstrap.sh  replays whatever a crash left behind, THIS HOME ONLY.
 # bin/fm-fleet-snapshot.sh's classifier and bin/fm-secondmate-reconcile.sh's
 # cross-home nudge stay defense in depth, not the primary mechanism.
 #
 # SCOPE. fm_backlog_transition_applies is the single gate. It excludes
 # secondmates (persistent agents are never backlog items, AGENTS.md section 10),
-# homes whose configured backlog backend is manual and homes that keep no
-# backlog file at all. Those return-1 exemptions are never errors; an
-# unresolvable configured data directory or incompatible tasks-axi instead
-# returns 2 so callers refuse before mutation.
+# and homes whose configured backlog backend is manual. Markdown homes that
+# keep no backlog file at all are likewise exempt. Those return-1 exemptions
+# are never errors; a home on any other configured backend has no markdown
+# file requirement at all. An unresolvable configured data directory or
+# incompatible tasks-axi instead returns 2 so callers refuse before mutation.
 #
-# ADDRESSING. Every call passes `--file <data>/backlog.md` so the mutation lands
-# in the home that owns the task regardless of the caller's working directory,
-# and runs from that data directory's parent so the same home's `.tasks.toml`
-# supplies done_keep and the archive path. The parent of the data directory is
-# the addressing root rather than FM_HOME, so a home whose data directory is
-# relocated keeps its backlog and its archive together. A root with no
+# ADDRESSING. The markdown backend owns the explicit `--file <data>/backlog.md`
+# on every mutation and row probe so the change lands in the home that owns
+# the task regardless of the caller's working directory. Every other
+# configured backend is addressed from that data directory's parent - the
+# addressing root - with no markdown file override, so the same home's
+# `.tasks.toml` supplies its backend, done_keep, and the archive path and
+# backend-owned state remains discoverable. The parent of the data directory
+# is the addressing root rather than FM_HOME, so a home whose data directory
+# is relocated keeps its backlog and its archive together. A root with no
 # `.tasks.toml` gets tasks-axi's built-in defaults.
 #
 # CRASH RECOVERY. Only teardown needs a durable record: it removes the meta and
@@ -44,6 +51,10 @@
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
 # it publishes the meta first, so a crash
 # leaves the meta itself as the evidence that the row is owed a start.
+# A captain-held row uses the same record with a `mode=retain` line: replay then
+# records the deliverable and reopens the row instead of closing it, and never
+# closes a row that reads as an open captain call. An answer that closed the row
+# first simply retires the record.
 
 # Set by fm_backlog_transition_applies for a return-1 exemption.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
@@ -53,7 +64,12 @@ FM_BACKLOG_TRANSITION_ERROR=
 FM_BACKLOG_ROW_RESULT=
 FM_BACKLOG_ROW_STATE=
 FM_BACKLOG_ROW_ERROR=
-# Set by fm_backlog_close_marker_replay: closed | closed_incomplete | stale | noop.
+# Set by fm_backlog_row_probe on a found row: the tasks-axi hold kind, empty when
+# the row is not held.
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+FM_BACKLOG_ROW_HOLD_KIND=
+# Set by fm_backlog_close_marker_replay: closed | closed_incomplete | retained |
+# retained_incomplete | answered | stale | noop.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_BACKLOG_CLOSE_REPLAY_RESULT=
 
@@ -161,7 +177,7 @@ fm_backlog_data_relative() {  # <data-dir>
 }
 
 fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
-  local config=$1 data authorized_data=$2 kind=$3 file
+  local config=$1 data authorized_data=$2 kind=$3 file root
   FM_BACKLOG_TRANSITION_SKIP=
   if [ "$kind" = secondmate ]; then
     FM_BACKLOG_TRANSITION_SKIP="secondmates are not backlog items"
@@ -175,13 +191,16 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $2"
     return 2
   fi
-  file=$(fm_backlog_file "$data")
-  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
-    FM_BACKLOG_TRANSITION_SKIP="this home keeps no backlog at $file"
-    return 1
-  fi
-  if ! fm_backlog_record_present "$file" "backlog file" "$authorized_data"; then
-    return 2
+  root=$(fm_backlog_root "$data") || return 2
+  if [ "$(fm_tasks_axi_backend "$root")" = markdown ]; then
+    file=$(fm_backlog_file "$data")
+    if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+      FM_BACKLOG_TRANSITION_SKIP="this home keeps no backlog at $file"
+      return 1
+    fi
+    if ! fm_backlog_record_present "$file" "backlog file" "$authorized_data"; then
+      return 2
+    fi
   fi
   if ! fm_tasks_axi_compatible; then
     FM_BACKLOG_TRANSITION_ERROR="automatic backlog transitions require tasks-axi $FM_TASKS_AXI_MIN or newer with the required update and mv features"
@@ -190,8 +209,35 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
   return 0
 }
 
+# Print one row's `tasks-axi show` output (plus stderr) from the backlog root,
+# with `--file` only for the markdown backend; the exit status is tasks-axi's.
+# Extra flags (such as --full) are passed through.
+fm_backlog_row_show() {  # <resolved-data-dir> <id> [flag...]
+  local data=$1 id=$2 file root
+  shift 2
+  file=$(fm_backlog_file "$data") || return 1
+  root=$(fm_backlog_root "$data") || return 1
+  if [ "$(fm_tasks_axi_backend "$root")" = markdown ]; then
+    (cd "$root" 2>/dev/null && tasks-axi show "$id" "$@" --file "$file" 2>&1)
+  else
+    (cd "$root" 2>/dev/null && tasks-axi show "$id" "$@" 2>&1)
+  fi
+}
+
+fm_backlog_row_list() {  # <resolved-data-dir> [flag...]
+  local data=$1 file root
+  shift
+  file=$(fm_backlog_file "$data") || return 1
+  root=$(fm_backlog_root "$data") || return 1
+  if [ "$(fm_tasks_axi_backend "$root")" = markdown ]; then
+    (cd "$root" 2>/dev/null && tasks-axi list "$@" --file "$file" 2>&1)
+  else
+    (cd "$root" 2>/dev/null && tasks-axi list "$@" 2>&1)
+  fi
+}
+
 fm_backlog_row_probe() {  # <data-dir> <id>
-  local data authorized_data=$1 file id=$2 out state held blocked command_status
+  local data authorized_data=$1 file id=$2 out state held blocked hold_kind command_status root
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_ROW_RESULT=error
     FM_BACKLOG_ROW_STATE=
@@ -200,17 +246,23 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   fi
   FM_BACKLOG_ROW_RESULT=error
   FM_BACKLOG_ROW_STATE=
+  FM_BACKLOG_ROW_HOLD_KIND=
   FM_BACKLOG_ROW_ERROR=
-  file=$(fm_backlog_file "$data") || {
+  root=$(fm_backlog_root "$data") || {
     FM_BACKLOG_ROW_ERROR=$FM_BACKLOG_TRANSITION_ERROR
     return 1
   }
-  if ! fm_backlog_record_present "$file" "backlog file" "$authorized_data"; then
-    FM_BACKLOG_ROW_ERROR=$FM_BACKLOG_TRANSITION_ERROR
-    return 1
+  if [ "$(fm_tasks_axi_backend "$root")" = markdown ]; then
+    file=$(fm_backlog_file "$data") || {
+      FM_BACKLOG_ROW_ERROR=$FM_BACKLOG_TRANSITION_ERROR
+      return 1
+    }
+    if ! fm_backlog_record_present "$file" "backlog file" "$authorized_data"; then
+      FM_BACKLOG_ROW_ERROR=$FM_BACKLOG_TRANSITION_ERROR
+      return 1
+    fi
   fi
-  out=$(cd "$(fm_backlog_root "$data")" 2>/dev/null && tasks-axi show "$id" \
-      --file "$file" 2>&1)
+  out=$(fm_backlog_row_show "$data" "$id")
   command_status=$?
   if [ "$command_status" -ne 0 ]; then
     if printf '%s\n' "$out" | grep -q '^code: NOT_FOUND$'; then
@@ -225,30 +277,44 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   state=$(printf '%s\n' "$out" | sed -n 's/^  state: *//p' | head -1)
   held=$(printf '%s\n' "$out" | sed -n 's/^  held: *//p' | head -1)
   blocked=$(printf '%s\n' "$out" | sed -n 's/^  blocked: *//p' | head -1)
+  hold_kind=$(printf '%s\n' "$out" | sed -n 's/^  hold_kind: *//p' | head -1)
   if [ -z "$state" ]; then
     FM_BACKLOG_ROW_ERROR="tasks-axi show $id returned no state"
     return 1
   fi
   FM_BACKLOG_ROW_RESULT=found
   FM_BACKLOG_ROW_STATE="$state ${held:-no} ${blocked:-no}"
+  case "$hold_kind" in
+    ''|'"-"'|-) FM_BACKLOG_ROW_HOLD_KIND= ;;
+    *) FM_BACKLOG_ROW_HOLD_KIND=$hold_kind ;;
+  esac
   return 0
 }
 
 # Run one tasks-axi mutation against <home>'s backlog, capturing its first
-# output line in FM_BACKLOG_TRANSITION_ERROR on failure.
+# output line in FM_BACKLOG_TRANSITION_ERROR on failure. The markdown backend
+# keeps its explicit <data>/backlog.md file and presence requirement; every
+# other configured backend is addressed by the root's own tasks-axi
+# configuration, so passing the markdown-era path would write the wrong store.
 fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
-  local data authorized_data=$1 file verb=$2 id=$3 out command_status
+  local data authorized_data=$1 file verb=$2 id=$3 out command_status root
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   fi
   shift 3
   FM_BACKLOG_TRANSITION_ERROR=
-  file=$(fm_backlog_file "$data") || return 1
-  fm_backlog_record_present "$file" "backlog file" "$authorized_data" || return 1
-  out=$(cd "$(fm_backlog_root "$data")" 2>/dev/null && tasks-axi "$verb" "$id" \
-      --file "$file" "$@" 2>&1)
-  command_status=$?
+  root=$(fm_backlog_root "$data") || return 1
+  if [ "$(fm_tasks_axi_backend "$root")" != markdown ]; then
+    out=$(cd "$root" 2>/dev/null && tasks-axi "$verb" "$id" "$@" 2>&1)
+    command_status=$?
+  else
+    file=$(fm_backlog_file "$data") || return 1
+    fm_backlog_record_present "$file" "backlog file" "$authorized_data" || return 1
+    out=$(cd "$root" 2>/dev/null && tasks-axi "$verb" "$id" \
+        --file "$file" "$@" 2>&1)
+    command_status=$?
+  fi
   [ "$command_status" -ne 0 ] || return 0
   FM_BACKLOG_TRANSITION_ERROR=$(printf '%s\n' "$out" | sed -n '1p')
   [ -n "$FM_BACKLOG_TRANSITION_ERROR" ] \
@@ -264,6 +330,78 @@ fm_backlog_done() {  # <data-dir> <id> [flag...]
   local data=$1 id=$2
   shift 2
   fm_backlog_mutate "$data" "done" "$id" "$@"
+}
+
+# Keep a captain-held row open across the removal of the work record that
+# discovered it: record the finished work's deliverable as one line at the end
+# of the task body (a line already present is left alone) and return the row to
+# Queued, the conventional post-cleanup shape for an open captain call.
+# bin/fm-fleet-snapshot.sh classifies that retained hold from its structured
+# fields; only bin/fm-captain-hold.sh answer closes the call. The links are
+# written into the body rather than through `tasks-axi update --report`,
+# because that flag rewrites the title of a row that is not Done.
+fm_backlog_retain() {  # <data-dir> <id> [flag...]
+  local data authorized_data=$1 id=$2 out command_status previous_arg=''
+  local arg deliverable='' line body new_body tmp
+  if ! data=$(fm_backlog_data_absolute "$1"); then
+    FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
+    return 1
+  fi
+  shift 2
+  FM_BACKLOG_TRANSITION_ERROR=
+  for arg in "$@"; do
+    case "$previous_arg" in
+      --report) deliverable="${deliverable:+$deliverable; }report $arg" ;;
+      --pr) deliverable="${deliverable:+$deliverable; }PR $arg" ;;
+      --note) deliverable="${deliverable:+$deliverable; }$arg" ;;
+    esac
+    previous_arg=$arg
+  done
+  if [ -n "$deliverable" ]; then
+    out=$(fm_backlog_row_show "$data" "$id" --full)
+    command_status=$?
+    if [ "$command_status" -ne 0 ]; then
+      FM_BACKLOG_TRANSITION_ERROR=$(printf '%s\n' "$out" | sed -n '1p')
+      [ -n "$FM_BACKLOG_TRANSITION_ERROR" ] \
+        || FM_BACKLOG_TRANSITION_ERROR="tasks-axi show $id failed with no output"
+      return "$command_status"
+    fi
+    body=$(printf '%s\n' "$out" | sed -n 's/^  body: //p' | head -1 \
+      | LC_ALL=C perl -MJSON::PP -e '
+        local $/;
+        my $shown = <STDIN>;
+        $shown =~ s/\s+\z//;
+        exit 0 if $shown eq "" || $shown eq "-";
+        my $value = $shown =~ /\A"/ ? decode_json($shown) : $shown;
+        print $value unless $value eq "-";
+      ') || {
+      FM_BACKLOG_TRANSITION_ERROR="could not decode the task body of $id"
+      return 1
+    }
+    line="Deliverable of the finished work: $deliverable"
+    case $'\n'"$body"$'\n' in
+      *$'\n'"$line"$'\n'*) ;;
+      *)
+        new_body=$line
+        [ -z "$body" ] || new_body=$(printf '%s\n\n%s' "$body" "$line")
+        tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-backlog-retain-body.XXXXXX") || {
+          FM_BACKLOG_TRANSITION_ERROR="cannot stage the deliverable for $id"
+          return 1
+        }
+        if ! printf '%s\n' "$new_body" > "$tmp"; then
+          rm -f -- "$tmp"
+          FM_BACKLOG_TRANSITION_ERROR="cannot stage the deliverable for $id"
+          return 1
+        fi
+        if ! fm_backlog_mutate "$authorized_data" update "$id" --body-file "$tmp"; then
+          rm -f -- "$tmp"
+          return 1
+        fi
+        rm -f -- "$tmp"
+        ;;
+    esac
+  fi
+  fm_backlog_mutate "$authorized_data" reopen "$id"
 }
 
 fm_backlog_canonical_existing() {
@@ -451,6 +589,16 @@ fm_backlog_close_transition() {
   fm_backlog_record_remove "$marker" "pending-close record" "$state"
 }
 
+# The captain-held twin of the close transition: same record, same ordering,
+# `reopen` with the deliverable recorded instead of `done`.
+fm_backlog_retain_transition() {
+  local meta=$1 marker=$2 data=$3 id=$4 state=$5
+  shift 5
+  [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
+  fm_backlog_retain "$data" "$id" "$@" || return 1
+  fm_backlog_record_remove "$marker" "pending-close record" "$state"
+}
+
 fm_backlog_atomic_transition() {
   local operation=$1
   shift
@@ -460,6 +608,7 @@ fm_backlog_atomic_transition() {
     dispatch) fm_backlog_dispatch_transition "$@" ;;
     rollback) fm_backlog_dispatch_rollback "$@" ;;
     close) fm_backlog_close_transition "$@" ;;
+    retain) fm_backlog_retain_transition "$@" ;;
     *) FM_BACKLOG_TRANSITION_ERROR="unknown backlog atomic transition $operation"; return 2 ;;
   esac
 }
@@ -470,15 +619,16 @@ fm_backlog_close_marker_path() {  # <state-dir> <id>
 
 fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <expected-id> <state-dir>
   local marker=$1 authorized_data data_resolved expected_id=$3 state=$4
-  local id='' data='' marker_spawn_gen='' cleanup_incomplete=0 line raw_bytes arg_value
+  local id='' data='' marker_spawn_gen='' cleanup_incomplete=0 mode=close line raw_bytes arg_value
   local url_tail url_authority url_path url_host url_port host_rest host_label host_valid
   local percent_tail percent_valid
-  local id_count=0 data_count=0 spawn_gen_count=0 cleanup_incomplete_count=0
+  local id_count=0 data_count=0 spawn_gen_count=0 cleanup_incomplete_count=0 mode_count=0
   local args=()
   FM_BACKLOG_CLOSE_VALIDATED_ID=
   FM_BACKLOG_CLOSE_VALIDATED_DATA=
   FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN=
   FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE=0
+  FM_BACKLOG_CLOSE_VALIDATED_MODE=close
   FM_BACKLOG_CLOSE_VALIDATED_ARGS=()
   fm_backlog_record_present "$marker" "pending-close record" "$state" || return 1
   raw_bytes=$(fm_backlog_bytes_of_file "$marker" 2>/dev/null) || {
@@ -495,10 +645,22 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
       data=*) data=${line#data=}; data_count=$((data_count + 1)) ;;
       spawn_gen=*) marker_spawn_gen=${line#spawn_gen=}; spawn_gen_count=$((spawn_gen_count + 1)) ;;
       cleanup_incomplete=*) cleanup_incomplete=${line#cleanup_incomplete=}; cleanup_incomplete_count=$((cleanup_incomplete_count + 1)) ;;
+      mode=*) mode=${line#mode=}; mode_count=$((mode_count + 1)) ;;
       arg=*) args+=("${line#arg=}") ;;
       *) FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"; return 1 ;;
     esac
   done < "$marker"
+  if [ "$mode_count" -gt 1 ]; then
+    FM_BACKLOG_TRANSITION_ERROR="unreadable pending-close record $marker"
+    return 1
+  fi
+  case "$mode" in
+    close|retain) ;;
+    *)
+      FM_BACKLOG_TRANSITION_ERROR="invalid transition mode in pending-close record $marker"
+      return 1
+      ;;
+  esac
   case "$id" in
     ''|.*|*[!A-Za-z0-9._-]*)
       FM_BACKLOG_TRANSITION_ERROR="invalid task identity in pending-close record $marker"
@@ -623,12 +785,16 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
   FM_BACKLOG_CLOSE_VALIDATED_DATA=$data_resolved
   FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN=$marker_spawn_gen
   FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE=$cleanup_incomplete
+  FM_BACKLOG_CLOSE_VALIDATED_MODE=$mode
   FM_BACKLOG_CLOSE_VALIDATED_ARGS=("${args[@]+"${args[@]}"}")
 }
 
-fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen> <state-dir> <cleanup-incomplete: 0|1> [flag...]
+# A leading `--retain` flag records the captain-held transition (`mode=retain`)
+# instead of a close; the remaining flags are the same completion links either
+# transition records.
+fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen> <state-dir> <cleanup-incomplete: 0|1> [--retain] [flag...]
   local tmp=$1 id=$2 data spawn_gen=$4 state=$5 cleanup_incomplete=$6 arg previous_arg=''
-  local serialized_args=()
+  local mode=close serialized_args=()
   data=$(fm_backlog_data_absolute "$3") || {
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $3"
     return 1
@@ -643,6 +809,10 @@ fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen
     *) FM_BACKLOG_TRANSITION_ERROR="invalid pending-close cleanup state"; return 1 ;;
   esac
   shift 6
+  if [ "${1:-}" = --retain ]; then
+    mode=retain
+    shift
+  fi
   for arg in "$@"; do
     if [ "$previous_arg" = --note ] && [ "$arg" = "local main" ]; then
       serialized_args+=("local%20main")
@@ -656,6 +826,7 @@ fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen
     printf 'data=%s\n' "$data"
     printf 'spawn_gen=%s\n' "$spawn_gen"
     printf 'cleanup_incomplete=%s\n' "$cleanup_incomplete"
+    [ "$mode" = close ] || printf 'mode=%s\n' "$mode"
     for arg in "${serialized_args[@]+"${serialized_args[@]}"}"; do
       printf 'arg=%s\n' "$arg"
     done
@@ -695,13 +866,14 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
   fm_backlog_close_marker_remove "$marker" "$1"
 }
 
-# Replay one recorded close. Returns 0 when the row is closed or the marker is
-# stale, and 1 when marker validation or recovery fails. Validation completes
-# before any meta or backlog mutation.
+# Replay one recorded close or retention. Returns 0 when the row is closed (or
+# retained), the marker is stale, or an answer already closed a retained row,
+# and 1 when marker validation or recovery fails. Validation completes before
+# any meta or backlog mutation.
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 marker_name expected_id
-  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete
-  local args=()
+  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete mode
+  local args=() mode_flags=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
   fm_backlog_directory_present "$state" "state directory" || return 1
   [ -e "$marker" ] || [ -L "$marker" ] || return 0
@@ -715,6 +887,8 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
   data=$FM_BACKLOG_CLOSE_VALIDATED_DATA
   marker_spawn_gen=$FM_BACKLOG_CLOSE_VALIDATED_SPAWN_GEN
   cleanup_incomplete=$FM_BACKLOG_CLOSE_VALIDATED_CLEANUP_INCOMPLETE
+  mode=$FM_BACKLOG_CLOSE_VALIDATED_MODE
+  [ "$mode" = close ] || mode_flags=(--retain)
   args=("${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]+"${FM_BACKLOG_CLOSE_VALIDATED_ARGS[@]}"}")
   if [ "${args[0]-}" = --note ]; then
     args[1]="local main"
@@ -733,13 +907,17 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
       return 0
     fi
     fm_backlog_close_marker_mark_cleanup_incomplete "$state" "$marker" "$id" "$data" \
-      "$marker_spawn_gen" "${args[@]+"${args[@]}"}" || return 1
+      "$marker_spawn_gen" "${mode_flags[@]+"${mode_flags[@]}"}" "${args[@]+"${args[@]}"}" \
+      || return 1
     cleanup_incomplete=1
     fm_backlog_atomic_transition remove "$meta" "the interrupted task record" "$state" \
       || return 1
   fi
   if fm_backlog_row_probe "$data" "$id"; then
     row_state=$FM_BACKLOG_ROW_STATE
+    if [ "${row_state%% *}" != "done" ] && [ "$FM_BACKLOG_ROW_HOLD_KIND" = captain ]; then
+      mode=retain
+    fi
   else
     if [ "$FM_BACKLOG_ROW_RESULT" != not_found ]; then
       FM_BACKLOG_TRANSITION_ERROR=$FM_BACKLOG_ROW_ERROR
@@ -749,6 +927,13 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
   fi
   case "$row_state" in
     done\ *)
+      if [ "$mode" = retain ]; then
+        # The captain's answer closed the row before this replay; the retained
+        # transition owes it nothing more than retiring the record.
+        fm_backlog_close_marker_remove "$marker" "$state" || return 1
+        FM_BACKLOG_CLOSE_REPLAY_RESULT=answered
+        return 0
+      fi
       if fm_backlog_atomic_transition close '' "$marker" "$data" "$id" "$state" \
           "${args[@]+"${args[@]}"}"; then
         if [ "$cleanup_incomplete" = 1 ]; then
@@ -766,9 +951,15 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
       return 0
       ;;
   esac
-  if fm_backlog_atomic_transition close '' "$marker" "$data" "$id" "$state" \
+  if fm_backlog_atomic_transition "$mode" '' "$marker" "$data" "$id" "$state" \
       "${args[@]+"${args[@]}"}"; then
-    if [ "$cleanup_incomplete" = 1 ]; then
+    if [ "$mode" = retain ]; then
+      if [ "$cleanup_incomplete" = 1 ]; then
+        FM_BACKLOG_CLOSE_REPLAY_RESULT=retained_incomplete
+      else
+        FM_BACKLOG_CLOSE_REPLAY_RESULT=retained
+      fi
+    elif [ "$cleanup_incomplete" = 1 ]; then
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
     else
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed

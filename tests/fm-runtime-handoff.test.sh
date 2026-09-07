@@ -4,6 +4,8 @@
 # Guarantees under test (behavior through the public scripts, not source bytes):
 #   - successful handoff preserves commits and uncommitted changes in the
 #     recorded worktree and does not call treehouse get/return
+#   - handoff requires and reuses the recorded, agent-free endpoint; a missing
+#     endpoint refuses rather than quietly creating a replacement identity
 #   - state/<id>.meta harness= (and model/effort when supplied) update while
 #     non-owned keys such as pr= are preserved
 #   - handoff refuses when the worktree cannot be reconciled
@@ -83,7 +85,27 @@ case "${1:-}" in
     esac
     exit 0
     ;;
-  has-session|new-session|set-window-option|send-keys) exit 0 ;;
+  has-session|new-session|set-window-option) exit 0 ;;
+  send-keys)
+    payload=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then payload=$arg; fi
+      prev=$arg
+    done
+    session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+    if [ -n "$session" ] && [ -n "$payload" ]; then
+      root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+      workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+      project="$root/fake-cursor-project"
+      mkdir -p "$project/agent-transcripts/fake-conversation"
+      printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+      printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+        > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+    fi
+    exit 0
+    ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   new-window)
     # -P -F '#{window_id}'
     printf '@9\n'
@@ -174,7 +196,9 @@ setup_case() {
   git -C "$CASE_WT" add feature.txt
   git -C "$CASE_WT" commit -qm 'task work'
   printf 'uncommitted\n' > "$CASE_WT/dirty.txt"
-  printf '# brief for %s\n' "$id" > "$CASE_HOME/data/$id/brief.md"
+  printf '%s\n' '# Task' '' "## Captain's intent" '' "brief for $id" '' \
+    '## Firstmate spec' '' 'Preserve the existing worktree and endpoint identity.' \
+    > "$CASE_HOME/data/$id/brief.md"
   fakebin=$(make_fakebin "$CASE_DIR")
   export FM_HOME="$CASE_HOME"
   export FM_FAKE_PANE_PATH="$CASE_WT"
@@ -462,6 +486,26 @@ setup_case() {
   pass "refuses when endpoint ownership cannot be reconciled"
 }
 
+# --- refusal: handoff cannot adopt a missing endpoint -----------------------
+
+{
+  setup_case refuse-missing-endpoint task-e1
+  export FM_FAKE_WINDOW_PRESENT=0
+  : > "$FM_FAKE_TREEHOUSE_LOG"
+  set +e
+  out=$("$HANDOFF" task-e1 --harness claude --skip-exit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a missing endpoint must refuse runtime handoff"
+  assert_contains "$out" "recorded endpoint for task-e1 is missing" "missing endpoint message"
+  [ ! -e "$CASE_HOME/state/task-e1.handoff-prompt" ] \
+    || fail "missing endpoint refusal must not write a handoff prompt"
+  if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
+    fail "missing endpoint refusal must not lease a worktree; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
+  fi
+  pass "refuses handoff when its recorded endpoint cannot be adopted"
+}
+
 # --- success: reuse-worktree preserves commits, dirt, meta keys ------------
 
 {
@@ -512,7 +556,7 @@ setup_case() {
   sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv2.meta"
   printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv2.meta"
   rm -f "$CASE_HOME/state/task-pv2.meta.bak"
-  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
   if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv2 --harness cursor --skip-exit 2>&1); then
     :
@@ -530,7 +574,7 @@ setup_case() {
   sed -i.bak 's/^harness=codex$/harness=opencode/' "$CASE_HOME/state/task-pv3.meta"
   printf 'provider=claude\n' >> "$CASE_HOME/state/task-pv3.meta"
   rm -f "$CASE_HOME/state/task-pv3.meta.bak"
-  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
   if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv3 --harness opencode --skip-exit 2>&1); then
     :
@@ -547,7 +591,7 @@ setup_case() {
   setup_case provider-unprovable task-pv4
   sed -i.bak 's/^harness=codex$/harness=claude/' "$CASE_HOME/state/task-pv4.meta"
   rm -f "$CASE_HOME/state/task-pv4.meta.bak"
-  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
   if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv4 --harness opencode --skip-exit 2>&1); then
     :
@@ -566,7 +610,7 @@ setup_case() {
 
 {
   setup_case success-handoff task-h1
-  export FM_FAKE_WINDOW_PRESENT=0
+  export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
   : > "$FM_FAKE_TREEHOUSE_LOG"
   head_before=$(git -C "$CASE_WT" rev-parse HEAD)
@@ -631,7 +675,7 @@ setup_case() {
   send_log=$(cat "$FM_FAKE_SEND_LOG")
   assert_contains "$send_log" "task-x1 /quit" "codex exit command delivered via fm-send"
   [ -f "$FM_FAKE_EXIT_MARKER" ] || fail "exit command should have been sent"
-  [ ! -f "$FM_FAKE_WINDOW_FILE" ] || fail "dead endpoint husk should have been killed"
+  [ -f "$FM_FAKE_WINDOW_FILE" ] || fail "agent-free endpoint should remain available for reuse"
 
   [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "exit path must preserve HEAD"
   [ -f "$CASE_WT/dirty.txt" ] || fail "exit path must preserve uncommitted changes"
@@ -684,7 +728,7 @@ setup_case() {
     *"task-x3 /exit"*) fail "cline has no exit command; a text exit was sent: $send_log" ;;
   esac
   [ -f "$FM_FAKE_EXIT_MARKER" ] || fail "exit key should have been sent"
-  [ ! -f "$FM_FAKE_WINDOW_FILE" ] || fail "dead endpoint husk should have been killed"
+  [ -f "$FM_FAKE_WINDOW_FILE" ] || fail "agent-free endpoint should remain available for reuse"
 
   [ "$(git -C "$CASE_WT" rev-parse HEAD)" = "$head_before" ] || fail "key-exit path must preserve HEAD"
   [ -f "$CASE_WT/dirty.txt" ] || fail "key-exit path must preserve uncommitted changes"
