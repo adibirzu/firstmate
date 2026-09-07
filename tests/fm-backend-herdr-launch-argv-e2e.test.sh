@@ -112,8 +112,12 @@ CONTROL_PANE=$(printf '%s' "$CONTROL" | jq -r '.result.root_pane.pane_id // empt
 lab pane run "$CONTROL_PANE" "$CONTROL_ARGV" >/dev/null 2>&1 \
   || fail "control pane did not accept the typed launch command"
 
-# Treatment: hand Herdr the argv it is able to persist.
-lab agent start argvtreatment --cwd "$LAB_CWD" --workspace "$WS" --no-focus \
+# Treatment: hand Herdr the argv it is able to persist through its current
+# existing-pane agent-start interface.
+TREATMENT=$(lab tab create --workspace "$WS" --cwd "$LAB_CWD" --label argvtreatment --no-focus 2>/dev/null)
+TREATMENT_PANE=$(printf '%s' "$TREATMENT" | jq -r '.result.root_pane.pane_id // empty')
+[ -n "$TREATMENT_PANE" ] || fail "treatment tab did not return a pane id"
+lab agent start claude --kind claude --pane "$TREATMENT_PANE" \
   -- claude --dangerously-skip-permissions --model opus --effort high --add-dir "$MARKER" \
   >/dev/null 2>&1 || fail "agent start with an explicit argv was rejected"
 

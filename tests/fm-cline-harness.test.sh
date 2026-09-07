@@ -75,7 +75,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" cline gh-axi gh
+  fm_fake_exit0 "$fakebin" cline claude gh-axi gh
   printf '%s\n' "$fakebin"
 }
 
@@ -108,9 +108,9 @@ EOF
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$id"
 }
 
-run_cline_spawn() {  # <case-dir> <home> <proj> <wt> <fakebin> <id> [extra args...]
-  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6
-  shift 6
+run_harness_spawn() {  # <case-dir> <home> <proj> <wt> <fakebin> <id> <harness> [extra args...]
+  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6 harness=$7
+  shift 7
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -118,7 +118,13 @@ run_cline_spawn() {  # <case-dir> <home> <proj> <wt> <fakebin> <id> [extra args.
     FM_FAKE_LAUNCH_LOG="$home/launch.log" \
     CLINE_DATA_DIR="$case_dir/clinedata" \
     PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "$proj" cline "$@" 2>&1
+    "$SPAWN" "$id" "$proj" "$harness" "$@" 2>&1
+}
+
+run_cline_spawn() {  # <case-dir> <home> <proj> <wt> <fakebin> <id> [extra args...]
+  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6
+  shift 6
+  run_harness_spawn "$case_dir" "$home" "$proj" "$wt" "$fakebin" "$id" cline "$@"
 }
 
 # Write a cline session fixture: <sessions-root> <id> <workspace> <status>
@@ -238,13 +244,24 @@ test_spawn_writes_session_binding_excluding_prior_sessions() {
 }
 
 test_existing_launch_templates_untouched() {
-  grep -Fq "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings" "$SPAWN" \
-    || fail "claude launch template or feedback safety controls changed"
-  grep -Fq '{"feedbackDrafts":"off"}' "$SPAWN" \
-    || fail "claude launch template dropped the feedback-drafts safety setting"
-  grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "grok launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
+  local rec case_dir home proj wt fakebin id out launch
+  rec=$(make_spawn_case claude-worker-contract)
+  IFS='|' read -r case_dir home proj wt fakebin id <<< "$rec"
+  mkdir -p "$case_dir/claude-config"
+  out=$(CLAUDE_CONFIG_DIR="$case_dir/claude-config" \
+    run_harness_spawn "$case_dir" "$home" "$proj" "$wt" "$fakebin" "$id" claude \
+      --mode no-mistakes --yolo off) || fail "Claude worker spawn failed: $out"
+  launch=$(cat "$home/launch.log")
+  assert_grep "CLAUDE_CODE_SEND_FEEDBACK=0" "$home/launch.log" \
+    "Claude worker launch lost its feedback safety control"
+  assert_grep "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}'" "$home/launch.log" \
+    "Claude worker launch lost strict empty MCP isolation"
+  assert_grep "--settings '{\"enabledPlugins\":{}}' --setting-sources project,local --no-chrome" "$home/launch.log" \
+    "Claude worker launch lost plugin, user-settings, or browser isolation"
+  assert_grep "claude --dangerously-skip-permissions" "$home/launch.log" \
+    "Claude worker launch was not delivered to the backend"
+  [ -n "$launch" ] || fail "Claude worker launch did not reach the fake backend"
+  pass "fm-spawn: Claude workers retain feedback, MCP, plugin, user-settings, and browser isolation"
 }
 
 test_cline_is_a_known_bare_adapter_name() {

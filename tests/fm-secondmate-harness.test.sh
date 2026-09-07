@@ -773,8 +773,18 @@ test_spawn_secondmate_harness_model_token() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-token: meta model not opus (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "model-token: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}' --model 'opus'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'opus'" \
     "model-token: launch did not carry --model opus"
+  assert_contains "$launch" "CLAUDE_CODE_SEND_FEEDBACK=0" \
+    "model-token: launch did not retain feedback safety control"
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --settings '{\"enabledPlugins\":" \
+    "model-token: launch did not retain strict MCP and plugin isolation"
+  assert_not_contains "$launch" '"enabledPlugins":{}' \
+    "model-token: launch did not enumerate inherited plugins for explicit disablement"
+  assert_not_contains "$launch" ':true' \
+    "model-token: launch left an inherited plugin enabled"
+  assert_contains "$launch" "--setting-sources project,local --no-chrome" \
+    "model-token: launch did not exclude user settings and browser integration"
   assert_not_contains "$launch" "--effort" "model-token: launch must not carry an --effort flag"
   pass "C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta"
 }
@@ -795,8 +805,18 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-effort-tokens: meta model not opus"
   [ "$(meta_field "$meta" effort)" = high ] || fail "model-effort-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}' --model 'opus' --effort 'high'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
+  assert_contains "$launch" "CLAUDE_CODE_SEND_FEEDBACK=0" \
+    "model-effort-tokens: launch did not retain feedback safety control"
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --settings '{\"enabledPlugins\":" \
+    "model-effort-tokens: launch did not retain strict MCP and plugin isolation"
+  assert_not_contains "$launch" '"enabledPlugins":{}' \
+    "model-effort-tokens: launch did not enumerate inherited plugins for explicit disablement"
+  assert_not_contains "$launch" ':true' \
+    "model-effort-tokens: launch left an inherited plugin enabled"
+  assert_contains "$launch" "--setting-sources project,local --no-chrome" \
+    "model-effort-tokens: launch did not exclude user settings and browser integration"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
 
