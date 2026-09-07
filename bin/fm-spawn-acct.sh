@@ -45,4 +45,7 @@ ACCOUNT_HARNESS=$(fm_account_resolve "$ACCOUNT" | cut -f1) || exit $?
 
 FM_SPAWN_BIN="${FM_SPAWN_BIN:-$SCRIPT_DIR/fm-spawn.sh}"
 # fm-spawn signature: <task-id> <project-dir> [<harness>|<launch-command>] [flags...]
-exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" --harness "$ACCOUNT_HARNESS" "${ACCOUNT_PROFILE_ARGS[@]}" ${PASS[@]+"${PASS[@]}"}
+# Stock macOS bash is 3.2, where "${arr[@]}" on an EMPTY array is an unbound
+# variable under set -u, so both optional arrays need the +-guard. Without it a
+# spawn that passes neither --model nor --effort dies before reaching fm-spawn.
+exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" --harness "$ACCOUNT_HARNESS" ${ACCOUNT_PROFILE_ARGS[@]+"${ACCOUNT_PROFILE_ARGS[@]}"} ${PASS[@]+"${PASS[@]}"}
