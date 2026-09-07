@@ -44,6 +44,7 @@
 # (bin/fm-timeout-lib.sh) for the bounded call; callers must source both files first.
 
 FM_CREW_USAGE_QUOTA_TIMEOUT=${FM_CREW_USAGE_QUOTA_TIMEOUT:-5}
+FM_CREW_USAGE_CONTEXT_TIMEOUT=${FM_CREW_USAGE_CONTEXT_TIMEOUT:-5}
 FM_CREW_USAGE_ACCOUNTS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-accounts-lib.sh"
 FM_CREW_USAGE_QUOTA_CACHE_ACCOUNTS=()
 FM_CREW_USAGE_QUOTA_CACHE_VALUES=()
@@ -56,6 +57,7 @@ fm_crew_usage_validate_quota_timeout() { # value
 }
 
 fm_crew_usage_validate_quota_timeout "$FM_CREW_USAGE_QUOTA_TIMEOUT" || return $?
+fm_crew_usage_validate_quota_timeout "$FM_CREW_USAGE_CONTEXT_TIMEOUT" || return $?
 
 # Fetch quota-axi's full JSON once per process; cache the raw text (empty
 # string on any failure, including quota-axi absent or the bound being hit).
@@ -111,7 +113,7 @@ fm_crew_usage_context_pct() {  # harness target
   local harness=$1 target=$2 status context
   case "$harness" in codex|claude) ;; *) printf 'n/a'; return 0 ;; esac
   [ -n "$target" ] || { printf 'n/a'; return 0; }
-  status=$("${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
+  status=$(fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" "${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
     printf 'n/a'; return 0;
   }
   context=$(printf '%s\n' "$status" | sed -nE 's/.*(^| )context_pct=([0-9]+).*/\2/p' | tail -n1)

@@ -4153,7 +4153,7 @@ spawn_write_meta_locked() {
     echo "yolo=$YOLO"
     echo "tasktmp=$TASK_TMP"
     [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
-    [ -z "${ACCOUNT:-}" ] || echo "account=$ACCOUNT"
+    [ "${FM_SPAWN_ACCT_ISOLATED:-0}" != 1 ] || [ -z "${ACCOUNT:-}" ] || echo "account=$ACCOUNT"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"

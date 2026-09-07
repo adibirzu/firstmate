@@ -758,6 +758,9 @@ task_json_lines() {
     event_json=$(status_event_json "$status_log" "$STATE/$id.status")
     fm_crew_usage_prepare_quota "$harness" "$account"
     usage_json=$(fm_crew_usage_json "$harness" "$model" "$id" "$account")
+    if ! snapshot_task_generation_is_current "$meta" "$id"; then
+      usage_json=$(jq -n '{harness:"",model:"",context_pct:"n/a",quota:"n/a"}')
+    fi
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     read -r current_state current_source < <(
       printf '%s' "$current_json" | jq -r '[.state // "", .source // ""] | @tsv'

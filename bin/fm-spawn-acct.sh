@@ -40,4 +40,4 @@ LAUNCH=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT") || exit $?
 
 FM_SPAWN_BIN="${FM_SPAWN_BIN:-$SCRIPT_DIR/fm-spawn.sh}"
 # fm-spawn signature: <task-id> <project-dir> [<harness>|<launch-command>] [flags...]
-exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" ${PASS[@]+"${PASS[@]}"}
+FM_SPAWN_ACCT_ISOLATED=1 exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" ${PASS[@]+"${PASS[@]}"}

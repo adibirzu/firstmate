@@ -73,6 +73,17 @@ test_context_pct_rejects_out_of_range() {
   pass "context percentage rejects values outside 0 through 100"
 }
 
+test_context_pct_times_out() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/context-timeout" '')
+  statusline="$TMP_ROOT/statusline-timeout"
+  printf '%s\n' '#!/usr/bin/env bash' 'sleep 2' 'printf "status=ok source=codex context_pct=40\\n"' > "$statusline"
+  chmod +x "$statusline"
+  out=$(FM_CREW_USAGE_CONTEXT_TIMEOUT=1 with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "n/a" ] || fail "timed-out context_pct: expected n/a, got '$out'"
+  pass "context percentage returns n/a after diagnostic timeout"
+}
+
 test_quota_disabled_by_default() {
   local fb out
   fb=$(make_fakebin "$TMP_ROOT/disabled" '#!/usr/bin/env bash
@@ -189,6 +200,7 @@ test_usage_json_row_defaults_quota_to_na() {
 
 test_context_pct_reads_supported_statusline
 test_context_pct_rejects_out_of_range
+test_context_pct_times_out
 test_quota_disabled_by_default
 test_quota_unmapped_harness_returns_empty
 test_quota_enabled_reads_spend_priority
