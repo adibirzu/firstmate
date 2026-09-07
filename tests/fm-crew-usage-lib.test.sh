@@ -101,6 +101,7 @@ test_quota_unmapped_harness_returns_empty() {
 echo "quota-axi should never be invoked for an unmapped harness" >&2
 exit 1
 ')
+  # shellcheck disable=SC2016 # Inner shell expands command output variables.
   out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
 v=$(fm_crew_usage_quota_spend_priority pi)
 printf "[%s]\n" "$v"')
@@ -136,6 +137,7 @@ cat <<JSON
 JSON
 EOF
   chmod +x "$fb/quota-axi"
+  # shellcheck disable=SC2016 # Inner shell expands command output variables.
   out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
 fm_crew_usage_prepare_quota codex codex-account
 first=$(fm_crew_usage_json codex gpt task-1 codex-account)

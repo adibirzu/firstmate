@@ -71,6 +71,7 @@ _fm_crew_usage_fetch_quota() { # account provider
       return 0
     fi
   done
+  # shellcheck disable=SC2016 # Inner shell expands positional parameters.
   out=$(fm_run_timed "$FM_CREW_USAGE_QUOTA_TIMEOUT" bash -c '
     . "$1"
     fm_account_quota_json "$2" "$3"
