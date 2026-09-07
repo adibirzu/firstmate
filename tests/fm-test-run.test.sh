@@ -795,12 +795,16 @@ test_exclude_family() {
   listed=$("$RUNNER" --list --all --exclude-family real-herdr-gated)
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "exclude-family real-herdr-gated left a real-herdr script"
+  printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-launch-argv-e2e.test.sh' \
+    && fail "exclude-family real-herdr-gated left the real launch-argv E2E"
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-lint.test.sh' \
     || fail "exclude-family must retain pure-contract-unit scripts"
   # Explicit family mode still works; exclude of a different family is a no-op.
   listed=$("$RUNNER" --list --family real-herdr-gated)
   printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "family real-herdr-gated must list smoke test"
+  printf '%s\n' "$listed" | grep -Fq 'tests/fm-backend-herdr-launch-argv-e2e.test.sh' \
+    || fail "family real-herdr-gated must list the launch-argv E2E"
   pass "exclude-family drops the named primary family after selection"
 }
 

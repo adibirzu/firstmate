@@ -25,6 +25,9 @@ TMUX_LOG="$TMP_ROOT/remote-tmux.log"
 TMUX_STATE="$TMP_ROOT/remote-tmux.state"
 CLAIMS="$TMP_ROOT/claims"
 mkdir -p "$PARENT/data" "$PARENT/state" "$PARENT/config" "$PARENT/projects" "$REMOTE_ROOT" "$CLAIMS"
+# This fixture exercises the remote launch protocol, not live-machine admission.
+# The inheritable test-local setting reaches the remote home before its own launch.
+printf 'mode = off\n' > "$PARENT/config/spawn-capacity"
 cleanup() {
   local worker_pid='' wait_attempt=0
   touch "$TMP_ROOT/provision.release" "$TMP_ROOT/seed.release" "$TMP_ROOT/handoff.release" \
