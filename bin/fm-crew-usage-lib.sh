@@ -3,17 +3,16 @@
 # model, context percentage, provider quota) surfaced by fm-fleet-snapshot.sh
 # and rendered by the bearings skill's fleet-wide fallback view.
 #
-# Scope, deliberately narrow (Slice 1/2 of data/fm-harness-usage-bar/report.md,
-# captain-approved 2026-09-06):
+# Scope, deliberately narrow:
 #   - harness, model: the caller reads these straight from state/<id>.meta;
 #     this file does not re-parse meta and takes them as arguments.
 #   - context percentage: firstmate reads the verified Codex/Claude statusline
 #     diagnostic when its pane format carries Context N% left. Confirmed absent
 #     for opencode (`opencode
 #     stats` is a pull-only cost/token command, not a per-turn live
-#     percentage), `pi --mode json` (single-turn JSON carries no token/context
-#     field), and `cline --json` (same: no token/context field in its
-#     per-message JSON). context_pct is "n/a" when unavailable or unsupported;
+#     percentage), `pi --mode json` (single-turn JSON does not expose the
+#     running task's context), and `cline --json` (same: its per-message JSON
+#     does not expose the running task's context). context_pct is "n/a" when unavailable or unsupported;
 #     this is a recorded finding, not a gap to route around with pane-scraping, which
 #     firstmate-coding-guidelines' "Harness-dependent checks" section would
 #     require two-test live proof for and this task's scope does not cover.

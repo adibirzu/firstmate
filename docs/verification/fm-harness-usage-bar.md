@@ -1,12 +1,11 @@
-# Fleet-wide usage bar: statusline proxy and per-harness JSON adapters
+# Fleet-wide usage bar: statusline proxy execution and per-harness JSON adapters
 
 Audience: maintainer verification.
 
-This record contains reusable version-scoped evidence for the fleet-wide usage-bar
-work (data/fm-harness-usage-bar/report.md, captain-approved 2026-09-06, Slices 0-2).
-Exact task chronology and delivery transcripts remain in the scout report and PR evidence.
+This record contains reusable version-scoped evidence for the fleet-wide usage bar.
+Exact task chronology and delivery transcripts remain in private task and PR evidence.
 
-## Slice 0: the Codex statusline proxy renders live, not the bare fallback
+## Slice 0: the Codex statusline proxy executes directly but not in a live pane
 
 Verified 2026-09-06 with codex-cli 0.153.4 on macOS.
 
@@ -27,7 +26,8 @@ Observed: both invocations render the full multi-line LifeOS bar (state rings, e
 row, memory line, harness/model/version row, context bar, startup-load breakdown).
 The `DEF MODEL` field read `UNKNOWN` with no stdin model field and `GPT-5.5` once one was
 supplied; the `CONTEXT` bar's percentage changed from `4%` to `25%` between the two runs.
-This confirms the proxy mechanism is live and input-sensitive, not a static fallback.
+This confirms that direct proxy execution is input-sensitive, not a static fallback.
+The live-pane capture below establishes the separate interactive-TUI result.
 
 ### Live-pane interactive verification (captured 2026-09-07)
 
@@ -55,9 +55,8 @@ multi-line  LIFEOS bar live in its TUI), Codex CLI 0.153.4’s interactive TU
 only its native statusline footer (model effort · cwd) and does not display the external
 statusline proxy output in its live interactive pane. The proxy `~/.codex/statusline.sh`
 executes and renders the LifeOS bar when run directly from shell via stdin, but Codex’s
-live TUI does not render it. Therefore, Codex crews rely on Firstmate’s fleet-wide usage
-row fallback (Slice 1 in `/bearings` and `fm-fleet-snapshot.sh`) for live token usage and
-context visibility.
+live TUI does not render it.
+Therefore, Codex crews rely on Firstmate’s fleet-wide usage row fallback in `/bearings` and `fm-fleet-snapshot.sh` for live task context and provider-quota visibility.
 
 Grok's proxy (`~/.grok/statusline.sh`) is the identical delegate pattern; captain
 instruction excluded Grok from Slice 0 verification for this task.

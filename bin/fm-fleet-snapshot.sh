@@ -66,8 +66,8 @@
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
 #     usage:{harness,model,context_pct,quota} is the fleet-wide usage-bar
-#     fallback row (bin/fm-crew-usage-lib.sh, data/fm-harness-usage-bar/report.md
-#     section 4): harness/model come straight from meta, context_pct is the
+#     fallback row (bin/fm-crew-usage-lib.sh): harness/model come straight from
+#     meta, context_pct is the
 #     validated live Codex/Claude statusline percentage where available (for
 #     example "40") and "n/a" when unavailable or unsupported, and
 #     quota is quota-axi's spendPriority for the harness's mapped provider -
