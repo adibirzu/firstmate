@@ -1452,10 +1452,29 @@ const client = { session: { promptAsync: async (request) => { prompts.push(reque
 const hooks = await mod.FmPrimaryWatchArm({ client, directory: process.env.WORKTREE, worktree: process.env.WORKTREE });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-not-needed" } } });
-await new Promise((settle) => setTimeout(settle, 400));
-const rows = existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length : 0;
-if (rows !== 1) {
-  console.error(`expected one arm before the need cleared, got ${rows} cycles`);
+const rows = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean).length
+    : 0;
+const settle = (ms) => new Promise((done) => setTimeout(done, ms));
+const until = async (ready, budgetMs) => {
+  for (let elapsed = 0; elapsed < budgetMs && !ready(); elapsed += 10) await settle(10);
+  return ready();
+};
+if (!(await until(() => rows() === 1 && !existsSync(`${process.env.FM_HOME}/state/task.meta`), 8000))) {
+  console.error(`the first arm did not clear its need before the retry window: rows=${rows()} taskMeta=${existsSync(`${process.env.FM_HOME}/state/task.meta`)} prompts=${JSON.stringify(prompts)}`);
+  process.exit(1);
+}
+// The configured retry is due in at most 10 ms. Observe a bounded quiet window
+// after the first arm has actually cleared the need, rather than assuming it
+// did so within a fixed delay under concurrent runner load.
+const firstRows = rows();
+for (let elapsed = 0; elapsed < 250; elapsed += 10) {
+  if (rows() !== firstRows || prompts.length !== 0) break;
+  await settle(10);
+}
+if (rows() !== 1) {
+  console.error(`expected one arm before the need cleared, got ${rows()} cycles`);
   process.exit(1);
 }
 if (prompts.length !== 0) {
@@ -1465,7 +1484,7 @@ if (prompts.length !== 0) {
 EOF
 )
   status=$?
-  expect_code 0 "$status" "a retry launch into a no-longer-needed home must stay silent"
+  expect_code 0 "$status" "a retry launch into a no-longer-needed home must stay silent: $out"
   [ -z "$out" ] || fail "retry-not-needed test printed output: $out"
   pass "watch-arm: a failure retry that finds no remaining need does not prompt"
 }
