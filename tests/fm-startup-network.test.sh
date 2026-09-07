@@ -564,6 +564,36 @@ EOF
   pass "fm-startup-network: a second start never launches a competing worker"
 }
 
+# start writes its generation before nohup returns a child pid.
+# A matching second request must join that reservation instead of treating its
+# pid=0 handoff state as an abandoned worker and starting duplicate sweeps.
+test_start_reuses_a_matching_reserved_generation() {
+  local rec home root log generation
+  rec=$(new_world reserved-single-flight)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  write_lock_binding "$home" "$$"
+  cat > "$home/state/.startup-network.status" <<EOF
+state=running
+pid=0
+started=$(date +%s)
+locked=1
+phases=probe,sweeps
+generation=reserved-generation
+lock_pid=$$
+lock_kind=ancestry
+lock_session=$$
+EOF
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  generation=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
+  [ "$generation" = reserved-generation ] \
+    || fail "a matching reservation was replaced before its worker published a pid"
+  [ ! -s "$log" ] || fail "a matching reservation launched competing network sweeps: $(cat "$log")"
+  pass "fm-startup-network: a matching pid-zero reservation is single-flight"
+}
+
 # A running worker covers a locked request only when it was launched under the
 # SAME lock identity, not merely the same pid: a same-pid successor session must
 # get its own worker, and a worker under the same identity must be reused.
@@ -865,6 +895,7 @@ test_the_stage_bound_is_reported_not_swallowed
 test_an_abandoned_run_reads_as_needing_a_rerun
 test_locked_start_is_not_satisfied_by_an_inflight_probe
 test_start_is_single_flight
+test_start_reuses_a_matching_reserved_generation
 test_locked_start_reuses_a_worker_only_under_the_same_lock_identity
 test_start_reserves_its_generation_before_returning
 test_new_lock_owner_probe_reuses_covering_worker

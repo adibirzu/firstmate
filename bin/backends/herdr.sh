@@ -839,7 +839,7 @@ fm_backend_herdr_projection_focus_snapshot() {  # <session>
 # A single tab.focus on the exact response-independent pre-operation tab id
 # restores both the workspace and tab atomically.
 fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation>
-  local session=$1 before=$2 operation=$3 workspace tab after info attempt=0 max_attempts=1 stable=0 settle_samples=1 restore_ready=0
+  local session=$1 before=$2 operation=$3 workspace tab after info attempt=0 max_attempts=20 stable=0 settle_samples=1 restore_ready=0
   [ -n "$before" ] || {
     echo "warning: herdr presentation $operation had no unambiguous pre-operation focus snapshot" >&2
     return 1
@@ -855,10 +855,15 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # several seconds after reporting the pane closed. Keep the original tab
   # stable across that delayed transition rather than accepting the first four
   # seconds of apparently restored focus.
-  case "$operation" in
-    "pane close"|"task kill") settle_samples=100; max_attempts=200 ;;
-  esac
   after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
+  # Do not make a focus-safe operation pay for the pane-death settling window.
+  # The bounded window below is needed only after we have actually observed a
+  # focus change and asked Herdr to restore it.
+  [ "$after" != "$before" ] || return 0
+  case "$operation" in
+    # Allow several whole stable windows after an observed drift.
+    "pane close"|"task kill") settle_samples=100; max_attempts=400 ;;
+  esac
   while [ "$attempt" -lt "$max_attempts" ]; do
     if [ "$after" = "$before" ]; then
       stable=$((stable + 1))

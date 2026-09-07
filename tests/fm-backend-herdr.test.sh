@@ -1544,7 +1544,7 @@ test_projection_focus_restore_recovers_delayed_close_drift() {
       count=$((count + 1))
       printf "%s\\n" "$count" > "$SAMPLES"
       case "$count" in
-        2) printf "w3\tw3:t1" ;;
+        1|3) printf "w3\tw3:t1" ;;
         *) printf "w2\tw2:t2" ;;
       esac
     }

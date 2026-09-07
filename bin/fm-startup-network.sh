@@ -194,6 +194,17 @@ worker_alive() {
   [ "$age" -le "$(( $(stage_budget) + 30 ))" ]
 }
 
+# start reserves a running generation before its detached worker has a pid.
+# That reservation is protected by PUBLISH_LOCK, but a second starter can still
+# observe the committed record as the first shell hands it to nohup.
+# Treat that explicit reservation as in flight so matching work joins it
+# instead of launching a competing worker.
+worker_starting() {
+  local pid
+  pid=$(status_get pid)
+  [ "$pid" = 0 ]
+}
+
 # The exact phase names the digest and the report use, so "what has not been
 # confirmed yet" is always answerable from the status record alone.
 phase_label() {  # <phases>
@@ -239,7 +250,7 @@ cmd_start() {  # <locked> <harvest-pid>
   lock_session=${FM_SESSION_LOCK_RECORD_SESSION:-}
 
   fm_lock_acquire_wait "$PUBLISH_LOCK"
-  if [ "$(status_get state)" = running ] && worker_alive \
+  if [ "$(status_get state)" = running ] && { worker_alive || worker_starting; } \
     && worker_covers_request "$locked" "$lock_pid" "$lock_kind" "$lock_session"; then
     # A worker whose phases cover this request is still going. Starting another
     # would duplicate its work and, for a locked request, race the same mutating
