@@ -138,7 +138,7 @@ jobs:
     # Measured whole remainder is ~63 min of serial work; the balanced shards
     # are ~12.7 min each. Keep enough margin for loaded hosted runners: this is
     # a hang tripwire, not a throughput target.
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false

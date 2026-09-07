@@ -1064,7 +1064,7 @@ EOF
 import { pathToFileURL } from "node:url";
 
 const { existsSync, unlinkSync } = await import("node:fs");
-for (const outcome of ["retrying", "not-needed", "healthy", "external", "existing", "armed", "not-primary", "failed", "read-only"]) {
+for (const outcome of ["retrying", "pending-silent-rearm", "not-needed", "healthy", "external", "existing", "armed", "not-primary", "failed", "read-only"]) {
   if (existsSync(process.env.MARKER)) unlinkSync(process.env.MARKER);
   globalThis.__firstmateOpenCodeWatchArm = { ensureArmed: async () => outcome };
   const mod = await import(`${pathToFileURL(process.env.PLUGIN).href}?outcome=${outcome}`);
@@ -1074,7 +1074,7 @@ for (const outcome of ["retrying", "not-needed", "healthy", "external", "existin
     client, directory: process.env.DIRECTORY, worktree: process.env.WORKTREE,
   });
   await hooks.event({ event: { type: "session.idle", properties: { sessionID: "guard-outcomes" } } });
-  const silent = ["retrying", "not-needed", "healthy", "external"].includes(outcome);
+  const silent = ["retrying", "pending-silent-rearm", "not-needed", "healthy"].includes(outcome);
   if (prompts !== (silent ? 0 : 1)) throw new Error(`${outcome}: unexpected prompts ${prompts}`);
   if (existsSync(process.env.MARKER) === silent) throw new Error(`${outcome}: incorrect shell guard invocation`);
 }

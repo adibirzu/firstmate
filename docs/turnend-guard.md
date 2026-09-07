@@ -61,7 +61,8 @@ If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot s
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
 - OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`.
-  The watch-arm coordinator suppresses the shell guard and model follow-up only for `retrying`, `not-needed`, and `healthy`, with the legacy `external` outcome normalized to `healthy`.
+  The watch-arm coordinator suppresses the shell guard and model follow-up only for `retrying`, `pending-silent-rearm`, `not-needed`, and `healthy`.
+  `observeArmOutput` classifies a healthy watcher as `healthy` at the source, so an `external` outcome is not a second silent path.
   Other outcomes reach the shell guard, which evaluates scope and supervision health.
   A genuine failed arm result is not in that silent set: it reaches the shell guard and its existing `client.session.promptAsync` fail-safe when the guard returns 2.
   The coordinator's arm predicate mirrors `bin/fm-supervision-lib.sh` (task metadata, an X-mode relay poll, or a registered process-event source), so a procevent-only home arms without a model turn.
