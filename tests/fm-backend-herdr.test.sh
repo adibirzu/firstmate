@@ -1533,6 +1533,38 @@ test_projection_close_restores_exact_prior_focus() {
   pass "herdr presentation focus: exact pane close restores the exact prior workspace and tab"
 }
 
+test_projection_focus_restore_recovers_delayed_close_drift() {
+  local dir log samples out status
+  dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_projection_focus_snapshot() {
+      count=$(cat "$SAMPLES")
+      count=$((count + 1))
+      printf "%s\\n" "$count" > "$SAMPLES"
+      case "$count" in
+        2) printf "w3\tw3:t1" ;;
+        *) printf "w2\tw2:t2" ;;
+      esac
+    }
+    fm_backend_herdr_cli() {
+      printf "%s\\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "tab get") printf "{\\"result\\":{\\"tab\\":{\\"tab_id\\":\\"w2:t2\\",\\"workspace_id\\":\\"w2\\"}}}\\n" ;;
+      esac
+    }
+    sleep() { :; }
+    before=$(printf "w2\tw2:t2")
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close"
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
+  assert_contains "$(cat "$log")" $'tab focus w2:t2' \
+    "a delayed close focus drift did not refocus the exact prior tab"
+  pass "herdr presentation focus: delayed post-close focus drift is restored before cleanup returns"
+}
+
 test_projection_close_refuses_active_tab() {
   local dir log resp fb out status
   dir="$TMP_ROOT/projection-focus-active-refusal"; mkdir -p "$dir/responses"
@@ -4738,6 +4770,7 @@ test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane
 test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
+test_projection_focus_restore_recovers_delayed_close_drift
 test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary
