@@ -2065,8 +2065,18 @@ test_projection_close_death_still_restores_a_stolen_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/11.out"
+  # Pane-death removal is asynchronous.  The focus-restoration backstop now
+  # requires a bounded stable window, so return the restored snapshot for
+  # every retry instead of exhausting this fake server's scripted responses.
+  cp "$resp/11.out" "$resp/12.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/14.out"
+  local response
+  for response in $(seq 15 3 129); do
+    cp "$resp/11.out" "$resp/$response.out"
+    cp "$resp/13.out" "$resp/$((response + 1)).out"
+    cp "$resp/14.out" "$resp/$((response + 2)).out"
+  done
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \

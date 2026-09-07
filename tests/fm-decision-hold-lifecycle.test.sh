@@ -63,7 +63,6 @@ test_uninventoried_report_decision_refuses_completion() {
 ## Done
 EOF
   fm_write_meta "$home/state/$id.meta" \
-    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-scratch" \
     "project=$home/projects/sample" \
@@ -113,7 +112,6 @@ run_decisions() {  # <home> <command args...>
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
-    "spawn_gen=fixture-$id" \
     "window=firstmate:fm-$id" \
     "worktree=$home/projects/missing-$id" \
     "project=$home/projects/sample" \
