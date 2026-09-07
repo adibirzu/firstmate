@@ -42,17 +42,57 @@ p=subprocess.Popen(['bash','-c',launch],cwd=d/'wt',env=env,stdin=slave,stdout=sl
 os.close(slave)
 transcript=b''
 samples=[]
+inventory_samples=[]
 deadline=time.monotonic()+100
 trusted=False
 bypass=False
 completed=False
+inventory_checked=False
+
+def process_rows():
+    rows={}
+    for line in subprocess.check_output(['ps','-axo','pid=,ppid=,pgid=,args='],text=True).splitlines():
+        a=line.strip().split(None,3)
+        if len(a)==4: rows[int(a[0])]=(int(a[1]),int(a[2]),a[3])
+    return rows
+
+def process_group(rows):
+    return {pid:cmd for pid,(_,pgid,cmd) in rows.items()
+            if pgid==p.pid and not (cmd.startswith('(') and cmd.endswith(')'))}
+
+def normalized_text():
+    return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', transcript.decode(errors='replace'))
+
+def inventory_is_empty(text):
+    compact=' '.join(text.lower().split())
+    return any(marker in compact for marker in (
+        'no mcp servers', 'no configured mcp servers', '0 mcp servers',
+        '0 servers configured', 'mcp servers: 0'))
+
+def terminate_group():
+    if p.poll() is None:
+        try: os.killpg(p.pid,signal.SIGTERM)
+        except ProcessLookupError: pass
+        try: p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(p.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            try: p.wait(timeout=3)
+            except subprocess.TimeoutExpired: pass
+    cleanup_deadline=time.monotonic()+3
+    while time.monotonic()<cleanup_deadline:
+        if not process_group(process_rows()): return
+        time.sleep(0.1)
+    survivors=process_group(process_rows())
+    raise AssertionError(f"{sys.argv[2]}: worker process group survived SIGTERM and SIGKILL: {survivors}")
+
 try:
     while time.monotonic()<deadline:
         if select.select([master],[],[],0.25)[0]:
             try: transcript+=os.read(master,65536)
             except OSError: break
         (d/'transcript').write_bytes(transcript)
-        text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', transcript.decode(errors='replace'))
+        text=normalized_text()
         if not trusted and ('Yes,Itrustthisfolder' in ''.join(text.split()) or 'Yes,Itrustthisproject' in ''.join(text.split())):
             os.write(master,b'\x1b[B')
             time.sleep(0.3)
@@ -61,37 +101,42 @@ try:
         if not bypass and 'Yes,Iaccept' in ''.join(text.split()):
             os.write(master,b'2\r')
             bypass=True
-        rows={}
-        for line in subprocess.check_output(['ps','-axo','pid=,ppid=,args='],text=True).splitlines():
-            a=line.strip().split(None,2)
-            if len(a)==3: rows[int(a[0])]=(int(a[1]),a[2])
+        rows=process_rows()
         descendants={p.pid}
         while True:
-            expanded=descendants|{pid for pid,(parent,_) in rows.items() if parent in descendants}
+            expanded=descendants|{pid for pid,(parent,_,_) in rows.items() if parent in descendants}
             if expanded==descendants: break
             descendants=expanded
-        # Skip the launching shell: its command text contains the debug path.
-        samples.extend(cmd for pid,(_,cmd) in rows.items() if pid in descendants and pid!=p.pid)
+        samples.extend(cmd for pid,(_,_,cmd) in rows.items() if pid in descendants and pid!=p.pid)
         if (d/'wt/tool-proof.txt').exists() and (d/'home/state/mcp-live.turn-ended').exists():
             completed=True
             break
         if p.poll() is not None: break
+    if completed and p.poll() is None:
+        os.write(master,b'/mcp\r')
+        inventory_deadline=time.monotonic()+15
+        while time.monotonic()<inventory_deadline:
+            if select.select([master],[],[],0.25)[0]:
+                try: transcript+=os.read(master,65536)
+                except OSError: break
+            if inventory_is_empty(normalized_text()):
+                inventory_checked=True
+                rows=process_rows()
+                inventory_samples=[(pid, parent, cmd) for pid,(parent,pgid,cmd) in rows.items() if pgid==p.pid]
+                break
 finally:
-    if p.poll() is None:
-        os.killpg(p.pid,signal.SIGTERM)
-        try: p.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid,signal.SIGKILL)
-            p.wait(timeout=3)
-    os.close(master)
+    try: terminate_group()
+    finally:
+        os.close(master)
     (d/'transcript').write_bytes(transcript)
 assert completed, f"{sys.argv[2]}: worker did not finish Read/Bash proof: {transcript[-5000:]!r}"
 assert (d/'wt/tool-proof.txt').read_text().strip()=='verified'
 assert samples, 'no descendant process samples'
 bad=[cmd for cmd in samples if 'LIFEOS_StatusLine.sh' in cmd or '/.claude/hooks/' in cmd]
 assert not bad, bad
-bad_mcp=[cmd for cmd in samples if pathlib.Path(cmd.split()[0]).name in ('node','nodejs') or 'mcp-server' in cmd.split()[0]]
-assert not bad_mcp, bad_mcp
+assert inventory_checked, f"{sys.argv[2]}: /mcp did not report an empty server inventory: {normalized_text()[-5000:]!r}"
+assert len(inventory_samples) <= 2, inventory_samples
+assert all(pid == p.pid or parent == p.pid for pid,parent,_ in inventory_samples), inventory_samples
 debug=(d/'debug').read_text()
 # A real Read tool event, a Bash proof artifact, and the owned Stop hook prove
 # that removing user settings did not disable the built-in tools or all hooks.
