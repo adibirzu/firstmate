@@ -1302,7 +1302,9 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
     # rest of the record and before anything destructive has happened, so a
     # record that cannot name its own endpoint refuses while the task is still
     # whole.
-    spawn_adopt_endpoint_ids || exit 1
+    if [ "$REUSE_OLD_STATE" != "missing" ]; then
+      spawn_adopt_endpoint_ids || exit 1
+    fi
   fi
   ARG3=
 elif [ "$KIND" = secondmate ]; then
@@ -2348,7 +2350,7 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 W="fm-$ID"
-if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ]; then
+if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ] && [ "${REUSE_OLD_STATE:-}" != "missing" ]; then
   # Adopt the recorded endpoint instead of creating one. This is what keeps a
   # relaunch a REPLACEMENT rather than a second copy of the task: no new
   # terminal, no second worktree, and every uncommitted change left exactly
@@ -2616,13 +2618,18 @@ fi
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
 spawn_send_text_line() {  # <target> <text>
+  local rc=0
   case "$BACKEND" in
-    tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
-    herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
-    zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
-    orca) fm_backend_orca_send_text_line "$1" "$2" ;;
-    cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
+    tmux) fm_backend_tmux_send_text_line "$1" "$2" || rc=$? ;;
+    herdr) fm_backend_herdr_send_text_line "$1" "$2" || rc=$? ;;
+    zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" || rc=$? ;;
+    orca) fm_backend_orca_send_text_line "$1" "$2" || rc=$? ;;
+    cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send line to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 spawn_current_path() {  # <target>
   case "$BACKEND" in
@@ -2706,7 +2713,10 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   if [ "$REUSE_WORKTREE" = 1 ]; then
     # In-place relaunch: keep the existing worktree; never run treehouse get.
     validate_spawn_worktree "recorded worktree (reuse-worktree)" "$T"
-    spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+    spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")" || {
+      echo "error: could not cd to worktree '$WT' in endpoint $WT_TARGET ($BACKEND)" >&2
+      exit 1
+    }
     # Confirm the pane really entered the recorded worktree before launch.
     WT_REAL=$(real_path_or_raw "$WT")
     landed=0
