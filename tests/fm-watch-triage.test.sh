@@ -2353,7 +2353,7 @@ test_live_declared_wait_churn_honors_the_resurface_throttle() {
 
 # The window key every hold fixture uses, derived the way fm-watch.sh derives it.
 hold_key() {
-  printf '%s' test:fm-held-merge | tr ':/.' '___'
+  watch_marker_key test:fm-held-merge
 }
 
 # bin/fm-captain-hold.sh against a hold fixture's own home.
