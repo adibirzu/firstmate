@@ -105,16 +105,32 @@ snapshot into a second pane reader racing the watcher's own capture.
 
 The watcher proves pane churn by comparing consecutive captures, and uses that proof to
 absorb a bare turn-end. A competing capture destroys the evidence, so the watcher
-resurfaced a wake it had proof to absorb. Reproduced deterministically against
+resurfaced a wake it had proof to absorb. Reproduced against
 `tests/fm-watch-triage.test.sh`: "pane churn resets prior wedge escalation state before
-the stale-path poll" failed on every run with the snapshot change present and passed with
-it reverted, isolated to `bin/fm-fleet-snapshot.sh` by reverting each changed file in turn.
+the stale-path poll". It is a race, so it is frequent but NOT deterministic - 3 of 3 runs
+failed during this work and an independent replication measured 3 of 4 - while the same
+test passes on `origin/main` and with the snapshot change reverted. Isolated to
+`bin/fm-fleet-snapshot.sh` by reverting each changed file in turn, and 5 of 5 after the fix.
 
 A timeout does not fix this - a fast extra capture is still an extra capture - so the
 live reads are gated off by default instead. Guarded by
 `tests/fm-crew-usage-lib.test.sh` ("never captures a pane by default", "a default usage
 row reads meta only", "only the human-facing bearings reader opts into the live context
 read").
+
+Two consequences of that opt-in are recorded rather than designed away:
+
+- **Both diagnostics run under `FM_GUARD_READ_ONLY=1`.** `bin/fm-statusline-quota.sh` and
+  `bin/fm-peek.sh` each run `bin/fm-guard.sh`, which prints its `WATCHER DOWN` banner once
+  per down-episode and CLAIMS that episode with a marker. Both usage reads discard stderr,
+  so without read-only mode a `/bearings` run during a supervision lapse would swallow the
+  banner and leave the next guarded command reporting it had "already printed" an alarm
+  nobody saw. Verified: after an opted-in read the marker is unclaimed and the next guard
+  run still prints the full banner. Guarded by the two "guard read-only mode" tests.
+- **A residual, accepted race.** `/bearings` is normally run while the watcher IS armed, so
+  the opted-in read can still capture a pane concurrently with the watcher. That is
+  acceptable for `tmux capture-pane`, which is read-only; an adapter whose capture is not
+  read-only would need re-checking before it is added to the supported set.
 
 
 ## Slice 2: opencode/pi/cline usage-data confirmation

@@ -350,6 +350,81 @@ test_model_footer_fallback_is_codex_only_and_bounded() {
   pass "the footer fallback is codex-only and expires on a hung pane read"
 }
 
+# --- the diagnostics must not spend the watcher-down alarm -------------------
+# bin/fm-statusline-quota.sh and bin/fm-peek.sh both run bin/fm-guard.sh on
+# entry, and the guard prints its WATCHER DOWN banner once per down-episode,
+# CLAIMING that episode with a marker. Both usage reads discard stderr, so
+# without read-only mode a /bearings run during a supervision lapse would
+# swallow the banner outright and leave the next guarded command reporting that
+# the full banner had "already been printed this episode" - a false statement
+# about an alarm nobody ever saw. FM_GUARD_READ_ONLY=1 makes the guard claim
+# nothing.
+test_context_read_runs_the_guard_read_only() {
+  local fb statusline seen out
+  fb=$(make_fakebin "$TMP_ROOT/guard-ctx" '')
+  statusline="$TMP_ROOT/statusline-guard"
+  seen="$TMP_ROOT/guard-ctx-seen"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "printf '%s' \"\${FM_GUARD_READ_ONLY:-unset}\" > '$seen'"
+    printf '%s\n' 'printf "status=ok source=codex context_pct=40\\n"'
+  } > "$statusline"
+  chmod +x "$statusline"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "40" ] || fail "the context read should still work, got '$out'"
+  [ "$(cat "$seen" 2>/dev/null)" = "1" ] \
+    || fail "the statusline diagnostic must run with FM_GUARD_READ_ONLY=1, saw '$(cat "$seen" 2>/dev/null)'"
+  pass "the context read runs its diagnostic in guard read-only mode"
+}
+
+test_model_footer_read_runs_the_guard_read_only() {
+  local fb peek seen out
+  fb=$(make_fakebin "$TMP_ROOT/guard-peek" '')
+  peek="$TMP_ROOT/peek-guard"
+  seen="$TMP_ROOT/guard-peek-seen"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "printf '%s' \"\${FM_GUARD_READ_ONLY:-unset}\" > '$seen'"
+    printf '%s\n' 'printf "  gpt-5.6-terra high \xc2\xb7 ~/work/repo\n"'
+  } > "$peek"
+  chmod +x "$peek"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_ENABLE_CONTEXT=1 FM_CREW_USAGE_PEEK_BIN=$peek fm_crew_usage_json codex default task-1 ''" | jq -r .model)
+  [ "$out" = "gpt-5.6-terra" ] || fail "the footer read should still work, got '$out'"
+  [ "$(cat "$seen" 2>/dev/null)" = "1" ] \
+    || fail "the pane tail must run with FM_GUARD_READ_ONLY=1, saw '$(cat "$seen" 2>/dev/null)'"
+  pass "the model footer read runs its diagnostic in guard read-only mode"
+}
+
+# --- an invalid timeout knob must never blind the canonical snapshot ---------
+# This library refuses to load on a non-positive bound (fm_run_timed disables
+# the deadline for one). fm-fleet-snapshot.sh runs under set -u but not set -e,
+# so an unguarded refusal left fm_crew_usage_json undefined and every task's
+# `jq --argjson usage ""` failed - dropping whole task rows while still exiting
+# 0. A blinded fleet snapshot at exit 0 is the wrong failure shape for a
+# supervision input.
+test_invalid_timeout_refuses_instead_of_emptying_the_snapshot() {
+  local knob out rc
+  for knob in FM_CREW_USAGE_CONTEXT_TIMEOUT FM_CREW_USAGE_QUOTA_TIMEOUT; do
+    set +e
+    out=$(env "$knob=0" bash "$ROOT/bin/fm-fleet-snapshot.sh" --json 2>"$TMP_ROOT/snap.err")
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "$knob=0 must refuse, not exit 0 with a snapshot"
+    [ -z "$out" ] || fail "$knob=0 must print no snapshot document, got: $out"
+    grep -q "refusing to report a fleet snapshot" "$TMP_ROOT/snap.err" \
+      || fail "$knob=0 must say why it refused: $(cat "$TMP_ROOT/snap.err")"
+    # The diagnostic must name the knob the operator actually set.
+    grep -q "$knob must be a positive integer" "$TMP_ROOT/snap.err" \
+      || fail "the refusal must name $knob: $(cat "$TMP_ROOT/snap.err")"
+  done
+  # A valid configuration still produces a snapshot from the same entrypoint.
+  out=$(bash "$ROOT/bin/fm-fleet-snapshot.sh" --json 2>/dev/null) \
+    || fail "a valid configuration must still produce a snapshot"
+  printf '%s' "$out" | jq -e '.schema == "fm-fleet-snapshot.v1"' >/dev/null \
+    || fail "the healthy snapshot lost its schema: $out"
+  pass "an invalid usage timeout refuses loudly instead of emptying the fleet snapshot"
+}
+
 test_context_pct_reads_supported_statusline
 test_context_pct_rejects_out_of_range
 test_context_pct_times_out
@@ -361,6 +436,9 @@ test_model_placeholders_are_not_reported_as_models
 test_model_footer_fallback_is_opt_in_and_shape_anchored
 test_model_footer_fallback_ignores_transcript_lookalikes
 test_model_footer_fallback_is_codex_only_and_bounded
+test_context_read_runs_the_guard_read_only
+test_model_footer_read_runs_the_guard_read_only
+test_invalid_timeout_refuses_instead_of_emptying_the_snapshot
 test_quota_disabled_by_default
 test_quota_unmapped_harness_returns_empty
 test_quota_enabled_reads_spend_priority

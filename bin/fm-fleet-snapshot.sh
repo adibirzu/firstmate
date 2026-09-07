@@ -227,7 +227,16 @@ esac
 . "$SCRIPT_DIR/fm-accounts-lib.sh"  # fm_account_quota_provider: harness -> quota-axi provider
 # shellcheck source=bin/fm-crew-usage-lib.sh
 # shellcheck disable=SC1091
-. "$SCRIPT_DIR/fm-crew-usage-lib.sh"  # fm_crew_usage_json: harness/model/context%/quota row
+# FAIL CLOSED. This library refuses to load on an invalid usage-timeout knob.
+# This script runs under set -u but NOT set -e, so without this guard a refusal
+# would leave fm_crew_usage_json undefined, usage_json empty, and the `jq
+# --argjson usage ""` for EVERY task would fail - dropping whole task rows while
+# still exiting 0. A blinded fleet snapshot at exit 0 is the worst possible
+# failure shape for a supervision input, so refuse loudly instead.
+. "$SCRIPT_DIR/fm-crew-usage-lib.sh" || {  # fm_crew_usage_json: harness/model/context%/quota row
+  echo "fm-fleet-snapshot: refusing to report a fleet snapshot without the usage library" >&2
+  exit 2
+}
 
 usage() {
   cat <<'EOF'

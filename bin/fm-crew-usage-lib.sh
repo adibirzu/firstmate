@@ -70,14 +70,25 @@ FM_CREW_USAGE_QUOTA_CACHE_ACCOUNTS=()
 FM_CREW_USAGE_QUOTA_CACHE_VALUES=()
 FM_CREW_USAGE_QUOTA_CACHE_RESULT=""
 
-fm_crew_usage_validate_quota_timeout() { # value
-  case "$1" in
-    ''|*[!0-9]*|0) printf 'fm-crew-usage: FM_CREW_USAGE_QUOTA_TIMEOUT must be a positive integer\n' >&2; return 2 ;;
+# Refuses a non-positive or non-numeric bound, naming the knob the CALLER
+# actually set: fm_run_timed's documented contract disables the deadline for a
+# non-positive bound, so an unvalidated 0 would silently remove the bound
+# instead of applying it. Sourcing fails, and every caller must fail closed on
+# that (see bin/fm-fleet-snapshot.sh) - a snapshot that keeps going without
+# these functions drops whole task rows, not just their usage field.
+fm_crew_usage_validate_timeout() { # name value
+  case "$2" in
+    ''|*[!0-9]*|0) printf 'fm-crew-usage: %s must be a positive integer\n' "$1" >&2; return 2 ;;
   esac
 }
 
-fm_crew_usage_validate_quota_timeout "$FM_CREW_USAGE_QUOTA_TIMEOUT" || return $?
-fm_crew_usage_validate_quota_timeout "$FM_CREW_USAGE_CONTEXT_TIMEOUT" || return $?
+# Retained under its original name for callers that validate the quota knob directly.
+fm_crew_usage_validate_quota_timeout() { # value
+  fm_crew_usage_validate_timeout FM_CREW_USAGE_QUOTA_TIMEOUT "$1"
+}
+
+fm_crew_usage_validate_timeout FM_CREW_USAGE_QUOTA_TIMEOUT "$FM_CREW_USAGE_QUOTA_TIMEOUT" || return $?
+fm_crew_usage_validate_timeout FM_CREW_USAGE_CONTEXT_TIMEOUT "$FM_CREW_USAGE_CONTEXT_TIMEOUT" || return $?
 
 # Fetch quota-axi's full JSON once per process; cache the raw text (empty
 # string on any failure, including quota-axi absent or the bound being hit).
@@ -137,7 +148,12 @@ fm_crew_usage_context_pct() {  # harness target
   [ "${FM_CREW_USAGE_ENABLE_CONTEXT:-0}" = 1 ] || { printf 'n/a'; return 0; }
   case "$harness" in codex|claude) ;; *) printf 'n/a'; return 0 ;; esac
   [ -n "$target" ] || { printf 'n/a'; return 0; }
-  status=$(fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" "${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
+  # FM_GUARD_READ_ONLY=1: fm-statusline-quota.sh runs fm-guard.sh on entry, and
+  # the guard prints its WATCHER DOWN banner once per down-episode, CLAIMING that
+  # episode with a marker. This call discards stderr, so without read-only mode a
+  # /bearings run during a supervision lapse would swallow the banner and leave
+  # the next guarded command claiming it was "already printed this episode".
+  status=$(FM_GUARD_READ_ONLY=1 fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" "${FM_CREW_USAGE_STATUSLINE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-statusline-quota.sh}" "$target" 2>/dev/null) || {
     printf 'n/a'; return 0;
   }
   context=$(printf '%s\n' "$status" | sed -nE 's/.*(^| )context_pct=([0-9]+).*/\2/p' | tail -n1)
@@ -176,7 +192,9 @@ fm_crew_usage_model_from_pane() {  # harness target
   [ "${FM_CREW_USAGE_ENABLE_CONTEXT:-0}" = 1 ] || return 0
   [ -n "$target" ] || return 0
   case "$harness" in codex) ;; *) return 0 ;; esac
-  tail_out=$(fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" \
+  # Read-only guard for the same reason as the context read above: fm-peek.sh
+  # also runs fm-guard.sh, and this call discards stderr.
+  tail_out=$(FM_GUARD_READ_ONLY=1 fm_run_timed "$FM_CREW_USAGE_CONTEXT_TIMEOUT" \
     "${FM_CREW_USAGE_PEEK_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-peek.sh}" \
     "$target" 6 2>/dev/null) || return 0
   while IFS= read -r line; do
