@@ -20,7 +20,7 @@
 set -u
 
 # shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 LIB="$ROOT/bin/fm-treehouse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -122,18 +122,29 @@ test_pins_nothing_that_does_not_exist() {
 
 # The guarantee is worthless if the lease path stops calling it, and the call has
 # to come BEFORE the HOME substitution or it reads the pool HOME instead.
-test_spawn_calls_it_before_substituting_home() {
-  local line
-  # Match the executable lease line, not the prose in the script's own --help.
-  line=$(grep -n 'treehouse get --lease' "$SPAWN" | grep -v ':[[:space:]]*#' | head -n 1)
-  [ -n "$line" ] || fail "could not find the lease call in $SPAWN"
-  assert_contains "$line" "fm_treehouse_preserve_user_config" \
-    "the lease call must preserve the operator's git and gh config"
-  case "$line" in
-    *fm_treehouse_preserve_user_config*HOME=*) : ;;
-    *) fail "fm_treehouse_preserve_user_config must run BEFORE HOME is substituted"$'\n'"--- line ---"$'\n'"$line" ;;
-  esac
-  pass "fm-spawn.sh: the lease preserves git and gh config before substituting HOME"
+test_spawn_lease_receives_real_home_config() {
+  local dir home proj wt fakebin id out rc
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-treehouse-lease.XXXXXX")
+  home="$dir/home"; proj="$dir/project"; wt="$dir/wt"; id=treehouse-config-z1
+  fakebin=$(fm_test_make_spawn_fakebin "$dir/fake" claude)
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf 'git=%s\ngh=%s\nhome=%s\n' "${GIT_CONFIG_GLOBAL:-}" "${GH_CONFIG_DIR:-}" "$HOME" > "$FM_TREEHOUSE_ENV_LOG"
+printf '%s\n' "$FM_TREEHOUSE_WORKTREE"
+SH
+  chmod +x "$fakebin/treehouse"
+  fm_test_spawn_home "$home" claude
+  fm_git_worktree "$proj" "$wt" treehouse-config
+  fm_test_spawn_brief "$home" "$id"
+  mkdir -p "$home/user-home/.config/gh"
+  : > "$home/user-home/.gitconfig"
+  out=$(FM_TREEHOUSE_ENV_LOG="$dir/lease-env" FM_TREEHOUSE_WORKTREE="$wt" fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  expect_code 0 "$rc" "spawn with leased worktree should succeed: $out"
+  assert_grep "git=$home/user-home/.gitconfig" "$dir/lease-env" "lease did not receive the real Git config"
+  assert_grep "gh=$home/user-home/.config/gh" "$dir/lease-env" "lease did not receive the real GH config"
+  assert_contains "$(cat "$dir/lease-env")" "home=$home/user-home/.fm-pools/" "lease did not substitute pool HOME"
+  rm -rf "$dir"
+  pass "fm-spawn: lease receives real user config under pool HOME"
 }
 
 test_pins_both_locations_from_the_real_home
@@ -141,4 +152,4 @@ test_falls_back_to_the_xdg_git_config
 test_honours_an_explicit_xdg_config_home
 test_never_overrides_operator_values
 test_pins_nothing_that_does_not_exist
-test_spawn_calls_it_before_substituting_home
+test_spawn_lease_receives_real_home_config
