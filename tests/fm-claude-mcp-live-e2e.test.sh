@@ -27,10 +27,15 @@ fm_test_spawn_brief "$home" mcp-live "Verify this isolated test worktree: read t
 FM_FAKE_LAUNCH_LOG="$TMP_ROOT/launch" fm_test_run_spawn "$home" "$wt" "$fakebin" mcp-live "$proj" --mode no-mistakes --yolo off --backend tmux --model sonnet --effort low > "$TMP_ROOT/spawn-output"
 # The real worker keeps its normal interactive mode, so status-line execution
 # is exercised too. Its generated local hook publishes the completion marker.
-python3 - "$TMP_ROOT" "$version" "$(dirname "${BASH_SOURCE[0]}")/fm-claude-mcp-process-tree.py" <<'PYLIVE'
-import fcntl, json, os, pathlib, pty, re, select, signal, struct, subprocess, sys, termios, time
+python3 - "$TMP_ROOT" "$version" "$(dirname "${BASH_SOURCE[0]}")/fm-claude-mcp-process-tree.py" "$(dirname "${BASH_SOURCE[0]}")/fm-claude-mcp-diagnostics.py" <<'PYLIVE'
+import fcntl, importlib.util, json, os, pathlib, pty, re, select, signal, struct, subprocess, sys, termios, time
 d=pathlib.Path(sys.argv[1])
+version=sys.argv[2]
 tree_tool=sys.argv[3]
+diagnostic_tool=sys.argv[4]
+diagnostic_spec=importlib.util.spec_from_file_location('claude_mcp_diagnostics', diagnostic_tool)
+diagnostics=importlib.util.module_from_spec(diagnostic_spec)
+diagnostic_spec.loader.exec_module(diagnostics)
 master, slave=pty.openpty()
 fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",40,160,0,0))
 env=os.environ.copy()
@@ -74,6 +79,12 @@ def worker_descendants():
     out=subprocess.check_output([sys.executable, tree_tool, '--json', str(p.pid)], text=True)
     return json.loads(out)['descendants']
 
+def require(condition, message):
+    diagnostics.require(version, condition, message)
+
+def read_text(path):
+    return diagnostics.read_text(version, path)
+
 def terminate_group():
     if p.poll() is None:
         try: os.killpg(p.pid,signal.SIGTERM)
@@ -89,7 +100,7 @@ def terminate_group():
         if not process_group(process_rows()): return
         time.sleep(0.1)
     survivors=process_group(process_rows())
-    raise AssertionError(f"{sys.argv[2]}: worker process group survived SIGTERM and SIGKILL: {survivors}")
+    require(False, f"worker process group survived SIGTERM and SIGKILL: {survivors}")
 
 try:
     while time.monotonic()<deadline:
@@ -133,21 +144,21 @@ finally:
     finally:
         os.close(master)
     (d/'transcript').write_bytes(transcript)
-assert completed, f"{sys.argv[2]}: worker did not finish Read/Bash proof: {transcript[-5000:]!r}"
-assert (d/'wt/tool-proof.txt').read_text().strip()=='verified'
-assert samples, 'no descendant process samples'
+require(completed, f"worker did not finish Read/Bash proof: {transcript[-5000:]!r}")
+require(read_text(d/'wt/tool-proof.txt').strip()=='verified', 'tool-proof.txt did not contain verified')
+require(samples, 'no descendant process samples')
 bad=[cmd for cmd in samples if 'LIFEOS_StatusLine.sh' in cmd or '/.claude/hooks/' in cmd]
-assert not bad, bad
-assert inventory_checked, f"{sys.argv[2]}: /mcp did not report an empty server inventory: {normalized_text()[-5000:]!r}"
-assert not inventory_descendants, f"{sys.argv[2]}: empty MCP inventory has worker descendants: {inventory_descendants}"
-debug=(d/'debug').read_text()
+require(not bad, bad)
+require(inventory_checked, f"/mcp did not report an empty server inventory: {normalized_text()[-5000:]!r}")
+require(not inventory_descendants, f"empty MCP inventory has worker descendants: {inventory_descendants}")
+debug=read_text(d/'debug')
 # A real Read tool event, a Bash proof artifact, and the owned Stop hook prove
 # that removing user settings did not disable the built-in tools or all hooks.
-assert '0 enabled' in debug, 'plugins were not disabled'
-assert 'Read' in debug, 'no Read event in Claude debug log'
-assert 'fm-busy-event.sh' in debug, 'owned supervision hooks did not run'
-assert 'LIFEOS_StatusLine.sh' not in debug, 'primary status line was loaded'
-assert '/.claude/hooks/' not in debug, 'primary per-event automation was loaded'
+require('0 enabled' in debug, 'plugins were not disabled')
+require('Read' in debug, 'no Read event in Claude debug log')
+require('fm-busy-event.sh' in debug, 'owned supervision hooks did not run')
+require('LIFEOS_StatusLine.sh' not in debug, 'primary status line was loaded')
+require('/.claude/hooks/' not in debug, 'primary per-event automation was loaded')
 print(f"ok - {sys.argv[2]}: interactive worker authenticated, Read/Bash and owned hooks succeeded, primary status-line/event automation=0")
 PYLIVE
 if [ -n "$primary_before" ]; then
