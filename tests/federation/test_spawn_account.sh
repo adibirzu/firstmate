@@ -93,9 +93,9 @@ chmod +x "$STUB"
 FM_STUB_OUT="$TMP/out.txt" FM_SPAWN_BIN="$STUB" \
   bash bin/fm-spawn-acct.sh T-1 /proj --account claude-alt --model opus >/dev/null 2>&1
 n=$(wc -l < "$TMP/out.txt")
-a1=$(sed -n '1p' "$TMP/out.txt"); a2=$(sed -n '2p' "$TMP/out.txt"); a3=$(sed -n '3p' "$TMP/out.txt")
-{ [ "$n" -eq 3 ] && [ "$a1" = "T-1" ] && [ "$a2" = "/proj" ] && [ "$a3" = "CLAUDE_CONFIG_DIR=$CD claude --model opus" ]; } \
-  && ok "wrapper passes (id, dir, composed-launch) to fm-spawn" || bad "wrapper passthrough (n=$n a1='$a1' a2='$a2' a3='$a3')"
+a1=$(sed -n '1p' "$TMP/out.txt"); a2=$(sed -n '2p' "$TMP/out.txt"); a3=$(sed -n '3p' "$TMP/out.txt"); a4=$(sed -n '4p' "$TMP/out.txt"); a5=$(sed -n '5p' "$TMP/out.txt")
+{ [ "$n" -eq 5 ] && [ "$a1" = "T-1" ] && [ "$a2" = "/proj" ] && [ "$a3" = "CLAUDE_CONFIG_DIR=$CD claude --model opus" ] && [ "$a4" = "--account" ] && [ "$a5" = "claude-alt" ]; } \
+  && ok "wrapper passes account-bound launch to fm-spawn" || bad "wrapper passthrough (n=$n a1='$a1' a2='$a2' a3='$a3' a4='$a4' a5='$a5')"
 
 # 10. wrapper refuses api-key account (fail-closed; stub NOT invoked)
 : > "$TMP/out2.txt"
