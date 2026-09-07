@@ -111,6 +111,17 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
+  new-window)
+    wname=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -n) wname="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$wname" ] && printf '%s\n' "$wname" >> "$D/windows"
+    printf '@1\n'
+    exit 0 ;;
 esac
 exit 0
 SH
@@ -1579,6 +1590,21 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
   pass "relaunch heals an item that drifted out of In flight while the task stayed live"
 }
 
+test_relaunch_when_endpoint_is_missing_recreates_endpoint_and_succeeds() {
+  local dir out rc=0
+  dir=$(new_case missing rl50)
+  add_ship_task "$dir" rl50 claude
+  # Simulate the endpoint being missing (dead/gone pane)
+  : > "$dir/fake/windows"
+  out=$(run_control "$dir" rl50 relaunch --note "recovering missing endpoint") || rc=$?
+  expect_code 0 "$rc" "relaunch on missing endpoint should succeed"$'\n'"$out"
+  assert_contains "$out" "relaunched rl50 harness=claude from=claude" "relaunch should succeed"
+  [ "$(journal_field "$dir" rl50 exit_result)" = already-stopped ] \
+    || fail "exit_result should be recorded as already-stopped"
+  assert_grep "encode launch-brief" "$dir/fake/literal" "the replacement should have been launched"
+  pass "fm-control relaunch: missing endpoint is recreated and succeeds"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
@@ -1633,3 +1659,5 @@ test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
+test_relaunch_when_endpoint_is_missing_recreates_endpoint_and_succeeds
+
