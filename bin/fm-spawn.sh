@@ -460,6 +460,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-account-env.sh
+. "$SCRIPT_DIR/fm-account-env.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -4091,7 +4093,7 @@ spawn_write_meta() {
 }
 
 spawn_write_meta_locked() {
-  local meta=$1 tmp drop_re meta_existed
+  local meta=$1 tmp drop_re meta_existed account_launch
   # Every key a spawn owns must be listed, or a --reuse-worktree relaunch keeps
   # the previous run's value. traceparent= is spawn-written too, so a stale
   # carrier would otherwise survive a handoff and mis-attribute the new run.
@@ -4153,7 +4155,10 @@ spawn_write_meta_locked() {
     echo "yolo=$YOLO"
     echo "tasktmp=$TASK_TMP"
     [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
-    [ "${FM_SPAWN_ACCT_ISOLATED:-0}" != 1 ] || [ -z "${ACCOUNT:-}" ] || echo "account=$ACCOUNT"
+    if [ -n "${ACCOUNT:-}" ] && [ "$RAW_LAUNCH" -eq 1 ] && [ "$HARNESS_SET" -eq 0 ]; then
+      account_launch=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT" 2>/dev/null || true)
+      [ "$LAUNCH" != "$account_launch" ] || echo "account=$ACCOUNT"
+    fi
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"

@@ -20,7 +20,7 @@ FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"; export FM_HOME
 # shellcheck source=bin/fm-account-env.sh disable=SC1091
 . "$SCRIPT_DIR/fm-account-env.sh"
 
-ACCOUNT=""; MODEL=""; EFFORT=""; POS=(); PASS=()
+ACCOUNT=""; MODEL=""; EFFORT=""; POS=(); PASS=(); ACCOUNT_PROFILE_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --account)   ACCOUNT=${2:-}; shift 2 ;;
@@ -37,7 +37,9 @@ done
 [ "${#POS[@]}" -ge 1 ] || { echo "error: task-id (and usually project-dir) required" >&2; exit 1; }
 
 LAUNCH=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT") || exit $?
+[ -z "$MODEL" ] || ACCOUNT_PROFILE_ARGS+=(--model "$MODEL")
+[ -z "$EFFORT" ] || ACCOUNT_PROFILE_ARGS+=(--effort "$EFFORT")
 
 FM_SPAWN_BIN="${FM_SPAWN_BIN:-$SCRIPT_DIR/fm-spawn.sh}"
 # fm-spawn signature: <task-id> <project-dir> [<harness>|<launch-command>] [flags...]
-FM_SPAWN_ACCT_ISOLATED=1 exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" ${PASS[@]+"${PASS[@]}"}
+exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" "${ACCOUNT_PROFILE_ARGS[@]}" ${PASS[@]+"${PASS[@]}"}
