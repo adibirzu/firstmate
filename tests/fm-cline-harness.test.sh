@@ -240,8 +240,22 @@ test_spawn_writes_session_binding_excluding_prior_sessions() {
 # --- detection --------------------------------------------------------------
 
 test_cline_detection_wired() {
-  grep -Fq '*cline*) echo cline; return ;;' "$HARNESS" \
-    || fail "fm-harness: cline ancestry case missing"
+  local tmp fakebin out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-cline-ancestry.XXXXXX")
+  fakebin="$tmp/fakebin"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *' -o comm= '*)
+    if [ -f "$FM_FAKE_PS_SEEN" ]; then printf '%s\n' cline; else touch "$FM_FAKE_PS_SEEN"; printf '%s\n' bash; fi ;;
+  *' -o ppid= '*) printf '%s\n' 4242 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  out=$(FM_FAKE_PS_SEEN="$tmp/seen" PATH="$fakebin:$PATH" "$HARNESS")
+  rm -rf "$tmp"
+  [ "$out" = cline ] || fail "fm-harness: expected cline from fake ancestry, got '$out'"
   pass "fm-harness: cline is detected by process ancestry"
 }
 
