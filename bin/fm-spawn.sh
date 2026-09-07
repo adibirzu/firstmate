@@ -1531,7 +1531,27 @@ else
   ARG3=${POS[2]:-}
   [ -n "$PROJ" ] || { echo "error: missing project directory" >&2; exit 1; }
 fi
-[ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+ACCOUNT_LAUNCH_VERIFIED=0
+ACCOUNT_RESOLVED_HARNESS=
+
+account_raw_launch_is_verified() {
+  local launch=$1 expected resolved
+  [ -n "$ACCOUNT" ] || return 1
+  _fm_acct_lib
+  expected=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT" 2>/dev/null) || return 1
+  [ "$launch" = "$expected" ] || return 1
+  resolved=$(fm_account_resolve "$ACCOUNT" 2>/dev/null | cut -f1) || return 1
+  [ -n "$resolved" ] || return 1
+  [ "$HARNESS_SET" -eq 0 ] || [ "$HARNESS_ARG" = "$resolved" ] || return 1
+  ACCOUNT_RESOLVED_HARNESS=$resolved
+  return 0
+}
+
+if [[ "$ARG3" == *' '* ]] && account_raw_launch_is_verified "$ARG3"; then
+  ACCOUNT_LAUNCH_VERIFIED=1
+elif [ -n "$HARNESS_ARG" ]; then
+  ARG3=$HARNESS_ARG
+fi
 if [ -z "$BACKEND" ]; then
   echo "error: internal: backend was not resolved before launch" >&2
   exit 1
@@ -1798,10 +1818,14 @@ case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     RAW_LAUNCH=1
     LAUNCH=$ARG3
-    HARNESS=""
-    for word in $LAUNCH; do
-      case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
-    done
+    if [ "$ACCOUNT_LAUNCH_VERIFIED" -eq 1 ]; then
+      HARNESS=$ACCOUNT_RESOLVED_HARNESS
+    else
+      HARNESS=""
+      for word in $LAUNCH; do
+        case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
+      done
+    fi
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -4093,7 +4117,7 @@ spawn_write_meta() {
 }
 
 spawn_write_meta_locked() {
-  local meta=$1 tmp drop_re meta_existed account_launch
+  local meta=$1 tmp drop_re meta_existed
   # Every key a spawn owns must be listed, or a --reuse-worktree relaunch keeps
   # the previous run's value. traceparent= is spawn-written too, so a stale
   # carrier would otherwise survive a handoff and mis-attribute the new run.
@@ -4155,10 +4179,7 @@ spawn_write_meta_locked() {
     echo "yolo=$YOLO"
     echo "tasktmp=$TASK_TMP"
     [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
-    if [ -n "${ACCOUNT:-}" ] && [ "$RAW_LAUNCH" -eq 1 ] && [ "$HARNESS_SET" -eq 0 ]; then
-      account_launch=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT" 2>/dev/null || true)
-      [ "$LAUNCH" != "$account_launch" ] || echo "account=$ACCOUNT"
-    fi
+    [ "$ACCOUNT_LAUNCH_VERIFIED" -eq 0 ] || echo "account=$ACCOUNT"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
