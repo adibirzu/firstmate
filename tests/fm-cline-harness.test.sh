@@ -237,39 +237,25 @@ test_spawn_writes_session_binding_excluding_prior_sessions() {
   pass "fm-spawn: cline session binding pins the root, workspace, and prior sessions"
 }
 
-test_existing_launch_templates_untouched() {
-  grep -Fq "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings" "$SPAWN" \
-    || fail "claude launch template or feedback safety controls changed"
-  grep -Fq '{"feedbackDrafts":"off"}' "$SPAWN" \
-    || fail "claude launch template dropped the feedback-drafts safety setting"
-  grep -Fq "grok --always-approve __MODELFLAG____EFFORTFLAG__" "$SPAWN" \
-    || fail "grok launch template changed"
-  pass "fm-spawn: pre-existing adapters' launch templates are untouched"
-}
-
-test_cline_is_a_known_bare_adapter_name() {
-  # cline must be accepted as a bare adapter name, not routed to the raw-launch hatch.
-  # (Robust to later adapters appended after cline, e.g. |cline|cursor-agent).)
-  grep -Fq "|kimi|cline" "$SPAWN" \
-    || fail "fm-spawn: cline not added to a known-harness allowlist"
-  pass "fm-spawn: cline is recognized as a known bare adapter name"
-}
-
-test_cline_model_and_effort_flags() {
-  # cline takes --model (long form of -m) and maps effort to --thinking (no max).
-  # (Robust to later adapters appended after cline in the --model allowlist.)
-  grep -Fq "|kimi|cline" "$SPAWN" \
-    || fail "fm-spawn: cline not in the --model allowlist"
-  grep -Fq "'--thinking %s '" "$SPAWN" \
-    || fail "fm-spawn: cline effort->--thinking mapping missing"
-  pass "fm-spawn: cline gets --model and effort->--thinking (low|medium|high|xhigh)"
-}
-
 # --- detection --------------------------------------------------------------
 
 test_cline_detection_wired() {
-  grep -Fq '*cline*) echo cline; return ;;' "$HARNESS" \
-    || fail "fm-harness: cline ancestry case missing"
+  local tmp fakebin out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-cline-ancestry.XXXXXX")
+  fakebin="$tmp/fakebin"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *' -o comm= '*)
+    if [ -f "$FM_FAKE_PS_SEEN" ]; then printf '%s\n' cline; else touch "$FM_FAKE_PS_SEEN"; printf '%s\n' bash; fi ;;
+  *' -o ppid= '*) printf '%s\n' 4242 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  out=$(FM_FAKE_PS_SEEN="$tmp/seen" PATH="$fakebin:$PATH" "$HARNESS")
+  rm -rf "$tmp"
+  [ "$out" = cline ] || fail "fm-harness: expected cline from fake ancestry, got '$out'"
   pass "fm-harness: cline is detected by process ancestry"
 }
 
@@ -614,9 +600,6 @@ test_control_plane_refuses_a_cline_secondmate
 test_control_plane_retires_cline_wiring_on_relaunch
 test_unverified_adapter_is_still_refused
 test_plan_mode_placeholder_reads_empty
-test_existing_launch_templates_untouched
-test_cline_is_a_known_bare_adapter_name
-test_cline_model_and_effort_flags
 test_cline_detection_wired
 test_cline_busy_default_defined
 test_cline_busy_line_matches

@@ -35,9 +35,10 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 
 The primary integration was verified on 2026-07-08 with OpenCode 1.17.6.
 `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
-Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `../../../bin/fm-turnend-guard.sh` returns 2.
+Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive.
+[`docs/turnend-guard.md`](../../../../../docs/turnend-guard.md#harness-integrations) owns the watch-arm handoff, including its exact silent outcomes and the failed-arm fail-safe.
 The follow-up was verified in the interactive TUI.
-`opencode run` can exit before displaying a queued follow-up, so the adapter steps aside in headless mode.
+The headless `opencode run` path remains fail-open because it can exit before displaying a queued follow-up.
 On native Windows, the operational-input adapter runs its Bash helper through `bash`; macOS and Linux invoke it directly.
 
 The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher supervision, wakes it with `client.session.promptAsync`, and coordinates with the guard before a blind-turn follow-up.

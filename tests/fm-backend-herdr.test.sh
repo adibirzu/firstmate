@@ -1511,6 +1511,14 @@ test_projection_close_restores_exact_prior_focus() {
   printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2","focused":true}}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/11.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":false},{"tab_id":"w2:t2","focused":true}]}}' > "$resp/12.out"
+  # Focus restoration requires a bounded stable window after an asynchronous
+  # close, so keep the fake server's exact focus snapshot stable throughout it.
+  local response
+  for response in $(seq 13 3 307); do
+    cp "$resp/10.out" "$resp/$response.out"
+    cp "$resp/11.out" "$resp/$((response + 1)).out"
+    cp "$resp/12.out" "$resp/$((response + 2)).out"
+  done
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w9:p2' "$ROOT" 2>&1)
@@ -1523,6 +1531,38 @@ test_projection_close_restores_exact_prior_focus() {
   assert_not_contains "$(cat "$log")" $'workspace\x1fclose' \
     "focus-preserving cleanup introduced workspace-close authority"
   pass "herdr presentation focus: exact pane close restores the exact prior workspace and tab"
+}
+
+test_projection_focus_restore_recovers_delayed_close_drift() {
+  local dir log samples out status
+  dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_projection_focus_snapshot() {
+      count=$(cat "$SAMPLES")
+      count=$((count + 1))
+      printf "%s\\n" "$count" > "$SAMPLES"
+      case "$count" in
+        1|3) printf "w3\tw3:t1" ;;
+        *) printf "w2\tw2:t2" ;;
+      esac
+    }
+    fm_backend_herdr_cli() {
+      printf "%s\\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "tab get") printf "{\\"result\\":{\\"tab\\":{\\"tab_id\\":\\"w2:t2\\",\\"workspace_id\\":\\"w2\\"}}}\\n" ;;
+      esac
+    }
+    sleep() { :; }
+    before=$(printf "w2\tw2:t2")
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close"
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
+  assert_contains "$(cat "$log")" $'tab focus w2:t2' \
+    "a delayed close focus drift did not refocus the exact prior tab"
+  pass "herdr presentation focus: delayed post-close focus drift is restored before cleanup returns"
 }
 
 test_projection_close_refuses_active_tab() {
@@ -2057,8 +2097,18 @@ test_projection_close_death_still_restores_a_stolen_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/11.out"
+  # Pane-death removal is asynchronous.  The focus-restoration backstop now
+  # requires a bounded stable window, so return the restored snapshot for
+  # every retry instead of exhausting this fake server's scripted responses.
+  cp "$resp/11.out" "$resp/12.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/14.out"
+  local response
+  for response in $(seq 15 3 309); do
+    cp "$resp/11.out" "$resp/$response.out"
+    cp "$resp/13.out" "$resp/$((response + 1)).out"
+    cp "$resp/14.out" "$resp/$((response + 2)).out"
+  done
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -4720,6 +4770,7 @@ test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane
 test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
+test_projection_focus_restore_recovers_delayed_close_drift
 test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary

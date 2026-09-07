@@ -598,13 +598,19 @@ function makeOffer(message, projects = [approvedProject], heartbeat = false, eli
   };
   return offer;
 }
-function dispatch(message, projects, heartbeat, eligible) {
+let wakeSequence = 0;
+let currentWakeRow = "";
+function dispatch(message, projects, heartbeat, eligible, rowCount = 1) {
   const offer = makeOffer(message, projects, heartbeat, eligible);
   if (offer.eligible) {
-    const row = offer.heartbeat
-      ? "1\t1\theartbeat\theartbeat\theartbeat\n"
-      : `1\t1\tsignal\tbranch-driver.status\t${message}\n`;
-    writeFileSync(`${home}/state/.wake-queue`, row);
+    const rows = Array.from({ length: rowCount }, () => String(++wakeSequence));
+    currentWakeRow = rows[0];
+    globalThis.__fmCurrentWakeRow = currentWakeRow;
+    globalThis.__fmCurrentWakeRows = rows;
+    const queue = rows.map((row) => offer.heartbeat
+      ? `1\t${row}\theartbeat\theartbeat\theartbeat\n`
+      : `1\t${row}\tsignal\tbranch-driver.status\t${message}\n`).join("");
+    writeFileSync(`${home}/state/.wake-queue`, queue);
   }
   bus.emit("fm-branch-supervision:dispatch", offer);
   return offer;
@@ -700,7 +706,7 @@ console.log(`CACHE_KEY=${rewriteA.prompt_cache_key}`);
 // captain-relevant persists a visible entry with no model turn. Store rows are
 // written before delivery and marked read only after it.
 const report = session.options.customTools.find((tool) => tool.name === "fm_branch_report");
-const r1 = await report.execute("call-1", { task: "branch-driver", verdict: "routine", summary: "worker healthy, no action needed", wake: "signal: working" }, undefined, undefined, {});
+const r1 = await report.execute("call-1", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "worker healthy, no action needed", wake: "signal: working" }, undefined, undefined, {});
 if (r1.isError) throw new Error(`routine report failed: ${JSON.stringify(r1)}`);
 finishWakePrompt();
 // Reports below are made outside any wake prompt (as a real Pi turn cannot):
@@ -985,6 +991,7 @@ globalThis.__fmOnBranchPrompt = async ({ session }) => {
       verdict: directlyRequested ? "captain" : "routine",
       summary: "healthy resource report: CPU 12%, memory 41%",
       wake: "signal: healthy resource result",
+      wakeRow: globalThis.__fmCurrentWakeRow,
     },
     undefined,
     undefined,
@@ -1255,7 +1262,7 @@ if (!routineOffer.accepted) throw new Error("branch refused the routine wake");
 await settle(() => (globalThis.__fmPrompts ?? []).length === 1, "routine branch prompt");
 const session = globalThis.__fmSessions[0];
 const report = session.options.customTools.find((tool) => tool.name === "fm_branch_report");
-await report.execute("routine", { task: "branch-driver", verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
+await report.execute("routine", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
 finishRoutinePrompt();
 // The reports below are made outside any wake prompt: wait for the wake to
 // settle so its task scope has been cleared.
@@ -1344,7 +1351,7 @@ if (!replacementOffer.accepted) throw new Error("branch refused a wake after the
 await settle(() => (globalThis.__fmSessions ?? []).length === 2, "replacement branch session");
 const report2 = globalThis.__fmSessions[1].options.customTools.find((tool) => tool.name === "fm_branch_report");
 const beforePair = requests().length;
-const second = await report2.execute("captain-2", { task: "branch-driver", verdict: "captain", summary: "PR https://example.com/pr/e is ready for review" }, undefined, undefined, {});
+const second = await report2.execute("captain-2", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "captain", summary: "PR https://example.com/pr/e is ready for review" }, undefined, undefined, {});
 if (second.isError) throw new Error(`second captain report failed: ${JSON.stringify(second)}`);
 finishReplacementPrompt();
 // The next report is made outside the wake prompt: wait for the wake to
@@ -1687,7 +1694,7 @@ const fleet = await report.execute("fleet", { task: "fleet", verdict: "routine",
 if (!fleet.isError || !fleet.content[0].text.includes("never fleet")) {
   throw new Error(`a fleet-wide report was not refused during a task-local wake: ${JSON.stringify(fleet)}`);
 }
-const named = await report.execute("named", { task: "branch-driver", verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
+const named = await report.execute("named", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
 if (named.isError) throw new Error(`the wake's own task was refused: ${JSON.stringify(named)}`);
 finish();
 await settle(() => !existsSync(`${home}/state/.branch-eligible-rows`), "task-local grant release");
@@ -1699,11 +1706,11 @@ if (!dispatch("heartbeat", [], true, true).accepted) throw new Error("branch ref
 await settle(() => (globalThis.__fmPrompts ?? []).length === 2, "heartbeat branch prompt");
 const heartbeatSession = globalThis.__fmSessions[globalThis.__fmSessions.length - 1];
 const heartbeatReport = heartbeatSession.options.customTools.find((tool) => tool.name === "fm_branch_report");
-const live = await heartbeatReport.execute("live", { task: "other-task", verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
+const live = await heartbeatReport.execute("live", { task: "other-task", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
 if (live.isError) throw new Error(`a heartbeat report for a live task was refused: ${JSON.stringify(live)}`);
-const goneInReview = await heartbeatReport.execute("gone-in-review", { task: "retired-task", verdict: "captain", summary: "PR merged and cleaned up" }, undefined, undefined, {});
+const goneInReview = await heartbeatReport.execute("gone-in-review", { task: "retired-task", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "captain", summary: "PR merged and cleaned up" }, undefined, undefined, {});
 if (goneInReview.isError) throw new Error(`a heartbeat report for a task with no record was refused: ${JSON.stringify(goneInReview)}`);
-const fleetInReview = await heartbeatReport.execute("fleet-in-review", { task: "fleet", verdict: "routine", summary: "fleet-wide note" }, undefined, undefined, {});
+const fleetInReview = await heartbeatReport.execute("fleet-in-review", { task: "fleet", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "fleet-wide note" }, undefined, undefined, {});
 if (fleetInReview.isError) throw new Error(`a fleet-wide report was refused during a heartbeat review: ${JSON.stringify(fleetInReview)}`);
 finish();
 
@@ -1960,7 +1967,7 @@ globalThis.__fmOnBranchPrompt = async ({ session }) => {
         : "post-recovery report proved the provider-error streak was clear";
     const recorded = await report.execute(
       `healthy-${attempt}`,
-      { task: "branch-driver", verdict: "routine", summary },
+      { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary },
       undefined,
       undefined,
       {},
@@ -1973,7 +1980,7 @@ globalThis.__fmOnBranchPrompt = async ({ session }) => {
     const report = session.options.customTools.find((tool) => tool.name === "fm_branch_report");
     const recorded = await report.execute(
       "reported-before-provider-error",
-      { task: "branch-driver", verdict: "routine", summary: "durable report preceded a failed continuation" },
+      { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "durable report preceded a failed continuation" },
       undefined,
       undefined,
       {},
@@ -2132,7 +2139,7 @@ globalThis.__fmOnBranchPrompt = async ({ session }) => {
     const report = session.options.customTools.find((tool) => tool.name === "fm_branch_report");
     const recorded = await report.execute(
       "healthy-after-selection",
-      { task: "branch-driver", verdict: "routine", summary: "replacement branch remains available" },
+      { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "replacement branch remains available" },
       undefined,
       undefined,
       {},
@@ -2243,7 +2250,7 @@ globalThis.__fmOnBranchPrompt = async ({ session }) => {
   const report = session.options.customTools.find((tool) => tool.name === "fm_branch_report");
   await report.execute(
     "first-drained-elsewhere",
-    { task: "branch-driver", verdict: "routine", summary: "the accepted wake was already reconciled" },
+    { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "the accepted wake was already reconciled" },
     undefined,
     undefined,
     {},
@@ -4281,7 +4288,7 @@ const { fire, dispatch, settle, outcomeScript, sentToMain, mainEntries, defaultS
 await fire("session_start", {}, defaultSessionCtx);
 let finishWakePrompt;
 globalThis.__fmOnBranchPrompt = () => new Promise((resolve) => { finishWakePrompt = resolve; });
-const offer = dispatch("signal: branch-driver working");
+const offer = dispatch("signal: branch-driver working", undefined, undefined, undefined, 8);
 if (!offer.accepted) throw new Error("branch did not accept the wake offer");
 await settle(() => (globalThis.__fmPrompts ?? []).length === 1, "branch wake prompt");
 const report = globalThis.__fmSessions[0].options.customTools.find((tool) => tool.name === "fm_branch_report");
@@ -4325,9 +4332,9 @@ async function timedDelivery(callId, params) {
   return { result, wallMs, ticks: probe.ticks, worstGapMs: probe.worstGapMs };
 }
 
-const routine = await timedDelivery("live-routine", { task: "branch-driver", verdict: "routine", summary: "routine outcome during a live loop" });
+const routine = await timedDelivery("live-routine", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[0], verdict: "routine", summary: "routine outcome during a live loop" });
 if (routine.result.isError) throw new Error(`routine delivery failed: ${JSON.stringify(routine.result)}`);
-const captain = await timedDelivery("live-captain", { task: "branch-driver", verdict: "captain", summary: "captain outcome during a live loop" });
+const captain = await timedDelivery("live-captain", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[1], verdict: "captain", summary: "captain outcome during a live loop" });
 if (captain.result.isError) throw new Error(`captain delivery failed: ${JSON.stringify(captain.result)}`);
 probe.stop();
 
@@ -4361,6 +4368,7 @@ const many = await Promise.all(
     `interleaved-${index}`,
     {
       task: "branch-driver",
+      wakeRow: globalThis.__fmCurrentWakeRows[index + 2],
       verdict: index % 2 === 0 ? "routine" : "captain",
       summary: `interleaved outcome ${index}`,
     },
@@ -4465,7 +4473,7 @@ const toolGeneration = 1;
 writeFileSync(process.env.FM_TEST_PS_ARM, "");
 const inFlight = report.execute(
   "replaced-mid-delivery",
-  { task: "branch-driver", verdict: "captain", summary: "reported as the session was replaced" },
+  { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "captain", summary: "reported as the session was replaced" },
   undefined,
   undefined,
   {},
@@ -4561,7 +4569,7 @@ const armStoreFailure = (subcommand) => writeFileSync(failArm, subcommand);
 await fire("session_start", {}, defaultSessionCtx);
 let finishWakePrompt;
 globalThis.__fmOnBranchPrompt = () => new Promise((resolve) => { finishWakePrompt = resolve; });
-const offer = dispatch("signal: branch-driver working");
+const offer = dispatch("signal: branch-driver working", undefined, undefined, undefined, 2);
 if (!offer.accepted) throw new Error("branch did not accept the wake offer");
 await settle(() => (globalThis.__fmPrompts ?? []).length === 1, "branch wake prompt");
 const report = globalThis.__fmSessions[0].options.customTools.find((tool) => tool.name === "fm_branch_report");
@@ -4569,7 +4577,7 @@ const report = globalThis.__fmSessions[0].options.customTools.find((tool) => too
 // 1. The durable append fails: the failure surfaces to the branch, and
 // nothing is delivered, because nothing was ever stored.
 armStoreFailure("append");
-const appendFailed = await report.execute("append-fails", { task: "branch-driver", verdict: "routine", summary: "append must fail" }, undefined, undefined, {});
+const appendFailed = await report.execute("append-fails", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[0], verdict: "routine", summary: "append must fail" }, undefined, undefined, {});
 if (!appendFailed.isError || !appendFailed.content[0].text.includes("outcome store append failed")) {
   throw new Error(`a failed append did not surface as an error: ${JSON.stringify(appendFailed)}`);
 }
@@ -4580,7 +4588,7 @@ if (outcomeScript(["list", "--recent", "50"]) !== "") throw new Error("a failed 
 // branch is told, the row stays in the store exactly once, and the next
 // reconciliation completes the delivery rather than losing it.
 armStoreFailure("mark-read");
-const markFailed = await report.execute("mark-read-fails", { task: "branch-driver", verdict: "captain", summary: "cursor advance must fail" }, undefined, undefined, {});
+const markFailed = await report.execute("mark-read-fails", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[1], verdict: "captain", summary: "cursor advance must fail" }, undefined, undefined, {});
 if (!markFailed.isError || !markFailed.content[0].text.includes("visible delivery or cursor advancement failed")) {
   throw new Error(`a failed cursor advance did not surface as an error: ${JSON.stringify(markFailed)}`);
 }
@@ -4664,7 +4672,7 @@ const captainCopies = (seq) => mainEntries.filter(
 await fire("session_start", {}, defaultSessionCtx);
 let finishWakePrompt;
 globalThis.__fmOnBranchPrompt = () => new Promise((resolve) => { finishWakePrompt = resolve; });
-const offer = dispatch("signal: branch-driver working");
+const offer = dispatch("signal: branch-driver working", undefined, undefined, undefined, 2);
 if (!offer.accepted) throw new Error("branch did not accept the wake offer");
 await settle(() => (globalThis.__fmPrompts ?? []).length === 1, "branch wake prompt");
 const report = globalThis.__fmSessions[0].options.customTools.find((tool) => tool.name === "fm_branch_report");
@@ -4672,7 +4680,7 @@ const report = globalThis.__fmSessions[0].options.customTools.find((tool) => too
 // A routine note is delivered, then its cursor write fails.
 const routineSummary = "routine note whose cursor write fails";
 armStoreFailure("mark-read");
-const routineFailed = await report.execute("routine-mark-read-fails", { task: "branch-driver", verdict: "routine", summary: routineSummary }, undefined, undefined, {});
+const routineFailed = await report.execute("routine-mark-read-fails", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[0], verdict: "routine", summary: routineSummary }, undefined, undefined, {});
 if (!routineFailed.isError || !routineFailed.content[0].text.includes("visible delivery or cursor advancement failed")) {
   throw new Error(`a failed routine cursor advance did not surface as an error: ${JSON.stringify(routineFailed)}`);
 }
@@ -4707,7 +4715,7 @@ if (routineCopies(routineSummary) !== 2) {
 // keyed by store sequence, so the re-run recognizes its own earlier write.
 const captainSummary = "captain outcome whose cursor write fails";
 armStoreFailure("mark-read");
-const captainFailed = await report.execute("captain-mark-read-fails", { task: "branch-driver", verdict: "captain", summary: captainSummary }, undefined, undefined, {});
+const captainFailed = await report.execute("captain-mark-read-fails", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRows[1], verdict: "captain", summary: captainSummary }, undefined, undefined, {});
 if (!captainFailed.isError) throw new Error(`a failed captain cursor advance did not surface as an error: ${JSON.stringify(captainFailed)}`);
 const captainSeq = storedRows().find((row) => row.summary === captainSummary).seq;
 if (captainCopies(captainSeq) !== 1) throw new Error(`the captain entry was not written exactly once: ${captainCopies(captainSeq)}`);

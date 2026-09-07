@@ -36,6 +36,11 @@
         { "harness": "codex", "provider": "codex", "model": "gpt-5.5", "effort": "high" }
       ],
       "why": "Use comparable strong coding profiles while fresh capacity evidence and the configured reserve permit them."
+    },
+    {
+      "when": "The captain asks for OpenRouter Auto Router, or remaining native seats are empty and OpenRouter should pick the model for this turn.",
+      "use": { "harness": "opencode", "model": "openrouter/auto" },
+      "why": "OpenRouter Auto Router is the model id openrouter/auto. Firstmate forwards that slug as --model on opencode. There is no extra Auto Router fee; you pay the selected model. LiteLLM catalogs may expose the same router as or-auto."
     }
   ],
   "default": [
@@ -45,10 +50,10 @@
   "modelFallback": {
     "agy": ["gemini-3.7-flash-high", "gemini-3.6-flash-high", "gemini-3.5-flash-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking"],
     "cursor": ["cursor-grok-4.6-high", "auto"],
-    "opencode": ["x-preview-f-free", "big-pickle", "hy3-free"],
+    "opencode": ["openrouter/auto", "x-preview-f-free", "big-pickle", "hy3-free"],
     "cline": ["glm-5.3", "kimi-k3"],
     "claude": ["claude-sonnet-5", "sonnet", "haiku"]
   },
   "modelFallbackCycles": ["cline"],
-  "fallbackLanes": ["agy", "cursor", "opencode", "cline"]
+  "fallbackLanes": ["codex", "agy", "cursor", "opencode", "cline"]
 }

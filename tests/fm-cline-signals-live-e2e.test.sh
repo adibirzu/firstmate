@@ -18,6 +18,8 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
 CLINE_BIN=$(command -v cline 2>/dev/null || true)
 REAL_TMUX=$(command -v tmux 2>/dev/null || true)
 LAB=
@@ -70,10 +72,7 @@ exit_cline() {
   "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" C-c || fail "could not send cline's exit key"
 }
 
-if [ "${FM_CLINE_SIGNALS_LIVE:-0}" != 1 ]; then
-  echo "skip: set FM_CLINE_SIGNALS_LIVE=1 to run the real cline signal drift guard"
-  exit 0
-fi
+fm_live_gate opt-in FM_CLINE_SIGNALS_LIVE cline
 
 [ -x "$CLINE_BIN" ] || fail "FM_CLINE_SIGNALS_LIVE=1 but no real cline executable is installed on PATH"
 [ -x "$REAL_TMUX" ] || fail "FM_CLINE_SIGNALS_LIVE=1 but tmux is not installed"

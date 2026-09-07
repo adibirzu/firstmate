@@ -710,6 +710,22 @@ test_opencode_secondmate_launch_keeps_permission_only_overlay() {
   pass "opencode secondmate launch keeps the previous permission-only overlay"
 }
 
+test_opencode_forwards_openrouter_auto_router_model() {
+  local rec id out status launch
+  id=profile-opencode-auto-router-z7b
+  rec=$(make_spawn_case profile-opencode-auto-router opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model openrouter/auto)
+  status=$?
+  expect_code 0 "$status" "opencode spawn with openrouter/auto should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" opencode openrouter/auto default
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "opencode --model 'openrouter/auto' --prompt" \
+    "opencode launch did not forward the OpenRouter Auto Router slug"
+  pass "opencode forwards openrouter/auto as the OpenRouter Auto Router model"
+}
+
 test_pi_threads_model_and_max_effort() {
   local rec id out status launch
   id=profile-pi-z8
@@ -1221,6 +1237,7 @@ test_cursor_failed_catalog_probe_does_not_block_spawn
 test_opencode_threads_model_and_ignores_effort_axis
 test_opencode_scout_launch_disables_claude_code_catalog
 test_opencode_secondmate_launch_keeps_permission_only_overlay
+test_opencode_forwards_openrouter_auto_router_model
 test_pi_threads_model_and_max_effort
 test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata

@@ -3284,14 +3284,30 @@ elif [ "$BACKEND" != orca ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
+  if [ "$(fm_backend_herdr_pane_presence_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
   else
     echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
   fi
 elif [ "$BACKEND" = herdr ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
+  # A projected teardown can lose the pre-close candidate gate when metadata
+  # cleanup has already advanced the endpoint identity.  The journal is still
+  # safe to retire only after the exact recorded pane is positively absent;
+  # never infer absence from a failed or malformed query.
+  HERDR_JOURNAL_SESSION=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
+  HERDR_JOURNAL_PANE=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
+  # Metadata may have advanced past the endpoint binding by the time the
+  # close confirmation runs. The journal is the durable, read-only binding for
+  # this exact projection, so use its session as the fallback rather than
+  # leaving a confirmed-dead projection journal quarantined.
+  [ -n "$HERDR_JOURNAL_SESSION" ] || HERDR_JOURNAL_SESSION=$HERDR_PRESENTATION_SESSION
+  if [ -n "$HERDR_JOURNAL_SESSION" ] && [ -n "$HERDR_JOURNAL_PANE" ] \
+     && [ "$(fm_backend_herdr_pane_presence_state "$HERDR_JOURNAL_SESSION" "$HERDR_JOURNAL_PANE")" = dead ]; then
+    rm -f "$HERDR_PRESENTATION_JOURNAL"
+  else
+    echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
+  fi
 fi
 # A refused, skipped, or failed Herdr close must never erase a live task's
 # durable endpoint identity: unless the exact pane is confirmed gone, retain
@@ -3308,6 +3324,20 @@ if [ "$BACKEND" = herdr ]; then
   if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
+  fi
+  # Endpoint confirmation is the final destructive-operation boundary. A
+  # transient presence lookup above may have quarantined the projection
+  # journal even though the authoritative endpoint check now proves teardown
+  # complete. Retire only the journal's exact pane, and only after a positive
+  # dead result; malformed or unqueryable journals remain recoverable.
+  if { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; } \
+    && declare -F fm_backend_herdr_projection_journal_field >/dev/null 2>&1; then
+    journal_session=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
+    journal_pane=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
+    if [ -n "$journal_session" ] && [ -n "$journal_pane" ] \
+      && [ "$(fm_backend_herdr_pane_presence_state "$journal_session" "$journal_pane")" = dead ]; then
+      rm -f "$HERDR_PRESENTATION_JOURNAL"
+    fi
   fi
 fi
 if [ "$KIND" != secondmate ]; then
