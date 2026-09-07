@@ -165,6 +165,7 @@ init_changed_fixture_repo() {
     "$repo/.agents/skills/harness-adapters/references/common" \
     "$repo/.claude" "$repo/.pi/extensions" "$repo/docs" "$repo/src"
   : >"$repo/.agents/skills/example/SKILL.md"
+  : >"$repo/.agents/skills/example/README-UK.md"
   : >"$repo/.agents/skills/harness-adapters/SKILL.md"
   : >"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
   : >"$repo/.claude/settings.json"
@@ -281,6 +282,13 @@ test_changed_dependency_selection_and_unmapped_failure() {
   assert_contains "$listed" "tests/fm-pi-watch-extension.test.sh" "Pi source selects watcher coverage"
   git -C "$repo" add .agents .claude .pi
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm non-bin-source-change
+
+  printf '\n' >>"$repo/.agents/skills/example/README-UK.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "skill support file selects pure contract coverage"
+  git -C "$repo" add .agents/skills/example/README-UK.md
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm skill-support-change
 
   printf '\n' >>"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)

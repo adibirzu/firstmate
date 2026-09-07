@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Behavioral adapter checks for Antigravity CLI.
 set -u
+# shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 HARNESS="$ROOT/bin/fm-harness.sh"
 . "$ROOT/bin/fm-tmux-lib.sh"

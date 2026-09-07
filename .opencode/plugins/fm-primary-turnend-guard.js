@@ -50,11 +50,9 @@ function runGuard(root) {
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
   if (!coordinator?.ensureArmed) return "guard";
-  // Pending re-arms and empty or healthy cycles need no guard turn.
-  // Normalize the legacy external outcome to the same healthy state.
+  // Retrying, pending silent re-arms, and empty or healthy cycles need no guard turn.
   const outcome = await coordinator.ensureArmed(sessionID, client);
-  const status = outcome === "external" ? "healthy" : outcome;
-  return ["retrying", "not-needed", "healthy"].includes(status)
+  return ["retrying", "pending-silent-rearm", "not-needed", "healthy"].includes(outcome)
     ? "silent"
     : "guard";
 }

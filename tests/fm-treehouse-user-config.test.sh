@@ -23,7 +23,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 LIB="$ROOT/bin/fm-treehouse-lib.sh"
-SPAWN="$ROOT/bin/fm-spawn.sh"
 
 # shellcheck source=/dev/null
 . "$LIB"
