@@ -4353,17 +4353,6 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-# The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Disarm lease-abort and provisional-record rollback before the side-band
-# home-summary refresh: an interrupt during that refresh must not roll the
-# published record back or return a live task's lease.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
-SPAWN_REFRESH_SAVED_PENDING=$SPAWN_FRESH_COMMIT_PENDING
-SPAWN_FRESH_COMMIT_PENDING=0
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-SPAWN_FRESH_COMMIT_PENDING=$SPAWN_REFRESH_SAVED_PENDING
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
-
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
@@ -4677,6 +4666,14 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+# The task has now committed both its metadata and matching In-flight backlog
+# transition, so teardown owns its lease.
+# Refreshing the side-band home summary before this point exposes a provisional
+# record to an interrupt and lets abort cleanup erase it after a reader saw it.
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"

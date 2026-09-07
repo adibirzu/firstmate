@@ -45,12 +45,12 @@ run_teardown() {  # <home> <id>
     FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id"
 }
 
-# Reproduces the loss exactly with privacy-safe synthetic names: the investigation
-# and visual review have ended, the only genuine unresolved decision is report prose,
-# no held backlog item or open status exists, and the authoritative Bearings view
-# correctly omits it. Completion must now refuse before teardown can erase the source.
-test_uninventoried_report_decision_refuses_completion() {
-  local home id json rc
+# Report prose is not an authoritative captain call.
+# The lifecycle owner deliberately never infers one from prose, because doing so
+# would turn recommendations and historical notes into durable holds without a
+# worker's explicit needs-decision event or a captain-held task.
+test_report_prose_is_not_inferred_as_a_captain_call() {
+  local home id json
   home=$(make_home omitted-decision)
   id=sample-route-review
   mkdir -p "$home/data/$id"
@@ -69,30 +69,30 @@ EOF
     "harness=codex" \
     "kind=scout" \
     "mode=scout" \
-    "spawn_gen=sfixture.omitted-decision"
+    "spawn_gen=fixture-$id"
   printf 'done: report and visual review complete\n' > "$home/state/$id.status"
   cat > "$home/data/$id/report.md" <<'EOF'
 # Sample route review
 
 The evidence is complete.
-The captain still needs to choose route north or route south before follow-up work starts.
+The report recommends route north for the next follow-up.
 EOF
 
-  json=$(run_bearings "$home") || fail "Bearings failed for unresolved-decision regression"
+  json=$(run_bearings "$home") || fail "Bearings failed for report-prose regression"
   printf '%s' "$json" | jq -e '
     (.decisions_open | length) == 0
       and (.gates | length) == 0
       and (.reports | any(.id == "sample-route-review"))
-  ' >/dev/null || fail "the pre-policy omission shape was not reproduced: $json"
+  ' >/dev/null || fail "report prose unexpectedly became a captain call: $json"
 
-  set +e
-  run_teardown "$home" "$id" > "$home/teardown.out" 2> "$home/teardown.err"
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "completed investigation teardown erased a report-only unresolved decision"
-  assert_present "$home/state/$id.meta" "refused completion must preserve investigation metadata"
-  assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit: $(cat "$home/teardown.err")"
-  pass "report-only unresolved decision is reproduced and completion refuses before loss"
+  # A source without an explicit captain call still records its empty inventory
+  # before teardown.
+  run_decisions "$home" complete "$id" --none >/dev/null \
+    || fail "an empty captain-call inventory could not be completed"
+  run_teardown "$home" "$id" > "$home/teardown.out" 2> "$home/teardown.err" \
+    || fail "report prose without a durable captain call blocked scout teardown: $(cat "$home/teardown.err")"
+  assert_no_grep "REFUSED" "$home/teardown.err" "report prose must not manufacture a refusal"
+  pass "report prose is not inferred as a captain call during scout teardown"
 }
 
 tasks_in() {  # <home> <tasks-axi args...>
@@ -118,7 +118,7 @@ write_origin_meta() {  # <home> <id> [kind]
     "harness=codex" \
     "kind=$kind" \
     "mode=$kind" \
-    "spawn_gen=sfixture.$id"
+    "spawn_gen=fixture-$id"
 }
 
 test_structured_holds_survive_teardown_and_route_resolution() {
@@ -975,7 +975,7 @@ test_second_untagged_decision_cannot_reuse_a_spent_identity() {
   pass "a second untagged decision cannot reuse a spent identity and clears through an unused key"
 }
 
-test_uninventoried_report_decision_refuses_completion
+test_report_prose_is_not_inferred_as_a_captain_call
 test_untagged_decision_closes_through_every_documented_path
 test_second_untagged_decision_cannot_reuse_a_spent_identity
 test_scout_teardown_always_requires_inventory_verification
