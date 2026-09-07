@@ -67,9 +67,9 @@
 #     without a probe, and other tasks use "not_checked".
 #     usage:{harness,model,context_pct,quota} is the fleet-wide usage-bar
 #     fallback row (bin/fm-crew-usage-lib.sh, data/fm-harness-usage-bar/report.md
-#     section 4): harness/model come straight from meta, context_pct is always
-#     "n/a" (no harness exposes a live context percentage on firstmate's
-#     external observation channel - a recorded finding, not a bug), and
+#     section 4): harness/model come straight from meta, context_pct is the
+#     validated live Codex/Claude statusline percentage where available (for
+#     example "40") and "n/a" when unavailable or unsupported, and
 #     quota is quota-axi's spendPriority for the harness's mapped provider -
 #     "n/a" unless the caller sets FM_CREW_USAGE_ENABLE_QUOTA=1, since that
 #     field is a live per-account network call and stays opt-in so the

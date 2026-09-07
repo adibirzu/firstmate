@@ -13,8 +13,8 @@
 #     stats` is a pull-only cost/token command, not a per-turn live
 #     percentage), `pi --mode json` (single-turn JSON carries no token/context
 #     field), and `cline --json` (same: no token/context field in its
-#     per-message JSON). context_pct is therefore always "n/a" today; this is
-#     a recorded finding, not a gap to route around with pane-scraping, which
+#     per-message JSON). context_pct is "n/a" when unavailable or unsupported;
+#     this is a recorded finding, not a gap to route around with pane-scraping, which
 #     firstmate-coding-guidelines' "Harness-dependent checks" section would
 #     require two-test live proof for and this task's scope does not cover.
 #   - quota: quota-axi's per-provider spendPriority, read only under the task's
