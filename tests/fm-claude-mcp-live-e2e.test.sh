@@ -49,6 +49,7 @@ os.close(slave)
 transcript=b''
 samples=[]
 inventory_descendants=[]
+inventory_text=''
 deadline=time.monotonic()+100
 trusted=False
 bypass=False
@@ -130,12 +131,17 @@ try:
         if p.poll() is not None: break
     if completed and p.poll() is None:
         os.write(master,b'/mcp\r')
+        inventory_response=b''
         inventory_deadline=time.monotonic()+15
         while time.monotonic()<inventory_deadline:
             if select.select([master],[],[],0.25)[0]:
-                try: transcript+=os.read(master,65536)
+                try:
+                    chunk=os.read(master,65536)
+                    transcript+=chunk
+                    inventory_response+=chunk
                 except OSError: break
-            if inventory_is_empty(normalized_text()):
+            inventory_text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', inventory_response.decode(errors='replace'))
+            if inventory_is_empty(inventory_text):
                 inventory_checked=True
                 inventory_descendants=worker_descendants()
                 break
@@ -149,7 +155,7 @@ require(read_text(d/'wt/tool-proof.txt').strip()=='verified', 'tool-proof.txt di
 require(samples, 'no descendant process samples')
 bad=[cmd for cmd in samples if 'LIFEOS_StatusLine.sh' in cmd or '/.claude/hooks/' in cmd]
 require(not bad, bad)
-require(inventory_checked, f"/mcp did not report an empty server inventory: {normalized_text()[-5000:]!r}")
+require(inventory_checked, f"/mcp did not report an empty server inventory: {inventory_text[-5000:]!r}")
 require(not inventory_descendants, f"empty MCP inventory has worker descendants: {inventory_descendants}")
 debug=read_text(d/'debug')
 # A real Read tool event, a Bash proof artifact, and the owned Stop hook prove

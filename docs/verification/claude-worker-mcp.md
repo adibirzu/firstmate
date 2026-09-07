@@ -11,12 +11,6 @@ Run:
 FM_CLAUDE_MCP_LIVE=1 bash tests/fm-claude-mcp-live-e2e.test.sh
 ```
 
-Output:
-
-```text
-ok - 2.1.257 (Claude Code): spawned worker authenticated, Read and Bash succeeded, MCP servers=0, plugins=0, MCP/node descendants=0
-```
-
 The initial MCP-only evidence above used the actual command emitted by `fm-spawn.sh` with the installed Claude binary and existing credentials in bounded print mode.
 The guard now uses an interactive PTY to exercise status-line behavior too, while pane allocation remains simulated.
 It checks Read and Bash, owned completion hooks, primary settings checksum, and descendant process samples captured externally with `ps -axo pid=,ppid=,args=`.
