@@ -1048,6 +1048,45 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+test_opencode_plugin_obeys_watch_arm_outcomes() {
+  local plugin dir marker out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  dir="$TMP_ROOT/opencode-non-primary"
+  marker="$dir/guard-ran"
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/fm-turnend-guard.sh" <<EOF
+#!/usr/bin/env bash
+touch "$marker"
+exit 2
+EOF
+  chmod +x "$dir/bin/fm-turnend-guard.sh"
+  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" DIRECTORY="$dir" WORKTREE="$dir" MARKER="$marker" node 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const { existsSync, unlinkSync } = await import("node:fs");
+for (const outcome of ["retrying", "pending-silent-rearm", "not-needed", "healthy", "external", "existing", "armed", "not-primary", "failed", "read-only"]) {
+  if (existsSync(process.env.MARKER)) unlinkSync(process.env.MARKER);
+  globalThis.__firstmateOpenCodeWatchArm = { ensureArmed: async () => outcome };
+  const mod = await import(`${pathToFileURL(process.env.PLUGIN).href}?outcome=${outcome}`);
+  let prompts = 0;
+  const client = { session: { promptAsync: async () => { prompts += 1; } } };
+  const hooks = await mod.FmPrimaryTurnendGuard({
+    client, directory: process.env.DIRECTORY, worktree: process.env.WORKTREE,
+  });
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "guard-outcomes" } } });
+  const silent = ["retrying", "pending-silent-rearm", "not-needed", "healthy"].includes(outcome);
+  if (prompts !== (silent ? 0 : 1)) throw new Error(`${outcome}: unexpected prompts ${prompts}`);
+  if (existsSync(process.env.MARKER) === silent) throw new Error(`${outcome}: incorrect shell guard invocation`);
+}
+
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode idle must honor the authorized silent outcomes"
+  [ -z "$out" ] || fail "non-primary OpenCode idle produced output: $out"
+  pass ".opencode primary plugin: exact silent outcomes bypass the shell guard and prompts"
+}
+
 test_pi_extension_injects_once_per_logical_agent_run() {
   local repo home ext log out status
   repo="$TMP_ROOT/pi-logical-run-root"
@@ -2037,6 +2076,7 @@ test_tracked_claude_entries_inert_under_grok
 test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_obeys_watch_arm_outcomes
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy

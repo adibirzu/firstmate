@@ -2523,7 +2523,7 @@ else
   fi
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$REUSE_WORKTREE" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
@@ -4259,10 +4259,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 # The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Returning it from here after this point would pull the lease out from under a
-# live task.
+# Disarm lease-abort and provisional-record rollback before the side-band
+# home-summary refresh: an interrupt during that refresh must not roll the
+# published record back or return a live task's lease.
 TREEHOUSE_LEASE_ABORT_CLEANUP=0
+SPAWN_REFRESH_SAVED_PENDING=$SPAWN_FRESH_COMMIT_PENDING
+SPAWN_FRESH_COMMIT_PENDING=0
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+SPAWN_FRESH_COMMIT_PENDING=$SPAWN_REFRESH_SAVED_PENDING
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")

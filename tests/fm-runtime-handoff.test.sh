@@ -639,7 +639,7 @@ setup_case() {
   prompt=$(cat "$CASE_HOME/state/task-h1.handoff-prompt")
   assert_contains "$prompt" "Codex quota exhausted" "progress note in handoff prompt"
   assert_contains "$prompt" "no-mistakes axi status" "pipeline re-attach instruction"
-  assert_contains "$prompt" "brief for task-h1" "original brief content embedded"
+  assert_contains "$prompt" "$(cat "$CASE_HOME/data/task-h1/brief.md")" "original brief content embedded"
   if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
     fail "handoff must not call treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
   fi

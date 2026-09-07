@@ -185,7 +185,7 @@ test_harvest_acknowledgement_suppresses_the_wake_and_no_claim_produces_it() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   sleep 30 &
   claimant=$!
@@ -519,7 +519,7 @@ test_locked_start_is_not_satisfied_by_an_inflight_probe() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
   printf '../other-home\n' > "$home/.fm-secondmate-home"
 
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=6 \
@@ -562,6 +562,36 @@ EOF
   runs=$(grep -c 'network=only' "$log" || true)
   [ "$runs" -eq 1 ] || fail "a second start launched a competing worker ($runs runs): $(cat "$log")"
   pass "fm-startup-network: a second start never launches a competing worker"
+}
+
+# start writes its generation before nohup returns a child pid.
+# A matching second request must join that reservation instead of treating its
+# pid=0 handoff state as an abandoned worker and starting duplicate sweeps.
+test_start_reuses_a_matching_reserved_generation() {
+  local rec home root log generation
+  rec=$(new_world reserved-single-flight)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  write_lock_binding "$home" "$$"
+  cat > "$home/state/.startup-network.status" <<EOF
+state=running
+pid=0
+started=$(date +%s)
+locked=1
+phases=probe,sweeps
+generation=reserved-generation
+lock_pid=$$
+lock_kind=ancestry
+lock_session=$$
+EOF
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" run_stage "$home" "$root" start --locked 1 --harvest-pid $$
+  generation=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
+  [ "$generation" = reserved-generation ] \
+    || fail "a matching reservation was replaced before its worker published a pid"
+  [ ! -s "$log" ] || fail "a matching reservation launched competing network sweeps: $(cat "$log")"
+  pass "fm-startup-network: a matching pid-zero reservation is single-flight"
 }
 
 # A running worker covers a locked request only when it was launched under the
@@ -646,26 +676,26 @@ EOF
   pass "fm-startup-network: start atomically reserves the generation harvest observes"
 }
 
-test_new_lock_owner_does_not_reuse_the_previous_owners_worker() {
+test_new_lock_owner_probe_reuses_covering_worker() {
   local rec home root log generation_one generation_two next_owner
   rec=$(new_world owner-handoff)
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=6 \
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
   generation_one=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
 
   next_owner=$(/bin/ps -o ppid= -p $$ | tr -d ' ')
-  printf '%s\n' "$next_owner" > "$home/state/.lock"
+  write_lock_binding "$home" "$next_owner"
   FM_FAKE_HARNESS_PID_OVERRIDE="$next_owner" FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
     run_stage "$home" "$root" start --locked 0 --harvest-pid $$
   generation_two=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
-  [ "$generation_one" != "$generation_two" ] \
-    || fail "the new lock owner reused the previous owner's generation"
+  [ "$generation_one" = "$generation_two" ] \
+    || fail "a read-only probe started a competing worker despite covering work"
   run_stage "$home" "$root" wait 30 >/dev/null || fail "the new owner's generation never published"
-  pass "fm-startup-network: a new lock owner gets a distinct worker generation"
+  pass "fm-startup-network: a new owner can share an in-flight read-only probe"
 }
 
 test_lock_takeover_stays_read_only_while_a_sweep_holds_the_lease() {
@@ -757,7 +787,7 @@ test_timings_are_published_and_only_the_on_demand_report_prints_them() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_OUT='sweep finding' \
     FM_FAKE_TIMING_PHASE=fleet-sync FM_FAKE_TIMING_DETAIL=dotfiles-private \
@@ -795,7 +825,7 @@ test_a_bounded_run_still_publishes_the_timings_it_managed_to_record() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   FM_STARTUP_NETWORK_TIMEOUT=1 FM_SESSION_START_TIMEOUT=2 \
     FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=20 \
@@ -821,7 +851,7 @@ test_the_timing_artifact_cannot_carry_a_command_line_or_forge_records() {
   IFS='|' read -r home root log <<EOF
 $rec
 EOF
-  printf '%s\n' $$ > "$home/state/.lock"
+  write_lock_binding "$home" "$$"
 
   FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_TIMING_PHASE=secondmate-sync \
     FM_FAKE_TIMING_DETAIL="ssh -i /key host	v1	forged	0	9999
@@ -865,9 +895,10 @@ test_the_stage_bound_is_reported_not_swallowed
 test_an_abandoned_run_reads_as_needing_a_rerun
 test_locked_start_is_not_satisfied_by_an_inflight_probe
 test_start_is_single_flight
+test_start_reuses_a_matching_reserved_generation
 test_locked_start_reuses_a_worker_only_under_the_same_lock_identity
 test_start_reserves_its_generation_before_returning
-test_new_lock_owner_does_not_reuse_the_previous_owners_worker
+test_new_lock_owner_probe_reuses_covering_worker
 test_lock_takeover_stays_read_only_while_a_sweep_holds_the_lease
 test_records_share_one_origin_so_offsets_form_a_timeline
 test_timings_are_published_and_only_the_on_demand_report_prints_them
