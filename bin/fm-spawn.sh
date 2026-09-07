@@ -469,6 +469,7 @@ fm_refuse_if_gate_agent
 KIND=ship
 HARNESS_ARG=
 PROVIDER=
+ACCOUNT=
 MODEL=
 EFFORT=
 BACKEND_ARG=
@@ -481,6 +482,7 @@ RELAUNCH_STRICT=0
 KIND_SET=0
 HARNESS_SET=0
 PROVIDER_SET=0
+ACCOUNT_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
@@ -497,6 +499,7 @@ for a in "$@"; do
     case "$want_value" in
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
       provider) PROVIDER=$a; PROVIDER_SET=1 ;;
+      account) ACCOUNT=$a; ACCOUNT_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
@@ -526,6 +529,8 @@ for a in "$@"; do
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --provider) want_value=provider ;;
     --provider=*) PROVIDER=${a#--provider=}; PROVIDER_SET=1 ;;
+    --account) want_value=account ;;
+    --account=*) ACCOUNT=${a#--account=}; ACCOUNT_SET=1 ;;
     --model) want_value=model ;;
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
@@ -546,6 +551,7 @@ done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
 [ "$PROVIDER_SET" -eq 0 ] || [ -n "$PROVIDER" ] || { echo "error: --provider requires a non-empty value" >&2; exit 1; }
+[ "$ACCOUNT_SET" -eq 0 ] || [ -n "$ACCOUNT" ] || { echo "error: --account requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
@@ -1450,6 +1456,9 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
   # named AND the harness whose per-task wiring must be retired before the
   # replacement's is armed, which is needed even when the harness changes.
   REUSE_PRESERVE_HARNESS=$(fm_meta_get "$REUSE_META" harness)
+  if [ "$ACCOUNT_SET" -ne 1 ]; then
+    ACCOUNT=$(fm_meta_get "$REUSE_META" account)
+  fi
   if [ "$HARNESS_SET" -ne 1 ] && [ -n "$REUSE_PRESERVE_HARNESS" ]; then
     HARNESS_ARG=$REUSE_PRESERVE_HARNESS
     HARNESS_SET=1
@@ -4095,7 +4104,7 @@ spawn_write_meta_locked() {
   # keep the previous adapter's routing provider: every reuse caller that can
   # prove a correct provider passes it explicitly (fm-runtime-handoff.sh and
   # fm-control.sh), so an unprovable one is dropped instead of left lying.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|spawn_gen|provider|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then
@@ -4147,6 +4156,7 @@ spawn_write_meta_locked() {
     echo "yolo=$YOLO"
     echo "tasktmp=$TASK_TMP"
     [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
+    [ -z "${ACCOUNT:-}" ] || echo "account=$ACCOUNT"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"

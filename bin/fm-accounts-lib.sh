@@ -127,9 +127,30 @@ fm_account_quota_provider() { # harness
     claude) echo claude ;;
     codex)  echo codex ;;
     grok)   echo grok ;;
-    cursor-agent) echo cursor ;;
+    cursor|cursor-agent) echo cursor ;;
+    agy)    echo agy ;;
     kimi)   echo kimi ;;
     *) return 1 ;;   # pi, cline: not covered by quota-axi
+  esac
+}
+
+fm_account_quota_json() { # account provider -> quota-axi full JSON under account isolation
+  local account=$1 prov=$2 line harness iso env flag cdir kfile qbin key
+  fm_account_validate "$account" || return 1
+  line=$(fm_account_resolve "$account") || return 1
+  IFS=$'\t' read -r harness iso env flag cdir kfile <<<"$line"
+  [ "$(fm_account_quota_provider "$harness" 2>/dev/null || true)" = "$prov" ] || return 1
+  qbin=${QUOTA_AXI_BIN:-quota-axi}
+  command -v "$qbin" >/dev/null 2>&1 || return 1
+  case "$iso" in
+    config-dir-env) env "$env=$cdir" "$qbin" --full --json ;;
+    api-key-env)
+      [ -r "$kfile" ] || return 1
+      key=$(head -n1 "$kfile")
+      [ -n "$key" ] || return 1
+      env "$env=$key" "$qbin" --full --json
+      ;;
+    *) return 1 ;;
   esac
 }
 

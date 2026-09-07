@@ -703,7 +703,7 @@ prefetch_task_current_states() {
 }
 
 task_json_lines() {
-  local meta original_meta id kind harness model mode yolo project worktree home projects spawn_gen backend target status_log report_path
+  local meta original_meta id kind harness model account mode yolo project worktree home projects spawn_gen backend target status_log report_path
   local usage_json
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
@@ -719,6 +719,7 @@ task_json_lines() {
     [ -n "$kind" ] || kind=ship
     harness=$(meta_value "$meta" harness)
     model=$(meta_value "$meta" model)
+    account=$(meta_value "$meta" account)
     mode=$(meta_value "$meta" mode)
     yolo=$(meta_value "$meta" yolo)
     project=$(meta_value "$meta" project)
@@ -755,7 +756,8 @@ task_json_lines() {
       return 1
     }
     event_json=$(status_event_json "$status_log" "$STATE/$id.status")
-    usage_json=$(fm_crew_usage_json "$harness" "$model")
+    fm_crew_usage_prepare_quota "$harness" "$account"
+    usage_json=$(fm_crew_usage_json "$harness" "$model" "$id" "$account")
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     read -r current_state current_source < <(
       printf '%s' "$current_json" | jq -r '[.state // "", .source // ""] | @tsv'

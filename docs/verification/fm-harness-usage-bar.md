@@ -86,9 +86,10 @@ accumulated usage. No adapter added; recorded as a confirmed-but-inapplicable fi
 
 ### Conclusion
 
-No opencode/pi/cline adapter was added to `bin/fm-crew-usage-lib.sh`. All three harnesses'
-`usage_context_pct` fields remain `"n/a"` for the reason already documented in that file's
-header. A future slice that wants real numbers for pi/cline would need to parse their
+No opencode/pi/cline adapter was added to `bin/fm-crew-usage-lib.sh`. Those three harnesses'
+`usage_context_pct` fields remain `"n/a"`; Codex and Claude use the existing read-only
+statusline diagnostic where it reports `Context N% left`. A future slice that wants real
+numbers for pi/cline would need to parse their
 session storage formats (a materially larger, harness-storage-format-dependent piece of
 work, and itself a harness-dependent check needing the two-test proof
 `firstmate-coding-guidelines` requires) rather than shelling a fresh print-mode turn.

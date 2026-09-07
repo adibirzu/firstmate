@@ -10,6 +10,7 @@ set -u
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
 TMP_ROOT=$(fm_test_tmproot fm-crew-usage-lib)
+ACCOUNTS_FILE=
 
 # Source with a fakebin quota-axi ahead of PATH so no test ever calls the real
 # thing, matching the pattern every other lib test in this suite uses.
@@ -24,7 +25,7 @@ make_fakebin() {  # <dir> <quota-axi-script-body-or-absent>
 }
 
 with_libs() {  # <fakebin-dir> <extra-env...> -- <shell-code>
-  PATH="$1:$PATH" bash -s <<EOF
+  PATH="$1:$PATH" FM_ACCOUNTS_FILE="$ACCOUNTS_FILE" bash -s <<EOF
 set -eu
 # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
 . "$ROOT/bin/fm-timeout-lib.sh"
@@ -36,13 +37,27 @@ ${2:-}
 EOF
 }
 
-test_context_pct_is_always_na() {
-  local out
-  out=$(with_libs "$TMP_ROOT/nofb1" 'fm_crew_usage_context_pct claude')
-  [ "$out" = "n/a" ] || fail "context_pct for claude: expected n/a, got '$out'"
-  out=$(with_libs "$TMP_ROOT/nofb2" 'fm_crew_usage_context_pct pi')
-  [ "$out" = "n/a" ] || fail "context_pct for pi: expected n/a, got '$out'"
-  pass "context percentage is always n/a (no harness exposes it externally)"
+make_account() {  # <name> <harness>
+  local name=$1 harness=$2 dir
+  dir="$TMP_ROOT/account-$name"
+  mkdir -p "$dir/config"
+  ACCOUNTS_FILE="$dir/accounts.json"
+  jq -n --arg name "$name" --arg harness "$harness" --arg config "$dir/config" \
+    '{($name):{harness:$harness,isolation:"config-dir-env",env:(if $harness == "codex" then "CODEX_HOME" else "CLAUDE_CONFIG_DIR" end),config_dir:$config}}' \
+    > "$ACCOUNTS_FILE"
+}
+
+test_context_pct_reads_supported_statusline() {
+  local fb statusline out
+  fb=$(make_fakebin "$TMP_ROOT/context" '')
+  statusline="$TMP_ROOT/statusline"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "status=ok source=codex context_pct=40\\n"' > "$statusline"
+  chmod +x "$statusline"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct codex task-1")
+  [ "$out" = "40" ] || fail "context_pct for codex: expected 40, got '$out'"
+  out=$(with_libs "$fb" "FM_CREW_USAGE_STATUSLINE_BIN=$statusline fm_crew_usage_context_pct pi task-1")
+  [ "$out" = "n/a" ] || fail "context_pct for unsupported harness: expected n/a, got '$out'"
+  pass "context percentage reads supported statusline output"
 }
 
 test_quota_disabled_by_default() {
@@ -71,19 +86,21 @@ printf "[%s]\n" "$v"')
 
 test_quota_enabled_reads_spend_priority() {
   local fb out
+  make_account claude-account claude
   fb=$(make_fakebin "$TMP_ROOT/enabled" '#!/usr/bin/env bash
 cat <<JSON
 {"providers":[{"provider":"claude","quotaSemantics":{"effectiveAvailability":[{"selection":{"status":"known","spendPriority":-4.75}}]}}]}
 JSON
 ')
   out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
-fm_crew_usage_quota_spend_priority claude')
+fm_crew_usage_quota_spend_priority claude claude-account')
   [ "$out" = "-4.75" ] || fail "expected spendPriority -4.75, got '$out'"
   pass "quota lookup reads spendPriority from quota-axi's per-provider selection when enabled"
 }
 
 test_quota_caches_across_calls_in_one_process() {
   local fb calls out
+  make_account codex-account codex
   fb=$(make_fakebin "$TMP_ROOT/cache" '')
   cat > "$fb/quota-axi" <<EOF
 #!/usr/bin/env bash
@@ -96,9 +113,11 @@ JSON
 EOF
   chmod +x "$fb/quota-axi"
   out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
-fm_crew_usage_quota_spend_priority codex >/dev/null
-fm_crew_usage_quota_spend_priority codex >/dev/null
-fm_crew_usage_quota_spend_priority codex')
+fm_crew_usage_prepare_quota codex codex-account
+first=$(fm_crew_usage_json codex gpt task-1 codex-account)
+second=$(fm_crew_usage_json codex gpt task-2 codex-account)
+printf "%s\\n%s\\n" "$first" "$second" | jq -s -e "all(.[]; .quota == \"1.5\")" >/dev/null
+printf 1.5')
   [ "$out" = "1.5" ] || fail "expected cached spendPriority 1.5, got '$out'"
   calls=$(cat "$TMP_ROOT/cache/.calls" 2>/dev/null || echo "?")
   [ "$calls" = "1" ] || fail "expected quota-axi invoked exactly once (cached), got $calls calls"
@@ -107,18 +126,42 @@ fm_crew_usage_quota_spend_priority codex')
 
 test_usage_json_row_shape() {
   local fb out
+  make_account codex-account codex
   fb=$(make_fakebin "$TMP_ROOT/row" '#!/usr/bin/env bash
 cat <<JSON
-{"providers":[{"provider":"grok","quotaSemantics":{"effectiveAvailability":[{"selection":{"status":"known","spendPriority":0.2}}]}}]}
+{"providers":[{"provider":"codex","quotaSemantics":{"effectiveAvailability":[{"selection":{"status":"known","spendPriority":0.2}}]}}]}
 JSON
 ')
   out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
-fm_crew_usage_json grok "grok-4.5"')
+fm_crew_usage_json codex "gpt-5.5" task-1 codex-account')
   printf '%s' "$out" | jq -e '
-    .harness == "grok" and .model == "grok-4.5"
+    .harness == "codex" and .model == "gpt-5.5"
       and .context_pct == "n/a" and .quota == "0.2"
   ' >/dev/null || fail "usage row shape mismatch: $out"
   pass "usage row carries harness, model, context_pct, and quota as documented"
+}
+
+test_quota_requires_worker_account() {
+  local fb out
+  fb=$(make_fakebin "$TMP_ROOT/no-account" '#!/usr/bin/env bash
+echo "quota-axi must not run without a worker account" >&2
+exit 1
+')
+  out=$(with_libs "$fb" 'export FM_CREW_USAGE_ENABLE_QUOTA=1
+fm_crew_usage_json codex gpt task-1 ""')
+  printf '%s' "$out" | jq -e '.quota == "n/a"' >/dev/null || fail "missing worker account must report n/a: $out"
+  pass "quota is unavailable without a worker account identity"
+}
+
+test_quota_timeout_must_be_positive() {
+  local fb out rc
+  fb=$(make_fakebin "$TMP_ROOT/timeout" '')
+  set +e
+  out=$(FM_CREW_USAGE_QUOTA_TIMEOUT=0 with_libs "$fb" '')
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "zero quota timeout should fail with 2, got $rc: $out"
+  pass "quota timeout rejects a non-positive bound"
 }
 
 test_usage_json_row_defaults_quota_to_na() {
@@ -131,10 +174,12 @@ test_usage_json_row_defaults_quota_to_na() {
   pass "usage row defaults quota to n/a when the quota gate is off or the harness is unmapped"
 }
 
-test_context_pct_is_always_na
+test_context_pct_reads_supported_statusline
 test_quota_disabled_by_default
 test_quota_unmapped_harness_returns_empty
 test_quota_enabled_reads_spend_priority
 test_quota_caches_across_calls_in_one_process
 test_usage_json_row_shape
 test_usage_json_row_defaults_quota_to_na
+test_quota_requires_worker_account
+test_quota_timeout_must_be_positive
