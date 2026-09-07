@@ -1218,6 +1218,10 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
+    tests/fm-claude-mcp-diagnostics.py|tests/fm-claude-mcp-process-tree.py)
+      families_for_test_reference "$(basename "$path")" \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/federation/test_*.sh)
       printf '%s\n' federation
       ;;

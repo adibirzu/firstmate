@@ -103,6 +103,7 @@ init_changed_fixture_repo() {
     fm-cd-pretool-check.test.sh \
     fm-daemon.test.sh \
     fm-harness-adapter-instructions-live-e2e.test.sh \
+    fm-claude-mcp-live-e2e.test.sh \
     fm-harness-adapter-references.test.sh \
     fm-backend-herdr-smoke.test.sh \
     fm-secondmate-safety.test.sh \
@@ -141,6 +142,8 @@ init_changed_fixture_repo() {
   : >"$repo/scripts/fleet-root-prereq.sh"
   : >"$repo/tests/lib.sh"
   : >"$repo/tests/fm-backend-herdr-eventwait.test.py"
+  : >"$repo/tests/fm-claude-mcp-diagnostics.py"
+  : >"$repo/tests/fm-claude-mcp-process-tree.py"
   : >"$repo/bin/fm-supervisor-target-lib.sh"
   : >"$repo/bin/fm-control-lib.sh"
   : >"$repo/bin/fm-timeout-lib.sh"
@@ -244,6 +247,18 @@ test_changed_dependency_selection_and_unmapped_failure() {
   assert_contains "$listed" "tests/fm-backend.test.sh" "eventwait test selects backend coverage"
   git -C "$repo" add tests/fm-backend-herdr-eventwait.test.py
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm eventwait-change
+
+  printf '# fm-claude-mcp-diagnostics.py\n# fm-claude-mcp-process-tree.py\n' \
+    >>"$repo/tests/fm-claude-mcp-live-e2e.test.sh"
+  git -C "$repo" add tests/fm-claude-mcp-live-e2e.test.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm claude-mcp-consumer
+
+  printf '\n' >>"$repo/tests/fm-claude-mcp-diagnostics.py"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-claude-mcp-live-e2e.test.sh" \
+    "Claude MCP diagnostics helper selects its consuming executable test"
+  git -C "$repo" add tests/fm-claude-mcp-diagnostics.py
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm claude-mcp-diagnostics-change
 
   printf '\n' >>"$repo/bin/fm-supervisor-target-lib.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
