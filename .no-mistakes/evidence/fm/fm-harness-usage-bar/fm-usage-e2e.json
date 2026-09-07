@@ -1,0 +1,12 @@
+{
+  "schema": "fm-bearings.v1",
+  "in_flight": [
+    {
+      "id": "usage-demo",
+      "usage_harness": "codex",
+      "usage_model": "gpt-5.6-terra",
+      "usage_context_pct": "40",
+      "usage_quota": "-3.25"
+    }
+  ]
+}
