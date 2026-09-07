@@ -384,8 +384,8 @@ EOF
     assert_grep $'check\tinactive-reconcile-diagnostic:invalid-secondmate-home\t' "$home/state/.wake-queue" \
       "$kind marker finding was swallowed by the deferred startup stage"
     report=$(run_stage "$home" "$root" report)
-    assert_contains "$report" "(silent - no problems found)" \
-      "$kind marker fixture unexpectedly depended on the network report"
+    assert_contains "$report" "inactive terminal outcomes remain unreconciled: invalid .fm-secondmate-home marker" \
+      "$kind marker finding was not preserved in the deferred network report"
 
     err="$home/drain.err"
     FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" >/dev/null 2> "$err"

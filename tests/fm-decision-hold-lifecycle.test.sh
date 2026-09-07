@@ -455,14 +455,15 @@ EOF
     || fail "secondmate-owned hold creation failed"
   run_decisions "$mate" complete "$origin" release >/dev/null \
     || fail "secondmate-owned completion failed"
-  run_teardown "$mate" "$origin" >/dev/null 2> "$mate/teardown.err" \
-    || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
-  tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
-
+  # Parent registration is part of the durable local route. Teardown resolves
+  # it before deleting the child record so a final child outcome cannot vanish.
   printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
     "$mate" > "$parent/data/secondmates.md"
   fm_write_secondmate_meta "$parent/state/sample-mate.meta" "$mate" \
     "firstmate:fm-sample-mate" sample
+  run_teardown "$mate" "$origin" >/dev/null 2> "$mate/teardown.err" \
+    || fail "secondmate investigation teardown failed: $(cat "$mate/teardown.err")"
+  tasks_in "$mate" "done" "$origin" --report "data/$origin/report.md" --keep 0 >/dev/null
   json=$(run_bearings "$parent") || fail "parent Bearings could not read secondmate hold"
   printf '%s' "$json" | jq -e --arg hold "$hold" '
     .decisions_open | any(.owner == "sample-mate" and .verb == "captain-hold" and (.id | endswith($hold)))

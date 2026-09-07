@@ -839,7 +839,7 @@ fm_backend_herdr_projection_focus_snapshot() {  # <session>
 # A single tab.focus on the exact response-independent pre-operation tab id
 # restores both the workspace and tab atomically.
 fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation>
-  local session=$1 before=$2 operation=$3 workspace tab after info restored attempt=0
+  local session=$1 before=$2 operation=$3 workspace tab after info restored attempt=0 stable=0 settle_samples=1
   [ -n "$before" ] || {
     echo "warning: herdr presentation $operation had no unambiguous pre-operation focus snapshot" >&2
     return 1
@@ -862,17 +862,23 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # single immediate read can observe the requested tab before the queued
   # removal moves focus again, leaving the captain in a different workspace.
   # Re-focus and verify a short bounded settle window instead.
-  # The UI may apply removal just after the focus command.  Keep restoring for
-  # one bounded second so that queued teardown work cannot leave a different
-  # workspace active after this operation returns.
-  while [ "$attempt" -lt 10 ]; do
+  # Pane-death workspace removal may arrive several seconds after the close
+  # request. Keep re-focusing until the original tab has remained active for a
+  # bounded window; a one-shot matching snapshot can otherwise race that event.
+  [ "$operation" != "pane close" ] || settle_samples=40
+  while [ "$attempt" -lt "$settle_samples" ]; do
     fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
       echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
       return 1
     }
     sleep 0.1
     restored=$(fm_backend_herdr_projection_focus_snapshot "$session") || restored=
-    [ "$restored" = "$before" ] && return 0
+    if [ "$restored" = "$before" ]; then
+      stable=$((stable + 1))
+      [ "$stable" -ge "$settle_samples" ] && return 0
+    else
+      stable=0
+    fi
     attempt=$((attempt + 1))
   done
   echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
