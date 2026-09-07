@@ -482,7 +482,6 @@ list_concurrent_safe_families() {
 watcher-wake-lock
 pure-contract-unit
 pr-forge
-secondmate
 session-bootstrap
 standalone
 EOF
@@ -499,7 +498,7 @@ family_is_concurrent_safe() {
 concurrent_safe_family_jobs_max() {
   case "$1" in
     watcher-wake-lock|pure-contract-unit|pr-forge) printf '4\n' ;;
-    secondmate|session-bootstrap|standalone) printf '4\n' ;;
+    session-bootstrap|standalone) printf '4\n' ;;
     *) printf '1\n' ;;
   esac
 }

@@ -964,6 +964,13 @@ test_jobs_requires_proven_isolated() {
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "--jobs on a family with no recorded proof must refuse, got $rc"
+  set +e
+  "$RUNNER" --jobs 2 tests/fm-remote-secondmate-lifecycle-e2e.test.sh >"$tmp/secondmate.out" 2>"$tmp/secondmate.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "--jobs must refuse the serial secondmate family, got $rc"
+  grep -Fq 'family has no recorded concurrent proof' "$tmp/secondmate.err" \
+    || fail "secondmate concurrency refusal message missing: $(cat "$tmp/secondmate.err")"
   # Sharding across runners never relaxes the serial rule inside one shard.
   shard_lane=$("$RUNNER" --list-lanes | grep -m1 '^portable-serial-[0-9]*of[0-9]*$')
   set +e
@@ -974,7 +981,7 @@ test_jobs_requires_proven_isolated() {
   grep -Fq 'not in the proven-isolated set' "$tmp/err3" \
     || fail "shard --jobs refusal message missing: $(cat "$tmp/err3")"
   rm -rf "$tmp"
-  pass "--jobs refuses non-proven / stateful selections"
+  pass "--jobs refuses non-proven, stateful, and secondmate selections"
 }
 
 # The complement of the refusal above: a family carrying a recorded concurrent

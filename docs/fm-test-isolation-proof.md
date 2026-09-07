@@ -145,27 +145,12 @@ The family's clock is two long scripts that do not contend: `fm-pr-check-securit
 `bin/fm-test-isolation-proof.sh`'s own `--list-exclusions` keeps `fm-pr-check-security` and `fm-teardown` out of the mixed PORTABLE pool, where they would share a machine with unrelated lock and forge stress.
 Admitting them inside their own family is a different question and this proof answers it: the family's six scripts are safe with each other at four workers.
 
-### secondmate: admitted
+### secondmate: concurrency admission withdrawn
 
-- Date: 2026-09-03
-- Command: `bin/fm-test-isolation-proof.sh --pool secondmate --jobs 4`
-- Result: two consecutive runs, 21 candidates, 0 failures.
-
-| Run | Summary |
-|---|---|
-| 1 | `FM_ISOLATION_SUMMARY total=21 failed=0 concurrency=4 duration_ms=536586` |
-| 2 | `FM_ISOLATION_SUMMARY total=21 failed=0 concurrency=4 duration_ms=571247` |
-
-An earlier proof on 2026-09-03 refused this family on `tests/fm-backlog-handoff.test.sh`, failing two runs of three with `Task "pre-move-crash" not found in this backlog`.
-The cause was in the case's crash injection, not in shared secondmate state.
-Its fake `tasks-axi` killed the handoff and then slept a fixed second before delegating to the real binary, expecting to be torn down during that pause.
-Nothing tore it down: the fake outlives the process it kills, so on a host slow enough for the case's next assertions to take longer than a second, the orphan woke up and completed the very move the case requires left undone, which then made the recovery step fail.
-Direct observation of the source and destination backlogs during the injected crash showed exactly that, the item moving one second after the crash while the case was still asserting.
-
-The injection is now decided by observation rather than by a clock.
-`fm_fake_crash_injector` in `tests/lib.sh` drops an `fm-crash-inject <pid>` shim that signals the target and returns only once that process is observably gone, and the pre-move fake never delegates the move at all.
-All four crash injections in that file use it, so none of them is a wall-clock bet any more.
-Under a synthetic five-minute load average above 30, the case failed on the old injection and passed six of six on the new one, and the whole script passed end to end twice at that load.
+The 2026-09-03 family proof is no longer current evidence.
+The subsequent changed-suite run showed that concurrent remote secondmate lifecycle and trace-context fixtures contaminate each other's remote-home, state, parent-route, and watcher state, although each passes serially.
+`secondmate` is therefore removed from `list_concurrent_safe_families` and remains serial until a new bounded proof demonstrates isolation under the production scheduler.
+The tests and their production guarantees remain unchanged.
 
 ### session-bootstrap: admitted
 
@@ -213,22 +198,22 @@ On the stale package the case fails serially as well as concurrently, so it is a
 ## Production runner effect of the 2026-09-03 admissions
 
 Each family measured with `bin/fm-test-run.sh --family <name> --jobs <n>` on the same host, back to back, every run reporting 0 failures.
-Together the pairs quantify the effect when a plain `--changed` or script-list selection contains all three families: the automatic scheduler gives each admitted family its own concurrent phase and leaves unproven work in the serial tail.
+Together the pairs quantify the effect when a plain `--changed` or script-list selection contains either admitted family: the automatic scheduler gives each admitted family its own concurrent phase and leaves unproven work in the serial tail.
 Curated `--family`, `--lane`, and `--all` selections remain serial unless the caller explicitly requests an admissible `--jobs` value, as documented by `bin/fm-test-run.sh --help`.
 
 | family | scripts | `--jobs 1` | `--jobs 4` | speedup | recovered |
 |---|---:|---:|---:|---:|---:|
-| `secondmate` | 21 | 1233.1s | 453.4s | 2.72x | 779.7s |
 | `session-bootstrap` | 11 | 756.4s | 286.4s | 2.64x | 470.0s |
 | `standalone` | 28 | 724.6s | 261.1s | 2.78x | 463.5s |
-| total | 60 | 2714.1s | 1000.9s | 2.71x | 1713.2s (28.6 min) |
+| total | 39 | 1481.0s | 547.5s | 2.71x | 933.5s |
 
 No test was removed, weakened, or skipped to get there.
-The three families retain the same coverage guarantees; what changed is one crash injection that no longer races, one equivalent condition-based assertion that no longer reads the host's speed, and a family map that no longer files a real-Herdr regression and an opt-in live script where they cannot run.
+The two admitted families retain the same coverage guarantees.
+The `secondmate` family is now serial because its concurrent isolation proof was withdrawn above.
 
 ## Scope
 
-Each worker used a separate mode-`0700` temporary root and private `TMPDIR` and `TMP`.
+Each worker in an admitted proof used a separate mode-`0700` temporary root and private `TMPDIR` and `TMP`.
 The harness cleared ambient `FM_HOME` and `FM_*_OVERRIDE` values for every worker and verified that global Git configuration was unchanged.
 A candidate failure fails the aggregate run and requires investigation rather than a retry.
 
