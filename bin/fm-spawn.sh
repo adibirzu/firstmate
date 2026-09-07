@@ -117,14 +117,24 @@
 #   focus-sensitive presentation mutation.
 #   Every single-task invocation holds one task-id-scoped lock across backend
 #   creation through metadata publication, so concurrent same-id spawns serialize
-#   even when they select different backends.
+#   even when they select different backends. A fresh spawn first takes the
+#   per-home task-set lock and refuses rather than waits when forced teardown owns
+#   it; relaunch is exempt because the existing task's control lock covers it.
+#   A fresh Treehouse-backed spawn also takes the project-identity lock in the local
+#   root Firstmate home's state directory before slot allocation and holds it through
+#   task metadata publication. Teardown holds that same lock while proving and
+#   returning a slot, so allocation cannot reuse a slot before its owner record
+#   is published. The local root is whatever bin/fm-wake-lib.sh's
+#   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
+#   that lock itself rather than failing to resolve one;
+#   contention refuses rather than waits.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -133,6 +143,27 @@
 #   a failed or inconclusive probe omits it so older Pi versions remain launchable.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
+#   For omp (Oh My Pi), fm-spawn resolves the `omp` executable from PATH once and
+#   refuses when it is absent. Every omp launch clears the foreign harness
+#   markers (omp publishes none of its own), sets the Firstmate-owned
+#   FM_OMP_HARNESS=omp detection marker, suppresses the first-run provider
+#   wizard with OMP_SKIP_SETUP=1, forces --auto-approve, pins the working
+#   directory with --cwd, and passes the tracked worker posture overlay
+#   .omp/fm-worker-overlay.yml through --config. That overlay pins composer
+#   shape, plan mode off, prewalk off, and the non-interactive usage-reserve
+#   policy for the one session only (--auto-approve alone owns approval); the
+#   captain's own ~/.omp/agent/config.yml (model roles, providers, theme) is
+#   never written.
+#   A model written as <provider>/<id> is validated against `omp models --json`
+#   only when that provider appears in the listing; a provider absent from the
+#   listing (an extension-registered provider such as claude-bridge, which omp
+#   never lists) passes through unvalidated with a stderr notice, and a bare
+#   fuzzy pattern is left to omp's own matcher. A crewmate or scout loads its
+#   per-task busy-state extension with -e from state/ (outside the worktree, so
+#   auto-discovery cannot load it a second time); a secondmate passes no -e at
+#   all and relies on omp auto-discovering the home's tracked .omp/extensions/
+#   (verified, omp 18.1.11: a file named both ways loads twice, and discovery is
+#   cwd-only with no trust dialog).
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -163,11 +194,20 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
-#   Only after this isolation check, a fresh ship or scout's clean task worktree
-#   fetches origin, resolves the current remote default branch, and resets to its tip.
-#   Relaunch reuses the recorded worktree without fetching or resetting its base.
-#   An unreachable origin, unresolved default branch, or non-clean worktree
-#   refuses a fresh spawn rather than risking a PR based on stale history.
+#   That placement is proven only at launch. Every ship or scout pane therefore
+#   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
+#   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
+#   behavior suite from the repository primary checkout while that marker is
+#   set (its header owns the refusal). A secondmate runs in its own home and is
+#   not marked.
+#   Only after this isolation check, every fresh ship or scout requires a clean
+#   task worktree. When an origin configuration is detected, spawn fetches it,
+#   resolves the current remote default branch, and resets to its tip. When none
+#   is detected, spawn skips that remote freshness check and launches from the
+#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
+#   fetching or resetting its base. An unreachable detected origin, unresolved
+#   default branch, or non-clean worktree refuses a fresh spawn rather than
+#   risking a PR based on stale history or discarding local work.
 #   Every kind - crewmate, scout, and secondmate - is admitted by the
 #   machine-capacity guard first (bin/fm-capacity-lib.sh, settings in
 #   config/spawn-capacity): it reads live free memory, swap in use, kernel memory
@@ -209,7 +249,8 @@
 #   LANG LC_ALL LC_CTYPE TMPDIR TMP TEMP GOTMPDIR, plus backend identity/routing:
 #   TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID
 #   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID CMUX_SOCKET_PATH
-#   ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION.
+#   ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION, plus the task
+#   marker FM_TASK_ID that ship and scout panes receive above.
 #   An enabled task trace also retains TRACEPARENT. Explicit Firstmate launch
 #   assignments still apply inside the filtered environment. Raw commands must
 #   be POSIX sh compatible under this opt-in; the absent-file path is unchanged.
@@ -226,6 +267,11 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
+#     __OMPBIN__   quoted concrete omp executable path resolved from PATH
+#     __OMPEXT__   absolute path to state/<task-id>.omp-ext.ts (omp busy-state and
+#                  turn-end extension, written by this script; outside the worktree so
+#                  omp's cwd-only auto-discovery cannot load it a second time)
+#     __OMPWORKERCFG__ absolute path to the tracked .omp/fm-worker-overlay.yml posture overlay
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
@@ -961,6 +1007,8 @@ SPAWN_CONTROL_LOCK=
 SPAWN_CONTROL_LOCK_HELD=0
 SPAWN_CONTROL_PARENT=0
 SPAWN_FRESH_COMMIT_PENDING=0
+SPAWN_TREEHOUSE_PROJECT_LOCK=
+SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1114,6 +1162,10 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+    SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
   fi
   if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_SET_LOCK_HELD=0
@@ -1448,7 +1500,7 @@ if [ "$REUSE_WORKTREE" = 1 ]; then
   ARG3=
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -1496,6 +1548,34 @@ pi_supports_tui_mode() {
   local executable=$1 help
   help=$("$executable" --help 2>&1) || return 1
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
+}
+
+# omp pre-launch model validation. `omp models --json` (omp 18.1.11) prints
+# {"models":[{"provider","id","selector":"<provider>/<id>",...}]} for built-in and
+# auto-discovered providers only; it never lists a provider an extension
+# registers at runtime (claude-bridge is the verified example), so the check is
+# scoped exactly to what the listing can prove: a <provider>/<id> whose provider
+# IS listed must be listed too, a provider the listing does not know passes
+# through with a notice, a bare fuzzy pattern is omp's own matcher's job, and an
+# unreadable listing establishes nothing (harness-adapters model-and-effort.md).
+omp_model_validate() {  # <omp-bin> <model>
+  local bin=$1 model=$2 provider listing providers
+  [ -n "$model" ] && [ "$model" != default ] || return 0
+  case "$model" in */*) ;; *) return 0 ;; esac
+  command -v jq >/dev/null 2>&1 || return 0
+  listing=$(OMP_SKIP_SETUP=1 "$bin" models --json 2>/dev/null) || return 0
+  providers=$(printf '%s' "$listing" | jq -r '.models[]?.provider // empty' 2>/dev/null | sort -u) || return 0
+  [ -n "$providers" ] || return 0
+  provider=${model%%/*}
+  if ! printf '%s\n' "$providers" | grep -qxF -- "$provider"; then
+    echo "notice: omp provider '$provider' is not in 'omp models --json' (extension-registered providers are never listed); launching '$model' unvalidated" >&2
+    return 0
+  fi
+  if printf '%s' "$listing" | jq -e --arg m "$model" '.models[]? | select(.selector == $m)' >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "error: omp model '$model' is not listed by 'omp models --json' although provider '$provider' is; choose a listed <provider>/<id> or omit --model" >&2
+  return 1
 }
 
 # The verified launch command per adapter. The knowledge half of each adapter
@@ -1554,6 +1634,26 @@ launch_template() {
         printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
         printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
+    # omp (Oh My Pi), a Pi fork. Same one-positional-brief, --model, --thinking,
+    # and -e shape as Pi, verified on omp 18.1.11. The differences are all at
+    # the launch boundary and documented in the header above: foreign markers
+    # cleared (omp has none of its own, so an inherited CLAUDECODE would win),
+    # FM_OMP_HARNESS=omp established for bin/fm-harness.sh, OMP_SKIP_SETUP=1
+    # against the fresh-profile provider wizard, --auto-approve so no approval
+    # prompt can park an unattended worker, the tracked posture overlay so a
+    # captain-level plan, prewalk, or usage dialog cannot either, and --cwd
+    # pinned to the worktree because omp's extension discovery is cwd-only. A
+    # secondmate loads its two primary extensions by that discovery alone:
+    # naming them with -e as well loads each twice (verified), doubling every
+    # session_stop continuation.
+    omp)
+      printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS FM_OMP_HARNESS=omp OMP_SKIP_SETUP=1 __OMPBIN__ --config __OMPWORKERCFG__ --auto-approve --cwd __WORKTREE__'
+      if [ "$kind" = secondmate ]; then
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __OMPEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -1807,6 +1907,17 @@ case "$HARNESS" in
       fi
     fi
     ;;
+  omp)
+    OMP_BIN=$(resolve_pi_executable omp) || {
+      echo "error: omp executable not found on PATH; install Oh My Pi or select a different verified harness" >&2
+      exit 1
+    }
+    OMP_WORKER_CFG="$FM_ROOT/.omp/fm-worker-overlay.yml"
+    [ -f "$OMP_WORKER_CFG" ] || {
+      echo "error: omp worker posture overlay missing at $OMP_WORKER_CFG; a worker launched without it can park on the captain's own approval or plan-mode settings" >&2
+      exit 1
+    }
+    ;;
 esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
@@ -1829,6 +1940,9 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       esac
     fi
   fi
+fi
+if [ "$HARNESS" = omp ]; then
+  omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
 fi
 
 secondmate_registry_value() {
@@ -1948,7 +2062,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor|copilot|gemini|muse|agy|rovo)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cline|cursor|copilot|gemini|muse|agy|rovo|omp)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -1998,6 +2112,13 @@ effort_flag_for_harness() {
       # copilot 1.0.75 accepts firstmate's full shared effort vocabulary.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    omp)
+      # omp 18.1.11 --thinking accepts off|minimal|low|medium|high|xhigh|max|auto,
+      # a superset of the shared vocabulary, so every level maps straight across.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     muse)
@@ -2400,6 +2521,17 @@ else
   fi
   BRIEF="$DATA/$ID/brief.md"
 fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
+    echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
+    exit 1
+  }
+  if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+    echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
+    exit 1
+  fi
+  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+fi
 [ -f "$BRIEF" ] || { echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2; exit 1; }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if fm_brief_task_placeholders_present "$BRIEF"; then
@@ -2620,8 +2752,37 @@ EOF
   printf '%s' "$lines" >&2
 }
 
+spawn_worktree_has_origin_config() {  # <worktree>
+  # Resolved remote.origin.* variables cover Git's effective include/includeIf chain; raw headers are also detected in the worktree config and any included file Git names through another variable. Git cannot enumerate a variable-less included file, so an empty origin section that is its only content remains indistinguishable from absence and intentionally proceeds rather than reimplementing Git's config parser.
+  local worktree=$1 config origin key seen=$'\n'
+  git -C "$worktree" config --get-regexp '^remote\.origin\.' >/dev/null 2>&1 && return 0
+  while IFS=$'\t' read -r origin key; do
+    case $origin in file:*) config=${origin#file:} ;; *) continue ;; esac
+    [ -f "$config" ] || continue
+    case $seen in *$'\n'"$config"$'\n'*) continue ;; esac
+    seen+="$config"$'\n'
+    awk '/^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee][[:space:]]+"origin"[[:space:]]*\][[:space:]]*([#;].*)?$/ || /^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee]\.origin[[:space:]]*\][[:space:]]*([#;].*)?$/ { found=1 } END { exit !found }' "$config" && return 0
+  done < <(git -C "$worktree" config --list --show-origin 2>/dev/null || true)
+  return 1
+}
+
 freshen_spawn_worktree_base() {  # <worktree>
   local worktree=$1 default target expected actual status
+  status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
+    echo "error: could not inspect pooled worktree '$worktree' before refreshing its base" >&2
+    return 1
+  }
+  if [ -n "$status" ]; then
+    if describe_stale_submodule_pins "$worktree" "$status"; then
+      echo "error: pooled worktree '$worktree' has a stale submodule checkout, not uncommitted work; refusing to launch and leaving it untouched" >&2
+    else
+      echo "error: pooled worktree '$worktree' is not clean; refusing to discard uncommitted work while refreshing its base" >&2
+    fi
+    return 1
+  fi
+  if ! spawn_worktree_has_origin_config "$worktree"; then
+    return 0
+  fi
   if ! git -C "$worktree" fetch --quiet origin; then
     echo "error: could not fetch origin for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
@@ -2643,18 +2804,6 @@ freshen_spawn_worktree_base() {  # <worktree>
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   }
-  status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
-    echo "error: could not inspect pooled worktree '$worktree' before refreshing its base" >&2
-    return 1
-  }
-  if [ -n "$status" ]; then
-    if describe_stale_submodule_pins "$worktree" "$status"; then
-      echo "error: pooled worktree '$worktree' has a stale submodule checkout, not uncommitted work; refusing to launch and leaving it untouched" >&2
-    else
-      echo "error: pooled worktree '$worktree' is not clean; refusing to discard uncommitted work while refreshing its base" >&2
-    fi
-    return 1
-  fi
   if ! git -C "$worktree" reset --hard "$target" >/dev/null; then
     echo "error: could not reset pooled worktree '$worktree' to '$target'; refusing to launch from a potentially stale base" >&2
     return 1
@@ -3438,7 +3587,7 @@ if [ "$KIND" != secondmate ]; then
       ;;
   esac
   case "$HARNESS" in
-    claude*|opencode*|pi|pi-signed)
+    claude*|opencode*|pi|pi-signed|omp)
       BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
         echo "error: failed to arm the busy-state contract for $ID" >&2
         exit 1
@@ -3603,6 +3752,43 @@ export default function (pi: any) {
   pi.on("agent_settled", (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
     return busyEvent("idle", "agent-settled");
+  });
+  pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+}
+EOF
+      ;;
+    omp)
+      # Written OUTSIDE the worktree like Pi's, but for a different reason: omp
+      # has no trust gate, yet its cwd-only extension auto-discovery would load a
+      # worktree-resident copy a SECOND time next to the explicit -e (verified,
+      # omp 18.1.11). Lives in state/, cleaned by teardown.
+      cat > "$STATE/$ID.omp-ext.ts" <<EOF
+// Firstmate semantic busy-state events + turn-end notification for omp (Oh My
+// Pi); written by fm-spawn under the contract owned by bin/fm-busy-lib.sh.
+// Semantic state: "agent_start" -> busy when a low-level agent run begins;
+// "agent_end" -> idle only when event.willContinue is not true. omp has no
+// agent_settled at all (verified, omp 18.1.2 and 18.1.11: zero occurrences in
+// the binary); agent_end is its loop boundary and willContinue is the reliable
+// "another loop is coming" flag, covering auto-retries, compaction retries,
+// queued follow-ups, and a session_stop-forced continuation. ctx.isIdle() is
+// deliberately NOT consulted: at a natural TUI agent_end it still reads false
+// because session_stop is awaited before the session settles, so gating on it
+// would leave every completed turn recorded busy. "turn_end" fires at every
+// inner turn boundary and stays a wake NOTIFICATION touch for the watcher,
+// never current-state truth.
+import { execFile } from "node:child_process";
+const busyEvent = (state: string, event: string) =>
+  new Promise<void>((resolve) => {
+    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
+      "apply", "$STATE_REAL", "$ID", state,
+      "--gen", "$BUSY_GEN", "--source", "omp-ext", "--event", event,
+    ], () => resolve());
+  });
+export default function (pi: any) {
+  pi.on("agent_start", () => busyEvent("busy", "agent-start"));
+  pi.on("agent_end", (event: any) => {
+    if (event && event.willContinue === true) return;
+    return busyEvent("idle", "agent-end");
   });
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
@@ -4012,6 +4198,49 @@ spawn_write_meta "$STATE/$ID.meta" || {
 # The replacement's record is published, so it now owns this task: its wiring is
 # no longer "pending" and must not be torn down by a later abort path.
 RELAUNCH_REPLACEMENT_PENDING=0
+
+# The deferred-signal exit path's preservation report. A claim about preserved
+# state is only trustworthy if that state is read back after the commit: the
+# commit's own exit status has been observed to agree with a row that did not
+# actually move (fm-yi4j evidence, 2026-09-05). This re-reads the paired record
+# and the backlog row under the same per-task lock as the commit, repairs a row
+# the commit believed it moved, and sets SPAWN_PRESERVED_CLAIM to exactly what
+# was verified or attempted - never intent phrased as outcome.
+spawn_report_preserved_state() {
+  local repair_error=
+  if ! fm_backlog_record_present "$STATE/$ID.meta" "task record" "$STATE"; then
+    SPAWN_PRESERVED_CLAIM="preservation could not be verified: its paired task record is missing; close out its backlog item by hand"
+    return 1
+  fi
+  if ! fm_backlog_row_probe "$DATA" "$ID"; then
+    if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+      SPAWN_PRESERVED_CLAIM="preservation could not be verified: its backlog item was not found; close out its paired task record by hand"
+    else
+      SPAWN_PRESERVED_CLAIM="preservation could not be verified: its backlog item state is unreadable (${FM_BACKLOG_ROW_ERROR:-no error recorded}); close out its paired task record and backlog item by hand"
+    fi
+    return 1
+  fi
+  if [ "$FM_BACKLOG_ROW_STATE" = "in_flight no no" ]; then
+    SPAWN_PRESERVED_CLAIM="verified preserved: its paired task record is present and its backlog item is In flight"
+    return 0
+  fi
+  # The commit reported success, but the row does not read back In flight:
+  # move it now under the same lock and verify the result before naming it.
+  fm_backlog_start "$DATA" "$ID" || repair_error=$FM_BACKLOG_TRANSITION_ERROR
+  if [ -z "$repair_error" ] \
+     && fm_backlog_row_probe "$DATA" "$ID" \
+     && [ "$FM_BACKLOG_ROW_STATE" = "in_flight no no" ]; then
+    SPAWN_PRESERVED_CLAIM="its backlog item did not read back In flight after the commit; it was moved to In flight now and verified, together with its paired task record"
+    return 0
+  fi
+  SPAWN_PRESERVED_CLAIM="preservation could not be verified: its backlog item reads ${FM_BACKLOG_ROW_STATE:-unreadable}${repair_error:+, and moving it to In flight failed ($repair_error)}; close out its paired task record and backlog item by hand"
+  return 1
+}
+
+if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
+  fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK"
+fi
 if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   # The record is published, so this task is now part of the set a teardown
   # enumerates and locks per task. The set lock is only needed across that
@@ -4031,6 +4260,8 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
+sq_ompext=$(shell_quote "$STATE/$ID.omp-ext.ts")
+sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
@@ -4049,12 +4280,15 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+LAUNCH=${LAUNCH//__OMPEXT__/$sq_ompext}
+LAUNCH=${LAUNCH//__OMPWORKERCFG__/$sq_ompcfg}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
   pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
   cline) LAUNCH=${LAUNCH//__CLINESETTINGS__/"$(shell_quote "$STATE/$ID.cline-settings.json")"} ;;
   gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
+  omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 case "$HARNESS" in
@@ -4078,8 +4312,12 @@ if [ "$KIND" = secondmate ]; then
   # Keep this in step with fm_supervision_model (bin/fm-wake-lib.sh): Claude's
   # Stop auto-arm and Cursor's stop-hook park both run the watcher only BETWEEN
   # turns, so a fresh beacon with no live watcher is their healthy mid-turn state.
+  # Pi and pi-signed secondmates previously received persistent here and now
+  # receive extension to match fm_supervision_model's own table, so their pull
+  # guard tolerates the extension hand-off exactly as a Pi primary does.
   case "$HARNESS" in
     claude|cursor) supervision_model=autoarm ;;
+    pi|pi-signed|omp) supervision_model=extension ;;
     *) supervision_model=persistent ;;
   esac
   # Deliver the primary's EFFECTIVE trace-context decision as a normalized on/off
@@ -4102,6 +4340,14 @@ fi
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
+# suite in the repository's primary checkout. Ship and scout workers are the
+# ones assigned an isolated worktree; a secondmate runs its own home instead.
+# The id reached a validated bare-slug charset above, so it carries no shell
+# syntax of its own.
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
+fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.
@@ -4124,6 +4370,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
     HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
     CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
+    FM_TASK_ID \
     $LAUNCH_ENV_NAMES; do
     # Only validated names enter shell syntax. Values expand once, quoted, in
     # the pane shell and never become source text or spawn-process snapshots.
@@ -4266,6 +4513,14 @@ if [ "$BACKLOG_TRANSITION" = 1 ]; then
   trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
 fi
 SPAWN_BACKLOG_COMMIT_STATUS=0
+# Both the commit and its preservation read-back run under this task's meta
+# lock, so an unresponsive tasks-axi there would hold the lock - and every
+# lifecycle operation waiting on it - open ended, with even the deferred
+# signals parked in a trap. Bound each invocation
+# (bin/fm-backlog-transition-lib.sh's fm_tasks_axi): a timed-out call
+# fails through the ordinary error plumbing, and the interrupted exit path
+# reports it as the reason the preservation could not be verified.
+FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30}
 if spawn_commit_backlog_transition; then
   SPAWN_FRESH_COMMIT_PENDING=0
 else
@@ -4290,17 +4545,24 @@ trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
 fi
-fm_lock_release "$SPAWN_META_LOCK"
-SPAWN_META_LOCK_HELD=0
 if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
   case "$SPAWN_DEFERRED_SIGNAL" in
     HUP) SPAWN_DEFERRED_SIGNAL_STATUS=129 ;;
     INT) SPAWN_DEFERRED_SIGNAL_STATUS=130 ;;
     TERM) SPAWN_DEFERRED_SIGNAL_STATUS=143 ;;
   esac
-  echo "error: spawn of $ID was interrupted after launch delivery began; its paired task record and In-flight backlog state were preserved" >&2
+  # Keep deferring further signals so the read-back below cannot itself be
+  # killed halfway through verifying or correcting the preserved state.
+  trap 'SPAWN_DEFERRED_SIGNAL=$SPAWN_DEFERRED_SIGNAL' HUP INT TERM
+  # Deliberately unguarded against errexit: a failed verification still set
+  # the honest attempted-preservation claim the exit below reports.
+  spawn_report_preserved_state || true
+  trap - HUP INT TERM
+  echo "error: spawn of $ID was interrupted after launch delivery began; $SPAWN_PRESERVED_CLAIM" >&2
   exit "$SPAWN_DEFERRED_SIGNAL_STATUS"
 fi
+fm_lock_release "$SPAWN_META_LOCK"
+SPAWN_META_LOCK_HELD=0
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
