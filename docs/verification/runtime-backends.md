@@ -6,7 +6,7 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
-Claude Code 2.1.257 worker MCP isolation passed on 2026-09-06; [the credentialed launch guard and results](claude-worker-mcp.md) own the reproducible evidence.
+Claude Code 2.1.257 passed the MCP-only print-mode probe on 2026-09-06; [the credentialed guard record](claude-worker-mcp.md) marks interactive status-line and per-event automation verification pending after a workspace-trust stall and post-SIGKILL cleanup timeout.
 
 ## tmux
 

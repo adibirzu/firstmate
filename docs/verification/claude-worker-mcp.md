@@ -1,6 +1,6 @@
 # Claude worker MCP verification
 
-Verified 2026-09-06 on macOS with Claude Code 2.1.257.
+The MCP-only print-mode probe passed on 2026-09-06 on macOS with Claude Code 2.1.257.
 [Configuration](../configuration.md#claude-worker-mcp-isolation) owns the operator contract.
 
 ## Credentialed launch guard
@@ -11,15 +11,16 @@ Run:
 FM_CLAUDE_MCP_LIVE=1 bash tests/fm-claude-mcp-live-e2e.test.sh
 ```
 
-The initial MCP-only evidence above used the actual command emitted by `fm-spawn.sh` with the installed Claude binary and existing credentials in bounded print mode.
+The initial MCP-only print-mode probe used the actual command emitted by `fm-spawn.sh` with the installed Claude binary and existing credentials in bounded print mode.
+The interactive PTY guard has not passed a live run yet because its prior attempt stalled at the workspace-trust screen and cleanup timed out after SIGKILL.
+The status-line and per-event automation guarantee awaits a successful interactive guard result.
 The guard now uses an interactive PTY to exercise status-line behavior too, while pane allocation remains simulated.
 It checks Read and Bash, owned completion hooks, primary settings checksum, and descendant process samples captured externally with `ps -axo pid=,ppid=,args=`.
-The expanded interactive verification must pass before certifying the user-automation isolation guarantee.
 The launch includes `--strict-mcp-config --mcp-config '{"mcpServers":{}}' --settings '<per-launch plugin overrides>' --setting-sources project,local --no-chrome`.
 The settings override explicitly maps configured plugin identifiers to false, rather than relying on an empty object to replace merged settings.
 No credential directory is created or copied.
-An additional process snapshot during the initial credentialed probe showed zero worker MCP descendants while 56 unrelated MCP processes remained present.
-This establishes the worker boundary without terminating primary or other worker processes.
+An additional process snapshot during the initial print-mode probe showed zero worker MCP descendants while 56 unrelated MCP processes remained present.
+This establishes the MCP-only worker boundary without terminating primary or other worker processes.
 Organization-managed policy and other Claude versions require their own credentialed verification.
 
 ## Portable checks
