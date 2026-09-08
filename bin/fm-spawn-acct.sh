@@ -20,7 +20,7 @@ FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"; export FM_HOME
 # shellcheck source=bin/fm-account-env.sh disable=SC1091
 . "$SCRIPT_DIR/fm-account-env.sh"
 
-ACCOUNT=""; MODEL=""; EFFORT=""; POS=(); PASS=()
+ACCOUNT=""; MODEL=""; EFFORT=""; POS=(); PASS=(); ACCOUNT_PROFILE_ARGS=(); ACCOUNT_HARNESS=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --account)   ACCOUNT=${2:-}; shift 2 ;;
@@ -36,8 +36,16 @@ done
 [ -n "$ACCOUNT" ] || { echo "usage: fm-spawn-acct.sh <task-id> <project-dir> --account <name> [--model M] [--effort E] [flags...]" >&2; exit 1; }
 [ "${#POS[@]}" -ge 1 ] || { echo "error: task-id (and usually project-dir) required" >&2; exit 1; }
 
+_fm_acct_lib
 LAUNCH=$(fm_account_compose_launch "$ACCOUNT" "$MODEL" "$EFFORT") || exit $?
+ACCOUNT_HARNESS=$(fm_account_resolve "$ACCOUNT" | cut -f1) || exit $?
+[ -n "$ACCOUNT_HARNESS" ] || { echo "error: account '$ACCOUNT' has no harness" >&2; exit 1; }
+[ -z "$MODEL" ] || ACCOUNT_PROFILE_ARGS+=(--model "$MODEL")
+[ -z "$EFFORT" ] || ACCOUNT_PROFILE_ARGS+=(--effort "$EFFORT")
 
 FM_SPAWN_BIN="${FM_SPAWN_BIN:-$SCRIPT_DIR/fm-spawn.sh}"
 # fm-spawn signature: <task-id> <project-dir> [<harness>|<launch-command>] [flags...]
-exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" ${PASS[@]+"${PASS[@]}"}
+# Stock macOS bash is 3.2, where "${arr[@]}" on an EMPTY array is an unbound
+# variable under set -u, so both optional arrays need the +-guard. Without it a
+# spawn that passes neither --model nor --effort dies before reaching fm-spawn.
+exec "$FM_SPAWN_BIN" "${POS[@]}" "$LAUNCH" --account "$ACCOUNT" --harness "$ACCOUNT_HARNESS" ${ACCOUNT_PROFILE_ARGS[@]+"${ACCOUNT_PROFILE_ARGS[@]}"} ${PASS[@]+"${PASS[@]}"}

@@ -65,6 +65,21 @@
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
+#     usage:{harness,model,context_pct,quota} is the fleet-wide usage-bar
+#     fallback row (bin/fm-crew-usage-lib.sh): harness/model come straight from
+#     meta and are always populated. context_pct and quota are BOTH live reads
+#     and BOTH opt-in, so this snapshot's default cost, determinism, and
+#     side effects are exactly main's for every caller that does not ask:
+#       - context_pct is the validated Codex/Claude statusline percentage (for
+#         example "40") only when the caller sets FM_CREW_USAGE_ENABLE_CONTEXT=1,
+#         because reading it captures the task's pane and bin/fm-watch.sh runs
+#         snapshot consumers on its own poll loop; "n/a" otherwise, and also
+#         whenever the harness or pane does not carry it.
+#       - quota is quota-axi's spendPriority for the harness's mapped provider
+#         only when the caller sets FM_CREW_USAGE_ENABLE_QUOTA=1, since that is
+#         a live per-account network call; "n/a" otherwise.
+#     bin/fm-bearings-snapshot.sh is the human-facing reader that opts into the
+#     context read; supervision-path callers deliberately do not.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
@@ -207,6 +222,21 @@ esac
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"  # fm_run_timed: the shared hard bound
+# shellcheck source=bin/fm-accounts-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-accounts-lib.sh"  # fm_account_quota_provider: harness -> quota-axi provider
+# shellcheck source=bin/fm-crew-usage-lib.sh
+# shellcheck disable=SC1091
+# FAIL CLOSED. This library refuses to load on an invalid usage-timeout knob.
+# This script runs under set -u but NOT set -e, so without this guard a refusal
+# would leave fm_crew_usage_json undefined, usage_json empty, and the `jq
+# --argjson usage ""` for EVERY task would fail - dropping whole task rows while
+# still exiting 0. A blinded fleet snapshot at exit 0 is the worst possible
+# failure shape for a supervision input, so refuse loudly instead.
+. "$SCRIPT_DIR/fm-crew-usage-lib.sh" || {  # fm_crew_usage_json: harness/model/context%/quota row
+  echo "fm-fleet-snapshot: refusing to report a fleet snapshot without the usage library" >&2
+  exit 2
+}
 
 usage() {
   cat <<'EOF'
@@ -688,7 +718,8 @@ prefetch_task_current_states() {
 }
 
 task_json_lines() {
-  local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
+  local meta original_meta id kind harness model account mode yolo project worktree home projects spawn_gen backend target status_log report_path
+  local usage_json
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
@@ -702,6 +733,8 @@ task_json_lines() {
     kind=$(meta_value "$meta" kind)
     [ -n "$kind" ] || kind=ship
     harness=$(meta_value "$meta" harness)
+    model=$(meta_value "$meta" model)
+    account=$(meta_value "$meta" account)
     mode=$(meta_value "$meta" mode)
     yolo=$(meta_value "$meta" yolo)
     project=$(meta_value "$meta" project)
@@ -738,6 +771,11 @@ task_json_lines() {
       return 1
     }
     event_json=$(status_event_json "$status_log" "$STATE/$id.status")
+    fm_crew_usage_prepare_quota "$harness" "$account"
+    usage_json=$(fm_crew_usage_json "$harness" "$model" "$id" "$account")
+    if ! snapshot_task_generation_is_current "$meta" "$id"; then
+      usage_json=$(jq -n '{harness:"",model:"",context_pct:"n/a",quota:"n/a"}')
+    fi
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     read -r current_state current_source < <(
       printf '%s' "$current_json" | jq -r '[.state // "", .source // ""] | @tsv'
@@ -820,6 +858,7 @@ task_json_lines() {
       --arg observed_at "$SNAPSHOT_NOW" \
       --arg last_event_raw "$last_event_raw" \
       --argjson current_state "$current_json" \
+      --argjson usage "$usage_json" \
       --argjson meta_path "$meta_json" \
       --argjson status_log "$status_json" \
       --argjson report "$report_json" \
@@ -848,6 +887,7 @@ task_json_lines() {
           report:$report
         },
         secondmate_projects:($projects | if . == "" then [] else split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(. != "")) end),
+        usage:$usage,
         current_state:($current_state + {observed_at:$observed_at,freshness:"fresh"}),
         endpoint:{target:($target | if . == "" then null else . end),exists:$endpoint_exists,agent_alive:$agent_alive,
           status:(if $endpoint_exists == false then "absent"
@@ -988,7 +1028,8 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
          | {id,kind,state:.current_state.state,
             repo:(($work.repo // .project // null) | if . == null then null else trunc(120) end),
             source:.current_state.source,
-            doing:((.current_state.detail // "") | trunc(120))} ]) as $active_all
+            doing:((.current_state.detail // "") | trunc(120)),
+            usage:(.usage // {harness:"",model:"",context_pct:"n/a",quota:"n/a"})} ]) as $active_all
     | ($captain_holds_all
        + ([ $tasks[] as $t | ($t.hints.open_decisions // [])[]
             | {id:$t.id,key,verb,summary:(.summary | trunc(160)),reason:null,source:"status"} ])) as $decisions_all

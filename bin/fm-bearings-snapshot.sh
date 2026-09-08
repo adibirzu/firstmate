@@ -191,6 +191,13 @@ command -v jq >/dev/null 2>&1 || { echo "fm-bearings-snapshot: jq not found" >&2
 "$SCRIPT_DIR/fm-afk-return.sh" guard || exit $?
 
 NOW=${FM_BEARINGS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+# Bearings is the human-facing reader that RENDERS the usage bar, and it is an
+# on-demand read, never a poll. It is therefore the one caller that opts into
+# the live per-task context read (bin/fm-crew-usage-lib.sh). Every
+# supervision-path snapshot consumer - notably the two fm-watch.sh backgrounds
+# on each poll - deliberately leaves it off so the canonical snapshot never
+# competes with the watcher for a task's pane capture.
+export FM_CREW_USAGE_ENABLE_CONTEXT=${FM_CREW_USAGE_ENABLE_CONTEXT:-1}
 if [ "$ALL_LANDED" = 1 ] || [ "$ALL_SECONDMATES" = 1 ]; then
   if [ "$ALL_LANDED" = 1 ]; then
     SNAP=$(FM_SNAPSHOT_NOW="$NOW" FM_SNAPSHOT_SECONDMATES=0 FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 "$FLEET" --json) || exit $?
@@ -454,7 +461,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         state: .current_state.state,
         repo:(.backlog.repo // .project // null),
         doing: ((.current_state.detail // "") as $d
-                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
+                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
+        usage_harness: (.usage.harness // ""),
+        usage_model: (.usage.model // ""),
+        usage_context_pct: (.usage.context_pct // "n/a"),
+        usage_quota: (.usage.quota // "n/a")
       } ]
      + [ $secondmate_views[] as $m
          | $m.active_children[]?
@@ -462,7 +473,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             kind:(.kind // "secondmate"),
             state:(.state // "working"),
             repo:(.repo // null),
-            doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
+            doing:((.doing // .state) | trunc(90)),
+            usage_harness: (.usage.harness // ""),
+            usage_model: (.usage.model // ""),
+            usage_context_pct: (.usage.context_pct // "n/a"),
+            usage_quota: (.usage.quota // "n/a")} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)

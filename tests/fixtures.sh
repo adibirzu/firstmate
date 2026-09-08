@@ -275,8 +275,8 @@ EOF
 }
 
 # fm_test_make_spawn_fakebin <dir> [extra-exit0-tool...]
-# Creates <dir>/fakebin with the spawn tmux stub, a no-op treehouse, and any
-# extra exit-0 tools. Echoes the fakebin path.
+# Creates <dir>/fakebin with the spawn tmux stub and any extra exit-0 tools
+# named by the caller. Echoes the fakebin path.
 fm_test_make_spawn_fakebin() {
   local dir=$1 fakebin
   shift

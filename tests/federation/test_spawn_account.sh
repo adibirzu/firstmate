@@ -93,25 +93,33 @@ chmod +x "$STUB"
 FM_STUB_OUT="$TMP/out.txt" FM_SPAWN_BIN="$STUB" \
   bash bin/fm-spawn-acct.sh T-1 /proj --account claude-alt --model opus >/dev/null 2>&1
 n=$(wc -l < "$TMP/out.txt")
-a1=$(sed -n '1p' "$TMP/out.txt"); a2=$(sed -n '2p' "$TMP/out.txt"); a3=$(sed -n '3p' "$TMP/out.txt")
-{ [ "$n" -eq 3 ] && [ "$a1" = "T-1" ] && [ "$a2" = "/proj" ] && [ "$a3" = "CLAUDE_CONFIG_DIR=$CD claude --model opus" ]; } \
-  && ok "wrapper passes (id, dir, composed-launch) to fm-spawn" || bad "wrapper passthrough (n=$n a1='$a1' a2='$a2' a3='$a3')"
+a1=$(sed -n '1p' "$TMP/out.txt"); a2=$(sed -n '2p' "$TMP/out.txt"); a3=$(sed -n '3p' "$TMP/out.txt"); a4=$(sed -n '4p' "$TMP/out.txt"); a5=$(sed -n '5p' "$TMP/out.txt"); a6=$(sed -n '6p' "$TMP/out.txt"); a7=$(sed -n '7p' "$TMP/out.txt"); a8=$(sed -n '8p' "$TMP/out.txt"); a9=$(sed -n '9p' "$TMP/out.txt")
+{ [ "$n" -eq 9 ] && [ "$a1" = "T-1" ] && [ "$a2" = "/proj" ] && [ "$a3" = "CLAUDE_CONFIG_DIR=$CD claude --model opus" ] && [ "$a4" = "--account" ] && [ "$a5" = "claude-alt" ] && [ "$a6" = "--harness" ] && [ "$a7" = "claude" ] && [ "$a8" = "--model" ] && [ "$a9" = "opus" ]; } \
+  && ok "wrapper passes verified account launch and harness to fm-spawn" || bad "wrapper passthrough (n=$n a1='$a1' a2='$a2' a3='$a3' a4='$a4' a5='$a5' a6='$a6' a7='$a7' a8='$a8' a9='$a9')"
 
-# 10. wrapper refuses api-key account (fail-closed; stub NOT invoked)
+# 10. wrapper preserves a whitespace-bearing config path and its resolved harness.
+FM_STUB_OUT="$TMP/out-space.txt" FM_SPAWN_BIN="$STUB" \
+  bash bin/fm-spawn-acct.sh T-2 /proj --account cline-space >/dev/null 2>&1
+n=$(wc -l < "$TMP/out-space.txt")
+a3=$(sed -n '3p' "$TMP/out-space.txt"); a6=$(sed -n '6p' "$TMP/out-space.txt"); a7=$(sed -n '7p' "$TMP/out-space.txt")
+{ [ "$n" -eq 7 ] && [ "$a3" = "cline --config '$CD_SPACE'" ] && [ "$a6" = "--harness" ] && [ "$a7" = "cline" ]; } \
+  && ok "wrapper preserves quoted account launch harness" || bad "wrapper whitespace harness (n=$n a3='$a3' a6='$a6' a7='$a7')"
+
+# 11. wrapper refuses api-key account (fail-closed; stub NOT invoked)
 : > "$TMP/out2.txt"
 FM_STUB_OUT="$TMP/out2.txt" FM_SPAWN_BIN="$STUB" \
   bash bin/fm-spawn-acct.sh T-2 /proj --account grok-x >/dev/null 2>&1; rc=$?
 { [ "$rc" -ne 0 ] && [ ! -s "$TMP/out2.txt" ]; } && ok "wrapper fail-closed on api-key account" || bad "wrapper api-key (rc=$rc, stub-called=$( [ -s "$TMP/out2.txt" ] && echo yes || echo no ))"
 
-# 11. apply_env exports in the CALLER's shell (regression: must NOT be a subshell)
+# 12. apply_env exports in the CALLER's shell (regression: must NOT be a subshell)
 ( unset CLAUDE_CONFIG_DIR; fm_account_apply_env claude-alt && [ "$CLAUDE_CONFIG_DIR" = "$CD" ] ) \
   && ok "apply_env exports config-dir-env in caller shell" || bad "apply_env export (subshell regression)"
 
-# 12. config-dir-flag sets FM_ACCT_ARGV_SUFFIX (not stdout)
+# 13. config-dir-flag sets FM_ACCT_ARGV_SUFFIX (not stdout)
 ( fm_account_apply_env cline-x && [ "$FM_ACCT_ARGV_SUFFIX" = "--config $CD" ] ) \
   && ok "apply_env sets argv suffix for flag method" || bad "apply_env suffix"
 
-# 13. config-dir-flag direct launches keep the config dir as one argv
+# 14. config-dir-flag direct launches keep the config dir as one argv
 ( fm_account_apply_env cline-space \
   && [ "${#FM_ACCT_ARGV_SUFFIX_ARGS[@]}" -eq 2 ] \
   && [ "${FM_ACCT_ARGV_SUFFIX_ARGS[0]}" = "--config" ] \
