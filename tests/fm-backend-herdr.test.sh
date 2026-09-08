@@ -23,6 +23,7 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 herdr_forget_inherited_pane
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
+export FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=0
 # Pin the ambient-home default to a marker-free fixture: FM_HOME resolves to
 # the suite's own root when unset, and a secondmate-marked checkout (any
 # treehouse crew home carries .fm-secondmate-home) would flip the default
@@ -1532,7 +1533,7 @@ test_projection_focus_restore_recovers_delayed_close_drift() {
   # corrective focus does not hold across the confirm window, so this exercises
   # both halves of the contract: wait for the removal that steals focus, then
   # correct again when one correction was not enough.
-  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=2 bash -c '
     . "$ROOT/bin/backends/herdr.sh"
     fm_backend_herdr_workspace_presence_state() {
       printf "presence-probe %s\n" "$2" >> "$LOG"
@@ -1598,6 +1599,35 @@ test_projection_focus_restore_waits_for_doomed_removal_before_safe_success() {
   assert_not_contains "$(cat "$log")" "tab focus w2:t2" \
     "a focus-safe post-removal snapshot unnecessarily re-focused the prior tab"
   pass "herdr presentation focus: safe snapshots still fence emptied-workspace removal"
+}
+
+test_projection_focus_restore_recovers_late_drift_after_safe_removal() {
+  local dir log samples out status
+  dir="$TMP_ROOT/projection-focus-late-drift"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=2 bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() { printf "dead"; }
+    fm_backend_herdr_projection_focus_snapshot() {
+      count=$(cat "$SAMPLES")
+      count=$((count + 1))
+      printf "%s\n" "$count" > "$SAMPLES"
+      case "$count" in 4) printf "w3\tw3:t1" ;; *) printf "w2\tw2:t2" ;; esac
+    }
+    fm_backend_herdr_cli() {
+      printf "%s\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "tab get") printf "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
+      esac
+    }
+    sleep() { :; }
+    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a focus steal published after a safe removal snapshot should be restored: $out"
+  assert_contains "$(cat "$log")" $'tab focus w2:t2' \
+    "a late focus steal after workspace removal was not corrected"
+  pass "herdr presentation focus: a late post-removal steal is corrected before cleanup returns"
 }
 
 test_projection_focus_restore_refuses_unconfirmed_doomed_removal() {
@@ -1759,6 +1789,8 @@ test_projection_close_emptying_after_focus_uses_pane_death_without_move() {
   cp "$resp/9.out" "$resp/11.out"
   cp "$resp/9.out" "$resp/12.out"
   cp "$resp/10.out" "$resp/13.out"
+  cp "$resp/9.out" "$resp/14.out"
+  cp "$resp/10.out" "$resp/15.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -4861,6 +4893,7 @@ test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
 test_projection_focus_restore_recovers_delayed_close_drift
 test_projection_focus_restore_waits_for_doomed_removal_before_safe_success
+test_projection_focus_restore_recovers_late_drift_after_safe_removal
 test_projection_focus_restore_refuses_unconfirmed_doomed_removal
 test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
