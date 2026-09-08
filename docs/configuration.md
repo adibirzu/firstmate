@@ -72,7 +72,8 @@ The effort list is a handful of levels and stays on Pi's plain selector dialog.
 Both picks change the supervision branch alone and never the captain's own conversation model or effort.
 It persists the model pick in gitignored `config/supervision-branch-model` and the effort pick in gitignored `config/supervision-branch-effort`, both under the effective Firstmate home, resolved from `FM_HOME`, then `FM_ROOT_OVERRIDE`, then the tracked code root derived from the extension path, or under `FM_CONFIG_OVERRIDE` when that test and specialized-setup override is present.
 Firstmate keeps no model catalog of its own; the list is the intersection of what Pi reports when the picker opens and what a fresh isolated branch runtime can run.
-A provider that exists only because an extension registered it inside the captain's session is not offered, while stored OAuth and API-key credentials retain their native credential type because Firstmate never copies, converts, installs, or overwrites credentials for the branch runtime.
+A provider that exists only because an extension registered it inside the captain's session, such as pi-devin-auth's `devin`, is offered and can be pinned or followed like any other; [pi-supervision-branch.md](pi-supervision-branch.md#cost-model-and-the-byte-stable-prefix) owns how that registration reaches the isolated branch runtime.
+Stored OAuth and API-key credentials retain their native credential type because Firstmate never copies, converts, installs, or overwrites credentials for the branch runtime.
 The file holds one `<provider>/<model-id>` line followed by one newline, split at the first `/` so a provider-qualified model id such as `openrouter/anthropic/claude-sonnet-4-5` survives intact.
 An absent, unreadable, or unparseable file means no pin, and the branch then follows main's own current model, applied explicitly and live whenever main changes models mid-session.
 A valid pin wins over main and remains unaffected by main's model changes.
@@ -432,6 +433,8 @@ Raw launch commands run under noninteractive POSIX `sh` with this option and mus
 The filter runs at the worker command boundary, after the terminal daemon and pane shell have started; it does not scrub either of those processes.
 This is not a sandbox: it cannot revoke same-user access to credential files, prevent tools or later shells from loading credentials again, or isolate processes from the same user's other processes.
 Regression coverage executes emitted launch commands with synthetic nonsecret values in [`tests/fm-spawn-dispatch-profile.test.sh`](../tests/fm-spawn-dispatch-profile.test.sh).
+
+Every claude launch's inline `--settings` JSON also carries `"attribution":{"commit":"","pr":"","sessionUrl":false}`, so a spawned worker never writes a Co-Authored-By trailer, Claude-Session link, or generated-with line into a commit or PR body regardless of which settings scopes end up loaded.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
@@ -1027,7 +1030,7 @@ FM_WATCH_REARM_RETRY_MAX_MS=4000   # Pi/OpenCode adapter cap for exponential con
 FM_WATCH_REARM_RETRY_LIMIT=5   # Pi/OpenCode adapter launch-failure retries before surfacing restoration failure
 FM_WATCH_CYCLE_LOG_MAX_BYTES=262144   # size cap for the arm-owned watcher lifecycle ledger
 FM_WATCH_CYCLE_LOG_KEEP_LINES=1000   # newest complete lifecycle rows considered when the ledger is capped
-FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE; seconds a live watcher lock may have a stale beacon before re-arm errors
+FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE if set, else the poll-derived grace (docs/turnend-guard.md "Guard grace and the poll cadence"); seconds a live watcher lock may have a stale beacon before re-arm errors
 FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
@@ -1035,7 +1038,7 @@ FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external
 FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age of a busy pane's latest state/<id>.turn-ended marker, or its state/<id>.meta spawn record before any turn completes, before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait or verified captain-held transfer takes the FM_PAUSE_RESURFACE_SECS recheck below instead
 FM_PAUSE_RESURFACE_SECS=3600       # seconds between bounded rechecks of a declared external wait or verified captain-held transfer, and between repeated new-hash stale alarms for an ordinary crew task with an open backlog captain call; this includes a live idle pane after its first inconclusive stale wake and a live busy pane past FM_BUSY_TURN_MAX_SECS, while the away-mode daemon uses the same setting and ages its window against the crew's own latest status line rather than pane busy state
-FM_SECONDMATE_WAKE_STALL_SECS=60   # minimum age of the oldest valid foreign wake-queue row before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification; zero or invalid values use 60
+FM_SECONDMATE_WAKE_STALL_SECS=180  # minimum interval with no change of the oldest actionable foreign wake-queue row (it advances as the mate drains, and a queue reprovisioned under the same task id starts a fresh interval at whatever sequence it restarts) before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification for that no-progress episode; a mate that is provably inside an active turn (an exact busy verdict, bounded by the same FM_BUSY_TURN_MAX_SECS above) never escalates whatever this interval says, declared external-wait pause rows are excluded, and zero or invalid values use 180
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WORKTREE_WRITE_PRUNE='.git node_modules .venv venv __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox target dist build .next .cache vendor'   # directory names the wedge detector's task-worktree write probe skips; the default keeps .git out so a supervisor's own read-only git command can never look like crew progress; set it to the empty string to prune nothing, which widens the probe to the whole depth-bounded tree rather than disabling it
 FM_WORKTREE_WRITE_MAXDEPTH=6       # depth that same probe walks below the recorded worktree; it runs only at the moment a wedge escalation would otherwise fire, never on every poll; no probe knob applies to a secondmate, whose recorded worktree is a provisioned home the probe skips entirely

@@ -541,7 +541,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   # same task id on one host cannot collide (bin/fm-spawn.sh).
   assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f'"export GOTMPDIR=/tmp/fm-$(id -u)-orcaspawnz1/gotmp"$'\x1f''--enter'$'\x1f''--json' \
     "spawn did not export GOTMPDIR through the Orca terminal"
-  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" \
+  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "spawn did not send the selected harness launch command through Orca"
   rm -rf "/tmp/fm-$(id -u)-$id"
   pass "fm-spawn.sh --backend orca: reuses implicit terminal, records metadata, launches harness"
