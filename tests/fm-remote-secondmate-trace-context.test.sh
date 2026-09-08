@@ -163,20 +163,20 @@ meta_traceparent() { sed -n 's/^traceparent=//p' "$1"; }
 # Provision and register the remote route from the captain-facing primary.
 FM_SECONDMATE_CHARTER='Own iOS delivery on the build Mac.' \
   FM_SECONDMATE_SCOPE='iOS implementation and Xcode validation' \
-  remote_env "$ROOT/bin/fm-remote-home-seed.sh" ios remote-mac "$REMOTE_ROOT" "$REMOTE_HOME" --no-projects >/dev/null \
+  remote_env "$ROOT/bin/fm-remote-home-seed.sh" trace-ios remote-mac "$REMOTE_ROOT" "$REMOTE_HOME" --no-projects >/dev/null \
   || fail "remote seed did not provision the traced route"
 
 # --- disabled: the remote route must stay byte-identically untraced ----------
 freeze_parent_session
 : > "$HERDR_LOG"
-remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >"$TMP_ROOT/default-spawn.out" 2>&1 \
+remote_env "$ROOT/bin/fm-spawn.sh" trace-ios --secondmate >"$TMP_ROOT/default-spawn.out" 2>&1 \
   || fail "default-off remote secondmate spawn failed: $(cat "$TMP_ROOT/default-spawn.out")"
-assert_present "$PARENT/state/ios.meta" "default-off remote spawn published no parent metadata"
-! grep -q '^traceparent=' "$PARENT/state/ios.meta" \
+assert_present "$PARENT/state/trace-ios.meta" "default-off remote spawn published no parent metadata"
+! grep -q '^traceparent=' "$PARENT/state/trace-ios.meta" \
   || fail "default-off remote spawn must not record a traceparent= line"
 ! grep -q 'export TRACEPARENT=' "$HERDR_LOG" \
   || fail "default-off remote spawn must not export a carrier into the remote pane"
-! grep -q '^traceparent=' "$REMOTE_HOME/state/parent-route/ios.meta" \
+! grep -q '^traceparent=' "$REMOTE_HOME/state/parent-route/trace-ios.meta" \
   || fail "default-off remote spawn must not record a carrier on the remote host"
 [ "$(remote_launch_snapshot)" = off ] \
   || fail "default-off remote spawn must deliver FM_TRACE_CONTEXT=off (got '$(remote_launch_snapshot)')"
@@ -189,11 +189,11 @@ pass "disabled: a remote-routed second mate records and receives no carrier and 
 freeze_parent_session
 reset_remote_herdr_fixture "$HERDR_STATE"   # the previous endpoint is gone; this is an ordinary relaunch
 : > "$HERDR_LOG"
-remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >"$TMP_ROOT/enabled-spawn.out" 2>&1 \
+remote_env "$ROOT/bin/fm-spawn.sh" trace-ios --secondmate >"$TMP_ROOT/enabled-spawn.out" 2>&1 \
   || fail "enabled remote secondmate spawn failed: $(cat "$TMP_ROOT/enabled-spawn.out")"
 
-PARENT_TP=$(meta_traceparent "$PARENT/state/ios.meta")
-REMOTE_TP=$(meta_traceparent "$REMOTE_HOME/state/parent-route/ios.meta")
+PARENT_TP=$(meta_traceparent "$PARENT/state/trace-ios.meta")
+REMOTE_TP=$(meta_traceparent "$REMOTE_HOME/state/parent-route/trace-ios.meta")
 INJECTED_TP=$(remote_injected_traceparent)
 fm_trace_context_valid "$PARENT_TP" \
   || fail "an enabled remote spawn must record a valid carrier in the parent metadata (got '$PARENT_TP')"
@@ -221,9 +221,9 @@ pass "enabled: a remote-routed second mate receives one carrier in its pane, ide
 # --- relaunch stability on the remote path ----------------------------------
 reset_remote_herdr_fixture "$HERDR_STATE"
 : > "$HERDR_LOG"
-remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >"$TMP_ROOT/enabled-relaunch.out" 2>&1 \
+remote_env "$ROOT/bin/fm-spawn.sh" trace-ios --secondmate >"$TMP_ROOT/enabled-relaunch.out" 2>&1 \
   || fail "enabled remote secondmate relaunch failed: $(cat "$TMP_ROOT/enabled-relaunch.out")"
-RELAUNCH_TP=$(meta_traceparent "$PARENT/state/ios.meta")
+RELAUNCH_TP=$(meta_traceparent "$PARENT/state/trace-ios.meta")
 RELAUNCH_INJECTED=$(remote_injected_traceparent)
 [ "$RELAUNCH_TP" = "$PARENT_TP" ] \
   || fail "a remote relaunch must keep the task's recorded carrier (first='$PARENT_TP' relaunch='$RELAUNCH_TP')"
@@ -326,14 +326,14 @@ for trace_mode in off on; do
       settings_args+=(--claude-user-settings)
       sources=user,project,local
     fi
-    remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate --harness claude "${settings_args[@]}" \
+    remote_env "$ROOT/bin/fm-spawn.sh" trace-ios --secondmate --harness claude "${settings_args[@]}" \
       >"$TMP_ROOT/claude-spawn.out" 2>&1 || fail "remote Claude $settings_mode spawn failed with tracing $trace_mode: $(cat "$TMP_ROOT/claude-spawn.out")"
     assert_grep "--setting-sources $sources " "$HERDR_LOG" "remote Claude must receive the invocation's settings sources"
     assert_grep '--strict-mcp-config --mcp-config' "$HERDR_LOG" "remote opt-in must retain strict MCP isolation"
     assert_grep '--no-chrome' "$HERDR_LOG" "remote opt-in must retain browser isolation"
     [ "$(remote_launch_snapshot)" = "$trace_mode" ] || fail "settings opt-in changed remote tracing"
     if [ "$trace_mode" = on ]; then
-      [ "$(remote_injected_traceparent)" = "$(meta_traceparent "$PARENT/state/ios.meta")" ] \
+      [ "$(remote_injected_traceparent)" = "$(meta_traceparent "$PARENT/state/trace-ios.meta")" ] \
         || fail "settings opt-in shifted the trace carrier"
     else
       ! grep -q 'export TRACEPARENT=' "$HERDR_LOG" || fail "settings opt-in enabled tracing"
@@ -347,13 +347,13 @@ for selection in explicit configured; do
   harness_args=()
   [ "$selection" != explicit ] || harness_args+=(--harness codex)
   : > "$HERDR_LOG"
-  if out=$(remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate "${harness_args[@]}" --claude-user-settings 2>&1); then
+  if out=$(remote_env "$ROOT/bin/fm-spawn.sh" trace-ios --secondmate "${harness_args[@]}" --claude-user-settings 2>&1); then
     fail "remote non-Claude settings opt-in was accepted ($selection)"
   fi
   assert_contains "$out" 'requires the managed Claude launch template' "remote parent must reject non-Claude opt-in"
   [ ! -s "$HERDR_LOG" ] || fail "rejected opt-in reached the remote backend"
 done
-if out=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh launch ios codex - - herdr '' --claude-user-settings 2>&1); then
+if out=$(remote_env "$ROOT/bin/fm-on.sh" trace-ios fm-remote-secondmate-control.sh launch trace-ios codex - - herdr '' --claude-user-settings 2>&1); then
   fail "remote control accepted non-Claude settings opt-in"
 fi
 assert_contains "$out" 'requires the managed Claude launch template' "remote control must validate the opt-in independently"
