@@ -917,7 +917,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws doomed_ws close_status state plan plan_shell_pid plan_move_record workspace_presence
+  local before active_tab info target_pane target_tab target_ws doomed_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -987,7 +987,12 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     close_status=1
   fi
   if [ "$close_status" -eq 0 ] && [ -n "$plan_move_record" ]; then
-    workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+    while [ "$removal_attempt" -lt 100 ]; do
+      workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+      [ "$workspace_presence" = dead ] && break
+      sleep 0.1
+      removal_attempt=$((removal_attempt + 1))
+    done
     if [ "$workspace_presence" != dead ]; then
       echo "warning: herdr presentation cleanup did not confirm removal of the repositioned workspace" >&2
       close_status=1
@@ -2981,7 +2986,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # back to the plain close, matching the pre-hardening contract.
 fm_backend_herdr_kill_serialized() {  # <session> <pane>
   local session=$1 pane=$2
-  local before active_tab info target_pane target_tab target_ws doomed_ws plan shell_pid plan_move_record close_failed workspace_presence
+  local before active_tab info target_pane target_tab target_ws doomed_ws plan shell_pid plan_move_record close_failed workspace_presence removal_attempt=0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || before=
   if [ -n "$before" ]; then
     active_tab=${before#*$'\t'}
@@ -3019,7 +3024,12 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
           ;;
       esac
       if [ "$close_failed" = 0 ] && [ -n "$plan_move_record" ]; then
-        workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+        while [ "$removal_attempt" -lt 100 ]; do
+          workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+          [ "$workspace_presence" = dead ] && break
+          sleep 0.1
+          removal_attempt=$((removal_attempt + 1))
+        done
         if [ "$workspace_presence" != dead ]; then
           echo "warning: herdr task kill did not confirm removal of the repositioned workspace" >&2
           close_failed=1
