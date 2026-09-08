@@ -1549,6 +1549,59 @@ SH
   pass "jobs scheduler runs proven scripts; failure propagates; non-proven refused"
 }
 
+# The portable serial shard count has two owners that must agree: the runner
+# (PORTABLE_SERIAL_SHARDS) and the CI matrix that names the lanes. ci.yml builds
+# lane names as "portable-serial-<shard>of<job-total>", so a matrix that grows or
+# shrinks alone produces an "ofN" the runner refuses - correct, but only after a
+# whole CI cycle has been spent. Assert the agreement here, and rebuild the exact
+# lane strings the workflow would emit rather than trusting the count alone.
+#
+# The 20-minute cap is asserted too, because the failure this guards against
+# (a shard cancelled at its cap) has an easy wrong fix: raise the timeout instead
+# of adding shards. Capacity belongs to the shard count.
+test_portable_serial_ci_matrix_matches_the_runner_shard_count() {
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/ci.yml as YAML"
+  local parsed matrix_len job_timeout runner_count shard lane rc tmp
+  parsed=$(ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+job = doc.fetch("jobs").fetch("tests-portable-serial")
+shards = job.fetch("strategy").fetch("matrix").fetch("shard")
+raise "matrix shard list must be a non-empty array" unless shards.is_a?(Array) && !shards.empty?
+raise "matrix shards must be 1..N in order, got #{shards.inspect}" unless shards == (1..shards.length).to_a
+puts shards.length
+puts job.fetch("timeout-minutes")
+' "$ROOT/.github/workflows/ci.yml") \
+    || fail "could not parse tests-portable-serial matrix from ci.yml"
+  matrix_len=$(printf '%s\n' "$parsed" | sed -n 1p)
+  job_timeout=$(printf '%s\n' "$parsed" | sed -n 2p)
+
+  runner_count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  [ "$matrix_len" = "$runner_count" ] \
+    || fail "ci.yml runs $matrix_len portable serial shards but the runner is configured for $runner_count"
+
+  # Every lane name the matrix would produce has to be one the runner accepts,
+  # so the contract is checked on the real strings and not on a count that
+  # happens to match.
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ci-matrix.XXXXXX")
+  shard=1
+  while [ "$shard" -le "$matrix_len" ]; do
+    lane="portable-serial-${shard}of${matrix_len}"
+    set +e
+    "$RUNNER" --list --lane "$lane" >"$tmp/out" 2>"$tmp/err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "the runner refused CI lane $lane: $(cat "$tmp/err")"
+    [ -s "$tmp/out" ] || fail "CI lane $lane selected no tests"
+    shard=$((shard + 1))
+  done
+  rm -rf "$tmp"
+
+  [ "$job_timeout" = 20 ] \
+    || fail "portable serial job cap must stay 20 minutes (add shards, not timeout), got $job_timeout"
+  pass "ci.yml portable serial matrix matches the runner shard count under an unchanged 20 min cap"
+}
+
 test_herdr_ci_family_run_has_a_step_timeout() {
   # The required Herdr lane's hang tripwire is the family-run *step* bound, not
   # the 75-minute job cap. Parse the workflow as YAML so nested `with.name`
@@ -1658,5 +1711,6 @@ test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_max_wall_ms_is_a_result_not_advice
 test_jobs_parallel_scheduler_and_failure_propagation
+test_portable_serial_ci_matrix_matches_the_runner_shard_count
 test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json

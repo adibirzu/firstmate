@@ -174,8 +174,18 @@ PER_SCRIPT_TIMEOUT_SECS=0
 CHANGED_DEFAULT_TIMEOUT_SECS=900
 
 # How many separate-runner shards the portable serial remainder splits into.
-# One owner: CI lane names carry this count and are refused when they disagree.
-PORTABLE_SERIAL_SHARDS=5
+# One owner: CI lane names carry this count and are refused when they disagree,
+# and .github/workflows/ci.yml's matrix length is asserted against it.
+#
+# Raised 5 -> 8 after the 2026-09-08 upstream parity sync grew this lane to 183
+# scripts. At 5 the heaviest shard replayed 18.1-19.7 min against a 20-minute
+# job cap and was cancelled at that boundary on runs 34187972666 and
+# 34199327612. 8 is the smallest count whose heaviest shard clears the cap on
+# every measured run (13.7-14.3 min, 68-72%). It is not simply 5 scaled up:
+# because the hint table below has drifted, the packing is not monotone in the
+# shard count and 7 replays worse than 6. docs/fm-test-portable-shards.md owns
+# those measurements and the pending hint refresh that lowers this further.
+PORTABLE_SERIAL_SHARDS=8
 
 # Balance hint for a portable-serial script with no measured duration, close to
 # the measured per-script mean so a newly added test neither starves nor

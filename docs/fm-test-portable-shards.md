@@ -62,6 +62,9 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 
 `bin/fm-test-run.sh` owns `n` and refuses any lane whose `of<n>` disagrees with it.
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
+That refusal is correct but late: it costs a full CI cycle across every shard before it says so.
+`tests/fm-test-run.test.sh` therefore parses the workflow and asserts the matrix length equals the runner's configured count, that the matrix is `1..n` in order, and that every lane name the matrix would build is one the runner accepts.
+It asserts the 20-minute job cap is unchanged in the same test, because a shard cancelled at its cap has an easy wrong fix: capacity belongs to the shard count, and the timeout stays a hang tripwire.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
 The 175 current hints cover all but eight scripts in the lane.
@@ -79,16 +82,54 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of5` | 36 | 1008555 ms (~16.81 min) |
-| `portable-serial-2of5` | 37 | 1008554 ms (~16.81 min) |
-| `portable-serial-3of5` | 37 | 1008554 ms (~16.81 min) |
-| `portable-serial-4of5` | 36 | 1008538 ms (~16.81 min) |
-| `portable-serial-5of5` | 37 | 1008555 ms (~16.81 min) |
-| imbalance | | 17 ms |
+| `portable-serial-1of8` | 20 | 630349 ms (~10.51 min) |
+| `portable-serial-2of8` | 22 | 630339 ms (~10.51 min) |
+| `portable-serial-3of8` | 23 | 630342 ms (~10.51 min) |
+| `portable-serial-4of8` | 22 | 630345 ms (~10.51 min) |
+| `portable-serial-5of8` | 24 | 630342 ms (~10.51 min) |
+| `portable-serial-6of8` | 24 | 630342 ms (~10.51 min) |
+| `portable-serial-7of8` | 24 | 630347 ms (~10.51 min) |
+| `portable-serial-8of8` | 24 | 630350 ms (~10.51 min) |
+| imbalance | | 11 ms |
 
-The current table is generated from the runner's retained maxima plus its default for the eight unhinted scripts, which arrived with the 2026-09-08 upstream sync and have no CI artifact yet.
-Replaying this partition against each of the three upstream source runs puts its worst shard at 14.91, 15.36, and 15.41 min, so 77% of the 20-minute job cap at the worst.
-That margin is thinner than the 63% this lane carried before the upstream merge, and the lane grows by scripts rather than by minutes per script, so the next few additions are the ones to watch for a shard-count increase.
+The current table is generated from the runner's retained maxima plus its default for the eight scripts that arrived with the 2026-09-08 upstream sync and are still unhinted.
+Those eight have since appeared in CI timing artifacts; folding them and the drifted values below into the hint table is the separate refresh described at the end of this section.
+
+### The 2026-09-08 capacity regression
+
+`n` was raised from 5 to 8 on 2026-09-08 because the 5-shard partition was being cancelled at its cap.
+The lane's own timing artifacts are the evidence; replaying a partition against them measures it in real runner seconds rather than in assignment weight, which is what the estimated-duration table above reports.
+Four fork runs are available; three recorded a complete set of five serial shards and so can be replayed against, and shard 4 was cancelled at the 20-minute boundary on two of them:
+
+| run | shard 1 | shard 2 | shard 3 | shard 4 | shard 5 |
+|---|---:|---:|---:|---:|---:|
+| [34187972666](https://github.com/adibirzu/firstmate/actions/runs/34187972666) (PR 38) | 18m19s | 14m25s | 16m06s | **20m05s cancelled** | 15m16s |
+| [34197679695](https://github.com/adibirzu/firstmate/actions/runs/34197679695) (PR 39) | 17m51s | 15m21s | 13m48s | **19m38s** | 17m17s |
+| [34199327612](https://github.com/adibirzu/firstmate/actions/runs/34199327612) (main) | 17m52s | 12m33s | 16m15s | **20m17s cancelled** | 19m02s |
+
+Job overhead measures about 25 seconds, so a shard's real budget is roughly 19.5 minutes of script time.
+
+Replaying the partition the current hints produce against the three complete runs, for each candidate shard count:
+
+| `n` | worst shard by assignment weight | worst shard replayed | share of the 20-minute cap |
+|---:|---:|---:|---:|
+| 5 | 16.81 min | 18.1-19.7 min | 90-99% |
+| 6 | 14.01 min | 15.1-16.2 min | 75-81% |
+| 7 | 12.01 min | 15.1-17.2 min | 75-86% |
+| 8 | 10.51 min | 13.7-14.3 min | 68-72% |
+| 9 | 9.34 min | 11.7-12.1 min | 59-61% |
+
+Replayed makespan is not monotone in `n`: 7 is worse than 6.
+That is a symptom, not a packing bug.
+Longest-processing-time packing is only as good as the weights it is given, and several hints below have drifted badly since they were measured, so adding a bin can move an underweighted script into a bin that then overruns.
+8 is the smallest count whose heaviest shard clears the cap on every measured run, and it holds without touching a single hint.
+
+Refreshing the hints is tracked separately and is the change that makes the packing trustworthy again rather than merely over-provisioned.
+Measured against the same three runs, the drifted values include `tests/fm-watch-triage.test.sh` at 486694 ms against a 358232 ms hint, `tests/fm-decision-hold-lifecycle.test.sh` at 212012 against 57130, `tests/fm-procevent.test.sh` at 167293 against 71783, `tests/fm-bearings-board.test.sh` at 60423 against 4684, and `tests/fm-calm-pi-extension.test.sh` at 50743 against 810.
+With those refreshed, the same 8 shards replay at 57-61% of the cap.
+
+Note what the `serial_unhinted=` bound could and could not see here: every script in the overloaded shard was hinted, so the unmeasured share stayed at eight of 183 and the guard passed throughout.
+The bound catches a lane that has grown past its measurements; it does not catch measurements that have gone stale in place.
 
 The single longest script, `tests/fm-watch-triage.test.sh` at 358232 ms, is the floor for any shard count.
 
@@ -133,7 +174,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-5 | job `timeout-minutes: 20` | Each balanced shard carries about 16.81 minutes of conservative assignment weight, leaving roughly 1.19x hang-tripwire margin for job setup and runner-speed spread. |
+| portable serial 1-8 | job `timeout-minutes: 20` | Each balanced shard carries about 10.51 minutes of conservative assignment weight and replays at 13.7-14.3 minutes, leaving roughly 1.4x hang-tripwire margin for job setup and runner-speed spread. The cap is deliberately unchanged across the 5 -> 8 shard increase: capacity comes from the shard count, and `tests/fm-test-run.test.sh` asserts it stays 20. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
