@@ -1,0 +1,28 @@
+Portable serial capacity acceptance transcript
+Target: 6300044cc4ff21e1f86811689097538fcf8c742c
+
+$ ruby -ryaml (semantic CI workflow check)
+workflow.matrix.shard=1,2,3,4,5,6,7,8
+workflow.timeout-minutes=20
+
+$ bin/fm-test-run.sh --list-lanes | grep portable-serial
+portable-serial-1of8
+portable-serial-2of8
+portable-serial-3of8
+portable-serial-4of8
+portable-serial-5of8
+portable-serial-6of8
+portable-serial-7of8
+portable-serial-8of8
+
+accepted portable-serial-1of8: 20 scripts (tests/fm-watch-triage.test.sh ... tests/fm-grok-continuity-live-e2e.test.sh)
+accepted portable-serial-2of8: 22 scripts (tests/fm-pr-check-security.test.sh ... tests/fm-codex-continuity-live-e2e.test.sh)
+accepted portable-serial-3of8: 23 scripts (tests/fm-remote-secondmate-lifecycle-e2e.test.sh ... tests/fm-cursor-primary-live-e2e.test.sh)
+accepted portable-serial-4of8: 22 scripts (tests/fm-public-followup.test.sh ... tests/fm-quota-array-dispatch-live-e2e.test.sh)
+accepted portable-serial-5of8: 24 scripts (tests/fm-session-start.test.sh ... tests/fm-grok-signals-live-e2e.test.sh)
+accepted portable-serial-6of8: 24 scripts (tests/fm-secondmate-harness.test.sh ... tests/fm-pi-primary-live-e2e.test.sh)
+accepted portable-serial-7of8: 24 scripts (tests/fm-control-relaunch.test.sh ... tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh)
+accepted portable-serial-8of8: 24 scripts (tests/fm-backlog-atomicity.test.sh ... tests/fm-harness-liveness-drift-live-e2e.test.sh)
+
+$ bin/fm-test-run.sh --list --lane portable-serial-1of5
+rejected as intended: fm-test-run: lane 'portable-serial-1of5' asks for 5 portable serial shards but this runner is configured for 8 (see --list-lanes)
