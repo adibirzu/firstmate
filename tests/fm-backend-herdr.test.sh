@@ -1808,6 +1808,40 @@ test_projection_close_emptying_after_focus_uses_pane_death_without_move() {
   pass "herdr presentation cleanup: emptying close behind focus ends the exact shell without a move or focus change"
 }
 
+test_projection_close_pane_death_restores_focus_after_removal_event() {
+  local dir log samples out status
+  dir="$TMP_ROOT/close-death-removal-focus-restore"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  # The pane-death close initially leaves focus intact, but its workspace
+  # removal event then steals focus to w3.
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=1 bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_projection_focus_snapshot() {
+      snapshot=$(cat "$SAMPLES")
+      snapshot=$((snapshot + 1))
+      printf "%s\\n" "$snapshot" > "$SAMPLES"
+      case "$snapshot" in 1|2) printf "w1\\tw1:t1" ;; 3) printf "w3\\tw3:t1" ;; *) printf "w1\\tw1:t1" ;; esac
+    }
+    fm_backend_herdr_emptying_close_plan() { printf "empty death 123"; }
+    fm_backend_herdr_death_close_pane() { return 0; }
+    fm_backend_herdr_workspace_presence_state() { printf dead; }
+    fm_backend_herdr_cli() {
+      printf "%s\\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "pane get") printf "{\\\"result\\\":{\\\"pane\\\":{\\\"pane_id\\\":\\\"w2:p2\\\",\\\"tab_id\\\":\\\"w2:t2\\\",\\\"workspace_id\\\":\\\"w2\\\"}}}" ;;
+        "tab get") printf "{\\\"result\\\":{\\\"tab\\\":{\\\"tab_id\\\":\\\"w1:t1\\\",\\\"workspace_id\\\":\\\"w1\\\"}}}" ;;
+      esac
+    }
+    sleep() { :; }
+    fm_backend_herdr_projection_close_pane_focus_preserving fmtest w2:p2
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a delayed pane-death focus steal should be restored before cleanup returns: $out"
+  assert_contains "$(cat "$log")" 'fmtest tab focus w1:t1' \
+    "a pane-death removal that stole focus did not restore the exact prior tab"
+  pass "herdr presentation cleanup: pane-death removal waits for its event and restores late stolen focus"
+}
+
 test_projection_close_emptying_before_focus_repositions_then_uses_pane_death() {
   local dir log resp fb out status bgpid mover_line
   dir="$TMP_ROOT/close-death-before"; mkdir -p "$dir/responses"
@@ -4899,6 +4933,7 @@ test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary
 test_projection_close_emptying_after_focus_uses_pane_death_without_move
+test_projection_close_pane_death_restores_focus_after_removal_event
 test_projection_close_emptying_before_focus_repositions_then_uses_pane_death
 test_projection_close_emptying_before_last_focus_needs_no_move
 test_projection_close_emptying_last_workspace_needs_no_move

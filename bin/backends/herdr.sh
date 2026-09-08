@@ -1023,10 +1023,10 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   if [ "$close_status" -ne 0 ]; then
     fm_backend_herdr_emptying_move_rollback "$plan_move_record" || true
   fi
-  # Pane death preserves focus when the plan proved the doomed workspace was
-  # positioned safely. Only the explicit-close fallback needs the delayed
-  # focus-transition fence.
-  [ "$plan" != plain ] || focus_settle_ws=$doomed_ws
+  # The removal event is asynchronous even when the pane-death plan is
+  # expected to preserve focus. Do not return from cleanup until an emptying
+  # close's workspace is observably gone and the exact prior focus still holds.
+  focus_settle_ws=$doomed_ws
   fm_backend_herdr_projection_focus_restore "$session" "$before" "pane close" "$focus_settle_ws" || return 2
   [ "$close_status" -eq 0 ]
 }
