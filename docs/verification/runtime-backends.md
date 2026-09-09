@@ -186,7 +186,16 @@ The local help documented configuration overrides and the two values used by Fir
 codex --help
 ```
 
-The bounded observed entries were `-c key=value` configuration overrides, approval-policy value `never`, and sandbox value `danger-full-access`.
+Bounded literal excerpts from the captured output:
+
+```text
+-c, --config <key=value>
+Override a configuration value that would otherwise be loaded from ~/.codex/config.toml.
+-s, --sandbox <SANDBOX_MODE>
+[possible values: read-only, workspace-write, danger-full-access]
+-a, --ask-for-approval <APPROVAL_POLICY>
+- never: Never ask for user approval Execution failures are immediately returned to the model
+```
 
 The installed CLI loaded the exact configuration keys and reported their effective policy without starting a model turn:
 
@@ -194,7 +203,19 @@ The installed CLI loaded the exact configuration keys and reported their effecti
 codex -c approval_policy=never -c sandbox_mode=danger-full-access doctor --json
 ```
 
-The bounded observed JSON result reported approval policy `Never` and filesystem access `unrestricted`.
+The command exited 1 because `overallStatus` was `fail` from unrelated environment checks.
+The configuration and sandbox checks themselves succeeded, with these bounded noncontiguous literal excerpts from the captured JSON:
+
+```text
+"config.load": {
+"status": "ok",
+"summary": "config loaded",
+"sandbox.helpers": {
+"status": "ok",
+"summary": "sandbox configuration is readable",
+"approval policy": "Never",
+"filesystem sandbox": "unrestricted"
+```
 
 This proves the configuration syntax and effective values against codex-cli 0.153.4 only.
 The requested live non-interactive approval smoke against Codex 0.148.0 was unavailable because that exact version was not installed, so no live acceptance is claimed for 0.148.0 or from help text, configuration loading, or rendered-command regressions.
