@@ -4288,11 +4288,6 @@ spawn_write_meta_locked() {
     SPAWN_META_PUBLISH_FAILED=1
     return 1
   fi
-  # Publication transfers worktree ownership to fm-teardown.sh.  Disarm the
-  # spawn-only lease cleanup in this same critical section: an interrupt after
-  # the atomic publish but before the caller regains control must never return
-  # the leased worktree underneath the now-live task record.
-  TREEHOUSE_LEASE_ABORT_CLEANUP=0
 }
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PUBLISH_FAILED=0
@@ -4644,6 +4639,10 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi
 fi
+# A successful final commit transfers the lease to teardown. This must happen
+# before deferred-signal handling, because that path can exit after a committed
+# delivery while reporting the interrupt to its caller.
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
@@ -4667,11 +4666,6 @@ fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 
-# The task has now committed both its metadata and matching In-flight backlog
-# transition, so teardown owns its lease.
-# Refreshing the side-band home summary before this point exposes a provisional
-# record to an interrupt and lets abort cleanup erase it after a reader saw it.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 

@@ -3215,10 +3215,14 @@ fi
 # focus-restore path, which can switch the captain to a neighboring workspace.
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || true
+    if ! fm_backend_herdr_projection_close_pane_focus_preserving \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE"; then
+      echo "error: herdr pane $T for $ID could not be closed while preserving the captain's active workspace and tab; retaining every durable task record" >&2
+      exit 1
+    fi
   else
     echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    exit 1
   fi
   if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its projected close; retaining every durable task record" >&2
