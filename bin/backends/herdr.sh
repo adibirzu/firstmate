@@ -856,13 +856,23 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
   # stable across that delayed transition rather than accepting the first four
   # seconds of apparently restored focus.
   after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
-  # Do not make a focus-safe operation pay for the pane-death settling window.
-  # The bounded window below is needed only after we have actually observed a
-  # focus change and asked Herdr to restore it.
-  [ "$after" != "$before" ] || return 0
   case "$operation" in
-    # Allow several whole stable windows after an observed drift.
-    "pane close"|"task kill") settle_samples=100; max_attempts=400 ;;
+    # A pane-death workspace removal can report the original focus before
+    # publishing its later focus transition, so this route must settle even
+    # when the first sample still matches the pre-close snapshot.
+    "pane-death close")
+      settle_samples=${FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES:-100}
+      case "$settle_samples" in
+        ''|*[!0-9]*|0) settle_samples=100 ;;
+      esac
+      max_attempts=$((settle_samples * 4))
+      ;;
+    "pane close"|"task kill")
+      [ "$after" != "$before" ] || return 0
+      settle_samples=100
+      max_attempts=400
+      ;;
+    *) [ "$after" != "$before" ] || return 0 ;;
   esac
   while [ "$attempt" -lt "$max_attempts" ]; do
     if [ "$after" = "$before" ]; then
@@ -913,7 +923,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record workspace_presence
+  local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record workspace_presence focus_operation="pane close"
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -963,6 +973,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     esac
   fi
   if [ "$plan" = death ]; then
+    focus_operation="pane-death close"
     if fm_backend_herdr_death_close_pane "$session" "$pane_id" "$plan_shell_pid"; then
       close_status=0
     elif fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane_id"; then
@@ -985,7 +996,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   if [ "$close_status" -ne 0 ]; then
     fm_backend_herdr_emptying_move_rollback "$plan_move_record" || true
   fi
-  fm_backend_herdr_projection_focus_restore "$session" "$before" "pane close" || return 2
+  fm_backend_herdr_projection_focus_restore "$session" "$before" "$focus_operation" || return 2
   [ "$close_status" -eq 0 ]
 }
 

@@ -32,6 +32,10 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 mkdir -p "$TMP_ROOT/ambient-home"
 export FM_HOME="$TMP_ROOT/ambient-home"
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
+# Fake Herdr fixtures model one stable post-close sample. The dedicated
+# delayed-drift regression below stubs the clock and covers the production
+# default's full bounded settle loop.
+export FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES=1
 
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
@@ -1514,10 +1518,9 @@ test_projection_close_restores_exact_prior_focus() {
   # Focus restoration requires a bounded stable window after an asynchronous
   # close, so keep the fake server's exact focus snapshot stable throughout it.
   local response
-  for response in $(seq 13 3 307); do
-    cp "$resp/10.out" "$resp/$response.out"
-    cp "$resp/11.out" "$resp/$((response + 1)).out"
-    cp "$resp/12.out" "$resp/$((response + 2)).out"
+  for response in $(seq 13 2 211); do
+    cp "$resp/11.out" "$resp/$response.out"
+    cp "$resp/12.out" "$resp/$((response + 1)).out"
   done
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -1537,26 +1540,26 @@ test_projection_focus_restore_recovers_delayed_close_drift() {
   local dir log samples out status
   dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
   log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
-  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+  out=$(FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES=100 ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
     . "$ROOT/bin/backends/herdr.sh"
     fm_backend_herdr_projection_focus_snapshot() {
       count=$(cat "$SAMPLES")
       count=$((count + 1))
       printf "%s\\n" "$count" > "$SAMPLES"
       case "$count" in
-        1|3) printf "w3\tw3:t1" ;;
+        2) printf "w3\tw3:t1" ;;
         *) printf "w2\tw2:t2" ;;
       esac
     }
     fm_backend_herdr_cli() {
       printf "%s\\n" "$*" >> "$LOG"
       case "$2 $3" in
-        "tab get") printf "{\\"result\\":{\\"tab\\":{\\"tab_id\\":\\"w2:t2\\",\\"workspace_id\\":\\"w2\\"}}}\\n" ;;
+        "tab get") printf "%s\n" "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}" ;;
       esac
     }
     sleep() { :; }
     before=$(printf "w2\tw2:t2")
-    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close"
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane-death close"
   ' 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
