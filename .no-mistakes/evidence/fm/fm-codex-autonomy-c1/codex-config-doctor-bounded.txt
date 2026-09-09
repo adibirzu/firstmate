@@ -1,0 +1,16 @@
+^D{
+  "overallStatus": "fail",
+  "codexVersion": "0.153.4",
+  "config_load": {
+    "status": "ok",
+    "summary": "config loaded"
+  },
+  "sandbox_helpers": {
+    "status": "ok",
+    "summary": "sandbox configuration is readable",
+    "details": {
+      "approval policy": "Never",
+      "filesystem sandbox": "unrestricted"
+    }
+  }
+}

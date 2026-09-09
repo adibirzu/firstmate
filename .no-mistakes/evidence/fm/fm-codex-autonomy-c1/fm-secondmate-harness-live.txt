@@ -1,0 +1,116 @@
+^Dok - A1 fm-harness.sh secondmate resolves the fallback chain; crew mode unchanged
+ok - fm-harness detects only Cursor Agent CLI's exact invocation marker
+ok - C1 fm-harness.sh secondmate-model/secondmate-effort resolve the optional tokens; bare harness stays empty (backward-compat)
+ok - pi-signed identity: authoritative launch selection distinguishes shared wrapper ancestry
+ok - harness identity: dash-leading ps command names are basename operands, not options
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/prop-lib/guard-repo"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/prop-lib/guard-repo"
+ok - B1 propagate_inheritable_config: copy, idempotence, convergence, absence-mirror, exclusion, no-op, skip diagnostics
+ok - B2 spawn: secondmate runs the secondmate harness; its home inherits declared config
+ok - B3 spawn: an absent secondmate-harness falls back to the crew harness (backward-compat)
+ok - B4 spawn: no config at all -> own harness and no propagation side effects
+ok - B5 spawn: an explicit per-spawn harness arg overrides config/secondmate-harness
+ok - B6 spawn: an unverified resolved secondmate harness is refused (guard intact)
+skip: cursor executable not resolvable in this environment, so the launch could not be built
+ok - B5b spawn: FM_BACKEND wins over inherited config/backend
+ok - B5c spawn: explicit --backend wins over FM_BACKEND and inherited config/backend
+ok - C2 spawn: a bare harness-only secondmate-harness file launches with no model/effort flag (backward-compat)
+ok - C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta
+ok - C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta
+ok - C5 spawn: an explicit --model overrides config/secondmate-harness's model token; the file's effort token still applies
+ok - C6 spawn: an explicit --effort overrides config/secondmate-harness's effort token; the file's model token still applies
+ok - C7 spawn: an explicit --harness starts with clean model/effort defaults
+ok - C8 spawn: an explicit --harness still honors explicit model/effort flags
+ok - C9 spawn: secondmate launch pins supervision to its own harness
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/spawn-fallback-and-crew/crew-project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/spawn-fallback-and-crew/crew-project"
+ok - C9 spawn: the harness fallback chain still resolves with no tokens; crew/scout launches are unaffected by this feature
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop/main"
+ok - B7 bootstrap sweep pushes, re-converges, and mirrors absence; never inherits secondmate-harness
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-current/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-current/main"
+ok - B8 bootstrap sweep propagates config even when the home's tracked files are already current
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/sm"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/sm"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-stale-dispatch/main"
+ok - B9 bootstrap sweep defers new inherited config until the home ignores it
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-noop/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-noop/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-noop/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-noop/main"
+ok - B10 bootstrap sweep materializes and inherits the startup-memory default while fast-forwarding
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/backend-inherit/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/backend-inherit/main"
+ok - B12b backend inheritance: present values and primary absence converge exactly
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/presentation-inherit/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/presentation-inherit/main"
+ok - B12c presentation inheritance: the primary default converges on, and only an explicit opt-out propagates off
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-fail/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-fail/main"
+ok - B11 bootstrap sweep surfaces config propagation failures
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-partial/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/boot-prop-partial/main"
+ok - B11 bootstrap rereads completed config writes after partial propagation
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-basic/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-basic/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-basic/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-basic/main"
+ok - B12 config-push propagates via shared live discovery, reports items, rereads on change only, and does not fast-forward
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-warnings/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-warnings/main"
+ok - B13 config-push reports dirty, non-allowing, and invalid homes without failing warnings-only runs
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-error/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-error/main"
+ok - B14 config-push exits nonzero on real propagation errors
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-partial/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-push-partial/main"
+ok - B14 config-push rereads completed config writes after partial propagation
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-per-home/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-per-home/main"
+ok - B15 config reread is per-home, exact-byte, ordered, and pointer-only
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-absent/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-absent/main"
+ok - B16 config reread isolation, ABSENT, generation safety, send failure, and retry
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-publication-retry/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-publication-retry/main"
+ok - B20 config reread publication failures retain exact generations for retry
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-write-retry/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-write-retry/main"
+ok - B21 config reread instruction-write failures retain exact retry generations
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-exact-temp-fallback/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-exact-temp-fallback/main"
+ok - B21 config reread preserves exact bytes when temporary adoption also fails
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-serialized-pushes/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-serialized-pushes/main"
+ok - B21 config reread serializes concurrent propagation and delivery
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-full-queue/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-full-queue/main"
+ok - B22 full config reread retry queues drain before new publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-mixed-delivery/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-mixed-delivery/main"
+ok - B23 mixed config reread delivery failures still bound sent history
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-order/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-order/main"
+ok - B26 config reread delivery stops after the oldest failed generation
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-after-push/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-after-push/main"
+ok - B17 config reread skips unchanged homes and reads destination post-write bytes
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-bootstrap/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-bootstrap/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-spawn-flex/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-spawn-flex/main"
+ok - B18 bootstrap config reread path works; spawn flexibility remains defaults-only
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-respawn-order/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-respawn-order/main"
+ok - B19 bootstrap respawns before inherited-config reread
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-spawn-quarantine/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/config-reread-spawn-quarantine/main"
+ok - B25 spawn quarantines stale rereads without blocking relaunch
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/bootstrap-detect-only/main"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-secondmate-harness.QGrdWS/bootstrap-detect-only/main"
+ok - B24 bootstrap detect-only mode remains filesystem read-only
+# all fm-secondmate-harness tests passed

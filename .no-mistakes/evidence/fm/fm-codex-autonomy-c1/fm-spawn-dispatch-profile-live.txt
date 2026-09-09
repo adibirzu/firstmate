@@ -1,0 +1,170 @@
+^D│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-absent/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-absent/project"
+ok - allowlist=absent preserves the operational floor and filters only when opted in
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-missing-config/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-missing-config/project"
+ok - allowlist=missing-config preserves the operational floor and filters only when opted in
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-enabled/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-enabled/project"
+ok - allowlist=enabled preserves the operational floor and filters only when opted in
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-empty/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-empty/project"
+ok - allowlist=empty preserves the operational floor and filters only when opted in
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-invalid/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-invalid/project"
+ok - invalid allowlist names refuse before launch or task publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-config-present/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-config-present/project"
+ok - inaccessible config with present allowlist refuses before launch or task publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-config-absent/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-config-absent/project"
+ok - inaccessible config with absent allowlist refuses before launch or task publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-ancestor-present/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-ancestor-present/project"
+ok - inaccessible ancestor with present allowlist refuses before launch or task publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-ancestor-absent/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inaccessible-ancestor-absent/project"
+ok - inaccessible ancestor with absent allowlist refuses before launch or task publication
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-secondmate/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-secondmate/project"
+ok - secondmate launch inherits the allowlist for subsequent worker launches
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inherit-local/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inherit-local/project"
+ok - local inheritance preserves the allowlist on source errors and mirrors proven absence
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inherit-remote/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/env-inherit-remote/project"
+ok - remote inheritance preserves the allowlist on source errors and mirrors proven absence
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-heading-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-heading-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-direct-PR/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-direct-PR/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-local-only/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-local-only/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-legacy-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-no-mistakes/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-direct-PR/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-direct-PR/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-local-only/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-local-only/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/role-launch-scaffold-scout/project"
+ok - fm-spawn: actual ship/scout launch commands deliver the worker role contract
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-off/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-off/project"
+ok - no --model/--effort records defaults and types the claude launch instructions
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-cursor-markers/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-cursor-markers/project"
+ok - non-cursor launches clear inherited Cursor identity markers
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-relative-paths/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-relative-paths/project"
+ok - relative home overrides ignore CDPATH and become absolute before spawn launch construction
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-home-defaults/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-home-defaults/project"
+ok - FM_HOME defaults resolve relative paths and preserve absolute spellings
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-absolute-paths/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-absolute-paths/project"
+ok - absolute override spellings are preserved in spawn launch paths
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-unresolvable-paths/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-unresolvable-paths/project"
+ok - unresolvable relative spawn overrides fail with named diagnostics
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-required-ship/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-required-ship/project"
+ok - active crew-dispatch profile requires an explicit harness for ship spawns
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-required-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-required-scout/project"
+ok - active crew-dispatch profile requires an explicit harness for scout spawns
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-explicit/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-explicit/project"
+ok - active crew-dispatch profile allows an explicit resolved harness
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-provider/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-provider/project"
+ok - selected routing providers persist and native identities stay aligned
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-positional/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-positional/project"
+ok - active crew-dispatch profile allows the legacy positional harness form
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-raw/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-raw/project"
+ok - active crew-dispatch profile allows the raw launch-command escape hatch
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude/project"
+ok - claude receives --model and --effort profile flags
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex/project"
+ok - codex receives --model and model_reasoning_effort profile flags
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-autonomy/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-autonomy/project"
+ok - codex crewmate and secondmate launches render complete explicit autonomy commands
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-max/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-max/project"
+ok - codex omits unsupported max effort instead of passing a bad config value
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok/project"
+ok - grok receives --model and --reasoning-effort profile flags
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok-max/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok-max/project"
+ok - grok omits unsupported max reasoning effort
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok-xhigh/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-grok-xhigh/project"
+ok - grok threads xhigh reasoning effort with model and typed brief
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor/project"
+ok - cursor receives its model-qualified reasoning class and exact task workspace
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-no-turn/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-no-turn/project"
+ok - cursor spawn refuses a zero-turn worker instead of reporting spawned
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-unsupported/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-unsupported/project"
+ok - cursor refuses model ids absent from its resolved binary's live catalog
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-catalog-unreachable/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-cursor-catalog-unreachable/project"
+ok - cursor preserves the requested model when its live catalog is unreachable
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode/project"
+ok - opencode receives --model and omits the unsupported effort axis
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-scout/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-scout/project"
+ok - opencode scout launch disables Claude Code compatibility and keeps the skill allowlist
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-secondmate/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-secondmate/project"
+ok - opencode secondmate launch keeps the previous permission-only overlay
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-auto-router/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-opencode-auto-router/project"
+ok - opencode forwards openrouter/auto as the OpenRouter Auto Router model
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi/project"
+ok - pi receives --model and --thinking max profile flags
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed/project"
+ok - pi-signed shares Pi launch semantics while preserving its configured and recorded identity
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed-missing/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed-missing/project"
+ok - pi-signed refuses safely and actionably when the selected executable is unavailable
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed-secondmate/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-pi-signed-secondmate/project"
+ok - pi-signed is a distinct persistent secondmate runtime with shared Pi supervision semantics
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-batch/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-batch/project"
+ok - batch dispatch forwards shared --harness, --model, and --effort to every pair
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-cfgdir/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-cfgdir/project"
+ok - claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-nocfgdir/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-nocfgdir/project"
+ok - claude omits the config-dir prefix when firstmate runs with the single-store default
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-nocfgdir/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-codex-nocfgdir/project"
+ok - non-claude harnesses do not receive the claude CLAUDE_CONFIG_DIR prefix
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-attribution/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-claude-attribution/project"
+ok - a claude crewmate launch carries the attribution-off policy in its own settings
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-secondmate-attribution/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-secondmate-attribution/project"
+ok - a claude secondmate launch carries the attribution-off policy too
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-secondmate/project"
+│  No config files with names ["lefthook" ".lefthook" ".config/lefthook"] have been found in "/private/var/folders/74/15xrg46j0575gdh7tgcv29780000gn/T/fm-spawn-dispatch-profile.0k3VXw/profile-secondmate/project"
+ok - active crew-dispatch profile does not block secondmate launches
+# all fm-spawn-dispatch-profile tests passed
