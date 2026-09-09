@@ -168,6 +168,37 @@ ok - local model ambient-router-gemma4:e4b selected every operation scenario and
 # unavailable native tools: pi-signed grok kimi cursor muse
 ```
 
+### Codex autonomous launch configuration
+
+Verified 2026-09-09 with the installed Codex CLI on macOS.
+
+```sh
+codex --version
+```
+
+```text
+codex-cli 0.153.4
+```
+
+The local help documented configuration overrides and the two values used by Firstmate's Codex launch template:
+
+```sh
+codex --help
+```
+
+The bounded observed entries were `-c key=value` configuration overrides, approval-policy value `never`, and sandbox value `danger-full-access`.
+
+The installed CLI loaded the exact configuration keys and reported their effective policy without starting a model turn:
+
+```sh
+codex -c approval_policy=never -c sandbox_mode=danger-full-access doctor --json
+```
+
+The bounded observed JSON result reported approval policy `Never` and filesystem access `unrestricted`.
+
+This proves the configuration syntax and effective values against codex-cli 0.153.4 only.
+The requested live non-interactive approval smoke against Codex 0.148.0 was unavailable because that exact version was not installed, so no live acceptance is claimed for 0.148.0 or from help text, configuration loading, or rendered-command regressions.
+
 The isolated process and endpoint checks used:
 
 ```sh
