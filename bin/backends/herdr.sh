@@ -1000,6 +1000,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     esac
   fi
   if [ "$plan" = death ]; then
+    focus_operation="pane-death close"
     if fm_backend_herdr_death_close_pane "$session" "$pane_id" "$plan_shell_pid"; then
       close_status=0
     elif fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane_id"; then
