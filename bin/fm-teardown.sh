@@ -2740,6 +2740,40 @@ FMEOF
   return 1
 }
 
+teardown_herdr_focus_checkpoint_write() {  # <path> <session> <snapshot>
+  local path=$1 session=$2 snapshot=$3 workspace tab tmp
+  workspace=${snapshot%%$'\t'*}
+  tab=${snapshot#*$'\t'}
+  [ -n "$workspace" ] && [ -n "$tab" ] && [ "$workspace" != "$snapshot" ] || return 1
+  case "$session:$workspace:$tab" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  tmp=$(mktemp "$STATE/.${ID}.herdr-focus.XXXXXX") || return 1
+  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  {
+    printf 'version=1\n'
+    printf 'session=%s\n' "$session"
+    printf 'workspace_id=%s\n' "$workspace"
+    printf 'tab_id=%s\n' "$tab"
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path"
+}
+
+teardown_herdr_focus_checkpoint_restore() {  # <path> <session>
+  local path=$1 session=$2 version saved_session workspace tab
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  version=$(meta_value "$path" version)
+  saved_session=$(meta_value "$path" session)
+  workspace=$(meta_value "$path" workspace_id)
+  tab=$(meta_value "$path" tab_id)
+  [ "$version" = 1 ] && [ "$saved_session" = "$session" ] || return 1
+  [ -n "$workspace" ] && [ -n "$tab" ] || return 1
+  case "$workspace:$tab" in
+    *:*:*|*[[:space:]]*) return 1 ;;
+  esac
+  fm_backend_herdr_projection_focus_restore "$session" "$workspace"$'\t'"$tab" "pane close"
+}
+
 teardown_herdr_require_prerequisites() {  # <task-id>
   local task_id=$1 prerequisite
   if ! fm_backend_source herdr; then
@@ -3100,6 +3134,7 @@ if [ "$BACKEND" = herdr ]; then
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+HERDR_FOCUS_CHECKPOINT="$STATE/$ID.herdr-focus"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
@@ -3118,6 +3153,17 @@ if [ "$BACKEND" = herdr ] \
        "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
     HERDR_PRESENTATION_RETIRE_CANDIDATE=1
   fi
+fi
+
+if [ "$BACKEND" = herdr ] && { [ -e "$HERDR_FOCUS_CHECKPOINT" ] || [ -L "$HERDR_FOCUS_CHECKPOINT" ]; }; then
+  if ! teardown_herdr_focus_checkpoint_restore "$HERDR_FOCUS_CHECKPOINT" "$TEARDOWN_HERDR_SESSION"; then
+    echo "error: herdr focus recovery for $ID could not restore the captain's active workspace and tab; retaining every durable task record" >&2
+    exit 1
+  fi
+  rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+    echo "error: herdr focus recovery for $ID could not retire its verified checkpoint; retaining every durable task record" >&2
+    exit 1
+  }
 fi
 
 BACKLOG_CLOSED=0
@@ -3215,11 +3261,24 @@ fi
 # focus-restore path, which can switch the captain to a neighboring workspace.
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
+    HERDR_FOCUS_SNAPSHOT=$(fm_backend_herdr_projection_focus_snapshot "$HERDR_PRESENTATION_SESSION") || {
+      echo "error: herdr pane $T for $ID has no unambiguous active workspace and tab to preserve; retaining every durable task record" >&2
+      exit 1
+    }
+    teardown_herdr_focus_checkpoint_write "$HERDR_FOCUS_CHECKPOINT" \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_FOCUS_SNAPSHOT" || {
+      echo "error: herdr pane $T for $ID could not persist its focus recovery checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
     if ! fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE"; then
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" "$HERDR_FOCUS_SNAPSHOT"; then
       echo "error: herdr pane $T for $ID could not be closed while preserving the captain's active workspace and tab; retaining every durable task record" >&2
       exit 1
     fi
+    rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+      echo "error: herdr pane $T for $ID could not retire its verified focus checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
   else
     echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
     exit 1

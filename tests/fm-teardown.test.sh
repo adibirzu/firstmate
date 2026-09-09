@@ -2672,10 +2672,21 @@ test_herdr_projection_teardown_retains_records_when_focus_restore_fails() {
     || fail "herdr-projection-restore-failure: focus-restore failure retired the presentation journal"
   [ -e "$case_dir/state/task-x1.meta" ] \
     || fail "herdr-projection-restore-failure: focus-restore failure erased the durable endpoint metadata"
+  [ -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure did not preserve the exact focus checkpoint"
   assert_grep "exact-tab restoration failed" "$case_dir/stderr" \
     "herdr-projection-restore-failure: teardown swallowed the focus helper's restore warning"
   assert_grep "could not be closed while preserving" "$case_dir/stderr" \
     "herdr-projection-restore-failure: teardown did not explain why durable records were retained"
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/retry-stdout" 2> "$case_dir/retry-stderr" \
+    || fail "herdr-projection-restore-failure: retry could not restore the saved captain focus"
+  [ ! -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: verified focus recovery did not retire its checkpoint"
+  [ ! -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-projection-restore-failure: retry retained metadata after restoring the saved focus"
+  assert_contains "$(cat "$log")" "tab focus w2:t2" \
+    "herdr-projection-restore-failure: retry did not restore the saved exact tab"
   pass "herdr projection teardown retains durable records when focus restoration fails"
 }
 
