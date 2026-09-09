@@ -4639,10 +4639,12 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi
 fi
-# A successful final commit transfers the lease to teardown. This must happen
-# before deferred-signal handling, because that path can exit after a committed
-# delivery while reporting the interrupt to its caller.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
+if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ]; then
+  # A successful final commit transfers the lease to teardown. This must happen
+  # before deferred-signal handling, because that path can exit after a committed
+  # delivery while reporting the interrupt to its caller.
+  TREEHOUSE_LEASE_ABORT_CLEANUP=0
+fi
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
