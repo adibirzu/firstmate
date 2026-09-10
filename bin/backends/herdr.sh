@@ -837,52 +837,53 @@ fm_backend_herdr_projection_focus_snapshot() {  # <session>
 # before a non-last focused workspace moves focus to the focused workspace's
 # right neighbor (upstream #1621/#1912); both fixes are unreleased.
 # A single tab.focus on the exact response-independent pre-operation tab id
-# restores both the workspace and tab atomically.
-fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation>
-  local session=$1 before=$2 operation=$3 workspace tab after info attempt=0 max_attempts=20 stable=0 settle_samples=1 restore_ready=0
+# restores both the workspace and tab atomically, but it is only durable once
+# the asynchronous transition that stole focus has actually landed. When the
+# caller names the workspace its close is emptying, wait for that workspace to
+# disappear before correcting focus. Older Herdr releases can publish the
+# corresponding focus transition after that disappearance, so retain the exact
+# snapshot through a bounded post-removal window and correct any late drift.
+fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation> [doomed-workspace]
+  local session=$1 before=$2 operation=$3 doomed=${4:-}
+  local workspace tab after info presence removal_confirmed=0 tab_verified=0 round=0 attempt=0
+  local max_rounds=3 removal_attempts=100 confirm_attempts=20
+  local settle_attempts=${FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS:-100}
+  case "$settle_attempts" in ''|*[!0-9]*) settle_attempts=100 ;; esac
   [ -n "$before" ] || {
     echo "warning: herdr presentation $operation had no unambiguous pre-operation focus snapshot" >&2
     return 1
   }
-  # Herdr applies workspace removal and focus commands asynchronously.  A
-  # single immediate read can observe the requested tab before the queued
-  # removal moves focus again, leaving the captain in a different workspace.
-  # Re-focus and verify a short bounded settle window instead.
-  # Pane-death workspace removal may arrive several seconds after the close
-  # request. Keep re-focusing until the original tab has remained active for a
-  # bounded window; a one-shot matching snapshot can otherwise race that event.
-  # The live 0.7.4 server can publish the workspace-removal focus transition
-  # several seconds after reporting the pane closed. Keep the original tab
-  # stable across that delayed transition rather than accepting the first four
-  # seconds of apparently restored focus.
   after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
-  case "$operation" in
-    # A pane-death workspace removal can report the original focus before
-    # publishing its later focus transition, so this route must settle even
-    # when the first sample still matches the pre-close snapshot.
-    "pane-death close")
-      settle_samples=${FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES:-100}
-      case "$settle_samples" in
-        ''|*[!0-9]*|0) settle_samples=100 ;;
-      esac
-      max_attempts=$((settle_samples * 4))
-      ;;
-    "pane close"|"task kill")
-      [ "$after" != "$before" ] || return 0
-      settle_samples=100
-      max_attempts=400
-      ;;
-    *) [ "$after" != "$before" ] || return 0 ;;
-  esac
-  while [ "$attempt" -lt "$max_attempts" ]; do
-    if [ "$after" = "$before" ]; then
-      stable=$((stable + 1))
-      [ "$stable" -ge "$settle_samples" ] && return 0
-    else
-      stable=0
-      if [ "$restore_ready" -eq 0 ]; then
-        workspace=${before%%$'\t'*}
-        tab=${before#*$'\t'}
+  # A focus-safe operation pays nothing: it neither waits nor re-focuses.
+  [ "$after" != "$before" ] || [ -n "$doomed" ] || return 0
+  if [ -n "$doomed" ]; then
+    while [ "$attempt" -lt "$removal_attempts" ]; do
+      presence=$(fm_backend_herdr_workspace_presence_state "$session" "$doomed")
+      if [ "$presence" = dead ]; then
+        removal_confirmed=1
+        break
+      fi
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+    if [ "$removal_confirmed" -ne 1 ]; then
+      echo "warning: herdr presentation $operation could not confirm removal of emptied workspace before focus restoration" >&2
+      return 1
+    fi
+    after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
+    # Canned adapter tests exercise the close planner separately and can skip
+    # its temporal fence without sleeping through a production-sized window.
+    [ "$settle_attempts" -ne 0 ] || return 0
+  fi
+  [ "$after" != "$before" ] || {
+    [ -n "$doomed" ] || return 0
+  }
+  workspace=${before%%$'\t'*}
+  tab=${before#*$'\t'}
+  while [ "$round" -lt "$max_rounds" ]; do
+    round=$((round + 1))
+    if [ "$after" != "$before" ]; then
+      if [ "$tab_verified" -ne 1 ]; then
         info=$(fm_backend_herdr_cli "$session" tab get "$tab" 2>/dev/null) || {
           echo "warning: herdr presentation $operation changed focus and the exact prior tab could not be verified for restoration" >&2
           return 1
@@ -893,16 +894,30 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
           echo "warning: herdr presentation $operation changed focus and the exact prior tab response was ambiguous" >&2
           return 1
         fi
-        restore_ready=1
+        tab_verified=1
       fi
       fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || {
         echo "warning: herdr presentation $operation changed focus and exact-tab restoration failed" >&2
         return 1
       }
     fi
-    sleep 0.1
-    after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
-    attempt=$((attempt + 1))
+    attempt=0
+    while [ "$attempt" -lt "$confirm_attempts" ]; do
+      sleep 0.1
+      after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
+      [ "$after" = "$before" ] && break
+      attempt=$((attempt + 1))
+    done
+    [ "$after" = "$before" ] || continue
+    [ -n "$doomed" ] || return 0
+    attempt=0
+    while [ "$attempt" -lt "$settle_attempts" ]; do
+      sleep 0.1
+      after=$(fm_backend_herdr_projection_focus_snapshot "$session") || after=
+      [ "$after" = "$before" ] || break
+      attempt=$((attempt + 1))
+    done
+    [ "$attempt" -ge "$settle_attempts" ] && return 0
   done
   echo "warning: herdr presentation $operation did not restore the exact prior workspace and tab" >&2
   return 1
@@ -923,7 +938,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record workspace_presence focus_operation="pane close"
+  local before active_tab info target_pane target_tab target_ws doomed_ws focus_settle_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -954,12 +969,20 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   plan=plain
   plan_shell_pid=
   plan_move_record=
+  doomed_ws=
+  focus_settle_ws=
   if [ -n "$target_ws" ]; then
     plan=$(fm_backend_herdr_emptying_close_plan "$session" "$pane_id" "$target_ws" "$target_tab" "${before%%$'\t'*}")
     case "$plan" in
       moved$'\t'*)
         plan_move_record=${plan%%$'\n'*}
         plan=${plan##*$'\n'}
+        ;;
+    esac
+    case "$plan" in
+      empty\ *)
+        doomed_ws=$target_ws
+        plan=${plan#empty }
         ;;
     esac
     case "$plan" in
@@ -973,7 +996,6 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     esac
   fi
   if [ "$plan" = death ]; then
-    focus_operation="pane-death close"
     if fm_backend_herdr_death_close_pane "$session" "$pane_id" "$plan_shell_pid"; then
       close_status=0
     elif fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane_id"; then
@@ -987,7 +1009,12 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     close_status=1
   fi
   if [ "$close_status" -eq 0 ] && [ -n "$plan_move_record" ]; then
-    workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+    while [ "$removal_attempt" -lt 100 ]; do
+      workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+      [ "$workspace_presence" = dead ] && break
+      sleep 0.1
+      removal_attempt=$((removal_attempt + 1))
+    done
     if [ "$workspace_presence" != dead ]; then
       echo "warning: herdr presentation cleanup did not confirm removal of the repositioned workspace" >&2
       close_status=1
@@ -996,7 +1023,11 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   if [ "$close_status" -ne 0 ]; then
     fm_backend_herdr_emptying_move_rollback "$plan_move_record" || true
   fi
-  fm_backend_herdr_projection_focus_restore "$session" "$before" "$focus_operation" || return 2
+  # The removal event is asynchronous even when the pane-death plan is
+  # expected to preserve focus. Do not return from cleanup until an emptying
+  # close's workspace is observably gone and the exact prior focus still holds.
+  focus_settle_ws=$doomed_ws
+  fm_backend_herdr_projection_focus_restore "$session" "$before" "pane close" "$focus_settle_ws" || return 2
   [ "$close_status" -eq 0 ]
 }
 
@@ -1063,11 +1094,9 @@ fm_backend_herdr_workspace_move_capable() {  # <session>
 }
 
 # fm_backend_herdr_emptying_close_plan: choose the focus-safe removal for one
-# exact pane. The LAST echoed line is the plan: "plain" (use the ordinary
-# explicit close; below the presentation version floor the exact-tab restore
-# backstop masks the focus move it causes when it empties a non-focused
-# workspace) or "death <shell-pid>" (end the proved lone idle shell so Herdr
-# removes the emptied workspace through its focus-preserving pane-death path).
+# exact pane. The LAST echoed line is "plain" for a non-emptying or ambiguous
+# close, or "empty plain" / "empty death <shell-pid>" for a confirmed-emptying
+# close.
 # Whenever the repositioning mover was invoked, a preceding
 # "moved<TAB><ws><TAB><original-index><TAB><socket><TAB><focused><TAB><pre-move-order-json>"
 # record line is echoed first so the caller can hand it to
@@ -1092,7 +1121,7 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
     (.result.panes | type) == "array" and (.result.panes | length) == 1
     and .result.panes[0].pane_id == $pane
   ' >/dev/null 2>&1 || { printf 'plain\n'; return 0; }
-  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || { printf 'plain\n'; return 0; }
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || { printf 'empty plain\n'; return 0; }
   indices=$(printf '%s' "$list" | jq -r --arg ws "$ws_id" --arg focused "$focused_ws" '
     (.result.workspaces // null) as $s
     | select(($s | type) == "array" and ($s | length) > 1)
@@ -1102,7 +1131,7 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
     | "\($w[0])\t\($f[0])\t\($s | length)"
   ' 2>/dev/null) || indices=
   if [ -z "$indices" ]; then
-    printf 'plain\n'
+    printf 'empty plain\n'
     return 0
   fi
   r=${indices%%$'\t'*}
@@ -1111,7 +1140,7 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
   len=${rest#*$'\t'}
   case "$r:$a:$len" in
     *[!0-9:]*)
-      printf 'plain\n'
+      printf 'empty plain\n'
       return 0
       ;;
   esac
@@ -1128,12 +1157,12 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
     fi
     if [ "$capable" -ne 0 ]; then
       echo "warning: herdr presentation cleanup could not verify workspace.move support; closing without the focus-safe removal path" >&2
-      printf 'plain\n'
+      printf 'empty plain\n'
       return 0
     fi
     socket=$(fm_backend_herdr_presentation_session_socket_path "$session") || {
       echo "warning: herdr presentation cleanup found an ambiguous named session socket; closing without the focus-safe removal path" >&2
-      printf 'plain\n'
+      printf 'empty plain\n'
       return 0
     }
     mover=${FM_BACKEND_HERDR_WORKSPACE_MOVER:-$FM_BACKEND_HERDR_ROOT/bin/backends/herdr-workspace-move.py}
@@ -1156,14 +1185,14 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
         and ([.result.workspaces[] | select(.focused == true) | .workspace_id] == [$focused])
       ' >/dev/null 2>&1; then
       echo "warning: herdr presentation cleanup could not move the doomed workspace behind the focused one; closing without the focus-safe removal path" >&2
-      printf 'plain\n'
+      printf 'empty plain\n'
       return 0
     fi
   fi
   if shell_pid=$(fm_backend_herdr_pane_idle_shell_pid "$session" "$pane_id"); then
-    printf 'death %s\n' "$shell_pid"
+    printf 'empty death %s\n' "$shell_pid"
   else
-    printf 'plain\n'
+    printf 'empty plain\n'
   fi
 }
 
@@ -2983,7 +3012,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # back to the plain close, matching the pre-hardening contract.
 fm_backend_herdr_kill_serialized() {  # <session> <pane>
   local session=$1 pane=$2
-  local before active_tab info target_pane target_tab target_ws plan shell_pid plan_move_record close_failed workspace_presence
+  local before active_tab info target_pane target_tab target_ws doomed_ws plan shell_pid plan_move_record close_failed workspace_presence removal_attempt=0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || before=
   if [ -n "$before" ]; then
     active_tab=${before#*$'\t'}
@@ -2994,10 +3023,17 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
     if [ "$target_pane" = "$pane" ] && [ -n "$target_tab" ] && [ "$target_tab" != "$active_tab" ]; then
       plan=$(fm_backend_herdr_emptying_close_plan "$session" "$pane" "$target_ws" "$target_tab" "${before%%$'\t'*}")
       plan_move_record=
+      doomed_ws=
       case "$plan" in
         moved$'\t'*)
           plan_move_record=${plan%%$'\n'*}
           plan=${plan##*$'\n'}
+          ;;
+      esac
+      case "$plan" in
+        empty\ *)
+          doomed_ws=$target_ws
+          plan=${plan#empty }
           ;;
       esac
       close_failed=0
@@ -3014,7 +3050,12 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
           ;;
       esac
       if [ "$close_failed" = 0 ] && [ -n "$plan_move_record" ]; then
-        workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+        while [ "$removal_attempt" -lt 100 ]; do
+          workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
+          [ "$workspace_presence" = dead ] && break
+          sleep 0.1
+          removal_attempt=$((removal_attempt + 1))
+        done
         if [ "$workspace_presence" != dead ]; then
           echo "warning: herdr task kill did not confirm removal of the repositioned workspace" >&2
           close_failed=1
@@ -3023,7 +3064,7 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
       if [ "$close_failed" = 1 ]; then
         fm_backend_herdr_emptying_move_rollback "$plan_move_record" || true
       fi
-      fm_backend_herdr_projection_focus_restore "$session" "$before" "task kill" || true
+      fm_backend_herdr_projection_focus_restore "$session" "$before" "task kill" "$doomed_ws" || true
       return 0
     fi
   fi

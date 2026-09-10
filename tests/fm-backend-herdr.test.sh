@@ -23,6 +23,7 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 herdr_forget_inherited_pane
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
+export FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=0
 # Pin the ambient-home default to a marker-free fixture: FM_HOME resolves to
 # the suite's own root when unset, and a secondmate-marked checkout (any
 # treehouse crew home carries .fm-secondmate-home) would flip the default
@@ -32,10 +33,6 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 mkdir -p "$TMP_ROOT/ambient-home"
 export FM_HOME="$TMP_ROOT/ambient-home"
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
-# Fake Herdr fixtures model one stable post-close sample. The dedicated
-# delayed-drift regression below stubs the clock and covers the production
-# default's full bounded settle loop.
-export FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES=1
 
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
@@ -1512,16 +1509,8 @@ test_projection_close_restores_exact_prior_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/7.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}' > "$resp/9.out"
-  printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2","focused":true}}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/11.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":false},{"tab_id":"w2:t2","focused":true}]}}' > "$resp/12.out"
-  # Focus restoration requires a bounded stable window after an asynchronous
-  # close, so keep the fake server's exact focus snapshot stable throughout it.
-  local response
-  for response in $(seq 13 2 211); do
-    cp "$resp/11.out" "$resp/$response.out"
-    cp "$resp/12.out" "$resp/$((response + 1)).out"
-  done
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w9:p2' "$ROOT" 2>&1)
@@ -1537,35 +1526,129 @@ test_projection_close_restores_exact_prior_focus() {
 }
 
 test_projection_focus_restore_recovers_delayed_close_drift() {
-  local dir log samples out status
+  local dir log samples out status probe_line focus_line focus_count
   dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
   log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
-  out=$(FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES=100 ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+  # The emptied workspace outlives the close for two probes, and the first
+  # corrective focus does not hold across the confirm window, so this exercises
+  # both halves of the contract: wait for the removal that steals focus, then
+  # correct again when one correction was not enough.
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=2 bash -c '
     . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() {
+      printf "presence-probe %s\n" "$2" >> "$LOG"
+      probes=$(cat "$SAMPLES.probes" 2>/dev/null || printf "0")
+      probes=$((probes + 1))
+      printf "%s\n" "$probes" > "$SAMPLES.probes"
+      [ "$probes" -ge 3 ] && printf "dead" || printf "present"
+    }
     fm_backend_herdr_projection_focus_snapshot() {
       count=$(cat "$SAMPLES")
       count=$((count + 1))
-      printf "%s\\n" "$count" > "$SAMPLES"
-      case "$count" in
-        2) printf "w3\tw3:t1" ;;
-        *) printf "w2\tw2:t2" ;;
-      esac
+      printf "%s\n" "$count" > "$SAMPLES"
+      if [ "$count" -le 22 ]; then printf "w3\tw3:t1"; else printf "w2\tw2:t2"; fi
     }
     fm_backend_herdr_cli() {
-      printf "%s\\n" "$*" >> "$LOG"
+      printf "%s\n" "$*" >> "$LOG"
       case "$2 $3" in
-        "tab get") printf "%s\n" "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}" ;;
+        "tab get") printf "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
       esac
     }
     sleep() { :; }
     before=$(printf "w2\tw2:t2")
-    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane-death close"
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close" w9
   ' 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
   assert_contains "$(cat "$log")" $'tab focus w2:t2' \
     "a delayed close focus drift did not refocus the exact prior tab"
+  assert_contains "$(cat "$log")" "presence-probe w9" \
+    "the restore did not wait for the emptied workspace to be removed"
+  probe_line=$(grep -n "presence-probe w9" "$log" | head -1 | cut -d: -f1)
+  focus_line=$(grep -n "tab focus w2:t2" "$log" | head -1 | cut -d: -f1)
+  [ -n "$probe_line" ] && [ -n "$focus_line" ] && [ "$probe_line" -lt "$focus_line" ] \
+    || fail "the corrective focus was issued before the emptied workspace was confirmed removed"
+  focus_count=$(grep -c "tab focus w2:t2" "$log")
+  [ "$focus_count" -ge 2 ] \
+    || fail "a correction that did not hold was never retried (focus issued $focus_count time(s))"
   pass "herdr presentation focus: delayed post-close focus drift is restored before cleanup returns"
+}
+
+test_projection_focus_restore_waits_for_doomed_removal_before_safe_success() {
+  local dir log samples out status probe_count
+  dir="$TMP_ROOT/projection-focus-safe-removal-wait"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() {
+      printf "presence-probe %s\n" "$2" >> "$LOG"
+      count=$(cat "$SAMPLES")
+      count=$((count + 1))
+      printf "%s\n" "$count" > "$SAMPLES"
+      [ "$count" -ge 2 ] && printf "dead" || printf "present"
+    }
+    fm_backend_herdr_projection_focus_snapshot() { printf "w2\tw2:t2"; }
+    fm_backend_herdr_cli() { printf "%s\n" "$*" >> "$LOG"; }
+    sleep() { :; }
+    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a focus-safe snapshot should succeed after the emptied workspace is confirmed removed: $out"
+  probe_count=$(grep -c "presence-probe w9" "$log")
+  [ "$probe_count" -eq 2 ] || fail "a safe initial snapshot skipped the doomed-workspace removal wait ($probe_count probes)"
+  assert_not_contains "$(cat "$log")" "tab focus w2:t2" \
+    "a focus-safe post-removal snapshot unnecessarily re-focused the prior tab"
+  pass "herdr presentation focus: safe snapshots still fence emptied-workspace removal"
+}
+
+test_projection_focus_restore_recovers_late_drift_after_safe_removal() {
+  local dir log samples out status
+  dir="$TMP_ROOT/projection-focus-late-drift"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=2 bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() { printf "dead"; }
+    fm_backend_herdr_projection_focus_snapshot() {
+      count=$(cat "$SAMPLES")
+      count=$((count + 1))
+      printf "%s\n" "$count" > "$SAMPLES"
+      case "$count" in 4) printf "w3\tw3:t1" ;; *) printf "w2\tw2:t2" ;; esac
+    }
+    fm_backend_herdr_cli() {
+      printf "%s\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "tab get") printf "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
+      esac
+    }
+    sleep() { :; }
+    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a focus steal published after a safe removal snapshot should be restored: $out"
+  assert_contains "$(cat "$log")" $'tab focus w2:t2' \
+    "a late focus steal after workspace removal was not corrected"
+  pass "herdr presentation focus: a late post-removal steal is corrected before cleanup returns"
+}
+
+test_projection_focus_restore_refuses_unconfirmed_doomed_removal() {
+  local dir log out status
+  dir="$TMP_ROOT/projection-focus-unconfirmed-removal"; mkdir -p "$dir"
+  log="$dir/log"; : > "$log"
+  out=$(ROOT="$ROOT" LOG="$log" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() { printf "presence-probe %s\n" "$2" >> "$LOG"; printf "unknown"; }
+    fm_backend_herdr_projection_focus_snapshot() { printf "w2\tw2:t2"; }
+    fm_backend_herdr_cli() { printf "%s\n" "$*" >> "$LOG"; }
+    sleep() { :; }
+    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
+  ' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unconfirmed emptied-workspace removal must leave focus uncertain"
+  assert_contains "$out" "could not confirm removal of emptied workspace" \
+    "unconfirmed removal did not report focus uncertainty"
+  assert_not_contains "$(cat "$log")" "tab focus w2:t2" \
+    "unconfirmed removal attempted focus restoration before the removal boundary"
+  pass "herdr presentation focus: unconfirmed emptied-workspace removal fails safely"
 }
 
 test_projection_close_refuses_active_tab() {
@@ -1703,6 +1786,11 @@ test_projection_close_emptying_after_focus_uses_pane_death_without_move() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
+  cp "$resp/9.out" "$resp/11.out"
+  cp "$resp/9.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
+  cp "$resp/9.out" "$resp/14.out"
+  cp "$resp/10.out" "$resp/15.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -1718,6 +1806,40 @@ test_projection_close_emptying_after_focus_uses_pane_death_without_move() {
   assert_not_contains "$(cat "$log")" $'pane\x1fclose' "emptying close behind focus used the focus-unsafe explicit close"
   assert_not_contains "$(cat "$log")" $'tab\x1ffocus' "focus moved despite the pane-death removal"
   pass "herdr presentation cleanup: emptying close behind focus ends the exact shell without a move or focus change"
+}
+
+test_projection_close_pane_death_restores_focus_after_removal_event() {
+  local dir log samples out status
+  dir="$TMP_ROOT/close-death-removal-focus-restore"; mkdir -p "$dir"
+  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  # The pane-death close initially leaves focus intact, but its workspace
+  # removal event then steals focus to w3.
+  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=1 bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_projection_focus_snapshot() {
+      snapshot=$(cat "$SAMPLES")
+      snapshot=$((snapshot + 1))
+      printf "%s\\n" "$snapshot" > "$SAMPLES"
+      case "$snapshot" in 1|2) printf "w1\\tw1:t1" ;; 3) printf "w3\\tw3:t1" ;; *) printf "w1\\tw1:t1" ;; esac
+    }
+    fm_backend_herdr_emptying_close_plan() { printf "empty death 123"; }
+    fm_backend_herdr_death_close_pane() { return 0; }
+    fm_backend_herdr_workspace_presence_state() { printf dead; }
+    fm_backend_herdr_cli() {
+      printf "%s\\n" "$*" >> "$LOG"
+      case "$2 $3" in
+        "pane get") printf "{\\\"result\\\":{\\\"pane\\\":{\\\"pane_id\\\":\\\"w2:p2\\\",\\\"tab_id\\\":\\\"w2:t2\\\",\\\"workspace_id\\\":\\\"w2\\\"}}}" ;;
+        "tab get") printf "{\\\"result\\\":{\\\"tab\\\":{\\\"tab_id\\\":\\\"w1:t1\\\",\\\"workspace_id\\\":\\\"w1\\\"}}}" ;;
+      esac
+    }
+    sleep() { :; }
+    fm_backend_herdr_projection_close_pane_focus_preserving fmtest w2:p2
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a delayed pane-death focus steal should be restored before cleanup returns: $out"
+  assert_contains "$(cat "$log")" 'fmtest tab focus w1:t1' \
+    "a pane-death removal that stole focus did not restore the exact prior tab"
+  pass "herdr presentation cleanup: pane-death removal waits for its event and restores late stolen focus"
 }
 
 test_projection_close_emptying_before_focus_repositions_then_uses_pane_death() {
@@ -1738,9 +1860,13 @@ test_projection_close_emptying_before_focus_repositions_then_uses_pane_death() {
   sleep 300 & bgpid=$!
   death_process_info_fixture w1:p1 "$bgpid" > "$resp/10.out"
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
-  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/12.out"
-  cp "$resp/12.out" "$resp/13.out"
-  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/14.out"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false}]}}' > "$resp/12.out"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
+  cp "$resp/13.out" "$resp/14.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/15.out"
+  cp "$resp/14.out" "$resp/16.out"
+  cp "$resp/14.out" "$resp/17.out"
+  cp "$resp/15.out" "$resp/18.out"
   make_death_lab "$dir" "$bgpid"
   printf '%s\n' '{"id":"fm-workspace-move","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w2","focused":true},{"workspace_id":"w3","focused":false},{"workspace_id":"w1","focused":false}]}}' > "$dir/mover-response"
   fb=$(make_herdr_fakebin "$dir")
@@ -1748,7 +1874,7 @@ test_projection_close_emptying_before_focus_repositions_then_uses_pane_death() {
     FM_HERDR_PS_BIN="$dir/ps" FM_BACKEND_HERDR_WORKSPACE_MOVER="$dir/mover" \
     FM_FAKE_MOVER_LOG="$dir/mover.log" FM_FAKE_MOVER_RESPONSE="$dir/mover-response" \
     FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
+    bash -c '. "$0/bin/backends/herdr.sh"; sleep() { :; }; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
   status=$?
   kill "$bgpid" 2>/dev/null || true; wait "$bgpid" 2>/dev/null || true
   [ "$status" -eq 0 ] || fail "repositioned emptying close should succeed through the pane-death path: $out"
@@ -1777,6 +1903,9 @@ test_projection_close_emptying_before_last_focus_needs_no_move() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/10.out"
+  cp "$resp/9.out" "$resp/11.out"
+  cp "$resp/9.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -1809,6 +1938,9 @@ test_projection_close_emptying_last_workspace_needs_no_move() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":false}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
+  cp "$resp/9.out" "$resp/11.out"
+  cp "$resp/9.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -1891,6 +2023,9 @@ test_projection_close_ambiguous_positions_fall_back_to_plain_close() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
+  cp "$resp/9.out" "$resp/11.out"
+  cp "$resp/9.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
   sleep 300 & bgpid=$!
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
@@ -1925,8 +2060,10 @@ test_projection_close_move_failure_falls_back_to_plain_close() {
   printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}' > "$resp/9.out"
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/12.out"
-  cp "$resp/12.out" "$resp/13.out"
-  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/14.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/13.out"
+  cp "$resp/12.out" "$resp/14.out"
+  cp "$resp/12.out" "$resp/15.out"
+  cp "$resp/13.out" "$resp/16.out"
   sleep 300 & bgpid=$!
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
@@ -1962,6 +2099,9 @@ test_projection_close_busy_pane_falls_back_to_plain_close() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/11.out"
+  cp "$resp/10.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
+  cp "$resp/11.out" "$resp/14.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -1996,6 +2136,9 @@ test_projection_close_transient_prompt_helper_settles_then_uses_pane_death() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/11.out"
+  cp "$resp/10.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
+  cp "$resp/11.out" "$resp/14.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -2031,6 +2174,9 @@ test_projection_close_death_escalates_sigkill_after_sighup_survival() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/12.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/13.out"
+  cp "$resp/12.out" "$resp/14.out"
+  cp "$resp/12.out" "$resp/15.out"
+  cp "$resp/13.out" "$resp/16.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -2069,6 +2215,9 @@ test_projection_close_death_failure_falls_back_to_plain_close() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/14.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/15.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/16.out"
+  cp "$resp/15.out" "$resp/17.out"
+  cp "$resp/15.out" "$resp/18.out"
+  cp "$resp/16.out" "$resp/19.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -2100,24 +2249,23 @@ test_projection_close_death_still_restores_a_stolen_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/9.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/10.out"
   printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/11.out"
-  # Pane-death removal is asynchronous.  The focus-restoration backstop now
-  # requires a bounded stable window, so return the restored snapshot for
-  # every retry instead of exhausting this fake server's scripted responses.
-  cp "$resp/11.out" "$resp/12.out"
-  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
-  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/14.out"
-  local response
-  for response in $(seq 15 3 309); do
-    cp "$resp/11.out" "$resp/$response.out"
-    cp "$resp/13.out" "$resp/$((response + 1)).out"
-    cp "$resp/14.out" "$resp/$((response + 2)).out"
-  done
+  # The removal fence first observes w2 gone, then the queued focus steal.
+  # It must restore the exact prior tab before the close returns.
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/11.out"
+  cp "$resp/9.out" "$resp/12.out"
+  cp "$resp/10.out" "$resp/13.out"
+  printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/14.out"
+  printf '%s\n' '{}' > "$resp/15.out"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/16.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/17.out"
+  cp "$resp/16.out" "$resp/18.out"
+  cp "$resp/17.out" "$resp/19.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     FM_HERDR_PS_BIN="$dir/ps" FM_BACKEND_HERDR_WORKSPACE_MOVER="$dir/mover" \
     FM_FAKE_MOVER_LOG="$dir/mover.log" FM_FAKE_MOVER_RESPONSE="$dir/no-response" \
-    FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 \
+    FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w2:p2' "$ROOT" 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "the pane-death close with a restored backstop should succeed: $out"
@@ -2147,6 +2295,9 @@ test_projection_close_death_never_sigkills_a_reused_pid() {
   printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/12.out"
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":true}]}}' > "$resp/13.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/14.out"
+  cp "$resp/13.out" "$resp/15.out"
+  cp "$resp/13.out" "$resp/16.out"
+  cp "$resp/14.out" "$resp/17.out"
   make_death_lab "$dir" "$bgpid"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -2215,7 +2366,7 @@ assert_projection_close_failed_removal_rolls_back_the_reposition() {
     FM_FAKE_MOVER_LOG="$dir/mover.log" FM_FAKE_MOVER_RESPONSE="$dir/mover-response" \
     FM_FAKE_MOVER_RESPONSE_2="$dir/mover-response-2" \
     FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
+    bash -c '. "$0/bin/backends/herdr.sh"; sleep() { :; }; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
   status=$?
   kill -KILL "$bgpid" 2>/dev/null || true; wait "$bgpid" 2>/dev/null || true
   [ "$status" -ne 0 ] || fail "an unconfirmed removal must report failure: $out"
@@ -4774,10 +4925,14 @@ test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
 test_projection_focus_restore_recovers_delayed_close_drift
+test_projection_focus_restore_waits_for_doomed_removal_before_safe_success
+test_projection_focus_restore_recovers_late_drift_after_safe_removal
+test_projection_focus_restore_refuses_unconfirmed_doomed_removal
 test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary
 test_projection_close_emptying_after_focus_uses_pane_death_without_move
+test_projection_close_pane_death_restores_focus_after_removal_event
 test_projection_close_emptying_before_focus_repositions_then_uses_pane_death
 test_projection_close_emptying_before_last_focus_needs_no_move
 test_projection_close_emptying_last_workspace_needs_no_move
