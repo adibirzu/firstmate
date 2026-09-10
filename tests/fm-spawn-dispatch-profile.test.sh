@@ -726,6 +726,74 @@ test_opencode_forwards_openrouter_auto_router_model() {
   pass "opencode forwards openrouter/auto as the OpenRouter Auto Router model"
 }
 
+test_native_effort_validator_keeps_axes_separate() {
+  local harness
+  for harness in pi pi-signed; do
+    "$ROOT/bin/fm-harness.sh" validate-native-effort "$harness" codex-native/gpt-6-astra ultra \
+      || fail "native validator refused supported harness $harness"
+  done
+  if "$ROOT/bin/fm-harness.sh" validate-native-effort 'pi:codex-native/forged' '' ultra 2>/dev/null; then
+    fail "native validator accepted a model prefix embedded in the harness axis"
+  fi
+  pass "native effort validator checks harness and model as separate axes"
+}
+
+test_native_pi_ultra_is_explicit_and_model_scoped() {
+  local rec id out launch harness mode native_profile model
+  for harness in pi pi-signed; do
+    for mode in no-mistakes direct-PR; do
+      id="ultra-$harness-$mode"
+      rec=$(make_spawn_case "$id" "$harness" "$id")
+      read_case_record "$rec"
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness "$harness" --model codex-native/gpt-6-astra --effort ultra --mode "$mode" --yolo off)
+      expect_code 0 "$?" "native Ultra spawn failed: $out"
+      assert_meta_profile "$HOME_DIR/state/$id.meta" "$harness" codex-native/gpt-6-astra ultra
+      launch=$(cat "$LAUNCH_LOG")
+      assert_contains "$launch" "--model 'codex-native/gpt-6-astra' --codex-effort 'ultra'" "native Ultra flag missing"
+      assert_not_contains "$launch" "--thinking" "native Ultra was converted into Pi thinking"
+      assert_not_contains "$launch" "'max'" "native Ultra was aliased to max"
+    done
+  done
+  for native_profile in 'claude:codex-native/gpt-6-astra' 'codex:codex-native/gpt-6-astra' 'pi:openai-codex/gpt-6-astra' 'pi:default' 'pi:codex-native/'; do
+    harness=${native_profile%%:*}; model=${native_profile#*:}; id="ultra-refused-$RANDOM"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+      --harness "$harness" --model "$model" --effort ultra 2>&1)
+    expect_code 1 "$?" "unsupported Ultra profile should refuse: $native_profile"
+    assert_contains "$out" "ultra effort requires pi or pi-signed" "native-only refusal missing"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "unsupported Ultra published metadata"
+    [ ! -e "$HOME_DIR/state/$id.busy-gen" ] || fail "unsupported Ultra provisioned lifecycle wiring"
+    [ ! -s "$LAUNCH_LOG" ] || fail "unsupported Ultra launched an agent"
+  done
+  id=ultra-raw-refused
+  rec=$(make_spawn_case "$id" pi "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    'pi --offline' --model codex-native/gpt-6-astra --effort ultra 2>&1)
+  expect_code 1 "$?" "raw launch silently omitted the native Ultra flag"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "raw Ultra launch published metadata"
+  assert_contains "$out" "canonical --harness pi or pi-signed" "raw launch refusal was not actionable"
+  pass "Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning"
+}
+
+test_batch_preserves_native_ultra() {
+  local rec id1=ultra-batch-a id2=ultra-batch-b out launch
+  rec=$(make_spawn_case ultra-batch pi "$id1" "$id2")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness pi --model codex-native/gpt-6-astra --effort ultra)
+  expect_code 0 "$?" "native Ultra batch failed: $out"
+  assert_meta_profile "$HOME_DIR/state/$id1.meta" pi codex-native/gpt-6-astra ultra
+  assert_meta_profile "$HOME_DIR/state/$id2.meta" pi codex-native/gpt-6-astra ultra
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--codex-effort 'ultra'" "batch dropped native effort"
+  assert_not_contains "$launch" "--thinking 'ultra'" "batch passed an invalid Pi level"
+  pass "batch dispatch preserves native Ultra in metadata and launch flags"
+}
+
 test_pi_threads_model_and_max_effort() {
   local rec id out status launch
   id=profile-pi-z8
@@ -1281,6 +1349,9 @@ test_opencode_threads_model_and_ignores_effort_axis
 test_opencode_scout_launch_disables_claude_code_catalog
 test_opencode_secondmate_launch_keeps_permission_only_overlay
 test_opencode_forwards_openrouter_auto_router_model
+test_native_effort_validator_keeps_axes_separate
+test_native_pi_ultra_is_explicit_and_model_scoped
+test_batch_preserves_native_ultra
 test_pi_threads_model_and_max_effort
 test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
