@@ -33,10 +33,6 @@ export FM_TEST_HERDR_FOCUS_SETTLE_ATTEMPTS=0
 mkdir -p "$TMP_ROOT/ambient-home"
 export FM_HOME="$TMP_ROOT/ambient-home"
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
-# Fake Herdr fixtures model one stable post-close sample. The dedicated
-# delayed-drift regression below stubs the clock and covers the production
-# default's full bounded settle loop.
-export FM_BACKEND_HERDR_PANE_DEATH_FOCUS_SETTLE_SAMPLES=1
 
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
@@ -1560,7 +1556,7 @@ test_projection_focus_restore_recovers_delayed_close_drift() {
     }
     sleep() { :; }
     before=$(printf "w2\tw2:t2")
-    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane-death close" w9
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close" w9
   ' 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
