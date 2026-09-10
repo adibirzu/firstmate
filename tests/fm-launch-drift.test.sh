@@ -91,6 +91,21 @@ MODEL_EQUALS_CHANGED=$(fm_launch_drift_verdict "claude --model=opus" claude "$WO
   || fail "--opt=value and --opt value must compare as equal when their operands match"
 pass "launch drift: option operands detect changed and missing values"
 
+AGY_BRIEF_LAUNCH='agy -i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+AGY_BRIEF_OK=$(fm_launch_drift_verdict "$AGY_BRIEF_LAUNCH" agy "$WORKTREE" "$PROJECT" "$WORKTREE" \
+  "$(argv_fields agy -i encoded-launch-brief)")
+[ "$(printf '%s' "$AGY_BRIEF_OK" | cut -f1)" = ok ] \
+  || fail "a non-empty agy -i encoded brief must read ok, got: $AGY_BRIEF_OK"
+AGY_BRIEF_MISSING=$(fm_launch_drift_verdict "$AGY_BRIEF_LAUNCH" agy "$WORKTREE" "$PROJECT" "$WORKTREE" \
+  "$(argv_fields agy -i)")
+[ "$(printf '%s' "$AGY_BRIEF_MISSING" | cut -f2)" = argv-loss ] \
+  || fail "a missing agy -i encoded brief must read argv-loss, got: $AGY_BRIEF_MISSING"
+AGY_BRIEF_EMPTY=$(fm_launch_drift_verdict "$AGY_BRIEF_LAUNCH" agy "$WORKTREE" "$PROJECT" "$WORKTREE" \
+  "$(argv_fields agy -i '')")
+[ "$(printf '%s' "$AGY_BRIEF_EMPTY" | cut -f2)" = argv-loss ] \
+  || fail "an empty agy -i encoded brief must read argv-loss, got: $AGY_BRIEF_EMPTY"
+pass "launch drift: encoded briefs require a non-empty option operand"
+
 CODEX_NOTIFY='notify=["bash","-c","touch __TURNEND__"]'
 CODEX_RECORD='codex -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]"'
 CODEX_LIVE=$(argv_fields codex -c "$CODEX_NOTIFY")
@@ -210,6 +225,8 @@ tmux_live_argv() {  # <harness>
     fm_backend_tmux_foreground_comms() { printf '%s\n' "$FM_TEST_FG_COMM"; }
     fm_backend_tmux_foreground_args() { printf '%s\n' "$FM_TEST_FG_ARGS"; }
     fm_backend_tmux_foreground_argv0s() { printf '%s\n' "$FM_TEST_FG_ARGV0"; }
+    fm_backend_tmux_foreground_pids() { printf '4242\n'; }
+    fm_backend_tmux_pid_argv() { printf '%s\n' "${FM_TEST_FG_EXACT_ARGV:-$FM_TEST_FG_ARGS}"; }
     fm_backend_pane_argv tmux '%0' "$1"
   )
 }
@@ -224,6 +241,15 @@ PI_ARGV=$(tmux_live_argv pi) || fail "a path-qualified executable must match the
 [ "$(verdict_field 1 pi "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$PI_ARGV")" = ok ] \
   || fail "a path-qualified executable must stay comparable after adapter identity selection"
 pass "launch drift: foreground identity requires an executable token boundary"
+
+FM_TEST_FG_COMM=codex FM_TEST_FG_ARGV0=codex
+FM_TEST_FG_ARGS="codex -c $CODEX_NOTIFY"
+FM_TEST_FG_EXACT_ARGV=$(argv_fields codex -c "$CODEX_NOTIFY")
+CODEX_ADAPTER_ARGV=$(tmux_live_argv codex) || fail "the tmux adapter must return a field-preserving Codex argv"
+[ "$(verdict_field 1 codex "$CODEX_RECORD" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CODEX_ADAPTER_ARGV")" = ok ] \
+  || fail "a field-preserving tmux Codex argv must read ok"
+unset FM_TEST_FG_EXACT_ARGV
+pass "launch drift: tmux argv fields preserve the Codex notify operand"
 
 CURSOR_LAUNCH="cursor-agent --trust --yolo"
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/cursor/cursor-agent --trust --yolo' FM_TEST_FG_ARGV0=node
@@ -391,6 +417,18 @@ chmod +x "$FAKEBIN/ps"
 PATH="$FAKEBIN:$PATH"
 export PATH
 
+FAKE_PROC="$TMP_ROOT/proc"
+mkdir -p "$FAKE_PROC/4242"
+write_fake_proc_argv() {  # <flattened-argv>
+  local field
+  : > "$FAKE_PROC/4242/cmdline"
+  while IFS= read -r field; do
+    printf '%s\0' "$field" >> "$FAKE_PROC/4242/cmdline"
+  done < <(fm_launch_drift_shell_tokens "$1")
+}
+FM_PROC_ROOT_OVERRIDE=$FAKE_PROC
+export FM_PROC_ROOT_OVERRIDE
+
 STATE_DIR="$TMP_ROOT/state"
 mkdir -p "$STATE_DIR"
 
@@ -400,11 +438,13 @@ FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
 FM_FAKE_PANE_PATH="$WORKTREE"
 export FAKE_AGENT_ARGV FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH
 trap 'fm_test_cleanup' EXIT
+write_fake_proc_argv "$FAKE_AGENT_ARGV"
 
 # Prove the foreground reader selects the recorded harness before any verdict
 # is trusted: without this the healthy case below could pass merely because the
 # argv was unreadable and the axis went quiet.
 . "$ROOT/bin/fm-backend.sh"
+fm_backend_source tmux
 READ_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
   || fail "the foreground reader could not read the stand-in agent's command line"
 assert_contains "$READ_ARGV" "--dangerously-skip-permissions" \
@@ -430,6 +470,7 @@ write_task_meta() {  # <id> [launch_argv]
 }
 
 crew_state() {  # <id>
+  write_fake_proc_argv "$FAKE_AGENT_ARGV"
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE_DIR" "$CREW_STATE" "$1" 2>&1
 }
 

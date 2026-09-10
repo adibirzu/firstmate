@@ -197,7 +197,7 @@ EOF
 $verify_snapshot
 EOF
       [ "$verify_pane" = "$pane_id" ] && [ "$verify_tty" = "$tty" ] || return 1
-      argv=$(fm_backend_tmux_pid_argv "${pids[i]:-}") || argv=$args
+      argv=$(fm_backend_tmux_pid_argv "${pids[i]:-}") || return 1
       printf '%s\n' "$argv"
       return 0
     fi
@@ -363,12 +363,12 @@ fm_backend_tmux_foreground_pids() {  # <target> [tty]
 }
 
 fm_backend_tmux_pid_argv() {  # <pid>
-  local pid=$1 token argv=''
-  [ -r "/proc/$pid/cmdline" ] || return 1
+  local pid=$1 token argv='' proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  [ -r "$proc_root/$pid/cmdline" ] || return 1
   while IFS= read -r -d '' token; do
     if [ -n "$argv" ]; then argv+=$'\037'; fi
     argv+=$token
-  done < "/proc/$pid/cmdline"
+  done < "$proc_root/$pid/cmdline"
   [ -n "$argv" ] && printf '%s\n' "$argv"
 }
 

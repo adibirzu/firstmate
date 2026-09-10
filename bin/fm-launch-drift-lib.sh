@@ -168,8 +168,30 @@ fm_launch_drift_option_has_no_operand() {  # <option>
   return 1
 }
 
+fm_launch_drift_option_value_mode() {  # <harness> <option> <recorded-operand>
+  case "$3" in
+    \$\(*) ;;
+    *) printf 'compare\n'; return 0 ;;
+  esac
+  case "$1:$2" in
+    agy:-i)
+      # agy's -i expansion is a non-reproducible encoded launch brief.
+      printf 'exists\n'
+      ;;
+    opencode:--prompt)
+      # opencode's --prompt expansion is a non-reproducible encoded launch brief.
+      printf 'exists\n'
+      ;;
+    copilot:-i)
+      # copilot's -i expansion is a non-reproducible encoded launch brief.
+      printf 'exists\n'
+      ;;
+    *) printf 'compare\n' ;;
+  esac
+}
+
 fm_launch_drift_option_values() {  # <launch-command> <harness>
-  local kind token option value next i
+  local kind token option value next mode i
   local -a tokens=()
   while IFS=$'\t' read -r kind token; do
     [ "$kind" = flag ] && tokens[${#tokens[@]}]=$token
@@ -180,22 +202,16 @@ fm_launch_drift_option_values() {  # <launch-command> <harness>
       -*=*)
         option=${token%%=*}
         value=${token#*=}
-        printf '%s\t%s\n' "$option" "$value"
+        mode=$(fm_launch_drift_option_value_mode "$2" "$option" "$value")
+        printf '%s\t%s\t%s\n' "$option" "$value" "$mode"
         ;;
       -*)
         fm_launch_drift_option_has_no_operand "$token" && continue
-        next=${tokens[i + 1]:-}
-        # A recorded operand that is itself a command substitution is not a
-        # comparable value: it was never expanded here, so the live argv carries
-        # its RESULT, and comparing the two would report drift on every read.
-        # The pattern is backslash-escaped rather than single-quoted so it
-        # matches the literal characters `$(` without shellcheck reading it as
-        # an expansion that failed to expand.
-        case "$next" in
-          ''|-*) continue ;;
-          \$\(*) continue ;;
-        esac
-        printf '%s\t%s\n' "$token" "$next"
+        [ "$((i + 1))" -lt "${#tokens[@]}" ] || continue
+        next=${tokens[i + 1]}
+        case "$next" in -*) continue ;; esac
+        mode=$(fm_launch_drift_option_value_mode "$2" "$token" "$next")
+        printf '%s\t%s\t%s\n' "$token" "$next" "$mode"
         i=$((i + 1))
         ;;
     esac
@@ -231,8 +247,9 @@ fm_launch_drift_live_option_values() {  # <live-argv>
         printf '%s\t%s\n' "$option" "$value"
         ;;
       -*)
-        next=${tokens[i + 1]:-}
-        case "$next" in ''|-*) continue ;; esac
+        [ "$((i + 1))" -lt "${#tokens[@]}" ] || continue
+        next=${tokens[i + 1]}
+        case "$next" in -*) continue ;; esac
         printf '%s\t%s\n' "$token" "$next"
         i=$((i + 1))
         ;;
@@ -279,7 +296,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <harness> <worktree> <project> <l
   local recorded=$1 harness=$2 worktree=$3 project=$4 live_cwd=$5 live_argv=$6
   local cwd_sev=unknown cwd_code=cwd-unreadable cwd_detail
   local argv_sev=unknown argv_code=argv-unreadable argv_detail
-  local flag missing='' option expected_value live_values live_value
+  local flag missing='' option expected_value mode live_values live_value
 
   if [ -z "$live_cwd" ]; then
     cwd_detail="endpoint working directory could not be read"
@@ -318,8 +335,16 @@ FLAGS
       argv_detail="$harness restarted without $missing"
     else
       live_values=$(fm_launch_drift_live_option_values "$live_argv")
-      while IFS=$'\t' read -r option expected_value; do
+      while IFS=$'\t' read -r option expected_value mode; do
         [ -n "$option" ] || continue
+        if [ "$mode" = exists ]; then
+          live_value=$(printf '%s\n' "$live_values" \
+            | awk -F '\t' -v option="$option" '$1 == option && length($2) { print $2; exit }')
+          [ -n "$live_value" ] && continue
+          argv_sev=warn argv_code=argv-loss
+          argv_detail="$harness restarted without a non-empty $option operand"
+          break
+        fi
         if printf '%s\n' "$live_values" | grep -Fqx -- "$(printf '%s\t%s' "$option" "$expected_value")"; then
           continue
         fi
