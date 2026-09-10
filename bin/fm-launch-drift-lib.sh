@@ -28,9 +28,10 @@
 #
 # severity is one of:
 #   ok      - the endpoint matches its record on both axes.
-#   unknown - a side could not be read. NEVER an alarm: an unreadable endpoint,
-#             a pre-detector task record, or a pane that is not running the
-#             harness at all must not be reported as drift.
+#   unknown - an axis could not be read. An unreadable cwd never alarms, and an
+#             unreadable argv, a pre-detector record, or a pane not running the
+#             harness never alarms on the argv axis. A verified cwd divergence
+#             can still report warn or severe without a launch record.
 #   warn    - a real divergence that is not the severe case.
 #   severe  - the worker is live in the project's primary checkout.
 #
@@ -52,6 +53,57 @@ fm_launch_drift_unquote() {  # <token>
   printf '%s\n' "$token"
 }
 
+# fm_launch_drift_open_quote: print the currently unclosed shell quote in
+# <token>, if any. It recognizes the quoting emitted by fm-spawn.sh's
+# shell_quote helper without evaluating the recorded command.
+fm_launch_drift_open_quote() {  # <token>
+  local token=$1 quote='' escaped=0 char i
+  for ((i = 0; i < ${#token}; i++)); do
+    char=${token:i:1}
+    if [ -n "$quote" ]; then
+      case "$quote" in
+        "'")
+          [ "$char" = "'" ] && quote=''
+          ;;
+        '"')
+          if [ "$escaped" = 1 ]; then
+            escaped=0
+          elif [ "$char" = '\\' ]; then
+            escaped=1
+          elif [ "$char" = '"' ]; then
+            quote=''
+          fi
+          ;;
+      esac
+    elif [ "$char" = '\\' ]; then
+      i=$((i + 1))
+    elif [ "$char" = "'" ] || [ "$char" = '"' ]; then
+      quote=$char
+    fi
+  done
+  printf '%s' "$quote"
+}
+
+# fm_launch_drift_shell_tokens: print <launch-command>'s whitespace-delimited
+# tokens while retaining quoted values as one token. The command is recorded
+# data, not shell input, so this deliberately does not evaluate substitutions
+# or other shell syntax.
+fm_launch_drift_shell_tokens() {  # <launch-command>
+  local part token='' quote
+  for part in $1; do
+    if [ -n "$token" ]; then
+      token="$token $part"
+    else
+      token=$part
+    fi
+    quote=$(fm_launch_drift_open_quote "$token")
+    [ -n "$quote" ] && continue
+    printf '%s\n' "$token"
+    token=''
+  done
+  [ -z "$token" ] || printf '%s\n' "$token"
+}
+
 # fm_launch_drift_parsed_tokens: print tab-separated harness and flag tokens
 # from <launch-command>. Whitespace splitting is deliberate and sufficient: a
 # flag the harness was launched with appears as its own token in the live
@@ -63,8 +115,12 @@ fm_launch_drift_unquote() {  # <token>
 # its command separator. Keeping that parser here makes harness identification
 # and flag collection use the same true harness boundary.
 fm_launch_drift_parsed_tokens() {  # <launch-command>
-  local token base harness_seen=0 skip_option_arg=0 skip_to_separator=0
-  for token in $1; do
+  local token base harness_seen=0 skip_option_arg=0 skip_to_separator=0 shell_wrapper=0 shell_command=0
+  while IFS= read -r token; do
+    if [ "$shell_command" = 1 ]; then
+      fm_launch_drift_parsed_tokens "$(fm_launch_drift_unquote "$token")"
+      return 0
+    fi
     token=$(fm_launch_drift_unquote "$token")
     if [ "$harness_seen" = 1 ]; then
       printf 'flag\t%s\n' "$token"
@@ -78,6 +134,10 @@ fm_launch_drift_parsed_tokens() {  # <launch-command>
       skip_option_arg=0
       continue
     fi
+    if [ "$shell_wrapper" = 1 ]; then
+      [ "$token" = -c ] && shell_command=1
+      continue
+    fi
     case "$token" in
       -u|--unset|-C|--chdir|-S|--split-string)
         skip_option_arg=1
@@ -87,7 +147,11 @@ fm_launch_drift_parsed_tokens() {  # <launch-command>
     esac
     base=${token##*/}
     case "$base" in
-      env|sh|bash|zsh|exec) continue ;;
+      env|exec) continue ;;
+      sh|bash|zsh)
+        shell_wrapper=1
+        continue
+        ;;
       unset)
         skip_to_separator=1
         continue
@@ -95,7 +159,7 @@ fm_launch_drift_parsed_tokens() {  # <launch-command>
     esac
     harness_seen=1
     printf 'harness\t%s\n' "$base"
-  done
+  done < <(fm_launch_drift_shell_tokens "$1")
 }
 
 # fm_launch_drift_flags: print the HARNESS's own flag tokens from a recorded
@@ -143,11 +207,23 @@ fm_launch_drift_path_within() {  # <path> <root>
 
 # fm_launch_drift_verdict: the whole policy. See the header for the output shape.
 #
-# An empty live_argv, or a live argv that does not carry the harness at all,
-# is deliberately `unknown` on the argv axis rather than `argv-loss`: a pane
-# sitting at a shell prompt after the agent exited is a different condition,
-# already owned by bin/fm-crew-state.sh's own state read, and reporting it as
-# lost flags would bury the real signal under noise.
+# An absent launch record, an empty live_argv, or a live argv that does not
+# carry the harness is deliberately `unknown` on the argv axis rather than
+# `argv-loss`. A pane sitting at a shell prompt after the agent exited is a
+# different condition, already owned by bin/fm-crew-state.sh's own state read,
+# and reporting it as lost flags would bury the real signal under noise. A
+# verified cwd divergence remains independently actionable without launch_argv.
+fm_launch_drift_live_argv_has_harness() {  # <harness> <live-argv>
+  local harness=$1 live_argv=$2 executable
+  for executable in $live_argv; do
+    executable=$(fm_launch_drift_unquote "$executable")
+    executable=${executable##*/}
+    [ "$executable" = "$harness" ]
+    return
+  done
+  return 1
+}
+
 fm_launch_drift_verdict() {  # <recorded-argv> <worktree> <project> <live-cwd> <live-argv>
   local recorded=$1 worktree=$2 project=$3 live_cwd=$4 live_argv=$5
   local cwd_sev=unknown cwd_code=cwd-unreadable cwd_detail
@@ -174,7 +250,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <worktree> <project> <live-cwd> <
     argv_detail="endpoint command line could not be read"
   elif ! harness=$(fm_launch_drift_harness_token "$recorded"); then
     argv_detail="recorded launch command names no harness executable"
-  elif [ "${live_argv#*"$harness"}" = "$live_argv" ]; then
+  elif ! fm_launch_drift_live_argv_has_harness "$harness" "$live_argv"; then
     argv_detail="endpoint is not running $harness"
   else
     argv_sev=ok argv_code=argv-ok argv_detail="launched flags intact"

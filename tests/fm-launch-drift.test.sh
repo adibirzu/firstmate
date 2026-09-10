@@ -17,8 +17,9 @@
 #       functions: healthy, argv loss, cwd drift, the severe primary-checkout
 #       case, and both axes diverging at once.
 #   (b) the unknown cases that must NEVER raise an alarm: an unreadable
-#       endpoint, a task record written before this detector existed, and a pane
-#       sitting at a shell prompt after its agent exited.
+#       endpoint, an unreadable argv axis in a task record written before this
+#       detector existed, and a pane sitting at a shell prompt after its agent
+#       exited. A verified cwd finding remains actionable for a legacy record.
 #   (c) the launch-env isolation regression: a launch wrapped in
 #       `/usr/bin/env -i ... /bin/sh -c '<launch>'` must not report the
 #       WRAPPER's own -i and -c as flags the harness lost.
@@ -90,17 +91,16 @@ pass "launch drift: both axes diverging keep severe and report both findings"
 [ "$(verdict_field 1 "$LAUNCH" "$WORKTREE" "$PROJECT" "" "")" = unknown ] \
   || fail "an endpoint that could not be read must be unknown, never drift"
 [ "$(verdict_field 1 "" "" "" "" "")" = unknown ] \
-  || fail "a task record from before this detector existed must be unknown, never drift"
-# An unverifiable axis outranks a verified-good one, so a record with no
-# launch_argv= reads unknown even while its cwd checks out. Both are silent to
-# the caller; what must never happen is either one reading as drift.
+  || fail "an unreadable pre-detector endpoint must be unknown, never drift"
+# A pre-detector record leaves only its argv axis unknown. A verified-good cwd
+# keeps the verdict silent, while a verified cwd divergence remains actionable.
 [ "$(verdict_field 1 "" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" = unknown ] \
-  || fail "a record with no launch_argv= must be unknown, never drift"
+  || fail "a pre-detector record with a healthy cwd must keep its argv axis unknown"
 assert_contains \
   "$(fm_launch_drift_verdict "" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" \
   "argv-unreadable" \
   "an unknown verdict must name which axis could not be verified"
-pass "launch drift: unreadable endpoints and pre-detector records never alarm"
+pass "launch drift: unreadable endpoints and an unverified argv axis never alarm"
 
 # A pane back at its shell prompt is a different condition entirely, owned by
 # fm-crew-state.sh's own state read. Reporting it as lost flags would bury it.
@@ -145,6 +145,22 @@ assert_contains \
   "--dangerously-skip-permissions" \
   "an unset relaunch prefix must name the real harness flag that went missing"
 pass "launch drift: env and relaunch prefixes preserve the true harness boundary"
+
+QUOTED_HOME_LAUNCH="FM_HOME='/tmp/Second Mate' claude --dangerously-skip-permissions --model opus"
+[ "$(verdict_field 2 "$QUOTED_HOME_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+  || fail "a quoted assignment must preserve the true harness after a spaced value"
+assert_contains \
+  "$(fm_launch_drift_verdict "$QUOTED_HOME_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "--dangerously-skip-permissions" \
+  "a quoted assignment must preserve the flag that the true harness lost"
+pass "launch drift: quoted assignment values preserve the true harness boundary"
+
+PI_LAUNCH="pi --thinking high"
+[ "$(verdict_field 1 "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "pip --thinking high")" = unknown ] \
+  || fail "a strict executable-name prefix must not be treated as the recorded harness"
+[ "$(verdict_field 1 "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "/opt/local/bin/pi --thinking high")" = ok ] \
+  || fail "a path-qualified executable must match the recorded harness by its final component"
+pass "launch drift: argv harness matching requires an executable token boundary"
 
 # State reads must use only passive cwd readers and leave active adapter probes
 # reserved for fm-spawn.sh before a harness starts.
@@ -304,18 +320,17 @@ assert_contains "$ARGV_LOSS_LINE" "--dangerously-skip-permissions" \
   "the argv-loss annotation must name the flag the restored worker lost"
 pass "launch drift: fm-crew-state.sh surfaces a worker restored without its launched flags"
 
-# A task record written before this detector existed must stay silent on the
-# argv axis while the cwd axis still works.
+# A task record written before this detector existed has a silent argv axis.
+# Its independently verified cwd axis remains actionable.
 write_task_meta legacy
 FM_FAKE_PANE_PATH="$WORKTREE"
 export FM_FAKE_PANE_PATH
 LEGACY_LINE=$(crew_state legacy)
 assert_not_contains "$LEGACY_LINE" "launch drift" \
-  "a pre-detector task record must not be annotated"
+  "a pre-detector record with a healthy cwd must stay unannotated"
 FM_FAKE_PANE_PATH="$PROJECT/src"
 export FM_FAKE_PANE_PATH
 LEGACY_SEVERE=$(crew_state legacy)
 assert_contains "$LEGACY_SEVERE" "primary-checkout" \
-  "a pre-detector record must still get the cwd axis, which needs no launch_argv="
-pass "launch drift: a pre-detector task record keeps the cwd axis and never false-alarms on argv"
-
+  "a pre-detector record must report a verified primary-checkout cwd landing"
+pass "launch drift: legacy records keep a silent argv axis and severe cwd alarms"
