@@ -1,0 +1,11 @@
+watcher_completed_poll_cycle=yes
+dotted_endpoint=s:a.b key=v2-733a612e62 hash_marker=present
+underscored_endpoint=s:a_b key=v2-733a615f62 hash_marker=present
+slashed_endpoint=s:a/b key=v2-733a612f62 hash_marker=present
+colon_endpoint=s:a:b key=v2-733a613a62 hash_marker=present
+legacy_hash=legacy hash legacy_count=41
+persisted_hash_markers:
+.hash-v2-733a612e62
+.hash-v2-733a612f62
+.hash-v2-733a613a62
+.hash-v2-733a615f62

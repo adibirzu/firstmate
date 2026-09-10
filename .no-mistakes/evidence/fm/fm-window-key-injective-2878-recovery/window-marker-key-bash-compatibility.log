@@ -1,0 +1,8 @@
+interpreter=bash
+version=GNU bash, version 5.3.9(1)-release (aarch64-apple-darwin25.1.0)
+non_ascii_endpoint=s:café
+marker_key=v2-733a636166c3a9
+interpreter=/bin/bash
+version=GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+non_ascii_endpoint=s:café
+marker_key=v2-733a636166c3a9

@@ -1,0 +1,3 @@
+ok - colliding endpoint spellings receive distinct filename-safe markers and ignore ambiguous legacy state
+ok - a non-ASCII endpoint keeps one persistent marker key across bash generations
+targeted_status=0
