@@ -208,20 +208,20 @@ fm_cursor_argv0_is_cursor() {  # <argv0>
   fm_cursor_path_is_cursor "$argv0"
 }
 
-# True when the process described by command name $1, arguments $2, and
-# structured argv0 $3 is Cursor. The single owner of Cursor process identity for the ancestry walk
+# True when the process described by command name $1 and structured argv0 $3 is
+# Cursor. The single owner of Cursor process identity for the ancestry walk
 # (bin/fm-session-lock-lib.sh), harness detection (bin/fm-harness.sh), pane
 # liveness (bin/backends/tmux.sh), and worker-server discovery (bin/fm-spawn.sh).
 #
 # Accepted: an exact cursor-agent command name; a MainThread or bare
-# interpreter whose executed script carries Cursor's install path; a legacy
+# interpreter whose structured argv[0] carries Cursor's install path; a legacy
 # `agent` whose argv[0] resolves into Cursor's install tree.
 #
 # Rejected: a bare MainThread with no Cursor evidence; any executable whose
 # basename merely happens to be `agent`; any path with an `agent/` directory
 # component that is running something else.
 fm_cursor_process_matches() {  # <comm> <args> [argv0]
-  local comm=$1 args=$2 argv0=${3:-} base token rest
+  local comm=$1 argv0=${3:-} base
   [ -n "$comm" ] || [ -n "$argv0" ] || return 1
   argv0=${argv0:-$comm}
   base=$(basename -- "$comm")
@@ -230,17 +230,6 @@ fm_cursor_process_matches() {  # <comm> <args> [argv0]
     cursor-agent) return 0 ;;
     agent|MainThread|node|node-*|node[0-9]*|python|python[0-9]*|python[0-9].[0-9]*)
       fm_cursor_argv0_is_cursor "$argv0" && return 0
-      rest=${args#"${args%%[![:space:]]*}"}
-      rest=${rest#"${rest%%[[:space:]]*}"}
-      while [ -n "$rest" ]; do
-        rest=${rest#"${rest%%[![:space:]]*}"}
-        [ -n "$rest" ] || break
-        token=${rest%%[[:space:]]*}
-        rest=${rest#"$token"}
-        case "$token" in -*) continue ;; esac
-        fm_cursor_path_is_cursor "$token" && return 0
-        return 1
-      done
       # A legacy alias may also be reported by its own path in comm.
       fm_cursor_path_is_cursor "$comm" && return 0
       return 1
@@ -249,5 +238,28 @@ fm_cursor_process_matches() {  # <comm> <args> [argv0]
   # A version-named or otherwise renamed executable still identifies through
   # its install path.
   case "$comm" in */*) fm_cursor_path_is_cursor "$comm" && return 0 ;; esac
+  return 1
+}
+
+fm_cursor_drift_process_matches() {  # <comm> <args> [argv0]
+  local comm=$1 args=$2 base token rest
+  fm_cursor_process_matches "$@" && return 0
+  base=$(basename -- "$comm")
+  base=${base#-}
+  case "$base" in
+    agent|MainThread|node|node-*|node[0-9]*|python|python[0-9]*|python[0-9].[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  rest=${args#"${args%%[![:space:]]*}"}
+  rest=${rest#"${rest%%[[:space:]]*}"}
+  while [ -n "$rest" ]; do
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    [ -n "$rest" ] || break
+    token=${rest%%[[:space:]]*}
+    rest=${rest#"$token"}
+    case "$token" in -*) continue ;; esac
+    fm_cursor_path_is_cursor "$token" && return 0
+    return 1
+  done
   return 1
 }

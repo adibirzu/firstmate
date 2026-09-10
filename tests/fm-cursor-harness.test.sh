@@ -101,9 +101,9 @@ test_identity_accepts_cursor_shapes_rejects_lookalikes() {
     "node /tmp/tool.js $tree/share/cursor-agent/versions/2026.08.11-e8db854/settings.json" \
     /usr/bin/node \
     || fail "a Cursor-tree data argument after an unrelated node script must not identify"
-  fm_cursor_process_matches node "node $bin/cursor-agent --trust" /usr/bin/node \
-    || fail "a node process running Cursor's script must identify"
-  pass "fm_cursor_process_matches: cursor's real shapes identify; real node/agent lookalikes do not"
+  ! fm_cursor_process_matches node "node $bin/cursor-agent --trust" /usr/bin/node \
+    || fail "a node process running Cursor's script must not broaden shared identity"
+  pass "fm_cursor_process_matches: cursor's structural shapes identify; script args do not widen identity"
 }
 
 test_identity_signals_diverge() {

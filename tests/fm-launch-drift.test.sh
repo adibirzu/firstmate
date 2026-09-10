@@ -7,9 +7,11 @@
 # restored into the project's PRIMARY CHECKOUT instead of its task worktree. No
 # supported backend replays a launch command - Herdr persists none at all from
 # 0.8.0 (docs/herdr-backend.md "Launch-argv replay") - so detection against
-# firstmate's own record is the only cover, and these cases pin it. Supervision
-# uses only tmux and Herdr's passive cwd reads; zellij, cmux, and Orca remain
-# unknown on that axis so a state read never types into a live pane.
+# firstmate's own record is the only cover, and these cases pin it. Herdr alone
+# covers the argv axis through its atomic argv array. Tmux reports argv unknown
+# because it has no atomic boundary-preserving argv source. The cwd axis covers
+# tmux and Herdr through passive reads; zellij, cmux, and Orca remain unknown so
+# a state read never types into a live pane.
 #
 # Both halves run without a harness, so CI enforces them everywhere:
 #   (a) the verdict matrix, driven directly through the library's public
@@ -30,6 +32,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-launch-drift-lib.sh"
+# shellcheck source=bin/fm-launch-drift-identity-lib.sh
+. "$ROOT/bin/fm-launch-drift-identity-lib.sh"
 
 CREW_STATE="$ROOT/bin/fm-crew-state.sh"
 TMP_ROOT=$(fm_test_tmproot fm-launch-drift)
@@ -216,25 +220,35 @@ assert_contains \
 pass "launch drift: quoted assignment values preserve the true harness boundary"
 
 PI_LAUNCH="pi --thinking high"
-tmux_live_argv() {  # <harness>
+herdr_live_argv() {  # <harness>
+  local harness=$1 argv_json
+  argv_json=$(
+    if [ -n "${FM_TEST_FG_EXACT_ARGV:-}" ]; then
+      fm_launch_drift_live_tokens "$FM_TEST_FG_EXACT_ARGV"
+    else
+      fm_launch_drift_live_tokens "$FM_TEST_FG_ARGS"
+    fi | jq -R . | jq -s .
+  ) || return 1
+  FM_TEST_HERDR_RESPONSE=$(jq -nc --arg name "$FM_TEST_FG_COMM" --argjson argv "$argv_json" \
+    '{result:{process_info:{foreground_processes:[{name:$name,argv:$argv}]}}}') || return 1
+  export FM_TEST_HERDR_RESPONSE
   (
     # shellcheck source=bin/fm-backend.sh
     . "$ROOT/bin/fm-backend.sh"
-    fm_backend_source tmux
-    fm_backend_tmux_target_pane_snapshot() { printf '%s\037%s\037%s\n' "$1" "$WORKTREE" /dev/pts/fm-launch-drift; }
-    fm_backend_tmux_foreground_tuples() { printf '4242\037%s\037%s\037%s\n' "$FM_TEST_FG_COMM" "$FM_TEST_FG_ARGV0" "$FM_TEST_FG_ARGS"; }
-    fm_backend_tmux_pid_argv() { printf '%s\n' "${FM_TEST_FG_EXACT_ARGV:-$FM_TEST_FG_ARGS}"; }
-    fm_backend_pane_argv tmux '%0' "$1"
+    fm_backend_source herdr
+    fm_backend_herdr_target_observe() { FM_BACKEND_HERDR_SESSION=default; FM_BACKEND_HERDR_PANE=w1:p2; }
+    fm_backend_herdr_cli() { printf '%s\n' "$FM_TEST_HERDR_RESPONSE"; }
+    fm_backend_pane_argv herdr default:w1:p2 "$harness"
   )
 }
 
 FM_TEST_FG_COMM=pip FM_TEST_FG_ARGS='pip --thinking high' FM_TEST_FG_ARGV0=pip
 export FM_TEST_FG_COMM FM_TEST_FG_ARGS FM_TEST_FG_ARGV0
-if tmux_live_argv pi >/dev/null; then
+if herdr_live_argv pi >/dev/null; then
   fail "a strict executable-name prefix must not be treated as the recorded harness"
 fi
 FM_TEST_FG_COMM=/opt/local/bin/pi FM_TEST_FG_ARGS='/opt/local/bin/pi --thinking high' FM_TEST_FG_ARGV0=/opt/local/bin/pi
-PI_ARGV=$(tmux_live_argv pi) || fail "a path-qualified executable must match the recorded harness by its final component"
+PI_ARGV=$(herdr_live_argv pi) || fail "a path-qualified executable must match the recorded harness by its final component"
 [ "$(verdict_field 1 pi "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$PI_ARGV")" = ok ] \
   || fail "a path-qualified executable must stay comparable after adapter identity selection"
 pass "launch drift: foreground identity requires an executable token boundary"
@@ -242,19 +256,30 @@ pass "launch drift: foreground identity requires an executable token boundary"
 FM_TEST_FG_COMM=codex FM_TEST_FG_ARGV0=codex
 FM_TEST_FG_ARGS="codex -c $CODEX_NOTIFY"
 FM_TEST_FG_EXACT_ARGV=$(argv_fields codex -c "$CODEX_NOTIFY")
-CODEX_ADAPTER_ARGV=$(tmux_live_argv codex) || fail "the tmux adapter must return a field-preserving Codex argv"
+CODEX_ADAPTER_ARGV=$(herdr_live_argv codex) || fail "the Herdr adapter must return a field-preserving Codex argv"
 [ "$(verdict_field 1 codex "$CODEX_RECORD" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CODEX_ADAPTER_ARGV")" = ok ] \
-  || fail "a field-preserving tmux Codex argv must read ok"
+  || fail "a field-preserving Herdr Codex argv must read ok"
 unset FM_TEST_FG_EXACT_ARGV
-pass "launch drift: tmux argv fields preserve the Codex notify operand"
+pass "launch drift: Herdr argv fields preserve the Codex notify operand"
+
+FM_TEST_FG_COMM=claude FM_TEST_FG_ARGS='claude --model opus' FM_TEST_FG_ARGV0=claude
+HERDR_MODEL_OK=$(herdr_live_argv claude) || fail "the Herdr adapter must return an intact model argv"
+[ "$(verdict_field 1 claude 'claude --model opus' "$WORKTREE" "$PROJECT" "$WORKTREE" "$HERDR_MODEL_OK")" = ok ] \
+  || fail "an intact Herdr model argv must read ok"
+FM_TEST_FG_ARGS='claude --model sonnet'
+HERDR_MODEL_CHANGED=$(herdr_live_argv claude) || fail "the Herdr adapter must return a changed model argv"
+HERDR_MODEL_DRIFT=$(fm_launch_drift_verdict 'claude --model opus' claude "$WORKTREE" "$PROJECT" "$WORKTREE" "$HERDR_MODEL_CHANGED")
+[ "$(printf '%s' "$HERDR_MODEL_DRIFT" | cut -f2)" = argv-loss ] \
+  || fail "a changed Herdr model operand must read argv-loss, got: $HERDR_MODEL_DRIFT"
+pass "launch drift: Herdr argv detects changed option operands"
 
 CURSOR_LAUNCH="cursor-agent --trust --yolo"
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/cursor/cursor-agent --trust --yolo' FM_TEST_FG_ARGV0=node
-CURSOR_ARGV=$(tmux_live_argv cursor-agent) || fail "a node-bundled Cursor worker must identify through the foreground adapter"
+CURSOR_ARGV=$(herdr_live_argv cursor-agent) || fail "a node-bundled Cursor worker must identify through the Herdr adapter"
 [ "$(verdict_field 1 cursor-agent "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CURSOR_ARGV")" = ok ] \
   || fail "a node-bundled Cursor worker with intact flags must read ok"
 FM_TEST_FG_ARGS='node /opt/cursor/cursor-agent --trust'
-CURSOR_ARGV_LOSS=$(tmux_live_argv cursor-agent) || fail "a node-bundled Cursor worker must remain identifiable after a flag loss"
+CURSOR_ARGV_LOSS=$(herdr_live_argv cursor-agent) || fail "a node-bundled Cursor worker must remain identifiable after a flag loss"
 CURSOR_LOSS=$(fm_launch_drift_verdict "$CURSOR_LAUNCH" cursor-agent "$WORKTREE" "$PROJECT" "$WORKTREE" "$CURSOR_ARGV_LOSS")
 [ "$(printf '%s' "$CURSOR_LOSS" | cut -f2)" = argv-loss ] \
   || fail "a node-bundled harness missing --yolo must read argv-loss, got: $CURSOR_LOSS"
@@ -272,11 +297,11 @@ pass "launch drift: the recorded Cursor alias retains argv-loss detection"
 
 CLAUDE_NODE_LAUNCH="claude --dangerously-skip-permissions"
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /x/@anthropic-ai/claude-code/cli.js --dangerously-skip-permissions' FM_TEST_FG_ARGV0=node
-CLAUDE_NODE_ARGV=$(tmux_live_argv claude) || fail "an interpreter-launched Claude worker must identify through the foreground adapter"
+CLAUDE_NODE_ARGV=$(herdr_live_argv claude) || fail "an interpreter-launched Claude worker must identify through the Herdr adapter"
 [ "$(verdict_field 1 claude "$CLAUDE_NODE_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLAUDE_NODE_ARGV")" = ok ] \
   || fail "an interpreter-launched Claude worker with intact flags must read ok"
 FM_TEST_FG_ARGS='node /x/@anthropic-ai/claude-code/cli.js'
-CLAUDE_NODE_ARGV_LOSS=$(tmux_live_argv claude) || fail "an interpreter-launched Claude worker must remain identifiable after a flag loss"
+CLAUDE_NODE_ARGV_LOSS=$(herdr_live_argv claude) || fail "an interpreter-launched Claude worker must remain identifiable after a flag loss"
 CLAUDE_NODE_LOSS=$(fm_launch_drift_verdict "$CLAUDE_NODE_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLAUDE_NODE_ARGV_LOSS")
 [ "$(printf '%s' "$CLAUDE_NODE_LOSS" | cut -f2)" = argv-loss ] \
   || fail "an interpreter-launched Claude worker missing its flag must read argv-loss, got: $CLAUDE_NODE_LOSS"
@@ -300,7 +325,7 @@ for drift_case in \
 $drift_case
 EOF
   FM_TEST_FG_COMM=$CASE_COMM FM_TEST_FG_ARGS="${CASE_RECORD/$CASE_FLAG/}" FM_TEST_FG_ARGV0=$CASE_ARGV0
-  CASE_LIVE=$(tmux_live_argv "$CASE_HARNESS") \
+  CASE_LIVE=$(herdr_live_argv "$CASE_HARNESS") \
     || fail "$CASE_HARNESS must remain identifiable after a launch flag is lost"
   CASE_LOSS=$(fm_launch_drift_verdict "$CASE_RECORD" "$CASE_HARNESS" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CASE_LIVE")
   [ "$(printf '%s' "$CASE_LOSS" | cut -f2)" = argv-loss ] \
@@ -310,13 +335,13 @@ EOF
 done
 
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/gemini/gemini' FM_TEST_FG_ARGV0=node
-GEMINI_LIVE=$(tmux_live_argv gemini) || fail "gemini must identify through its interpreter command"
+GEMINI_LIVE=$(herdr_live_argv gemini) || fail "gemini must identify through its interpreter command"
 GEMINI_LOSS=$(fm_launch_drift_verdict 'gemini --yolo' gemini "$WORKTREE" "$PROJECT" "$WORKTREE" "$GEMINI_LIVE")
 [ "$(printf '%s' "$GEMINI_LOSS" | cut -f2)" = argv-loss ] \
   || fail "gemini missing --yolo must read argv-loss, got: $GEMINI_LOSS"
 
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/node_modules/cline/bin/.cline' FM_TEST_FG_ARGV0=node
-CLINE_LIVE=$(tmux_live_argv cline) || fail "cline must identify through its executed script"
+CLINE_LIVE=$(herdr_live_argv cline) || fail "cline must identify through its executed script"
 CLINE_LOSS=$(fm_launch_drift_verdict 'cline --yolo' cline "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLINE_LIVE")
 [ "$(printf '%s' "$CLINE_LOSS" | cut -f2)" = argv-loss ] \
   || fail "cline missing --yolo must read argv-loss, got: $CLINE_LOSS"
@@ -325,8 +350,11 @@ pass "launch drift: every supported harness retains argv-loss detection"
 (
   . "$ROOT/bin/fm-session-lock-lib.sh"
   ! fm_harness_process_matches agy 'agy --dangerously-skip-permissions'
+  ! fm_harness_process_matches node 'node /opt/cursor/cursor-agent --trust'
 ) || fail "launch-drift identity must not broaden session-lock holder identity"
-pass "launch drift: session-lock identity remains unchanged"
+fm_launch_drift_process_matches cursor-agent node 'node /opt/cursor/cursor-agent --trust' node \
+  || fail "launch-drift identity must retain detector-only Cursor script evidence"
+pass "launch drift: Cursor detector evidence leaves session-lock identity unchanged"
 
 # State reads must use only passive cwd readers and leave active adapter probes
 # reserved for fm-spawn.sh before a harness starts.
@@ -380,18 +408,8 @@ for arg in "$@"; do
   esac
 done
 if [ "${1:-}" = list-panes ] && [ "${2:-}" = -a ]; then
-  if [ -n "${FM_FAKE_TMUX_SNAPSHOT_CALLS:-}" ]; then
-    calls=$(( $(cat "$FM_FAKE_TMUX_SNAPSHOT_CALLS" 2>/dev/null || echo 0) + 1 ))
-    printf '%s\n' "$calls" > "$FM_FAKE_TMUX_SNAPSHOT_CALLS"
-  else
-    calls=0
-  fi
-  snapshot_tty=/dev/pts/fm-launch-drift
-  if [ "${FM_FAKE_TMUX_REVALIDATE_TTY_AFTER:-0}" -gt 0 ] && [ "$calls" -gt "${FM_FAKE_TMUX_REVALIDATE_TTY_AFTER:-0}" ]; then
-    snapshot_tty=${FM_FAKE_TMUX_REVALIDATE_TTY:-/dev/pts/fm-launch-drift-reused}
-  fi
   [ "${FM_FAKE_TMUX_TARGET_LIVE:-1}" = 1 ] \
-    && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\t%s\t%s\n' "${FM_FAKE_SNAPSHOT_PATH:-}" "$snapshot_tty"
+    && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\t%s\t/dev/pts/fm-launch-drift\n' "${FM_FAKE_SNAPSHOT_PATH:-}"
   exit 0
 fi
 exit 0
@@ -404,21 +422,7 @@ cat > "$FAKEBIN/ps" <<'SH'
 #!/usr/bin/env bash
 set -u
 case " $* " in
-  *' -t pts/fm-launch-drift '*)
-    if [ -n "${FM_FAKE_TMUX_TUPLE_CALLS:-}" ]; then
-      calls=$(( $(cat "$FM_FAKE_TMUX_TUPLE_CALLS" 2>/dev/null || echo 0) + 1 ))
-      printf '%s\n' "$calls" > "$FM_FAKE_TMUX_TUPLE_CALLS"
-      case "$calls:$*" in
-        1:*args=*) printf '4242 4242 4242 claude %s\n' "${FAKE_AGENT_ARGV:-}" ;;
-        1:*|2:*|3:*) printf '4242 4242 4242 claude\n' ;;
-        *) printf '7777 7777 7777 claude\n' ;;
-      esac
-    elif case "$*" in *args=*) true ;; *) false ;; esac; then
-      printf '4242 4242 4242 claude %s\n' "${FAKE_AGENT_ARGV:-}"
-    else
-      printf '4242 4242 4242 claude\n'
-    fi
-    ;;
+  *' -t pts/fm-launch-drift '*) printf '4242 4242 4242 claude\n' ;;
   *' -p 4242 '*) printf '%s\n' "${FAKE_AGENT_ARGV:-}" ;;
   *) exec "$REAL_PS" "$@" ;;
 esac
@@ -427,19 +431,6 @@ chmod +x "$FAKEBIN/ps"
 
 PATH="$FAKEBIN:$PATH"
 export PATH
-
-FAKE_PROC="$TMP_ROOT/proc"
-mkdir -p "$FAKE_PROC/4242"
-write_fake_proc_argv() {  # <flattened-argv> [pid]
-  local field pid=${2:-4242}
-  mkdir -p "$FAKE_PROC/$pid"
-  : > "$FAKE_PROC/$pid/cmdline"
-  while IFS= read -r field; do
-    printf '%s\0' "$field" >> "$FAKE_PROC/$pid/cmdline"
-  done < <(fm_launch_drift_shell_tokens "$1")
-}
-FM_PROC_ROOT_OVERRIDE=$FAKE_PROC
-export FM_PROC_ROOT_OVERRIDE
 
 STATE_DIR="$TMP_ROOT/state"
 mkdir -p "$STATE_DIR"
@@ -450,32 +441,13 @@ FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
 FM_FAKE_PANE_PATH="$WORKTREE"
 export FAKE_AGENT_ARGV FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH
 trap 'fm_test_cleanup' EXIT
-write_fake_proc_argv "$FAKE_AGENT_ARGV"
 
-# Prove the foreground reader selects the recorded harness before any verdict
-# is trusted: without this the healthy case below could pass merely because the
-# argv was unreadable and the axis went quiet.
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source tmux
-TUPLE_CALLS="$TMP_ROOT/foreground-tuple-calls"
-FAKE_REPLACEMENT_ARGV='claude --model opus'
-write_fake_proc_argv "$FAKE_REPLACEMENT_ARGV" 7777
-FM_FAKE_TMUX_TUPLE_CALLS=$TUPLE_CALLS
-export FM_FAKE_TMUX_TUPLE_CALLS
-TUPLE_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
-  || fail "the foreground reader could not collect a single process tuple"
-assert_contains "$TUPLE_ARGV" "--dangerously-skip-permissions" \
-  "the foreground reader must keep identity and argv from one process tuple"
-[ "$(cat "$TUPLE_CALLS")" = 1 ] \
-  || fail "the foreground reader must collect its process fields in one observation"
-unset FM_FAKE_TMUX_TUPLE_CALLS
-READ_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
-  || fail "the foreground reader could not read the stand-in agent's command line"
-assert_contains "$READ_ARGV" "--dangerously-skip-permissions" \
-  "the foreground reader must read the agent's own launched flags"
-assert_contains "$READ_ARGV" "claude" \
-  "the foreground reader must read the recorded harness, not a shell helper"
-pass "launch drift: the foreground reader sees the agent's real command line"
+if fm_backend_pane_argv tmux '%0' claude >/dev/null; then
+  fail "tmux must leave the argv axis unreadable"
+fi
+pass "launch drift: tmux reports its argv axis as unknown"
 
 # kind=scout keeps the no-mistakes run lookup out of this suite: the run-step
 # source has its own coverage in tests/fm-crew-state.test.sh, and this suite is
@@ -494,7 +466,6 @@ write_task_meta() {  # <id> [launch_argv]
 }
 
 crew_state() {  # <id>
-  write_fake_proc_argv "$FAKE_AGENT_ARGV"
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE_DIR" "$CREW_STATE" "$1" 2>&1
 }
 
@@ -518,57 +489,6 @@ assert_not_contains "$RACE_LINE" "primary-checkout" \
 assert_not_contains "$RACE_LINE" "launch drift" \
   "a target snapshot must keep a healthy worker silent during pane teardown"
 pass "launch drift: tmux reads stay bound to the target snapshot"
-
-FAKE_AGENT_ARGV='claude --model opus'
-FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
-FM_FAKE_PANE_PATH="$WORKTREE"
-FM_FAKE_ACTIVE_TTY=/dev/pts/fm-launch-drift-active
-export FAKE_AGENT_ARGV FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH FM_FAKE_ACTIVE_TTY
-ARGV_RACE_LINE=$(crew_state healthy)
-assert_contains "$ARGV_RACE_LINE" "launch drift (argv-loss)" \
-  "a target snapshot must retain its foreground process group during pane teardown"
-assert_contains "$ARGV_RACE_LINE" "--dangerously-skip-permissions" \
-  "a target snapshot must retain the target worker's missing flag"
-FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
-unset FM_FAKE_ACTIVE_TTY
-export FAKE_AGENT_ARGV
-pass "launch drift: tmux argv reads stay bound to the target snapshot"
-
-PTY_REUSE_CALLS="$TMP_ROOT/pty-reuse-snapshot-calls"
-printf '0\n' > "$PTY_REUSE_CALLS"
-FAKE_AGENT_ARGV='claude --model opus'
-FM_FAKE_PANE_PATH="$WORKTREE"
-FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
-FM_FAKE_TMUX_SNAPSHOT_CALLS=$PTY_REUSE_CALLS
-FM_FAKE_TMUX_REVALIDATE_TTY_AFTER=2
-FM_FAKE_TMUX_REVALIDATE_TTY=/dev/pts/fm-launch-drift-reused
-export FAKE_AGENT_ARGV FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH FM_FAKE_TMUX_SNAPSHOT_CALLS \
-  FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
-PTY_REUSE_LINE=$(crew_state healthy)
-assert_not_contains "$PTY_REUSE_LINE" "launch drift" \
-  "a reused pty after the recorded pane disappears must leave the argv axis unknown"
-unset FM_FAKE_TMUX_SNAPSHOT_CALLS FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
-FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
-export FAKE_AGENT_ARGV
-pass "launch drift: tmux rejects a reused pty after its pane disappears"
-
-POST_READ_REUSE_CALLS="$TMP_ROOT/post-read-reuse-snapshot-calls"
-printf '0\n' > "$POST_READ_REUSE_CALLS"
-FAKE_AGENT_ARGV='claude --model opus'
-FM_FAKE_PANE_PATH="$WORKTREE"
-FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
-FM_FAKE_TMUX_SNAPSHOT_CALLS=$POST_READ_REUSE_CALLS
-FM_FAKE_TMUX_REVALIDATE_TTY_AFTER=3
-FM_FAKE_TMUX_REVALIDATE_TTY=/dev/pts/fm-launch-drift-reused
-export FAKE_AGENT_ARGV FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH FM_FAKE_TMUX_SNAPSHOT_CALLS \
-  FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
-POST_READ_REUSE_LINE=$(crew_state healthy)
-assert_not_contains "$POST_READ_REUSE_LINE" "launch drift" \
-  "a reused pty after argv collection must leave the argv axis unknown"
-unset FM_FAKE_TMUX_SNAPSHOT_CALLS FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
-FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
-export FAKE_AGENT_ARGV
-pass "launch drift: tmux rejects a reused pty after argv collection"
 
 # Severe: the same worker, now standing in the primary checkout.
 FM_FAKE_PANE_PATH="$PROJECT/src"
@@ -594,20 +514,17 @@ FM_FAKE_TMUX_TARGET_LIVE=1
 export FM_FAKE_TMUX_TARGET_LIVE
 pass "launch drift: a torn-down tmux target stays silent"
 
-# The production symptom itself: the worker came back, in the right place, but
-# without the flags it was launched with. Restarting the stand-in agent under a
-# reduced argv reproduces exactly that.
+# A restored tmux worker can lose flags, but its argv axis is deliberately
+# unreadable while its verified cwd stays in the task worktree.
 FAKE_AGENT_ARGV='claude --model opus'
 export FAKE_AGENT_ARGV
 FM_FAKE_PANE_PATH="$WORKTREE"
 FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
 export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 ARGV_LOSS_LINE=$(crew_state healthy)
-assert_contains "$ARGV_LOSS_LINE" "launch drift (argv-loss)" \
-  "a worker restored without its launched flags must be surfaced"
-assert_contains "$ARGV_LOSS_LINE" "--dangerously-skip-permissions" \
-  "the argv-loss annotation must name the flag the restored worker lost"
-pass "launch drift: fm-crew-state.sh surfaces a worker restored without its launched flags"
+assert_not_contains "$ARGV_LOSS_LINE" "launch drift" \
+  "a tmux worker with unreadable argv must not be annotated for lost flags"
+pass "launch drift: tmux lost flags leave the argv axis unknown"
 
 # A task record written before this detector existed has a silent argv axis.
 # Its independently verified cwd axis remains actionable.

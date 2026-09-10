@@ -10,11 +10,13 @@
 # No supported runtime backend can prevent this on its own. Herdr persists a
 # pane's live cwd but records no launch command at all from 0.8.0 onward
 # (docs/herdr-backend.md "Launch-argv replay"), and tmux, zellij, and cmux
-# persist neither across a server restart. Only tmux and Herdr expose a passive
-# live-cwd read for supervision; zellij, cmux, and Orca report unknown on that
-# axis rather than having supervision type into a live pane. Detection at
-# supervision time is therefore the available cover, which is what this file
-# owns.
+# persist neither across a server restart. Herdr alone exposes an atomic,
+# boundary-preserving live argv read, so only it covers the argv axis. tmux
+# reports argv unknown because it lacks such a read. Tmux and Herdr expose the
+# passive live-cwd reads used by supervision; zellij, cmux, and Orca report
+# unknown on that axis rather than having supervision type into a live pane.
+# Detection at supervision time is therefore the available cover, which is what
+# this file owns.
 #
 # The comparison is between what the spawn RECORDED (state/<id>.meta's
 # launch_argv= and worktree=, published by bin/fm-spawn.sh) and what the

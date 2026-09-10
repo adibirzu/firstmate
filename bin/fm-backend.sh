@@ -856,10 +856,11 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
 }
 
 # fm_backend_pane_argv: the live command line running in <target>, or a nonzero
-# return when this backend cannot answer. A backend without an argv surface is
-# not a failure: bin/fm-launch-drift-lib.sh reports `unknown` on the argv axis
-# and checks the working-directory axis only on passive-read backends (tmux and
-# Herdr). Zellij, cmux, and Orca report unknown on the cwd axis.
+# return when this backend cannot answer. Herdr alone covers the argv axis: tmux
+# reports unknown because it has no atomic boundary-preserving argv surface.
+# bin/fm-launch-drift-lib.sh checks the working-directory axis only on
+# passive-read backends (tmux and Herdr). Zellij, cmux, and Orca report unknown
+# on the cwd axis.
 fm_backend_pane_argv() {  # <backend> <target> <harness>
   local backend=$1
   shift

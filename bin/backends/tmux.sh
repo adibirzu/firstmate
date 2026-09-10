@@ -26,8 +26,6 @@
 . "$FM_BACKEND_LIB_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-gemini-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-gemini-lib.sh"
-# shellcheck source=bin/fm-launch-drift-identity-lib.sh
-. "$FM_BACKEND_LIB_DIR/fm-launch-drift-identity-lib.sh"
 
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
@@ -156,34 +154,7 @@ EOF
   printf '%s\n' "$path"
 }
 
-fm_backend_tmux_snapshot_matches() {  # <pane-id> <tty>
-  local snapshot verify_pane verify_path verify_tty
-  snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
-  IFS=$'\037' read -r verify_pane verify_path verify_tty <<EOF
-$snapshot
-EOF
-  [ "$verify_pane" = "$1" ] && [ "$verify_tty" = "$2" ]
-}
-
-# fm_backend_tmux_pane_argv: the live command line of the recorded harness in
-# <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 snapshot pane_id path tty pid comm args argv0 argv
-  [ -n "$harness" ] || return 1
-  snapshot=$(fm_backend_tmux_target_pane_snapshot "$target") || return 1
-  IFS=$'\037' read -r pane_id path tty <<EOF
-$snapshot
-EOF
-  [ -n "$pane_id" ] && [ -n "$tty" ] || return 1
-  while IFS=$'\037' read -r pid comm argv0 args; do
-    if fm_launch_drift_process_matches "$harness" "$comm" "$args" "$argv0"; then
-      fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
-      argv=$(fm_backend_tmux_pid_argv "$pid") || return 1
-      fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
-      printf '%s\n' "$argv"
-      return 0
-    fi
-  done < <(fm_backend_tmux_foreground_tuples "$pane_id" "$tty")
   return 1
 }
 
@@ -316,21 +287,6 @@ fm_backend_tmux_foreground_comms() {  # <target> [tty]
       done
 }
 
-fm_backend_tmux_foreground_tuples() {  # <target> [tty]
-  local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
-  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
-  [ -n "$tty" ] || return 0
-  LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm=,args= 2>/dev/null \
-    | while read -r pid pgid tpgid comm args; do
-        [ -n "$pid" ] && [ -n "$comm" ] && [ -n "$args" ] || continue
-        [ "$pgid" = "$tpgid" ] || continue
-        args=${args#"${args%%[![:space:]]*}"}
-        argv0=${args%%[[:space:]]*}
-        [ -n "$argv0" ] || continue
-        printf '%s\037%s\037%s\037%s\n' "$pid" "$comm" "$argv0" "$args"
-      done
-}
-
 # The foreground group's full command lines. Needed because a node-bundle
 # harness carries its identity in argv[1] rather than in its command name or
 # argv[0]; bin/fm-gemini-lib.sh owns what counts as evidence inside one.
@@ -357,16 +313,6 @@ fm_backend_tmux_foreground_pids() {  # <target> [tty]
         [ "$pgid" = "$tpgid" ] || continue
         printf '%s\n' "$pid"
       done
-}
-
-fm_backend_tmux_pid_argv() {  # <pid>
-  local pid=$1 token argv='' proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  [ -r "$proc_root/$pid/cmdline" ] || return 1
-  while IFS= read -r -d '' token; do
-    if [ -n "$argv" ]; then argv+=$'\037'; fi
-    argv+=$token
-  done < "$proc_root/$pid/cmdline"
-  [ -n "$argv" ] && printf '%s\n' "$argv"
 }
 
 fm_backend_tmux_foreground_argv0s() {  # <target> [tty]

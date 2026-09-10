@@ -37,7 +37,7 @@ fm_launch_drift_process_matches() {  # <harness> <comm> <args> [argv0]
   local harness=$1 comm=$2 args=$3 argv0=${4:-} name base
   case "$harness" in
     cursor|cursor-agent)
-      fm_cursor_process_matches "$comm" "$args" "$argv0"
+      fm_cursor_drift_process_matches "$comm" "$args" "$argv0"
       return
       ;;
     gemini)
