@@ -1508,17 +1508,10 @@ test_projection_close_restores_exact_prior_focus() {
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":true}]}}' > "$resp/7.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' > "$resp/8.out"
   printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}' > "$resp/9.out"
-  printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2","focused":true}}}' > "$resp/10.out"
+  # This close leaves another tab in w9, so the workspace is not known to be
+  # emptying and the restore must not wait on an unrelated workspace removal.
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/11.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":false},{"tab_id":"w2:t2","focused":true}]}}' > "$resp/12.out"
-  # Focus restoration requires a bounded stable window after an asynchronous
-  # close, so keep the fake server's exact focus snapshot stable throughout it.
-  local response
-  for response in $(seq 13 3 307); do
-    cp "$resp/10.out" "$resp/$response.out"
-    cp "$resp/11.out" "$resp/$((response + 1)).out"
-    cp "$resp/12.out" "$resp/$((response + 2)).out"
-  done
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w9:p2' "$ROOT" 2>&1)
@@ -1534,34 +1527,51 @@ test_projection_close_restores_exact_prior_focus() {
 }
 
 test_projection_focus_restore_recovers_delayed_close_drift() {
-  local dir log samples out status
+  local dir log samples out status probe_line focus_line focus_count
   dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
   log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
+  # The emptied workspace outlives the close for two probes, and the first
+  # corrective focus does not hold across the confirm window, so this exercises
+  # both halves of the contract: wait for the removal that steals focus, then
+  # correct again when one correction was not enough.
   out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
     . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_presence_state() {
+      printf "presence-probe %s\n" "$2" >> "$LOG"
+      probes=$(cat "$SAMPLES.probes" 2>/dev/null || printf "0")
+      probes=$((probes + 1))
+      printf "%s\n" "$probes" > "$SAMPLES.probes"
+      [ "$probes" -ge 3 ] && printf "dead" || printf "present"
+    }
     fm_backend_herdr_projection_focus_snapshot() {
       count=$(cat "$SAMPLES")
       count=$((count + 1))
-      printf "%s\\n" "$count" > "$SAMPLES"
-      case "$count" in
-        1|3) printf "w3\tw3:t1" ;;
-        *) printf "w2\tw2:t2" ;;
-      esac
+      printf "%s\n" "$count" > "$SAMPLES"
+      if [ "$count" -le 22 ]; then printf "w3\tw3:t1"; else printf "w2\tw2:t2"; fi
     }
     fm_backend_herdr_cli() {
-      printf "%s\\n" "$*" >> "$LOG"
+      printf "%s\n" "$*" >> "$LOG"
       case "$2 $3" in
-        "tab get") printf "{\\"result\\":{\\"tab\\":{\\"tab_id\\":\\"w2:t2\\",\\"workspace_id\\":\\"w2\\"}}}\\n" ;;
+        "tab get") printf "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
       esac
     }
     sleep() { :; }
     before=$(printf "w2\tw2:t2")
-    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close"
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close" w9
   ' 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
   assert_contains "$(cat "$log")" $'tab focus w2:t2' \
     "a delayed close focus drift did not refocus the exact prior tab"
+  assert_contains "$(cat "$log")" "presence-probe w9" \
+    "the restore did not wait for the emptied workspace to be removed"
+  probe_line=$(grep -n "presence-probe w9" "$log" | head -1 | cut -d: -f1)
+  focus_line=$(grep -n "tab focus w2:t2" "$log" | head -1 | cut -d: -f1)
+  [ -n "$probe_line" ] && [ -n "$focus_line" ] && [ "$probe_line" -lt "$focus_line" ] \
+    || fail "the corrective focus was issued before the emptied workspace was confirmed removed"
+  focus_count=$(grep -c "tab focus w2:t2" "$log")
+  [ "$focus_count" -ge 2 ] \
+    || fail "a correction that did not hold was never retried (focus issued $focus_count time(s))"
   pass "herdr presentation focus: delayed post-close focus drift is restored before cleanup returns"
 }
 
