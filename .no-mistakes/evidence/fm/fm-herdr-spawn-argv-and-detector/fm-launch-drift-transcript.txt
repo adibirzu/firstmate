@@ -1,0 +1,29 @@
+ok - launch drift: matching worktree and intact flags read ok
+ok - launch drift: a dropped flag reads argv-loss and names the flag
+ok - launch drift: option operands detect changed and missing values
+ok - launch drift: encoded briefs require a non-empty option operand
+ok - launch drift: encoded argv preserves spaced and quoted Codex operands
+ok - launch drift: a worker in an unrelated directory reads cwd-drift
+ok - launch drift: a worker in the primary checkout reads severe/primary-checkout
+ok - launch drift: both axes diverging keep severe and report both findings
+ok - launch drift: unreadable endpoints and an unverified argv axis never alarm
+ok - launch drift: a pane back at its shell prompt is not reported as lost flags
+ok - launch drift: the launch-env isolation wrapper's own flags are not attributed to the harness
+ok - launch drift: env and relaunch prefixes preserve the true harness boundary
+ok - launch drift: quoted assignment values preserve the true harness boundary
+ok - launch drift: foreground identity requires an executable token boundary
+ok - launch drift: Herdr argv fields preserve the Codex notify operand
+ok - launch drift: Herdr argv detects changed option operands
+ok - launch drift: node-bundled harnesses retain argv-loss detection
+ok - launch drift: the recorded Cursor alias retains argv-loss detection
+ok - launch drift: interpreter-launched Claude workers retain argv-loss detection
+ok - launch drift: every supported harness retains argv-loss detection
+ok - launch drift: Cursor detector evidence leaves session-lock identity unchanged
+ok - launch drift: supervision dispatches only passive cwd readers
+ok - launch drift: tmux reports its argv axis as unknown
+ok - launch drift: fm-crew-state.sh leaves a healthy worker's line unannotated
+ok - launch drift: tmux reads stay bound to the target snapshot
+ok - launch drift: fm-crew-state.sh surfaces the primary-checkout case on the state line
+ok - launch drift: a torn-down tmux target stays silent
+ok - launch drift: tmux lost flags leave the argv axis unknown
+ok - launch drift: legacy records keep a silent argv axis and severe cwd alarms

@@ -1,0 +1,4 @@
+herdr 0.8.2
+protocol: 20
+agent.start required parameters: name, kind, pane_id
+persisted SessionSnapshot fields: agents, focused_pane_id, focused_tab_id, focused_workspace_id, layouts, panes, protocol, tabs, version, workspaces
