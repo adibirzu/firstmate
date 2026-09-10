@@ -1086,6 +1086,11 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
+  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+    if ! spawn_fresh_commit_rollback; then
+      status=1
+    fi
+  fi
   # The treehouse lease is durable, so a spawn that fails before publishing
   # state/<id>.meta must return it here: teardown never runs for a task that
   # never existed, so nothing else would ever free that pool slot. The one
@@ -1097,6 +1102,8 @@ spawn_abort_cleanup() {
     if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
       if [ "$herdr_pane_close_refused" = 1 ]; then
         echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      elif [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+        echo "warning: leased worktree $WT was not returned because failed-dispatch rollback retained its task record; reconcile the record and endpoint before returning the lease" >&2
       else
         fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
           || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
@@ -1146,11 +1153,6 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
     fm_lock_release "$SPAWN_TASK_LOCK" || true
-  fi
-  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
-    if ! spawn_fresh_commit_rollback; then
-      status=1
-    fi
   fi
   # An aborted relaunch must not leave the REPLACEMENT's wiring armed: the task
   # keeps running its previous incarnation's record, so a stray hook file or
