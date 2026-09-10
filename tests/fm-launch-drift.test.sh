@@ -238,7 +238,9 @@ herdr_live_argv() {  # <harness>
     # shellcheck source=bin/fm-backend.sh
     . "$ROOT/bin/fm-backend.sh"
     fm_backend_source herdr
+    # shellcheck disable=SC2034,SC2329 # The adapter invokes these test doubles indirectly.
     fm_backend_herdr_target_observe() { FM_BACKEND_HERDR_SESSION=default; FM_BACKEND_HERDR_PANE=w1:p2; }
+    # shellcheck disable=SC2329 # fm_backend_pane_argv reaches this adapter double indirectly.
     fm_backend_herdr_cli() { printf '%s\n' "$FM_TEST_HERDR_RESPONSE"; }
     fm_backend_pane_argv herdr default:w1:p2 "$harness"
   )
@@ -374,10 +376,13 @@ pass "launch drift: Cursor detector evidence leaves session-lock identity unchan
   # active-pane fallback for an absent target. Only the bound reader proves
   # the value belongs to the recorded pane, which is what keeps a torn-down
   # task from being annotated with a severe primary-checkout landing.
+  # shellcheck disable=SC2329 # The assertion proves this decoy is not called.
   fm_backend_tmux_current_path() { printf '/unbound/tmux\n'; }
   fm_backend_tmux_bound_current_path() { printf '/passive/tmux\n'; }
   fm_backend_herdr_current_path() { printf '/passive/herdr\n'; }
+  # shellcheck disable=SC2329 # The dispatcher must return unknown without this active probe.
   fm_backend_zellij_current_path() { return 23; }
+  # shellcheck disable=SC2329 # The dispatcher must return unknown without this active probe.
   fm_backend_cmux_current_path() { return 24; }
   [ "$(fm_backend_current_path tmux sess:win)" = /passive/tmux ] \
     || fail "the tmux dispatcher must use its BOUND passive cwd reader, not the unbound spawn poll"

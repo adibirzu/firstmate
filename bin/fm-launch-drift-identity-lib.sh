@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 
 if ! declare -F fm_harness_path_name >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-session-lock-lib.sh
   . "$(dirname -- "${BASH_SOURCE[0]}")/fm-session-lock-lib.sh"
 fi
 if ! declare -F fm_gemini_args_are_gemini >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-gemini-lib.sh
   . "$(dirname -- "${BASH_SOURCE[0]}")/fm-gemini-lib.sh"
 fi
 

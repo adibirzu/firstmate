@@ -922,7 +922,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws doomed_ws close_status state plan plan_shell_pid plan_move_record workspace_presence
+  local before active_tab info target_pane target_tab target_ws doomed_ws close_status death_closed state plan plan_shell_pid plan_move_record workspace_presence
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -954,6 +954,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   plan_shell_pid=
   plan_move_record=
   doomed_ws=
+  death_closed=0
   if [ -n "$target_ws" ]; then
     plan=$(fm_backend_herdr_emptying_close_plan "$session" "$pane_id" "$target_ws" "$target_tab" "${before%%$'\t'*}")
     case "$plan" in
@@ -981,6 +982,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   if [ "$plan" = death ]; then
     if fm_backend_herdr_death_close_pane "$session" "$pane_id" "$plan_shell_pid"; then
       close_status=0
+      death_closed=1
     elif fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane_id"; then
       close_status=0
     else
@@ -991,6 +993,9 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   else
     close_status=1
   fi
+  # A successful pane-death close is already focus preserving.  An explicit
+  # fallback, however, can still queue a focus-changing workspace removal.
+  [ "$death_closed" = 1 ] && doomed_ws=
   if [ "$close_status" -eq 0 ] && [ -n "$plan_move_record" ]; then
     workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
     if [ "$workspace_presence" != dead ]; then
@@ -3029,7 +3034,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # back to the plain close, matching the pre-hardening contract.
 fm_backend_herdr_kill_serialized() {  # <session> <pane>
   local session=$1 pane=$2
-  local before active_tab info target_pane target_tab target_ws doomed_ws plan shell_pid plan_move_record close_failed workspace_presence
+  local before active_tab info target_pane target_tab target_ws doomed_ws plan shell_pid plan_move_record close_failed death_closed workspace_presence
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || before=
   if [ -n "$before" ]; then
     active_tab=${before#*$'\t'}
@@ -3041,6 +3046,7 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
       plan=$(fm_backend_herdr_emptying_close_plan "$session" "$pane" "$target_ws" "$target_tab" "${before%%$'\t'*}")
       plan_move_record=
       doomed_ws=
+      death_closed=0
       case "$plan" in
         moved$'\t'*)
           plan_move_record=${plan%%$'\n'*}
@@ -3057,8 +3063,9 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
       case "$plan" in
         death\ *)
           shell_pid=${plan#death }
-          if ! fm_backend_herdr_death_close_pane "$session" "$pane" "$shell_pid" \
-            && ! fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane"; then
+          if fm_backend_herdr_death_close_pane "$session" "$pane" "$shell_pid"; then
+            death_closed=1
+          elif ! fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane"; then
             close_failed=1
           fi
           ;;
@@ -3066,6 +3073,9 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
           fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane" || close_failed=1
           ;;
       esac
+      # A successful pane-death close is already focus preserving.  An explicit
+      # fallback, however, can still queue a focus-changing workspace removal.
+      [ "$death_closed" = 1 ] && doomed_ws=
       if [ "$close_failed" = 0 ] && [ -n "$plan_move_record" ]; then
         workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
         if [ "$workspace_presence" != dead ]; then
