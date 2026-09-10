@@ -1534,123 +1534,35 @@ test_projection_close_restores_exact_prior_focus() {
 }
 
 test_projection_focus_restore_recovers_delayed_close_drift() {
-  local dir log samples out status probe_line focus_line focus_count
+  local dir log samples out status
   dir="$TMP_ROOT/projection-delayed-focus-restore"; mkdir -p "$dir"
   log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
-  # The emptied workspace outlives the close for two probes, and the first
-  # corrective focus does not hold across the confirm window, so this exercises
-  # both halves of the contract: wait for the removal that steals focus, then
-  # correct again when one correction was not enough.
   out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
     . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_workspace_presence_state() {
-      printf "presence-probe %s\n" "$2" >> "$LOG"
-      probes=$(cat "$SAMPLES.probes" 2>/dev/null || printf "0")
-      probes=$((probes + 1))
-      printf "%s\n" "$probes" > "$SAMPLES.probes"
-      [ "$probes" -ge 3 ] && printf "dead" || printf "present"
-    }
     fm_backend_herdr_projection_focus_snapshot() {
       count=$(cat "$SAMPLES")
       count=$((count + 1))
-      printf "%s\n" "$count" > "$SAMPLES"
-      if [ "$count" -le 22 ]; then printf "w3\tw3:t1"; else printf "w2\tw2:t2"; fi
+      printf "%s\\n" "$count" > "$SAMPLES"
+      case "$count" in
+        1|3) printf "w3\tw3:t1" ;;
+        *) printf "w2\tw2:t2" ;;
+      esac
     }
     fm_backend_herdr_cli() {
-      printf "%s\n" "$*" >> "$LOG"
+      printf "%s\\n" "$*" >> "$LOG"
       case "$2 $3" in
-        "tab get") printf "{\"result\":{\"tab\":{\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
+        "tab get") printf "{\\"result\\":{\\"tab\\":{\\"tab_id\\":\\"w2:t2\\",\\"workspace_id\\":\\"w2\\"}}}\\n" ;;
       esac
     }
     sleep() { :; }
     before=$(printf "w2\tw2:t2")
-    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close" w9
+    fm_backend_herdr_projection_focus_restore fmtest "$before" "pane close"
   ' 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "a delayed focus drift after a close should be restored: $out"
   assert_contains "$(cat "$log")" $'tab focus w2:t2' \
     "a delayed close focus drift did not refocus the exact prior tab"
-  assert_contains "$(cat "$log")" "presence-probe w9" \
-    "the restore did not wait for the emptied workspace to be removed"
-  probe_line=$(grep -n "presence-probe w9" "$log" | head -1 | cut -d: -f1)
-  focus_line=$(grep -n "tab focus w2:t2" "$log" | head -1 | cut -d: -f1)
-  [ -n "$probe_line" ] && [ -n "$focus_line" ] && [ "$probe_line" -lt "$focus_line" ] \
-    || fail "the corrective focus was issued before the emptied workspace was confirmed removed"
-  focus_count=$(grep -c "tab focus w2:t2" "$log")
-  [ "$focus_count" -ge 2 ] \
-    || fail "a correction that did not hold was never retried (focus issued $focus_count time(s))"
   pass "herdr presentation focus: delayed post-close focus drift is restored before cleanup returns"
-}
-
-test_projection_focus_restore_waits_for_doomed_removal_before_safe_success() {
-  local dir log samples out status probe_count
-  dir="$TMP_ROOT/projection-focus-safe-removal-wait"; mkdir -p "$dir"
-  log="$dir/log"; samples="$dir/samples"; : > "$log"; printf '0\n' > "$samples"
-  out=$(ROOT="$ROOT" LOG="$log" SAMPLES="$samples" bash -c '
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_workspace_presence_state() {
-      printf "presence-probe %s\n" "$2" >> "$LOG"
-      count=$(cat "$SAMPLES")
-      count=$((count + 1))
-      printf "%s\n" "$count" > "$SAMPLES"
-      [ "$count" -ge 2 ] && printf "dead" || printf "present"
-    }
-    fm_backend_herdr_projection_focus_snapshot() { printf "w2\tw2:t2"; }
-    fm_backend_herdr_cli() { printf "%s\n" "$*" >> "$LOG"; }
-    sleep() { :; }
-    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
-  ' 2>&1)
-  status=$?
-  [ "$status" -eq 0 ] || fail "a focus-safe snapshot should succeed after the emptied workspace is confirmed removed: $out"
-  probe_count=$(grep -c "presence-probe w9" "$log")
-  [ "$probe_count" -eq 2 ] || fail "a safe initial snapshot skipped the doomed-workspace removal wait ($probe_count probes)"
-  assert_not_contains "$(cat "$log")" "tab focus w2:t2" \
-    "a focus-safe post-removal snapshot unnecessarily re-focused the prior tab"
-  pass "herdr presentation focus: safe snapshots still fence emptied-workspace removal"
-}
-
-test_projection_focus_restore_refuses_unconfirmed_doomed_removal() {
-  local dir log out status
-  dir="$TMP_ROOT/projection-focus-unconfirmed-removal"; mkdir -p "$dir"
-  log="$dir/log"; : > "$log"
-  out=$(ROOT="$ROOT" LOG="$log" bash -c '
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_workspace_presence_state() { printf "presence-probe %s\n" "$2" >> "$LOG"; printf "unknown"; }
-    fm_backend_herdr_projection_focus_snapshot() { printf "w2\tw2:t2"; }
-    fm_backend_herdr_cli() { printf "%s\n" "$*" >> "$LOG"; }
-    sleep() { :; }
-    fm_backend_herdr_projection_focus_restore fmtest "$(printf "w2\tw2:t2")" "pane close" w9
-  ' 2>&1)
-  status=$?
-  [ "$status" -ne 0 ] || fail "an unconfirmed emptied-workspace removal must leave focus uncertain"
-  assert_contains "$out" "could not confirm removal of emptied workspace" \
-    "unconfirmed removal did not report focus uncertainty"
-  assert_not_contains "$(cat "$log")" "tab focus w2:t2" \
-    "unconfirmed removal attempted focus restoration before the removal boundary"
-  pass "herdr presentation focus: unconfirmed emptied-workspace removal fails safely"
-}
-
-test_projection_close_failure_does_not_wait_for_a_removal_that_never_started() {
-  local dir log out status
-  dir="$TMP_ROOT/projection-close-failure-no-removal-wait"; mkdir -p "$dir"
-  log="$dir/log"; : > "$log"
-  out=$(ROOT="$ROOT" LOG="$log" bash -c '
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_projection_focus_snapshot() { printf "w1\tw1:t1"; }
-    fm_backend_herdr_emptying_close_plan() { printf "empty plain"; }
-    fm_backend_herdr_explicit_close_pane_confirmed() { return 1; }
-    fm_backend_herdr_workspace_presence_state() { printf "workspace-read\n" >> "$LOG"; printf unknown; }
-    fm_backend_herdr_cli() {
-      case "$2 $3" in
-        "pane get") printf "{\"result\":{\"pane\":{\"pane_id\":\"w2:p2\",\"tab_id\":\"w2:t2\",\"workspace_id\":\"w2\"}}}\n" ;;
-      esac
-    }
-    fm_backend_herdr_projection_close_pane_focus_preserving fmtest w2:p2
-  ' 2>&1)
-  status=$?
-  [ "$status" -ne 0 ] || fail "a failed close must remain unsuccessful: $out"
-  [ ! -s "$log" ] || fail "a failed close waited for a workspace removal that never started"
-  pass "herdr presentation focus: a failed close does not wait for an unstarted removal"
 }
 
 test_projection_close_refuses_active_tab() {
@@ -4885,9 +4797,6 @@ test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
 test_projection_focus_restore_recovers_delayed_close_drift
-test_projection_focus_restore_waits_for_doomed_removal_before_safe_success
-test_projection_focus_restore_refuses_unconfirmed_doomed_removal
-test_projection_close_failure_does_not_wait_for_a_removal_that_never_started
 test_projection_close_refuses_active_tab
 test_projection_close_reports_focus_restore_failure
 test_projection_close_rechecks_required_agent_state_at_boundary
