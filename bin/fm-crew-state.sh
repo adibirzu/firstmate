@@ -104,6 +104,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-launch-drift-lib.sh
+. "$SCRIPT_DIR/fm-launch-drift-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -122,10 +124,18 @@ FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
 
+# Set by launch_drift_note() once the endpoint has been read, and appended by
+# emit() to whichever line this run produces. It is deliberately an ANNOTATION
+# rather than a state: a worker with lost flags, or one standing in the primary
+# checkout, is usually still `working` by every other measure, so overriding the
+# state would hide what it is actually doing. The supervisor needs both facts.
+LAUNCH_DRIFT_NOTE=''
+
 # Emit the one canonical line and exit 0. Detail is optional.
 emit() {  # <state> <source> [detail]
   local line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
+  [ -n "$LAUNCH_DRIFT_NOTE" ] && line="$line${SEP}$LAUNCH_DRIFT_NOTE"
   printf '%s\n' "$line"
   exit 0
 }
@@ -229,6 +239,42 @@ fi
 TASK_BACKEND=$(fm_backend_of_meta "$META")
 BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
+
+# --- launch drift ----------------------------------------------------------
+
+# Compare the endpoint's LIVE working directory and command line against what
+# the spawn RECORDED, and set LAUNCH_DRIFT_NOTE when they diverge. The policy,
+# including which divergences are severe and which reads are allowed to be
+# unknown, is owned by bin/fm-launch-drift-lib.sh; this function only gathers
+# the two live values and formats the note.
+#
+# It runs on every state read because a restore can strip a worker's flags or
+# move it into the primary checkout at any point in its life, not only at spawn.
+# Both reads are best-effort and their failure is not an error: an unreadable
+# endpoint yields `unknown`, which produces no note at all.
+#
+# A remote secondmate is skipped: its worktree and endpoint live on another
+# host, so both local reads would compare this machine's paths against that
+# host's record and manufacture a divergence that does not exist.
+launch_drift_note() {
+  local live_cwd='' live_argv='' verdict severity code detail
+  [ -z "$REMOTE_HOST" ] || return 0
+  [ -n "$BACKEND_TARGET" ] || return 0
+  live_cwd=$(fm_backend_current_path "$TASK_BACKEND" "$BACKEND_TARGET" "$EXPECTED_LABEL" 2>/dev/null) || live_cwd=''
+  live_argv=$(fm_backend_pane_argv "$TASK_BACKEND" "$BACKEND_TARGET" 2>/dev/null) || live_argv=''
+  verdict=$(fm_launch_drift_verdict \
+    "$(meta_value launch_argv)" "$WT" "$(meta_value project)" "$live_cwd" "$live_argv")
+  IFS=$'\t' read -r severity code detail <<VERDICT
+$verdict
+VERDICT
+  case "$severity" in
+    severe) LAUNCH_DRIFT_NOTE="LAUNCH DRIFT (severe, $code): $detail" ;;
+    warn) LAUNCH_DRIFT_NOTE="launch drift ($code): $detail" ;;
+    *) LAUNCH_DRIFT_NOTE='' ;;
+  esac
+}
+launch_drift_note
+
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
     tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;

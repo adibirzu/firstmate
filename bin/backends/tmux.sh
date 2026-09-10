@@ -107,6 +107,23 @@ fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
 }
 
+# fm_backend_tmux_pane_argv: the live command line of the pane's deepest
+# non-shell descendant, or empty when it cannot be read. Consumed by
+# bin/fm-crew-state.sh's launch-drift detector to compare a running worker
+# against the command state/<id>.meta says it was launched with.
+#
+# tmux exposes the pane's top-level shell pid but not the agent's own argv, so
+# the process table is the source. fm_backend_agent_descendant_argv owns which
+# descendant counts as the agent and why.
+fm_backend_tmux_pane_argv() {  # <target>
+  local pane_pid
+  pane_pid=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pane_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  fm_backend_agent_descendant_argv "$pane_pid"
+}
+
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
 # composer verification - used for the fixed spawn-time commands
 # (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence

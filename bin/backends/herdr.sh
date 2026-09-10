@@ -2611,6 +2611,39 @@ fm_backend_herdr_current_path() {  # <target>
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
 
+# fm_backend_herdr_pane_argv: the live command line of the pane's foreground
+# process, or a nonzero return when it cannot be read. Consumed by
+# bin/fm-crew-state.sh's launch-drift detector.
+#
+# Herdr answers this natively: `pane process-info` reports each foreground
+# process with its own argv, so no process-table walk is needed. The FIRST
+# non-scaffolding entry is taken, applying the same rule as the tmux reader
+# through the same owner (fm_backend_command_is_launch_scaffolding): the
+# launch-env isolation wrapper and a busy agent's own tool subprocesses are all
+# in the foreground group, and only the agent carries the launched flags.
+#
+# This is the only launch evidence Herdr offers. From 0.8.0 it persists no
+# launch command at all, so nothing here survives a restart and the comparison
+# must be made against firstmate's own record (docs/herdr-backend.md
+# "Launch-argv replay").
+fm_backend_herdr_pane_argv() {  # <target>
+  fm_backend_herdr_target_ready "$1" || return 1
+  local argv line
+  argv=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info \
+    --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+    | jq -r '.result.process_info.foreground_processes[]? | select((.argv // []) | length > 0) | (.argv | join(" "))' 2>/dev/null) || return 1
+  [ -n "$argv" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    fm_backend_command_is_launch_scaffolding "${line%% *}" && continue
+    printf '%s\n' "$line"
+    return 0
+  done <<ARGV
+$argv
+ARGV
+  return 1
+}
+
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
 # spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types

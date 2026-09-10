@@ -979,6 +979,63 @@ ok - forced secondmate teardown retains Herdr child identity until exact pane di
 ok - forced teardown retains a nested secondmate home and its grandchild's Herdr identity when the grandchild close is unconfirmed
 ```
 
+### Launch-argv replay removal
+
+Measured on 2026-09-10 against the installed Herdr 0.8.2, protocol 20, macOS aarch64, through the guarded lab helper.
+This is the empirical basis for [`herdr-backend.md`](../herdr-backend.md) "Launch-argv replay" and for the launch-drift detector existing at all.
+
+The pane-creating `agent start` signature earlier releases accepted is gone:
+
+```sh
+bin/fm-herdr-lab.sh run "$LAB" agent start argvold --cwd "$DIR" --workspace w1 --no-focus -- claude --dangerously-skip-permissions
+```
+
+```text
+unknown option: --cwd
+```
+
+`agent.start` now attaches an agent to an existing pane, and its `argv` is a response field rather than persisted state:
+
+```sh
+herdr api schema --json | jq -r '.schemas.request."$defs".AgentStartParams.required'
+```
+
+```text
+["name","kind","pane_id"]
+```
+
+No persisted launch record exists anywhere in the schema.
+The only `argv` fields belong to `pane.process_info`'s live process read and to the `agent_started` response:
+
+```sh
+herdr api schema --json | jq -r 'paths(scalars) as $p | select($p|map(tostring)|join(".")|test("argv";"i")) | $p|map(tostring)|join(".")' | sed 's/\.[^.]*$//' | sort -u
+```
+
+```text
+schemas.success_response.$defs.PaneProcessInfoProcess.properties.argv
+schemas.success_response.$defs.PaneProcessInfoProcess.properties.argv0
+schemas.success_response.$defs.ResponseResult.oneOf.13.properties.argv
+```
+
+A persisted pane record carries `cwd` alone, and that cwd follows the live shell rather than freezing at creation.
+A pane created at one directory and then `cd`ed into another persisted the second path across a real guarded stop:
+
+```sh
+bin/fm-herdr-lab.sh run "$LAB" tab create --workspace w1 --cwd "$DIR/project" --label cwdtab --no-focus
+bin/fm-herdr-lab.sh run "$LAB" pane run w1:p2 "cd $DIR/worktree"
+bin/fm-herdr-lab.sh stop "$LAB"
+jq -r '[.workspaces[].tabs[].panes[].cwd]' "$SESSION_JSON"
+```
+
+```text
+[
+  "<DIR>/project",
+  "<DIR>/worktree"
+]
+```
+
+The first entry is the workspace's own seeded pane; the second is the task pane, which followed the `cd`.
+
 ### Composer and operational input
 
 Real captures verified these active distinctions:
