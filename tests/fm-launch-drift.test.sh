@@ -159,6 +159,7 @@ tmux_live_argv() {  # <harness>
     # shellcheck source=bin/fm-backend.sh
     . "$ROOT/bin/fm-backend.sh"
     fm_backend_source tmux
+    fm_backend_tmux_target_pane_id() { printf '%s\n' "$1"; }
     fm_backend_tmux_foreground_comms() { printf '%s\n' "$FM_TEST_FG_COMM"; }
     fm_backend_tmux_foreground_args() { printf '%s\n' "$FM_TEST_FG_ARGS"; }
     fm_backend_tmux_foreground_argv0s() { printf '%s\n' "$FM_TEST_FG_ARGV0"; }
@@ -190,6 +191,14 @@ CURSOR_LOSS=$(fm_launch_drift_verdict "$CURSOR_LAUNCH" cursor-agent "$WORKTREE" 
 assert_contains "$CURSOR_LOSS" "--yolo" \
   "a node-bundled harness argv-loss must name the dropped flag"
 pass "launch drift: node-bundled harnesses retain argv-loss detection"
+
+CURSOR_ALIAS_LAUNCH="/opt/cursor/agent --trust --yolo"
+CURSOR_ALIAS_LOSS=$(fm_launch_drift_verdict "$CURSOR_ALIAS_LAUNCH" cursor "$WORKTREE" "$PROJECT" "$WORKTREE" "$CURSOR_ARGV_LOSS")
+[ "$(printf '%s' "$CURSOR_ALIAS_LOSS" | cut -f2)" = argv-loss ] \
+  || fail "a verified legacy Cursor alias missing --yolo must read argv-loss, got: $CURSOR_ALIAS_LOSS"
+assert_contains "$CURSOR_ALIAS_LOSS" "--yolo" \
+  "a verified legacy Cursor alias argv-loss must name the dropped flag"
+pass "launch drift: the recorded Cursor alias retains argv-loss detection"
 
 CLAUDE_NODE_LAUNCH="claude --dangerously-skip-permissions"
 FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /x/@anthropic-ai/claude-code/cli.js --dangerously-skip-permissions' FM_TEST_FG_ARGV0=node
@@ -249,6 +258,10 @@ for arg in "$@"; do
     '#{pane_id}') printf '%%0\n'; exit 0 ;;
   esac
 done
+if [ "${1:-}" = list-panes ] && [ "${2:-}" = -a ]; then
+  [ "${FM_FAKE_TMUX_TARGET_LIVE:-1}" = 1 ] && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\n'
+  exit 0
+fi
 exit 0
 SH
 chmod +x "$FAKEBIN/tmux"
@@ -273,7 +286,8 @@ STATE_DIR="$TMP_ROOT/state"
 mkdir -p "$STATE_DIR"
 
 FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
-export FAKE_AGENT_ARGV
+FM_FAKE_TMUX_TARGET_LIVE=1
+export FAKE_AGENT_ARGV FM_FAKE_TMUX_TARGET_LIVE
 trap 'fm_test_cleanup' EXIT
 
 # Prove the foreground reader selects the recorded harness before any verdict
@@ -327,6 +341,18 @@ assert_contains "$SEVERE_LINE" "LAUNCH DRIFT (severe, primary-checkout)" \
 assert_contains "$SEVERE_LINE" "state: " \
   "the drift annotation must accompany the state, not replace it"
 pass "launch drift: fm-crew-state.sh surfaces the primary-checkout case on the state line"
+
+FM_FAKE_TMUX_TARGET_LIVE=0
+FM_FAKE_PANE_PATH="$PROJECT/src"
+export FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_PANE_PATH
+MISSING_LINE=$(crew_state healthy)
+assert_not_contains "$MISSING_LINE" "primary-checkout" \
+  "a torn-down tmux target must not read the active pane as a primary-checkout worker"
+assert_not_contains "$MISSING_LINE" "launch drift" \
+  "a torn-down tmux target must keep both unreadable axes silent"
+FM_FAKE_TMUX_TARGET_LIVE=1
+export FM_FAKE_TMUX_TARGET_LIVE
+pass "launch drift: a torn-down tmux target stays silent"
 
 # The production symptom itself: the worker came back, in the right place, but
 # without the flags it was launched with. Restarting the stand-in agent under a

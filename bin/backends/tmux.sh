@@ -100,33 +100,56 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
   printf '%s\n' "$wid"
 }
 
+fm_backend_tmux_target_pane_id() {  # <target>
+  local target=$1 row_session row_window row_window_id row_pane_id row_active
+  [ -n "$target" ] || return 1
+  while IFS=$'\t' read -r row_session row_window row_window_id row_pane_id row_active; do
+    case "$target" in
+      %*) [ "$row_pane_id" = "$target" ] || continue ;;
+      @*) [ "$row_window_id" = "$target" ] && [ "$row_active" = 1 ] || continue ;;
+      *:*)
+        [ "$row_session" = "${target%%:*}" ] \
+          && [ "$row_window" = "${target#*:}" ] \
+          && [ "$row_active" = 1 ] || continue
+        ;;
+      *) return 1 ;;
+    esac
+    printf '%s\n' "$row_pane_id"
+    return 0
+  done < <(tmux list-panes -a -F '#{session_name}\t#{window_name}\t#{window_id}\t#{pane_id}\t#{pane_active}' 2>/dev/null)
+  return 1
+}
+
 # fm_backend_tmux_current_path: the live pane's current working directory, or
 # empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
 # `tmux display-message -p -t "$T" '#{pane_current_path}'`.
 fm_backend_tmux_current_path() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+  local pane_id
+  pane_id=$(fm_backend_tmux_target_pane_id "$1") || return 1
+  tmux display-message -p -t "$pane_id" '#{pane_current_path}' 2>/dev/null
 }
 
 # fm_backend_tmux_pane_argv: the live command line of the recorded harness in
 # <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 comm args argv0 i
+  local target=$1 harness=$2 pane_id comm args argv0 i
   local -a comms=() argses=() argv0s=()
   [ -n "$harness" ] || return 1
+  pane_id=$(fm_backend_tmux_target_pane_id "$target") || return 1
   while IFS= read -r comm; do
     [ -n "$comm" ] && comms[${#comms[@]}]=$comm
   done <<EOF
-$(fm_backend_tmux_foreground_comms "$target")
+$(fm_backend_tmux_foreground_comms "$pane_id")
 EOF
   while IFS= read -r args; do
     [ -n "$args" ] && argses[${#argses[@]}]=$args
   done <<EOF
-$(fm_backend_tmux_foreground_args "$target")
+$(fm_backend_tmux_foreground_args "$pane_id")
 EOF
   while IFS= read -r argv0; do
     [ -n "$argv0" ] && argv0s[${#argv0s[@]}]=$argv0
   done <<EOF
-$(fm_backend_tmux_foreground_argv0s "$target")
+$(fm_backend_tmux_foreground_argv0s "$pane_id")
 EOF
   for ((i = 0; i < ${#argses[@]}; i++)); do
     comm=${comms[i]:-}

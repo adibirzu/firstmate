@@ -214,14 +214,14 @@ fm_cursor_argv0_is_cursor() {  # <argv0>
 # liveness (bin/backends/tmux.sh), and worker-server discovery (bin/fm-spawn.sh).
 #
 # Accepted: an exact cursor-agent command name; a MainThread or bare
-# interpreter whose argv carries Cursor's install path; a legacy `agent` whose
-# argv[0] resolves into Cursor's install tree.
+# interpreter whose executed script carries Cursor's install path; a legacy
+# `agent` whose argv[0] resolves into Cursor's install tree.
 #
 # Rejected: a bare MainThread with no Cursor evidence; any executable whose
 # basename merely happens to be `agent`; any path with an `agent/` directory
 # component that is running something else.
 fm_cursor_process_matches() {  # <comm> <args> [argv0]
-  local comm=$1 args=$2 argv0=${3:-} base token
+  local comm=$1 args=$2 argv0=${3:-} base token rest
   [ -n "$comm" ] || [ -n "$argv0" ] || return 1
   argv0=${argv0:-$comm}
   base=$(basename -- "$comm")
@@ -230,8 +230,16 @@ fm_cursor_process_matches() {  # <comm> <args> [argv0]
     cursor-agent) return 0 ;;
     agent|MainThread|node|node-*|node[0-9]*|python|python[0-9]*|python[0-9].[0-9]*)
       fm_cursor_argv0_is_cursor "$argv0" && return 0
-      for token in $args; do
+      rest=${args#"${args%%[![:space:]]*}"}
+      rest=${rest#"${rest%%[[:space:]]*}"}
+      while [ -n "$rest" ]; do
+        rest=${rest#"${rest%%[![:space:]]*}"}
+        [ -n "$rest" ] || break
+        token=${rest%%[[:space:]]*}
+        rest=${rest#"$token"}
+        case "$token" in -*) continue ;; esac
         fm_cursor_path_is_cursor "$token" && return 0
+        return 1
       done
       # A legacy alias may also be reported by its own path in comm.
       fm_cursor_path_is_cursor "$comm" && return 0
