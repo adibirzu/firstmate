@@ -898,21 +898,21 @@ fm_backend_command_is_launch_scaffolding() {  # <command-word>
 }
 
 # fm_backend_current_path: the live working directory of <target>, or a nonzero
-# return when this backend cannot answer. The zellij and cmux readers take the
-# expected pane label as a third argument to prove they read the right pane;
-# tmux and herdr address the pane directly and ignore it.
+# return when this backend cannot answer. Supervision must NEVER type into a
+# live pane: fm-crew-state.sh calls this on every state read, so it may use only
+# tmux and Herdr's passive readers. Zellij and cmux's active marker probes stay
+# scoped to fm-spawn.sh's pre-harness worktree-discovery poll, and Orca has no
+# current-path reader.
 #
 # fm-spawn.sh has its own spawn_current_path for the worktree-discovery poll,
 # which predates this dispatcher and stays as it is: it runs while $BACKEND is a
 # local, already-resolved variable inside a single spawn.
 fm_backend_current_path() {  # <backend> <target> [expected-label]
-  local backend=$1 target=$2 label=${3:-}
+  local backend=$1 target=$2
   fm_backend_source "$backend" || return 1
   case "$backend" in
     tmux) fm_backend_tmux_current_path "$target" ;;
     herdr) fm_backend_herdr_current_path "$target" ;;
-    zellij) fm_backend_zellij_current_path "$target" "$label" ;;
-    cmux) fm_backend_cmux_current_path "$target" "$label" ;;
     *) return 1 ;;
   esac
 }
@@ -920,8 +920,8 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
 # fm_backend_pane_argv: the live command line running in <target>, or a nonzero
 # return when this backend cannot answer. A backend without an argv surface is
 # not a failure: bin/fm-launch-drift-lib.sh reports `unknown` on the argv axis
-# and still checks the working-directory axis, which every backend supports
-# through fm_backend_current_path's per-adapter readers.
+# and checks the working-directory axis only on passive-read backends (tmux and
+# Herdr). Zellij, cmux, and Orca report unknown on the cwd axis.
 fm_backend_pane_argv() {  # <backend> <target>
   local backend=$1
   shift

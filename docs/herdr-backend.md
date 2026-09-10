@@ -296,6 +296,8 @@ Because no supported backend replays a launch, firstmate detects the loss instea
 `bin/fm-spawn.sh` records the resolved command as the task record's `launch_argv=`, and `bin/fm-crew-state.sh` compares it, and the recorded `worktree=`, against what the endpoint is live running on every state read.
 `bin/fm-launch-drift-lib.sh` owns that verdict policy, including which divergences are severe.
 `fm_backend_herdr_pane_argv` supplies the live side here through `pane.process_info`.
+Only tmux and Herdr expose passive cwd readers for that supervision path.
+Zellij and cmux's cwd probes are active and remain limited to fm-spawn.sh before a harness launches, while Orca has no cwd reader, so those backends report unknown on the cwd axis.
 
 ## Push events and polling fallback
 

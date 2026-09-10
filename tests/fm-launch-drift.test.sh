@@ -7,7 +7,9 @@
 # restored into the project's PRIMARY CHECKOUT instead of its task worktree. No
 # supported backend replays a launch command - Herdr persists none at all from
 # 0.8.0 (docs/herdr-backend.md "Launch-argv replay") - so detection against
-# firstmate's own record is the only cover, and these cases pin it.
+# firstmate's own record is the only cover, and these cases pin it. Supervision
+# uses only tmux and Herdr's passive cwd reads; zellij, cmux, and Orca remain
+# unknown on that axis so a state read never types into a live pane.
 #
 # Both halves run with real processes and no harness, so CI enforces them
 # everywhere:
@@ -125,6 +127,51 @@ assert_contains \
   "$(fm_launch_drift_flags "$WRAPPED")" "--dangerously-skip-permissions" \
   "the harness's own flags must still be collected from inside the wrapper"
 pass "launch drift: the launch-env isolation wrapper's own flags are not attributed to the harness"
+
+# Env options and relaunch shell prefixes must not become a false harness token.
+ENV_UNSET_LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions --model opus"
+[ "$(verdict_field 2 "$ENV_UNSET_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+  || fail "an env -u wrapper must compare the real harness flags, not its removed variable names"
+assert_contains \
+  "$(fm_launch_drift_verdict "$ENV_UNSET_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "--dangerously-skip-permissions" \
+  "an env -u wrapper must name the real harness flag that went missing"
+
+RELAUNCH="unset TRACEPARENT; claude --dangerously-skip-permissions --model opus"
+[ "$(verdict_field 2 "$RELAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+  || fail "an unset relaunch prefix must compare the real harness flags, not TRACEPARENT"
+assert_contains \
+  "$(fm_launch_drift_verdict "$RELAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "--dangerously-skip-permissions" \
+  "an unset relaunch prefix must name the real harness flag that went missing"
+pass "launch drift: env and relaunch prefixes preserve the true harness boundary"
+
+# State reads must use only passive cwd readers and leave active adapter probes
+# reserved for fm-spawn.sh before a harness starts.
+(
+  # shellcheck source=bin/fm-backend.sh
+  . "$ROOT/bin/fm-backend.sh"
+  _FM_BACKEND_TMUX_SOURCED=1
+  _FM_BACKEND_HERDR_SOURCED=1
+  _FM_BACKEND_ZELLIJ_SOURCED=1
+  _FM_BACKEND_CMUX_SOURCED=1
+  _FM_BACKEND_ORCA_SOURCED=1
+  fm_backend_tmux_current_path() { printf '/passive/tmux\n'; }
+  fm_backend_herdr_current_path() { printf '/passive/herdr\n'; }
+  fm_backend_zellij_current_path() { return 23; }
+  fm_backend_cmux_current_path() { return 24; }
+  [ "$(fm_backend_current_path tmux sess:win)" = /passive/tmux ] \
+    || fail "the tmux dispatcher must retain its passive cwd reader"
+  [ "$(fm_backend_current_path herdr default:w1:p2)" = /passive/herdr ] \
+    || fail "the Herdr dispatcher must retain its passive cwd reader"
+  fm_backend_current_path zellij firstmate:7 fm-task >/dev/null
+  [ "$?" -eq 1 ] || fail "the zellij dispatcher must not invoke its active cwd probe"
+  fm_backend_current_path cmux workspace:surface fm-task >/dev/null
+  [ "$?" -eq 1 ] || fail "the cmux dispatcher must not invoke its active cwd probe"
+  fm_backend_current_path orca terminal-1 >/dev/null
+  [ "$?" -eq 1 ] || fail "the Orca dispatcher must report its unavailable cwd axis as unknown"
+) || fail "the passive cwd dispatcher contract failed"
+pass "launch drift: supervision dispatches only passive cwd readers"
 
 # --- (d) end to end through fm-crew-state.sh -------------------------------
 
@@ -271,5 +318,4 @@ LEGACY_SEVERE=$(crew_state legacy)
 assert_contains "$LEGACY_SEVERE" "primary-checkout" \
   "a pre-detector record must still get the cwd axis, which needs no launch_argv="
 pass "launch drift: a pre-detector task record keeps the cwd axis and never false-alarms on argv"
-
 

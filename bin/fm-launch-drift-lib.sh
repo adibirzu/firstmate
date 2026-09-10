@@ -10,8 +10,11 @@
 # No supported runtime backend can prevent this on its own. Herdr persists a
 # pane's live cwd but records no launch command at all from 0.8.0 onward
 # (docs/herdr-backend.md "Launch-argv replay"), and tmux, zellij, and cmux
-# persist neither across a server restart. Detection at supervision time is
-# therefore the only cover, which is what this file owns.
+# persist neither across a server restart. Only tmux and Herdr expose a passive
+# live-cwd read for supervision; zellij, cmux, and Orca report unknown on that
+# axis rather than having supervision type into a live pane. Detection at
+# supervision time is therefore the available cover, which is what this file
+# owns.
 #
 # The comparison is between what the spawn RECORDED (state/<id>.meta's
 # launch_argv= and worktree=, published by bin/fm-spawn.sh) and what the
@@ -49,32 +52,60 @@ fm_launch_drift_unquote() {  # <token>
   printf '%s\n' "$token"
 }
 
-# fm_launch_drift_flags: print the HARNESS's own flag tokens from a recorded
-# launch command, one per line. Whitespace splitting is deliberate and
-# sufficient: a flag the harness was launched with appears as its own token in
-# the live process argv.
+# fm_launch_drift_parsed_tokens: print tab-separated harness and flag tokens
+# from <launch-command>. Whitespace splitting is deliberate and sufficient: a
+# flag the harness was launched with appears as its own token in the live
+# process argv.
 #
-# Only tokens AFTER the harness executable count. The launch string may be
-# wrapped by the launch-env isolation prefix
-# (`/usr/bin/env -i HOME=... /bin/sh -c '<real launch>'`), and that wrapper's
-# own flags - `-i`, `-c` - never reach the harness process. Requiring them
-# would report every isolated launch as having lost its flags. Tokens are
-# deduplicated so a flag repeated in the wrapper is not required twice.
-fm_launch_drift_flags() {  # <launch-command>
-  local token base seen=$'\n' harness_seen=0
+# The launch can have an env wrapper, an isolation shell, or the relaunch's
+# `unset TRACEPARENT;` prefix. Env options that take a separate operand are
+# consumed before executable selection, and an unset prefix is skipped through
+# its command separator. Keeping that parser here makes harness identification
+# and flag collection use the same true harness boundary.
+fm_launch_drift_parsed_tokens() {  # <launch-command>
+  local token base harness_seen=0 skip_option_arg=0 skip_to_separator=0
   for token in $1; do
     token=$(fm_launch_drift_unquote "$token")
-    if [ "$harness_seen" = 0 ]; then
-      case "$token" in
-        -*|*=*) continue ;;
-      esac
-      base=${token##*/}
-      case "$base" in
-        env|sh|bash|zsh|unset|exec) continue ;;
-      esac
-      harness_seen=1
+    if [ "$harness_seen" = 1 ]; then
+      printf 'flag\t%s\n' "$token"
       continue
     fi
+    if [ "$skip_to_separator" = 1 ]; then
+      case "$token" in *';') skip_to_separator=0 ;; esac
+      continue
+    fi
+    if [ "$skip_option_arg" = 1 ]; then
+      skip_option_arg=0
+      continue
+    fi
+    case "$token" in
+      -u|--unset|-C|--chdir|-S|--split-string)
+        skip_option_arg=1
+        continue
+        ;;
+      -*|*=*) continue ;;
+    esac
+    base=${token##*/}
+    case "$base" in
+      env|sh|bash|zsh|exec) continue ;;
+      unset)
+        skip_to_separator=1
+        continue
+        ;;
+    esac
+    harness_seen=1
+    printf 'harness\t%s\n' "$base"
+  done
+}
+
+# fm_launch_drift_flags: print the HARNESS's own flag tokens from a recorded
+# launch command, one per line. Wrapper flags never reach the harness process,
+# so they are excluded. Tokens are deduplicated so a flag repeated in the
+# wrapper is not required twice.
+fm_launch_drift_flags() {  # <launch-command>
+  local kind token seen=$'\n'
+  while IFS=$'\t' read -r kind token; do
+    [ "$kind" = flag ] || continue
     case "$token" in
       -*) ;;
       *) continue ;;
@@ -84,27 +115,18 @@ fm_launch_drift_flags() {  # <launch-command>
     esac
     seen="$seen$token"$'\n'
     printf '%s\n' "$token"
-  done
+  done < <(fm_launch_drift_parsed_tokens "$1")
 }
 
 # fm_launch_drift_harness_token: print the harness executable token a recorded
-# launch is expected to produce in a live argv. It is the first token that is
-# neither a flag nor an env assignment nor a shell the wrapper interposes, which
-# is what `/usr/bin/env -i A=1 /bin/sh -c 'FM_HOME=x claude --flag'` reduces to.
+# launch is expected to produce in a live argv.
 fm_launch_drift_harness_token() {  # <launch-command>
-  local token base
-  for token in $1; do
-    token=$(fm_launch_drift_unquote "$token")
-    case "$token" in
-      -*|*=*) continue ;;
-    esac
-    base=${token##*/}
-    case "$base" in
-      env|sh|bash|zsh|unset|exec) continue ;;
-    esac
-    printf '%s\n' "$base"
+  local kind token
+  while IFS=$'\t' read -r kind token; do
+    [ "$kind" = harness ] || continue
+    printf '%s\n' "$token"
     return 0
-  done
+  done < <(fm_launch_drift_parsed_tokens "$1")
   return 1
 }
 
