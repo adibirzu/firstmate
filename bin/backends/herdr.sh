@@ -2628,18 +2628,18 @@ fm_backend_herdr_current_path() {  # <target>
 # (docs/herdr-backend.md "Launch-argv replay").
 fm_backend_herdr_pane_argv() {  # <target> <harness>
   fm_backend_herdr_target_observe "$1" || return 1
-  local harness=$2 rows name argv0 argv
+  local harness=$2 rows name argv0 flattened argv
   [ -n "$harness" ] || return 1
   rows=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info \
     --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.process_info.foreground_processes[]?
       | select((.argv // []) | length > 0)
-      | [(.name // ""), (.argv0 // .argv[0] // ""), (.argv | join(" "))]
+      | [(.name // ""), (.argv0 // .argv[0] // ""), (.argv | join(" ")), (.argv | join("\u001f"))]
       | @tsv' 2>/dev/null) || return 1
   [ -n "$rows" ] || return 1
-  while IFS=$'\t' read -r name argv0 argv; do
+  while IFS=$'\t' read -r name argv0 flattened argv; do
     [ -n "$argv" ] || continue
-    if fm_launch_drift_process_matches "$harness" "$name" "$argv" "$argv0"; then
+    if fm_launch_drift_process_matches "$harness" "$name" "$flattened" "$argv0"; then
       printf '%s\n' "$argv"
       return 0
     fi

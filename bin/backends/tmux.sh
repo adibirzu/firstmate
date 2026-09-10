@@ -159,8 +159,8 @@ EOF
 # fm_backend_tmux_pane_argv: the live command line of the recorded harness in
 # <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 snapshot verify_snapshot pane_id path tty verify_pane verify_path verify_tty comm args argv0 i
-  local -a comms=() argses=() argv0s=()
+  local target=$1 harness=$2 snapshot verify_snapshot pane_id path tty verify_pane verify_path verify_tty comm args argv0 argv i
+  local -a comms=() argses=() argv0s=() pids=()
   [ -n "$harness" ] || return 1
   snapshot=$(fm_backend_tmux_target_pane_snapshot "$target") || return 1
   IFS=$'\037' read -r pane_id path tty <<EOF
@@ -182,6 +182,11 @@ EOF
   done <<EOF
 $(fm_backend_tmux_foreground_argv0s "$pane_id" "$tty")
 EOF
+  while IFS= read -r argv; do
+    [ -n "$argv" ] && pids[${#pids[@]}]=$argv
+  done <<EOF
+$(fm_backend_tmux_foreground_pids "$pane_id" "$tty")
+EOF
   for ((i = 0; i < ${#argses[@]}; i++)); do
     comm=${comms[i]:-}
     args=${argses[i]}
@@ -192,7 +197,8 @@ EOF
 $verify_snapshot
 EOF
       [ "$verify_pane" = "$pane_id" ] && [ "$verify_tty" = "$tty" ] || return 1
-      printf '%s\n' "$args"
+      argv=$(fm_backend_tmux_pid_argv "${pids[i]:-}") || argv=$args
+      printf '%s\n' "$argv"
       return 0
     fi
   done
@@ -344,9 +350,9 @@ fm_backend_tmux_foreground_args() {  # <target> [tty]
       done
 }
 
-fm_backend_tmux_foreground_pids() {  # <target>
-  local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_pids() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -354,6 +360,16 @@ fm_backend_tmux_foreground_pids() {  # <target>
         [ "$pgid" = "$tpgid" ] || continue
         printf '%s\n' "$pid"
       done
+}
+
+fm_backend_tmux_pid_argv() {  # <pid>
+  local pid=$1 token argv=''
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  while IFS= read -r -d '' token; do
+    if [ -n "$argv" ]; then argv+=$'\037'; fi
+    argv+=$token
+  done < "/proc/$pid/cmdline"
+  [ -n "$argv" ] && printf '%s\n' "$argv"
 }
 
 fm_backend_tmux_foreground_argv0s() {  # <target> [tty]

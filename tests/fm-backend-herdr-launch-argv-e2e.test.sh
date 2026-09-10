@@ -115,19 +115,39 @@ START_REQUIRED=$(printf '%s' "$SCHEMA" | jq -r '.schemas.request."$defs".AgentSt
 [ "$START_REQUIRED" = "name,kind,pane_id" ] \
   || fail "agent.start's required parameters changed: expected name,kind,pane_id, got '$START_REQUIRED'"
 
-snapshot_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".SessionSnapshot.properties | keys | join(",")' 2>/dev/null)
-pane_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".PaneInfo.properties | keys | join(",")' 2>/dev/null)
-agent_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".AgentInfo.properties | keys | join(",")' 2>/dev/null)
-agent_session_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".AgentSessionInfo.properties | keys | join(",")' 2>/dev/null)
-
-[ "$snapshot_keys" = "agents,focused_pane_id,focused_tab_id,focused_workspace_id,layouts,panes,protocol,tabs,version,workspaces" ] \
-  || fail "$HERDR_VERSION changed the persisted session snapshot shape ($snapshot_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
-[ "$pane_keys" = "agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,label,pane_id,revision,scroll,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id" ] \
-  || fail "$HERDR_VERSION changed the persisted pane record shape ($pane_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
-[ "$agent_keys" = "agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,interactive_ready,launch_pending,name,pane_id,revision,screen_detection_skipped,state_change_seq,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id" ] \
-  || fail "$HERDR_VERSION changed the persisted agent record shape ($agent_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
-[ "$agent_session_keys" = "agent,kind,source,value" ] \
-  || fail "$HERDR_VERSION changed the persisted agent-session shape ($agent_session_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
+snapshot_graph=$(printf '%s' "$SCHEMA" | jq -r '
+  .schemas.success_response."$defs" as $defs
+  | def ref_name: split("/") | .[-1];
+    def refs($node): [$node | .. | objects | .["$ref"]? | strings | select(startswith("#/schemas/success_response/$defs/")) | ref_name] | unique;
+    def closure($todo; $seen):
+      if ($todo | length) == 0 then $seen
+      else $todo[0] as $name
+        | if $seen[$name] then closure($todo[1:]; $seen)
+          else closure(($todo[1:] + refs($defs[$name])); $seen + {($name): true})
+          end
+      end;
+    closure(["SessionSnapshot"]; {}) | keys[] as $name
+    | $defs[$name] as $node
+    | [$node | .. | objects | select((.properties? | type) == "object") | (.properties | keys | join(","))] | unique[]
+    | "\($name):\(.)"
+' 2>/dev/null | sort)
+expected_snapshot_graph=$(cat <<'GRAPH'
+AgentInfo:agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,interactive_ready,launch_pending,name,pane_id,revision,screen_detection_skipped,state_change_seq,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id
+AgentSessionInfo:agent,kind,source,value
+PaneInfo:agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,label,pane_id,revision,scroll,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id
+PaneLayoutPane:focused,pane_id,rect
+PaneLayoutRect:height,width,x,y
+PaneLayoutSnapshot:area,focused_pane_id,panes,splits,tab_id,workspace_id,zoomed
+PaneLayoutSplit:direction,id,ratio,rect
+PaneScrollInfo:max_offset_from_bottom,offset_from_bottom,viewport_rows
+SessionSnapshot:agents,focused_pane_id,focused_tab_id,focused_workspace_id,layouts,panes,protocol,tabs,version,workspaces
+TabInfo:agent_status,focused,label,number,pane_count,tab_id,workspace_id
+WorkspaceInfo:active_tab_id,agent_status,focused,label,number,pane_count,tab_count,tokens,workspace_id,worktree
+WorkspaceWorktreeInfo:checkout_path,is_linked_worktree,repo_key,repo_name,repo_root
+GRAPH
+)
+[ "$snapshot_graph" = "$expected_snapshot_graph" ] \
+  || fail "$HERDR_VERSION changed the persisted SessionSnapshot graph; a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
 pass "herdr launch-argv: protocol $PROTOCOL persists no launch command, only a live process read and a start response"
 
 # --- 3. the persisted cwd follows the live shell and survives a restart ----

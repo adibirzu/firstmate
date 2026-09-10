@@ -49,6 +49,15 @@ verdict_field() {
   fm_launch_drift_verdict "$1" "$harness" "${@:2}" | cut -f"$n"
 }
 
+argv_fields() {
+  local field out=''
+  for field in "$@"; do
+    if [ -n "$out" ]; then out+=$'\037'; fi
+    out+=$field
+  done
+  printf '%s' "$out"
+}
+
 # --- (a) the verdict matrix ------------------------------------------------
 
 [ "$(verdict_field 1 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = ok ] \
@@ -81,6 +90,25 @@ MODEL_EQUALS_CHANGED=$(fm_launch_drift_verdict "claude --model=opus" claude "$WO
 [ "$(verdict_field 1 claude "claude --model=opus" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = ok ] \
   || fail "--opt=value and --opt value must compare as equal when their operands match"
 pass "launch drift: option operands detect changed and missing values"
+
+CODEX_NOTIFY='notify=["bash","-c","touch __TURNEND__"]'
+CODEX_RECORD='codex -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]"'
+CODEX_LIVE=$(argv_fields codex -c "$CODEX_NOTIFY")
+[ "$(verdict_field 1 codex "$CODEX_RECORD" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CODEX_LIVE")" = ok ] \
+  || fail "an intact Codex -c operand with spaces and escaped quotes must read ok"
+CODEX_CHANGED=$(fm_launch_drift_verdict "$CODEX_RECORD" codex "$WORKTREE" "$PROJECT" "$WORKTREE" \
+  "$(argv_fields codex -c 'notify=["bash","-c","changed __TURNEND__"]')")
+[ "$(printf '%s' "$CODEX_CHANGED" | cut -f2)" = argv-loss ] \
+  || fail "a changed Codex -c operand with spaces must read argv-loss, got: $CODEX_CHANGED"
+assert_contains "$CODEX_CHANGED" "$CODEX_NOTIFY" \
+  "a changed Codex operand must name the recorded value"
+assert_contains "$CODEX_CHANGED" "changed __TURNEND__" \
+  "a changed Codex operand must name the live value"
+CODEX_EQUALS_RECORD='codex --config="notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]"'
+[ "$(verdict_field 1 codex "$CODEX_EQUALS_RECORD" "$WORKTREE" "$PROJECT" "$WORKTREE" \
+  "$(argv_fields codex "--config=$CODEX_NOTIFY")")" = ok ] \
+  || fail "an intact --opt=value operand with spaces must read ok"
+pass "launch drift: encoded argv preserves spaced and quoted Codex operands"
 
 [ "$(verdict_field 2 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$ELSEWHERE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = cwd-drift ] \
   || fail "a worker outside both its worktree and the project must read cwd-drift"

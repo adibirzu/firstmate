@@ -38,76 +38,52 @@
 # Severity ordering is severe > warn > unknown > ok: the worst axis wins, so a
 # primary-checkout finding is never masked by a healthy argv.
 
-# fm_launch_drift_unquote: strip one layer of leading and trailing shell quotes
-# from a token.
-#
-# The recorded launch is a shell command LINE, so the launch-env isolation
-# wrapper's `/bin/sh -c '<launch>'` leaves its quote characters attached to the
-# first and last tokens inside it - `'FM_HOME=/h` and `--some-flag'`. Comparing
-# those against a live process argv, where no quotes survive, would report every
-# isolated launch as having lost its last flag.
-fm_launch_drift_unquote() {  # <token>
-  local token=$1
-  token=${token#[\'\"]}
-  token=${token%[\'\"]}
-  printf '%s\n' "$token"
-}
-
-# fm_launch_drift_open_quote: print the currently unclosed shell quote in
-# <token>, if any. It recognizes the quoting emitted by fm-spawn.sh's
-# shell_quote helper without evaluating the recorded command.
-fm_launch_drift_open_quote() {  # <token>
-  local token=$1 quote='' escaped=0 char i
-  for ((i = 0; i < ${#token}; i++)); do
-    char=${token:i:1}
-    if [ -n "$quote" ]; then
-      case "$quote" in
-        "'")
-          [ "$char" = "'" ] && quote=''
-          ;;
-        '"')
-          if [ "$escaped" = 1 ]; then
-            escaped=0
-          elif [ "$char" = "\\" ]; then
-            escaped=1
-          elif [ "$char" = '"' ]; then
-            quote=''
-          fi
-          ;;
-      esac
-    elif [ "$char" = "\\" ]; then
-      i=$((i + 1))
-    elif [ "$char" = "'" ] || [ "$char" = '"' ]; then
-      quote=$char
-    fi
-  done
-  printf '%s' "$quote"
-}
-
-# fm_launch_drift_shell_tokens: print <launch-command>'s whitespace-delimited
-# tokens while retaining quoted values as one token. The command is recorded
-# data, not shell input, so this deliberately does not evaluate substitutions
-# or other shell syntax.
+# fm_launch_drift_shell_tokens: print the shell words in <launch-command>, with
+# shell quoting and backslash escapes removed. The command is recorded data, not
+# shell input, so this deliberately does not evaluate substitutions or other
+# shell syntax.
 fm_launch_drift_shell_tokens() {  # <launch-command>
-  local part token='' quote
-  for part in $1; do
-    if [ -n "$token" ]; then
-      token="$token $part"
-    else
-      token=$part
+  local command=$1 token='' quote='' char next token_started=0 i
+  for ((i = 0; i < ${#command}; i++)); do
+    char=${command:i:1}
+    if [ -n "$quote" ]; then
+      if [ "$quote" = "'" ]; then
+        if [ "$char" = "'" ]; then quote=''; else token+=$char; fi
+      elif [ "$char" = '"' ]; then
+        quote=''
+      elif [ "$char" = "\\" ]; then
+        i=$((i + 1))
+        next=${command:i:1}
+        token+=$next
+      else
+        token+=$char
+      fi
+      token_started=1
+      continue
     fi
-    quote=$(fm_launch_drift_open_quote "$token")
-    [ -n "$quote" ] && continue
-    printf '%s\n' "$token"
-    token=''
+    case "$char" in
+      [[:space:]])
+        if [ "$token_started" = 1 ]; then
+          printf '%s\n' "$token"
+          token=''
+          token_started=0
+        fi
+        ;;
+      "'"|'"') quote=$char; token_started=1 ;;
+      \\)
+        i=$((i + 1))
+        next=${command:i:1}
+        token+=$next
+        token_started=1
+        ;;
+      *) token+=$char; token_started=1 ;;
+    esac
   done
-  [ -z "$token" ] || printf '%s\n' "$token"
+  [ "$token_started" = 0 ] || printf '%s\n' "$token"
 }
 
 # fm_launch_drift_parsed_tokens: print tab-separated harness and flag tokens
-# from <launch-command> after locating its recorded <harness>. Whitespace
-# splitting is deliberate and sufficient: a flag the harness was launched with
-# appears as its own token in the live process argv.
+# from <launch-command> after locating its recorded <harness>.
 #
 # The launch can have an env wrapper, an isolation shell, or the relaunch's
 # `unset TRACEPARENT;` prefix. Env options that take a separate operand are
@@ -117,10 +93,9 @@ fm_launch_drift_parsed_tokens() {  # <launch-command> <harness>
   local launch=$1 harness=$2 token base harness_seen=0 skip_option_arg=0 skip_to_separator=0 shell_wrapper=0 shell_command=0
   while IFS= read -r token; do
     if [ "$shell_command" = 1 ]; then
-      fm_launch_drift_parsed_tokens "$(fm_launch_drift_unquote "$token")" "$harness"
+      fm_launch_drift_parsed_tokens "$token" "$harness"
       return 0
     fi
-    token=$(fm_launch_drift_unquote "$token")
     if [ "$harness_seen" = 1 ]; then
       printf 'flag\t%s\n' "$token"
       continue
@@ -227,11 +202,26 @@ fm_launch_drift_option_values() {  # <launch-command> <harness>
   done
 }
 
+fm_launch_drift_live_tokens() {  # <live-argv>
+  local live=$1 token
+  if [[ "$live" == *$'\037'* ]]; then
+    while :; do
+      token=${live%%$'\037'*}
+      printf '%s\n' "$token"
+      [ "$token" = "$live" ] && break
+      live=${live#*$'\037'}
+    done
+    return 0
+  fi
+  fm_launch_drift_shell_tokens "$live"
+}
+
 fm_launch_drift_live_option_values() {  # <live-argv>
-  local live=$1 token option value next i
+  local token option value next i
   local -a tokens=()
-  local IFS=$' \t\n'
-  read -r -a tokens <<< "$live"
+  while IFS= read -r token; do
+    tokens[${#tokens[@]}]=$token
+  done < <(fm_launch_drift_live_tokens "$1")
   for ((i = 0; i < ${#tokens[@]}; i++)); do
     token=${tokens[i]}
     case "$token" in
@@ -248,6 +238,14 @@ fm_launch_drift_live_option_values() {  # <live-argv>
         ;;
     esac
   done
+}
+
+fm_launch_drift_live_has_flag() {  # <live-argv> <option>
+  local token
+  while IFS= read -r token; do
+    case "$token" in "$2"|"$2="*) return 0 ;; esac
+  done < <(fm_launch_drift_live_tokens "$1")
+  return 1
 }
 
 fm_launch_drift_recorded_has_harness() {  # <launch-command> <harness>
@@ -309,9 +307,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <harness> <worktree> <project> <l
     argv_sev=ok argv_code=argv-ok argv_detail="launched flags intact"
     while IFS= read -r flag; do
       [ -n "$flag" ] || continue
-      case " $live_argv " in
-        *" $flag "*|*" $flag="*) continue ;;
-      esac
+      fm_launch_drift_live_has_flag "$live_argv" "$flag" && continue
       missing=$flag
       break
     done <<FLAGS
