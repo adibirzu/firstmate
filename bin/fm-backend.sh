@@ -849,7 +849,7 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2
   fm_backend_source "$backend" || return 1
   case "$backend" in
-    tmux) fm_backend_tmux_current_path "$target" ;;
+    tmux) fm_backend_tmux_bound_current_path "$target" ;;
     herdr) fm_backend_herdr_current_path "$target" ;;
     *) return 1 ;;
   esac

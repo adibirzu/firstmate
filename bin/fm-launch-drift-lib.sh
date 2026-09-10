@@ -68,14 +68,14 @@ fm_launch_drift_open_quote() {  # <token>
         '"')
           if [ "$escaped" = 1 ]; then
             escaped=0
-          elif [ "$char" = '\\' ]; then
+          elif [ "$char" = "\\" ]; then
             escaped=1
           elif [ "$char" = '"' ]; then
             quote=''
           fi
           ;;
       esac
-    elif [ "$char" = '\\' ]; then
+    elif [ "$char" = "\\" ]; then
       i=$((i + 1))
     elif [ "$char" = "'" ] || [ "$char" = '"' ]; then
       quote=$char
@@ -210,9 +210,15 @@ fm_launch_drift_option_values() {  # <launch-command> <harness>
       -*)
         fm_launch_drift_option_has_no_operand "$token" && continue
         next=${tokens[i + 1]:-}
+        # A recorded operand that is itself a command substitution is not a
+        # comparable value: it was never expanded here, so the live argv carries
+        # its RESULT, and comparing the two would report drift on every read.
+        # The pattern is backslash-escaped rather than single-quoted so it
+        # matches the literal characters `$(` without shellcheck reading it as
+        # an expansion that failed to expand.
         case "$next" in
           ''|-*) continue ;;
-          '$('* ) continue ;;
+          \$\(*) continue ;;
         esac
         printf '%s\t%s\n' "$token" "$next"
         i=$((i + 1))
@@ -275,7 +281,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <harness> <worktree> <project> <l
   local recorded=$1 harness=$2 worktree=$3 project=$4 live_cwd=$5 live_argv=$6
   local cwd_sev=unknown cwd_code=cwd-unreadable cwd_detail
   local argv_sev=unknown argv_code=argv-unreadable argv_detail
-  local flag missing= option expected_value live_values live_value
+  local flag missing='' option expected_value live_values live_value
 
   if [ -z "$live_cwd" ]; then
     cwd_detail="endpoint working directory could not be read"

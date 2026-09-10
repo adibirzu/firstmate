@@ -123,9 +123,30 @@ fm_backend_tmux_target_pane_snapshot() {  # <target>
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Its value is read with the target inventory snapshot
-# rather than through tmux's target lookup, which falls back to the active pane.
+# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
+# `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+#
+# This stays the cheap direct read because fm-spawn.sh polls it up to 60 times
+# while waiting for a pane it JUST created to enter its leased worktree. tmux's
+# active-pane fallback is not a hazard there: the target is a stable window id
+# the spawn just captured, and the spawn independently proves the worktree with
+# validate_spawn_worktree before launching. Supervision has the opposite threat
+# model - it observes panes that may already be gone - so it uses the bound
+# reader below instead.
 fm_backend_tmux_current_path() {  # <target>
+  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+}
+
+# fm_backend_tmux_bound_current_path: the same value, but read out of the target
+# inventory snapshot so it is bound to the pane that actually matches <target>.
+#
+# Supervision needs this stronger contract: `display-message -t` silently falls
+# back to the ACTIVE pane when its target no longer exists, so a torn-down task
+# would return firstmate's own pane path. If that pane sits in the project
+# checkout, the launch-drift detector would report a severe primary-checkout
+# landing for a worker that is simply gone - the worst false positive the
+# feature can produce. Returning failure here maps to a silent `unknown`.
+fm_backend_tmux_bound_current_path() {  # <target>
   local snapshot pane_id path tty
   snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
   IFS=$'\037' read -r pane_id path tty <<EOF

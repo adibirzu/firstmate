@@ -287,12 +287,19 @@ pass "launch drift: session-lock identity remains unchanged"
   _FM_BACKEND_ZELLIJ_SOURCED=1
   _FM_BACKEND_CMUX_SOURCED=1
   _FM_BACKEND_ORCA_SOURCED=1
-  fm_backend_tmux_current_path() { printf '/passive/tmux\n'; }
+  # tmux has two passive readers, and supervision must use the BOUND one:
+  # fm_backend_tmux_current_path is the cheap direct read fm-spawn.sh polls
+  # while waiting for a pane it just created, and it inherits tmux's
+  # active-pane fallback for an absent target. Only the bound reader proves
+  # the value belongs to the recorded pane, which is what keeps a torn-down
+  # task from being annotated with a severe primary-checkout landing.
+  fm_backend_tmux_current_path() { printf '/unbound/tmux\n'; }
+  fm_backend_tmux_bound_current_path() { printf '/passive/tmux\n'; }
   fm_backend_herdr_current_path() { printf '/passive/herdr\n'; }
   fm_backend_zellij_current_path() { return 23; }
   fm_backend_cmux_current_path() { return 24; }
   [ "$(fm_backend_current_path tmux sess:win)" = /passive/tmux ] \
-    || fail "the tmux dispatcher must retain its passive cwd reader"
+    || fail "the tmux dispatcher must use its BOUND passive cwd reader, not the unbound spawn poll"
   [ "$(fm_backend_current_path herdr default:w1:p2)" = /passive/herdr ] \
     || fail "the Herdr dispatcher must retain its passive cwd reader"
   fm_backend_current_path zellij firstmate:7 fm-task >/dev/null
