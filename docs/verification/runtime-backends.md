@@ -1036,6 +1036,9 @@ jq -r '[.workspaces[].tabs[].panes[].cwd]' "$SESSION_JSON"
 
 The first entry is the workspace's own seeded pane; the second is the task pane, which followed the `cd`.
 
+`tests/fm-backend-herdr-launch-argv-e2e.test.sh` is the live regression guard for these protocol-20 facts.
+Run it after a Herdr upgrade; a reintroduced persisted launch command fails loudly with the installed version named.
+
 ### Composer and operational input
 
 Real captures verified these active distinctions:

@@ -2597,13 +2597,18 @@ fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
+# fm_backend_herdr_target_observe: parse a target for a passive read only.
+# Unlike fm_backend_herdr_target_ready, this MUST NOT ensure or start its server:
+# a stopped session must leave supervision's cwd/argv axis unreadable rather
+# than reviving persisted panes as a side effect of observing them.
 fm_backend_herdr_target_observe() {  # <target>
   fm_backend_herdr_parse_target "$1"
 }
 
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
-# any error. Mirrors tmux's pane_current_path poll used for worktree-path
-# discovery after `treehouse get`.
+# any error. It serves both the spawn-time worktree-path poll after `treehouse
+# get` and passive supervision, so it uses target_observe rather than the
+# operational target_ready path that starts a stopped server.
 #
 # Verified pitfall: `pane get`'s `.result.pane.cwd` is the pane's cwd AT
 # CREATION TIME - the top-level shell's cwd - and does NOT update when that

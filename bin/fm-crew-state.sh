@@ -17,6 +17,12 @@
 #
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
 #
+# Before producing that line for a local endpoint, the reader passively compares
+# its live cwd and, where a backend can read it atomically, argv with the spawn
+# record. A confirmed divergence is appended as a launch-drift annotation; it
+# never overrides the state, because the worker can still be working. The drift
+# policy and backend coverage are owned by bin/fm-launch-drift-lib.sh.
+#
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
