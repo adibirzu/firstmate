@@ -942,7 +942,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws doomed_ws focus_settle_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0 focus_operation="pane close"
+  local before active_tab info target_pane target_tab target_ws doomed_ws focus_settle_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -1000,7 +1000,6 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     esac
   fi
   if [ "$plan" = death ]; then
-    focus_operation="pane-death close"
     if fm_backend_herdr_death_close_pane "$session" "$pane_id" "$plan_shell_pid"; then
       close_status=0
     elif fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane_id"; then
@@ -1032,7 +1031,7 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   # expected to preserve focus. Do not return from cleanup until an emptying
   # close's workspace is observably gone and the exact prior focus still holds.
   focus_settle_ws=$doomed_ws
-  fm_backend_herdr_projection_focus_restore "$session" "$before" "$focus_operation" "$focus_settle_ws" || return 2
+  fm_backend_herdr_projection_focus_restore "$session" "$before" "pane close" "$focus_settle_ws" || return 2
   [ "$close_status" -eq 0 ]
 }
 
