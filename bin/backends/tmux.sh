@@ -168,46 +168,22 @@ EOF
 # fm_backend_tmux_pane_argv: the live command line of the recorded harness in
 # <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 snapshot pane_id path tty comm args argv0 argv i
-  local -a comms=() argses=() argv0s=() pids=()
+  local target=$1 harness=$2 snapshot pane_id path tty pid comm args argv0 argv
   [ -n "$harness" ] || return 1
   snapshot=$(fm_backend_tmux_target_pane_snapshot "$target") || return 1
   IFS=$'\037' read -r pane_id path tty <<EOF
 $snapshot
 EOF
   [ -n "$pane_id" ] && [ -n "$tty" ] || return 1
-  while IFS= read -r comm; do
-    [ -n "$comm" ] && comms[${#comms[@]}]=$comm
-  done <<EOF
-$(fm_backend_tmux_foreground_comms "$pane_id" "$tty")
-EOF
-  while IFS= read -r args; do
-    [ -n "$args" ] && argses[${#argses[@]}]=$args
-  done <<EOF
-$(fm_backend_tmux_foreground_args "$pane_id" "$tty")
-EOF
-  while IFS= read -r argv0; do
-    [ -n "$argv0" ] && argv0s[${#argv0s[@]}]=$argv0
-  done <<EOF
-$(fm_backend_tmux_foreground_argv0s "$pane_id" "$tty")
-EOF
-  while IFS= read -r argv; do
-    [ -n "$argv" ] && pids[${#pids[@]}]=$argv
-  done <<EOF
-$(fm_backend_tmux_foreground_pids "$pane_id" "$tty")
-EOF
-  for ((i = 0; i < ${#argses[@]}; i++)); do
-    comm=${comms[i]:-}
-    args=${argses[i]}
-    argv0=${argv0s[i]:-}
+  while IFS=$'\037' read -r pid comm argv0 args; do
     if fm_launch_drift_process_matches "$harness" "$comm" "$args" "$argv0"; then
       fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
-      argv=$(fm_backend_tmux_pid_argv "${pids[i]:-}") || return 1
+      argv=$(fm_backend_tmux_pid_argv "$pid") || return 1
       fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
       printf '%s\n' "$argv"
       return 0
     fi
-  done
+  done < <(fm_backend_tmux_foreground_tuples "$pane_id" "$tty")
   return 1
 }
 
@@ -337,6 +313,21 @@ fm_backend_tmux_foreground_comms() {  # <target> [tty]
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
         printf '%s\n' "$comm"
+      done
+}
+
+fm_backend_tmux_foreground_tuples() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  [ -n "$tty" ] || return 0
+  LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm=,args= 2>/dev/null \
+    | while read -r pid pgid tpgid comm args; do
+        [ -n "$pid" ] && [ -n "$comm" ] && [ -n "$args" ] || continue
+        [ "$pgid" = "$tpgid" ] || continue
+        args=${args#"${args%%[![:space:]]*}"}
+        argv0=${args%%[[:space:]]*}
+        [ -n "$argv0" ] || continue
+        printf '%s\037%s\037%s\037%s\n' "$pid" "$comm" "$argv0" "$args"
       done
 }
 

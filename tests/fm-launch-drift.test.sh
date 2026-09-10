@@ -222,10 +222,7 @@ tmux_live_argv() {  # <harness>
     . "$ROOT/bin/fm-backend.sh"
     fm_backend_source tmux
     fm_backend_tmux_target_pane_snapshot() { printf '%s\037%s\037%s\n' "$1" "$WORKTREE" /dev/pts/fm-launch-drift; }
-    fm_backend_tmux_foreground_comms() { printf '%s\n' "$FM_TEST_FG_COMM"; }
-    fm_backend_tmux_foreground_args() { printf '%s\n' "$FM_TEST_FG_ARGS"; }
-    fm_backend_tmux_foreground_argv0s() { printf '%s\n' "$FM_TEST_FG_ARGV0"; }
-    fm_backend_tmux_foreground_pids() { printf '4242\n'; }
+    fm_backend_tmux_foreground_tuples() { printf '4242\037%s\037%s\037%s\n' "$FM_TEST_FG_COMM" "$FM_TEST_FG_ARGV0" "$FM_TEST_FG_ARGS"; }
     fm_backend_tmux_pid_argv() { printf '%s\n' "${FM_TEST_FG_EXACT_ARGV:-$FM_TEST_FG_ARGS}"; }
     fm_backend_pane_argv tmux '%0' "$1"
   )
@@ -407,7 +404,21 @@ cat > "$FAKEBIN/ps" <<'SH'
 #!/usr/bin/env bash
 set -u
 case " $* " in
-  *' -t pts/fm-launch-drift '*) printf '4242 4242 4242 claude\n' ;;
+  *' -t pts/fm-launch-drift '*)
+    if [ -n "${FM_FAKE_TMUX_TUPLE_CALLS:-}" ]; then
+      calls=$(( $(cat "$FM_FAKE_TMUX_TUPLE_CALLS" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\n' "$calls" > "$FM_FAKE_TMUX_TUPLE_CALLS"
+      case "$calls:$*" in
+        1:*args=*) printf '4242 4242 4242 claude %s\n' "${FAKE_AGENT_ARGV:-}" ;;
+        1:*|2:*|3:*) printf '4242 4242 4242 claude\n' ;;
+        *) printf '7777 7777 7777 claude\n' ;;
+      esac
+    elif case "$*" in *args=*) true ;; *) false ;; esac; then
+      printf '4242 4242 4242 claude %s\n' "${FAKE_AGENT_ARGV:-}"
+    else
+      printf '4242 4242 4242 claude\n'
+    fi
+    ;;
   *' -p 4242 '*) printf '%s\n' "${FAKE_AGENT_ARGV:-}" ;;
   *) exec "$REAL_PS" "$@" ;;
 esac
@@ -419,11 +430,12 @@ export PATH
 
 FAKE_PROC="$TMP_ROOT/proc"
 mkdir -p "$FAKE_PROC/4242"
-write_fake_proc_argv() {  # <flattened-argv>
-  local field
-  : > "$FAKE_PROC/4242/cmdline"
+write_fake_proc_argv() {  # <flattened-argv> [pid]
+  local field pid=${2:-4242}
+  mkdir -p "$FAKE_PROC/$pid"
+  : > "$FAKE_PROC/$pid/cmdline"
   while IFS= read -r field; do
-    printf '%s\0' "$field" >> "$FAKE_PROC/4242/cmdline"
+    printf '%s\0' "$field" >> "$FAKE_PROC/$pid/cmdline"
   done < <(fm_launch_drift_shell_tokens "$1")
 }
 FM_PROC_ROOT_OVERRIDE=$FAKE_PROC
@@ -445,6 +457,18 @@ write_fake_proc_argv "$FAKE_AGENT_ARGV"
 # argv was unreadable and the axis went quiet.
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source tmux
+TUPLE_CALLS="$TMP_ROOT/foreground-tuple-calls"
+FAKE_REPLACEMENT_ARGV='claude --model opus'
+write_fake_proc_argv "$FAKE_REPLACEMENT_ARGV" 7777
+FM_FAKE_TMUX_TUPLE_CALLS=$TUPLE_CALLS
+export FM_FAKE_TMUX_TUPLE_CALLS
+TUPLE_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
+  || fail "the foreground reader could not collect a single process tuple"
+assert_contains "$TUPLE_ARGV" "--dangerously-skip-permissions" \
+  "the foreground reader must keep identity and argv from one process tuple"
+[ "$(cat "$TUPLE_CALLS")" = 1 ] \
+  || fail "the foreground reader must collect its process fields in one observation"
+unset FM_FAKE_TMUX_TUPLE_CALLS
 READ_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
   || fail "the foreground reader could not read the stand-in agent's command line"
 assert_contains "$READ_ARGV" "--dangerously-skip-permissions" \
