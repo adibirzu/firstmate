@@ -156,10 +156,19 @@ EOF
   printf '%s\n' "$path"
 }
 
+fm_backend_tmux_snapshot_matches() {  # <pane-id> <tty>
+  local snapshot verify_pane verify_path verify_tty
+  snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
+  IFS=$'\037' read -r verify_pane verify_path verify_tty <<EOF
+$snapshot
+EOF
+  [ "$verify_pane" = "$1" ] && [ "$verify_tty" = "$2" ]
+}
+
 # fm_backend_tmux_pane_argv: the live command line of the recorded harness in
 # <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 snapshot verify_snapshot pane_id path tty verify_pane verify_path verify_tty comm args argv0 argv i
+  local target=$1 harness=$2 snapshot pane_id path tty comm args argv0 argv i
   local -a comms=() argses=() argv0s=() pids=()
   [ -n "$harness" ] || return 1
   snapshot=$(fm_backend_tmux_target_pane_snapshot "$target") || return 1
@@ -192,12 +201,9 @@ EOF
     args=${argses[i]}
     argv0=${argv0s[i]:-}
     if fm_launch_drift_process_matches "$harness" "$comm" "$args" "$argv0"; then
-      verify_snapshot=$(fm_backend_tmux_target_pane_snapshot "$pane_id") || return 1
-      IFS=$'\037' read -r verify_pane verify_path verify_tty <<EOF
-$verify_snapshot
-EOF
-      [ "$verify_pane" = "$pane_id" ] && [ "$verify_tty" = "$tty" ] || return 1
+      fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
       argv=$(fm_backend_tmux_pid_argv "${pids[i]:-}") || return 1
+      fm_backend_tmux_snapshot_matches "$pane_id" "$tty" || return 1
       printf '%s\n' "$argv"
       return 0
     fi

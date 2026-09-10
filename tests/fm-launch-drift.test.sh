@@ -528,6 +528,24 @@ FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
 export FAKE_AGENT_ARGV
 pass "launch drift: tmux rejects a reused pty after its pane disappears"
 
+POST_READ_REUSE_CALLS="$TMP_ROOT/post-read-reuse-snapshot-calls"
+printf '0\n' > "$POST_READ_REUSE_CALLS"
+FAKE_AGENT_ARGV='claude --model opus'
+FM_FAKE_PANE_PATH="$WORKTREE"
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+FM_FAKE_TMUX_SNAPSHOT_CALLS=$POST_READ_REUSE_CALLS
+FM_FAKE_TMUX_REVALIDATE_TTY_AFTER=3
+FM_FAKE_TMUX_REVALIDATE_TTY=/dev/pts/fm-launch-drift-reused
+export FAKE_AGENT_ARGV FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH FM_FAKE_TMUX_SNAPSHOT_CALLS \
+  FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
+POST_READ_REUSE_LINE=$(crew_state healthy)
+assert_not_contains "$POST_READ_REUSE_LINE" "launch drift" \
+  "a reused pty after argv collection must leave the argv axis unknown"
+unset FM_FAKE_TMUX_SNAPSHOT_CALLS FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
+FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
+export FAKE_AGENT_ARGV
+pass "launch drift: tmux rejects a reused pty after argv collection"
+
 # Severe: the same worker, now standing in the primary checkout.
 FM_FAKE_PANE_PATH="$PROJECT/src"
 FM_FAKE_SNAPSHOT_PATH="$PROJECT/src"
