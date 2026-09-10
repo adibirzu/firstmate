@@ -95,6 +95,8 @@ MODEL_EQUALS_CHANGED=$(fm_launch_drift_verdict "claude --model=opus" claude "$WO
   || fail "--opt=value and --opt value must compare as equal when their operands match"
 pass "launch drift: option operands detect changed and missing values"
 
+# The literal $( is the fixture under test, not an expansion.
+# shellcheck disable=SC2016
 AGY_BRIEF_LAUNCH='agy -i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
 AGY_BRIEF_OK=$(fm_launch_drift_verdict "$AGY_BRIEF_LAUNCH" agy "$WORKTREE" "$PROJECT" "$WORKTREE" \
   "$(argv_fields agy -i encoded-launch-brief)")
