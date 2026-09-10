@@ -2597,6 +2597,10 @@ fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
+fm_backend_herdr_target_observe() {  # <target>
+  fm_backend_herdr_parse_target "$1"
+}
+
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
 # any error. Mirrors tmux's pane_current_path poll used for worktree-path
 # discovery after `treehouse get`.
@@ -2610,9 +2614,10 @@ fm_backend_herdr_target_ready() {  # <target>
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
 fm_backend_herdr_current_path() {  # <target>
-  fm_backend_herdr_target_ready "$1" || return 0
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
-    | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+  local pane
+  fm_backend_herdr_target_observe "$1" || return 1
+  pane=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 1
+  printf '%s' "$pane" | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
 
 # fm_backend_herdr_pane_argv: the live command line of the recorded harness in
@@ -2622,7 +2627,7 @@ fm_backend_herdr_current_path() {  # <target>
 # comparison must be made against firstmate's own record
 # (docs/herdr-backend.md "Launch-argv replay").
 fm_backend_herdr_pane_argv() {  # <target> <harness>
-  fm_backend_herdr_target_ready "$1" || return 1
+  fm_backend_herdr_target_observe "$1" || return 1
   local harness=$2 rows name argv0 argv
   [ -n "$harness" ] || return 1
   rows=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info \

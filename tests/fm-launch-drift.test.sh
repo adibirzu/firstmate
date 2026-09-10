@@ -63,6 +63,25 @@ assert_contains \
   "argv-loss must name the flag that went missing"
 pass "launch drift: a dropped flag reads argv-loss and names the flag"
 
+MODEL_VALUE_LAUNCH="claude --model opus"
+MODEL_VALUE_CHANGED=$(fm_launch_drift_verdict "$MODEL_VALUE_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model sonnet")
+[ "$(printf '%s' "$MODEL_VALUE_CHANGED" | cut -f2)" = argv-loss ] \
+  || fail "a changed --model operand must read argv-loss, got: $MODEL_VALUE_CHANGED"
+assert_contains "$MODEL_VALUE_CHANGED" "opus" "a changed option operand must name the recorded value"
+assert_contains "$MODEL_VALUE_CHANGED" "sonnet" "a changed option operand must name the live value"
+
+MODEL_VALUE_MISSING=$(fm_launch_drift_verdict "$MODEL_VALUE_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model")
+[ "$(printf '%s' "$MODEL_VALUE_MISSING" | cut -f2)" = argv-loss ] \
+  || fail "a missing --model operand must read argv-loss, got: $MODEL_VALUE_MISSING"
+assert_contains "$MODEL_VALUE_MISSING" "<missing>" "a missing option operand must be identified as missing"
+
+MODEL_EQUALS_CHANGED=$(fm_launch_drift_verdict "claude --model=opus" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model sonnet")
+[ "$(printf '%s' "$MODEL_EQUALS_CHANGED" | cut -f2)" = argv-loss ] \
+  || fail "--opt=value must detect a changed operand, got: $MODEL_EQUALS_CHANGED"
+[ "$(verdict_field 1 claude "claude --model=opus" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = ok ] \
+  || fail "--opt=value and --opt value must compare as equal when their operands match"
+pass "launch drift: option operands detect changed and missing values"
+
 [ "$(verdict_field 2 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$ELSEWHERE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = cwd-drift ] \
   || fail "a worker outside both its worktree and the project must read cwd-drift"
 pass "launch drift: a worker in an unrelated directory reads cwd-drift"
@@ -303,8 +322,18 @@ for arg in "$@"; do
   esac
 done
 if [ "${1:-}" = list-panes ] && [ "${2:-}" = -a ]; then
+  if [ -n "${FM_FAKE_TMUX_SNAPSHOT_CALLS:-}" ]; then
+    calls=$(( $(cat "$FM_FAKE_TMUX_SNAPSHOT_CALLS" 2>/dev/null || echo 0) + 1 ))
+    printf '%s\n' "$calls" > "$FM_FAKE_TMUX_SNAPSHOT_CALLS"
+  else
+    calls=0
+  fi
+  snapshot_tty=/dev/pts/fm-launch-drift
+  if [ "${FM_FAKE_TMUX_REVALIDATE_TTY_AFTER:-0}" -gt 0 ] && [ "$calls" -gt "${FM_FAKE_TMUX_REVALIDATE_TTY_AFTER:-0}" ]; then
+    snapshot_tty=${FM_FAKE_TMUX_REVALIDATE_TTY:-/dev/pts/fm-launch-drift-reused}
+  fi
   [ "${FM_FAKE_TMUX_TARGET_LIVE:-1}" = 1 ] \
-    && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\t%s\t/dev/pts/fm-launch-drift\n' "${FM_FAKE_SNAPSHOT_PATH:-}"
+    && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\t%s\t%s\n' "${FM_FAKE_SNAPSHOT_PATH:-}" "$snapshot_tty"
   exit 0
 fi
 exit 0
@@ -404,6 +433,24 @@ FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
 unset FM_FAKE_ACTIVE_TTY
 export FAKE_AGENT_ARGV
 pass "launch drift: tmux argv reads stay bound to the target snapshot"
+
+PTY_REUSE_CALLS="$TMP_ROOT/pty-reuse-snapshot-calls"
+printf '0\n' > "$PTY_REUSE_CALLS"
+FAKE_AGENT_ARGV='claude --model opus'
+FM_FAKE_PANE_PATH="$WORKTREE"
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+FM_FAKE_TMUX_SNAPSHOT_CALLS=$PTY_REUSE_CALLS
+FM_FAKE_TMUX_REVALIDATE_TTY_AFTER=2
+FM_FAKE_TMUX_REVALIDATE_TTY=/dev/pts/fm-launch-drift-reused
+export FAKE_AGENT_ARGV FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH FM_FAKE_TMUX_SNAPSHOT_CALLS \
+  FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
+PTY_REUSE_LINE=$(crew_state healthy)
+assert_not_contains "$PTY_REUSE_LINE" "launch drift" \
+  "a reused pty after the recorded pane disappears must leave the argv axis unknown"
+unset FM_FAKE_TMUX_SNAPSHOT_CALLS FM_FAKE_TMUX_REVALIDATE_TTY_AFTER FM_FAKE_TMUX_REVALIDATE_TTY
+FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
+export FAKE_AGENT_ARGV
+pass "launch drift: tmux rejects a reused pty after its pane disappears"
 
 # Severe: the same worker, now standing in the primary checkout.
 FM_FAKE_PANE_PATH="$PROJECT/src"

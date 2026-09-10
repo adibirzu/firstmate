@@ -174,6 +174,7 @@ fm_launch_drift_flags() {  # <launch-command> <harness>
   while IFS=$'\t' read -r kind token; do
     [ "$kind" = flag ] || continue
     case "$token" in
+      -*=*) token=${token%%=*} ;;
       -*) ;;
       *) continue ;;
     esac
@@ -183,6 +184,64 @@ fm_launch_drift_flags() {  # <launch-command> <harness>
     seen="$seen$token"$'\n'
     printf '%s\n' "$token"
   done < <(fm_launch_drift_parsed_tokens "$1" "$2")
+}
+
+fm_launch_drift_option_has_no_operand() {  # <option>
+  case "$1" in
+    --dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|--always-approve|--trust|--yolo|-y|--auto|--full-auto|--allow-all|--no-ask-user|--tui) return 0 ;;
+  esac
+  return 1
+}
+
+fm_launch_drift_option_values() {  # <launch-command> <harness>
+  local kind token option value next i
+  local -a tokens=()
+  while IFS=$'\t' read -r kind token; do
+    [ "$kind" = flag ] && tokens[${#tokens[@]}]=$token
+  done < <(fm_launch_drift_parsed_tokens "$1" "$2")
+  for ((i = 0; i < ${#tokens[@]}; i++)); do
+    token=${tokens[i]}
+    case "$token" in
+      -*=*)
+        option=${token%%=*}
+        value=${token#*=}
+        printf '%s\t%s\n' "$option" "$value"
+        ;;
+      -*)
+        fm_launch_drift_option_has_no_operand "$token" && continue
+        next=${tokens[i + 1]:-}
+        case "$next" in
+          ''|-*) continue ;;
+          '$('* ) continue ;;
+        esac
+        printf '%s\t%s\n' "$token" "$next"
+        i=$((i + 1))
+        ;;
+    esac
+  done
+}
+
+fm_launch_drift_live_option_values() {  # <live-argv>
+  local live=$1 token option value next i
+  local -a tokens=()
+  local IFS=$' \t\n'
+  read -r -a tokens <<< "$live"
+  for ((i = 0; i < ${#tokens[@]}; i++)); do
+    token=${tokens[i]}
+    case "$token" in
+      -*=*)
+        option=${token%%=*}
+        value=${token#*=}
+        printf '%s\t%s\n' "$option" "$value"
+        ;;
+      -*)
+        next=${tokens[i + 1]:-}
+        case "$next" in ''|-*) continue ;; esac
+        printf '%s\t%s\n' "$token" "$next"
+        i=$((i + 1))
+        ;;
+    esac
+  done
 }
 
 fm_launch_drift_recorded_has_harness() {  # <launch-command> <harness>
@@ -216,7 +275,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <harness> <worktree> <project> <l
   local recorded=$1 harness=$2 worktree=$3 project=$4 live_cwd=$5 live_argv=$6
   local cwd_sev=unknown cwd_code=cwd-unreadable cwd_detail
   local argv_sev=unknown argv_code=argv-unreadable argv_detail
-  local flag missing=
+  local flag missing= option expected_value live_values live_value
 
   if [ -z "$live_cwd" ]; then
     cwd_detail="endpoint working directory could not be read"
@@ -255,6 +314,20 @@ FLAGS
     if [ -n "$missing" ]; then
       argv_sev=warn argv_code=argv-loss
       argv_detail="$harness restarted without $missing"
+    else
+      live_values=$(fm_launch_drift_live_option_values "$live_argv")
+      while IFS=$'\t' read -r option expected_value; do
+        [ -n "$option" ] || continue
+        if printf '%s\n' "$live_values" | grep -Fqx -- "$(printf '%s\t%s' "$option" "$expected_value")"; then
+          continue
+        fi
+        live_value=$(printf '%s\n' "$live_values" | awk -F '\t' -v option="$option" '$1 == option { print $2; exit }')
+        argv_sev=warn argv_code=argv-loss
+        argv_detail="$harness restarted with $option ${live_value:-<missing>}; expected $expected_value"
+        break
+      done <<VALUES
+$(fm_launch_drift_option_values "$recorded" "$harness")
+VALUES
     fi
   fi
 
