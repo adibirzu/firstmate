@@ -79,6 +79,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-composer-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-launch-drift-identity-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-launch-drift-identity-lib.sh"
 
 # Shared, backend-neutral normalized-transition shape and the single-owner
 # status->action policy table (bin/fm-transition-lib.sh). This adapter's event
@@ -2632,7 +2634,7 @@ fm_backend_herdr_pane_argv() {  # <target> <harness>
   [ -n "$rows" ] || return 1
   while IFS=$'\t' read -r name argv0 argv; do
     [ -n "$argv" ] || continue
-    if fm_harness_process_matches_name "$harness" "$name" "$argv" "$argv0"; then
+    if fm_launch_drift_process_matches "$harness" "$name" "$argv" "$argv0"; then
       printf '%s\n' "$argv"
       return 0
     fi

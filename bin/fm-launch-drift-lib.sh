@@ -157,7 +157,7 @@ fm_launch_drift_parsed_tokens() {  # <launch-command> <harness>
         ;;
     esac
     case "$harness:$base" in
-      cursor:cursor-agent|cursor:agent|cursor-agent:cursor-agent|"$harness:$harness") ;;
+      cursor:cursor-agent|cursor:agent|cursor-agent:cursor-agent|muse:muse-bin-*|"$harness:$harness") ;;
       *) continue ;;
     esac
     harness_seen=1

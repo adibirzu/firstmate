@@ -159,7 +159,7 @@ tmux_live_argv() {  # <harness>
     # shellcheck source=bin/fm-backend.sh
     . "$ROOT/bin/fm-backend.sh"
     fm_backend_source tmux
-    fm_backend_tmux_target_pane_id() { printf '%s\n' "$1"; }
+    fm_backend_tmux_target_pane_snapshot() { printf '%s\037%s\037%s\n' "$1" "$WORKTREE" /dev/pts/fm-launch-drift; }
     fm_backend_tmux_foreground_comms() { printf '%s\n' "$FM_TEST_FG_COMM"; }
     fm_backend_tmux_foreground_args() { printf '%s\n' "$FM_TEST_FG_ARGS"; }
     fm_backend_tmux_foreground_argv0s() { printf '%s\n' "$FM_TEST_FG_ARGV0"; }
@@ -214,6 +214,50 @@ assert_contains "$CLAUDE_NODE_LOSS" "--dangerously-skip-permissions" \
   "an interpreter-launched Claude argv-loss must name the dropped flag"
 pass "launch drift: interpreter-launched Claude workers retain argv-loss detection"
 
+for drift_case in \
+  'codex|codex|codex|codex --full-auto|--full-auto' \
+  'opencode|opencode|opencode|opencode --agent build|--agent' \
+  'pi-signed|pi-signed|pi-signed|pi-signed --thinking high|--thinking' \
+  'grok|grok|grok|grok --fast|--fast' \
+  'kimi|kimi|kimi|kimi --yolo|--yolo' \
+  'cline|/opt/cline/bin/cline|/opt/cline/bin/cline|cline --yolo|--yolo' \
+  'omp|omp|omp|omp --yolo|--yolo' \
+  'agy|agy|agy|agy --dangerously-skip-permissions|--dangerously-skip-permissions' \
+  'muse|muse-bin-1.0|muse-bin-1.0|muse-bin-1.0 --yolo|--yolo' \
+  'copilot|copilot|copilot|copilot --yolo|--yolo' \
+  'rovo|rovo|rovo|rovo --yolo|--yolo'; do
+  IFS='|' read -r CASE_HARNESS CASE_COMM CASE_ARGV0 CASE_RECORD CASE_FLAG <<EOF
+$drift_case
+EOF
+  FM_TEST_FG_COMM=$CASE_COMM FM_TEST_FG_ARGS="${CASE_RECORD/$CASE_FLAG/}" FM_TEST_FG_ARGV0=$CASE_ARGV0
+  CASE_LIVE=$(tmux_live_argv "$CASE_HARNESS") \
+    || fail "$CASE_HARNESS must remain identifiable after a launch flag is lost"
+  CASE_LOSS=$(fm_launch_drift_verdict "$CASE_RECORD" "$CASE_HARNESS" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CASE_LIVE")
+  [ "$(printf '%s' "$CASE_LOSS" | cut -f2)" = argv-loss ] \
+    || fail "$CASE_HARNESS missing $CASE_FLAG must read argv-loss, got: $CASE_LOSS"
+  assert_contains "$CASE_LOSS" "$CASE_FLAG" \
+    "$CASE_HARNESS argv-loss must name the dropped flag"
+done
+
+FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/gemini/gemini' FM_TEST_FG_ARGV0=node
+GEMINI_LIVE=$(tmux_live_argv gemini) || fail "gemini must identify through its interpreter command"
+GEMINI_LOSS=$(fm_launch_drift_verdict 'gemini --yolo' gemini "$WORKTREE" "$PROJECT" "$WORKTREE" "$GEMINI_LIVE")
+[ "$(printf '%s' "$GEMINI_LOSS" | cut -f2)" = argv-loss ] \
+  || fail "gemini missing --yolo must read argv-loss, got: $GEMINI_LOSS"
+
+FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/node_modules/cline/bin/.cline' FM_TEST_FG_ARGV0=node
+CLINE_LIVE=$(tmux_live_argv cline) || fail "cline must identify through its executed script"
+CLINE_LOSS=$(fm_launch_drift_verdict 'cline --yolo' cline "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLINE_LIVE")
+[ "$(printf '%s' "$CLINE_LOSS" | cut -f2)" = argv-loss ] \
+  || fail "cline missing --yolo must read argv-loss, got: $CLINE_LOSS"
+pass "launch drift: every supported harness retains argv-loss detection"
+
+(
+  . "$ROOT/bin/fm-session-lock-lib.sh"
+  ! fm_harness_process_matches agy 'agy --dangerously-skip-permissions'
+) || fail "launch-drift identity must not broaden session-lock holder identity"
+pass "launch drift: session-lock identity remains unchanged"
+
 # State reads must use only passive cwd readers and leave active adapter probes
 # reserved for fm-spawn.sh before a harness starts.
 (
@@ -254,12 +298,13 @@ set -u
 for arg in "$@"; do
   case "$arg" in
     '#{pane_current_path}') printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-    '#{pane_tty}') printf '/dev/pts/fm-launch-drift\n'; exit 0 ;;
+    '#{pane_tty}') printf '%s\n' "${FM_FAKE_ACTIVE_TTY:-/dev/pts/fm-launch-drift}"; exit 0 ;;
     '#{pane_id}') printf '%%0\n'; exit 0 ;;
   esac
 done
 if [ "${1:-}" = list-panes ] && [ "${2:-}" = -a ]; then
-  [ "${FM_FAKE_TMUX_TARGET_LIVE:-1}" = 1 ] && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\n'
+  [ "${FM_FAKE_TMUX_TARGET_LIVE:-1}" = 1 ] \
+    && printf 'firstmate\tfm-healthy\t@1\t%%0\t1\t%s\t/dev/pts/fm-launch-drift\n' "${FM_FAKE_SNAPSHOT_PATH:-}"
   exit 0
 fi
 exit 0
@@ -287,7 +332,9 @@ mkdir -p "$STATE_DIR"
 
 FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
 FM_FAKE_TMUX_TARGET_LIVE=1
-export FAKE_AGENT_ARGV FM_FAKE_TMUX_TARGET_LIVE
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+FM_FAKE_PANE_PATH="$WORKTREE"
+export FAKE_AGENT_ARGV FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH
 trap 'fm_test_cleanup' EXIT
 
 # Prove the foreground reader selects the recorded harness before any verdict
@@ -326,15 +373,42 @@ crew_state() {  # <id>
 # must stay clean - a detector that annotates healthy workers is noise.
 write_task_meta healthy "claude --dangerously-skip-permissions --model opus"
 FM_FAKE_PANE_PATH="$WORKTREE"
-export FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 HEALTHY_LINE=$(crew_state healthy)
 assert_not_contains "$HEALTHY_LINE" "launch drift" \
   "a healthy worker must not be annotated with launch drift"
 pass "launch drift: fm-crew-state.sh leaves a healthy worker's line unannotated"
 
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+FM_FAKE_PANE_PATH="$PROJECT/src"
+export FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH
+RACE_LINE=$(crew_state healthy)
+assert_not_contains "$RACE_LINE" "primary-checkout" \
+  "a target snapshot must not be replaced by a later active-pane cwd read"
+assert_not_contains "$RACE_LINE" "launch drift" \
+  "a target snapshot must keep a healthy worker silent during pane teardown"
+pass "launch drift: tmux reads stay bound to the target snapshot"
+
+FAKE_AGENT_ARGV='claude --model opus'
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+FM_FAKE_PANE_PATH="$WORKTREE"
+FM_FAKE_ACTIVE_TTY=/dev/pts/fm-launch-drift-active
+export FAKE_AGENT_ARGV FM_FAKE_SNAPSHOT_PATH FM_FAKE_PANE_PATH FM_FAKE_ACTIVE_TTY
+ARGV_RACE_LINE=$(crew_state healthy)
+assert_contains "$ARGV_RACE_LINE" "launch drift (argv-loss)" \
+  "a target snapshot must retain its foreground process group during pane teardown"
+assert_contains "$ARGV_RACE_LINE" "--dangerously-skip-permissions" \
+  "a target snapshot must retain the target worker's missing flag"
+FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
+unset FM_FAKE_ACTIVE_TTY
+export FAKE_AGENT_ARGV
+pass "launch drift: tmux argv reads stay bound to the target snapshot"
+
 # Severe: the same worker, now standing in the primary checkout.
 FM_FAKE_PANE_PATH="$PROJECT/src"
-export FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$PROJECT/src"
+export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 SEVERE_LINE=$(crew_state healthy)
 assert_contains "$SEVERE_LINE" "LAUNCH DRIFT (severe, primary-checkout)" \
   "a worker in the primary checkout must be surfaced on the supervisor's line"
@@ -344,7 +418,8 @@ pass "launch drift: fm-crew-state.sh surfaces the primary-checkout case on the s
 
 FM_FAKE_TMUX_TARGET_LIVE=0
 FM_FAKE_PANE_PATH="$PROJECT/src"
-export FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$PROJECT/src"
+export FM_FAKE_TMUX_TARGET_LIVE FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 MISSING_LINE=$(crew_state healthy)
 assert_not_contains "$MISSING_LINE" "primary-checkout" \
   "a torn-down tmux target must not read the active pane as a primary-checkout worker"
@@ -360,7 +435,8 @@ pass "launch drift: a torn-down tmux target stays silent"
 FAKE_AGENT_ARGV='claude --model opus'
 export FAKE_AGENT_ARGV
 FM_FAKE_PANE_PATH="$WORKTREE"
-export FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 ARGV_LOSS_LINE=$(crew_state healthy)
 assert_contains "$ARGV_LOSS_LINE" "launch drift (argv-loss)" \
   "a worker restored without its launched flags must be surfaced"
@@ -372,12 +448,14 @@ pass "launch drift: fm-crew-state.sh surfaces a worker restored without its laun
 # Its independently verified cwd axis remains actionable.
 write_task_meta legacy
 FM_FAKE_PANE_PATH="$WORKTREE"
-export FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$WORKTREE"
+export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 LEGACY_LINE=$(crew_state legacy)
 assert_not_contains "$LEGACY_LINE" "launch drift" \
   "a pre-detector record with a healthy cwd must stay unannotated"
 FM_FAKE_PANE_PATH="$PROJECT/src"
-export FM_FAKE_PANE_PATH
+FM_FAKE_SNAPSHOT_PATH="$PROJECT/src"
+export FM_FAKE_PANE_PATH FM_FAKE_SNAPSHOT_PATH
 LEGACY_SEVERE=$(crew_state legacy)
 assert_contains "$LEGACY_SEVERE" "primary-checkout" \
   "a pre-detector record must report a verified primary-checkout cwd landing"

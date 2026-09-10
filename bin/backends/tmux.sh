@@ -26,6 +26,8 @@
 . "$FM_BACKEND_LIB_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-gemini-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-gemini-lib.sh"
+# shellcheck source=bin/fm-launch-drift-identity-lib.sh
+. "$FM_BACKEND_LIB_DIR/fm-launch-drift-identity-lib.sh"
 
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
@@ -100,10 +102,10 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
   printf '%s\n' "$wid"
 }
 
-fm_backend_tmux_target_pane_id() {  # <target>
-  local target=$1 row_session row_window row_window_id row_pane_id row_active
+fm_backend_tmux_target_pane_snapshot() {  # <target>
+  local target=$1 row_session row_window row_window_id row_pane_id row_active row_path row_tty
   [ -n "$target" ] || return 1
-  while IFS=$'\t' read -r row_session row_window row_window_id row_pane_id row_active; do
+  while IFS=$'\t' read -r row_session row_window row_window_id row_pane_id row_active row_path row_tty; do
     case "$target" in
       %*) [ "$row_pane_id" = "$target" ] || continue ;;
       @*) [ "$row_window_id" = "$target" ] && [ "$row_active" = 1 ] || continue ;;
@@ -114,48 +116,56 @@ fm_backend_tmux_target_pane_id() {  # <target>
         ;;
       *) return 1 ;;
     esac
-    printf '%s\n' "$row_pane_id"
+    printf '%s\037%s\037%s\n' "$row_pane_id" "$row_path" "$row_tty"
     return 0
-  done < <(tmux list-panes -a -F '#{session_name}\t#{window_name}\t#{window_id}\t#{pane_id}\t#{pane_active}' 2>/dev/null)
+  done < <(tmux list-panes -a -F '#{session_name}\t#{window_name}\t#{window_id}\t#{pane_id}\t#{pane_active}\t#{pane_current_path}\t#{pane_tty}' 2>/dev/null)
   return 1
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
-# `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+# empty on any tmux error. Its value is read with the target inventory snapshot
+# rather than through tmux's target lookup, which falls back to the active pane.
 fm_backend_tmux_current_path() {  # <target>
-  local pane_id
-  pane_id=$(fm_backend_tmux_target_pane_id "$1") || return 1
-  tmux display-message -p -t "$pane_id" '#{pane_current_path}' 2>/dev/null
+  local snapshot pane_id path tty
+  snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
+  IFS=$'\037' read -r pane_id path tty <<EOF
+$snapshot
+EOF
+  [ -n "$pane_id" ] || return 1
+  printf '%s\n' "$path"
 }
 
 # fm_backend_tmux_pane_argv: the live command line of the recorded harness in
 # <target>'s foreground process group, or empty when it cannot be read.
 fm_backend_tmux_pane_argv() {  # <target> <harness>
-  local target=$1 harness=$2 pane_id comm args argv0 i
+  local target=$1 harness=$2 snapshot pane_id path tty comm args argv0 i
   local -a comms=() argses=() argv0s=()
   [ -n "$harness" ] || return 1
-  pane_id=$(fm_backend_tmux_target_pane_id "$target") || return 1
+  snapshot=$(fm_backend_tmux_target_pane_snapshot "$target") || return 1
+  IFS=$'\037' read -r pane_id path tty <<EOF
+$snapshot
+EOF
+  [ -n "$pane_id" ] && [ -n "$tty" ] || return 1
   while IFS= read -r comm; do
     [ -n "$comm" ] && comms[${#comms[@]}]=$comm
   done <<EOF
-$(fm_backend_tmux_foreground_comms "$pane_id")
+$(fm_backend_tmux_foreground_comms "$pane_id" "$tty")
 EOF
   while IFS= read -r args; do
     [ -n "$args" ] && argses[${#argses[@]}]=$args
   done <<EOF
-$(fm_backend_tmux_foreground_args "$pane_id")
+$(fm_backend_tmux_foreground_args "$pane_id" "$tty")
 EOF
   while IFS= read -r argv0; do
     [ -n "$argv0" ] && argv0s[${#argv0s[@]}]=$argv0
   done <<EOF
-$(fm_backend_tmux_foreground_argv0s "$pane_id")
+$(fm_backend_tmux_foreground_argv0s "$pane_id" "$tty")
 EOF
   for ((i = 0; i < ${#argses[@]}; i++)); do
     comm=${comms[i]:-}
     args=${argses[i]}
     argv0=${argv0s[i]:-}
-    if fm_harness_process_matches_name "$harness" "$comm" "$args" "$argv0"; then
+    if fm_launch_drift_process_matches "$harness" "$comm" "$args" "$argv0"; then
       printf '%s\n' "$args"
       return 0
     fi
@@ -280,9 +290,9 @@ fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
 # absent target from the client's active window rather than failing, so callers
 # must confirm exact window membership first, exactly as the classifier below
 # does, or they will describe some other pane entirely.
-fm_backend_tmux_foreground_comms() {  # <target>
-  local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_comms() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -295,9 +305,9 @@ fm_backend_tmux_foreground_comms() {  # <target>
 # The foreground group's full command lines. Needed because a node-bundle
 # harness carries its identity in argv[1] rather than in its command name or
 # argv[0]; bin/fm-gemini-lib.sh owns what counts as evidence inside one.
-fm_backend_tmux_foreground_args() {  # <target>
-  local target=$1 tty pid pgid tpgid comm args
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_args() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm args
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -320,9 +330,9 @@ fm_backend_tmux_foreground_pids() {  # <target>
       done
 }
 
-fm_backend_tmux_foreground_argv0s() {  # <target>
-  local target=$1 tty pid pgid tpgid comm args argv0
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_argv0s() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
