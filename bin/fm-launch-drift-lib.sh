@@ -218,8 +218,7 @@ fm_launch_drift_live_argv_has_harness() {  # <harness> <live-argv>
   for executable in $live_argv; do
     executable=$(fm_launch_drift_unquote "$executable")
     executable=${executable##*/}
-    [ "$executable" = "$harness" ]
-    return
+    [ "$executable" = "$harness" ] && return 0
   done
   return 1
 }

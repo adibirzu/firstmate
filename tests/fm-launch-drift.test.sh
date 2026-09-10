@@ -162,6 +162,16 @@ PI_LAUNCH="pi --thinking high"
   || fail "a path-qualified executable must match the recorded harness by its final component"
 pass "launch drift: argv harness matching requires an executable token boundary"
 
+CURSOR_LAUNCH="cursor-agent --trust --yolo"
+[ "$(verdict_field 1 "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "node /opt/cursor/cursor-agent --trust --yolo")" = ok ] \
+  || fail "a node-bundled harness must match its path token in the live argv"
+CURSOR_LOSS=$(fm_launch_drift_verdict "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "node /opt/cursor/cursor-agent --trust")
+[ "$(printf '%s' "$CURSOR_LOSS" | cut -f2)" = argv-loss ] \
+  || fail "a node-bundled harness missing --yolo must read argv-loss, got: $CURSOR_LOSS"
+assert_contains "$CURSOR_LOSS" "--yolo" \
+  "a node-bundled harness argv-loss must name the dropped flag"
+pass "launch drift: node-bundled harnesses retain argv-loss detection"
+
 # State reads must use only passive cwd readers and leave active adapter probes
 # reserved for fm-spawn.sh before a harness starts.
 (
