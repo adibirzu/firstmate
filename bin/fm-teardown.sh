@@ -2769,7 +2769,14 @@ teardown_herdr_focus_checkpoint_restore() {  # <path> <session>
   [ "$version" = 1 ] && [ "$saved_session" = "$session" ] || return 1
   [ -n "$workspace" ] && [ -n "$tab" ] || return 1
   case "$workspace:$tab" in
-    *:*:*|*[[:space:]]*) return 1 ;;
+    *[[:space:]]*) return 1 ;;
+  esac
+  case "$workspace" in
+    *:*) return 1 ;;
+  esac
+  case "$tab" in
+    "$workspace":?*) ;;
+    *) return 1 ;;
   esac
   fm_backend_herdr_projection_focus_restore "$session" "$workspace"$'\t'"$tab" "pane close"
 }
