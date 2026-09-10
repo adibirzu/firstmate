@@ -107,21 +107,37 @@ fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
 }
 
-# fm_backend_tmux_pane_argv: the live command line of the pane's deepest
-# non-shell descendant, or empty when it cannot be read. Consumed by
-# bin/fm-crew-state.sh's launch-drift detector to compare a running worker
-# against the command state/<id>.meta says it was launched with.
-#
-# tmux exposes the pane's top-level shell pid but not the agent's own argv, so
-# the process table is the source. fm_backend_agent_descendant_argv owns which
-# descendant counts as the agent and why.
-fm_backend_tmux_pane_argv() {  # <target>
-  local pane_pid
-  pane_pid=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
-  case "$pane_pid" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  fm_backend_agent_descendant_argv "$pane_pid"
+# fm_backend_tmux_pane_argv: the live command line of the recorded harness in
+# <target>'s foreground process group, or empty when it cannot be read.
+fm_backend_tmux_pane_argv() {  # <target> <harness>
+  local target=$1 harness=$2 comm args argv0 i
+  local -a comms=() argses=() argv0s=()
+  [ -n "$harness" ] || return 1
+  while IFS= read -r comm; do
+    [ -n "$comm" ] && comms[${#comms[@]}]=$comm
+  done <<EOF
+$(fm_backend_tmux_foreground_comms "$target")
+EOF
+  while IFS= read -r args; do
+    [ -n "$args" ] && argses[${#argses[@]}]=$args
+  done <<EOF
+$(fm_backend_tmux_foreground_args "$target")
+EOF
+  while IFS= read -r argv0; do
+    [ -n "$argv0" ] && argv0s[${#argv0s[@]}]=$argv0
+  done <<EOF
+$(fm_backend_tmux_foreground_argv0s "$target")
+EOF
+  for ((i = 0; i < ${#argses[@]}; i++)); do
+    comm=${comms[i]:-}
+    args=${argses[i]}
+    argv0=${argv0s[i]:-}
+    if fm_harness_process_matches_name "$harness" "$comm" "$args" "$argv0"; then
+      printf '%s\n' "$args"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no

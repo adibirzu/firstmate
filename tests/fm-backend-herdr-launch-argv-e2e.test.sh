@@ -115,26 +115,19 @@ START_REQUIRED=$(printf '%s' "$SCHEMA" | jq -r '.schemas.request."$defs".AgentSt
 [ "$START_REQUIRED" = "name,kind,pane_id" ] \
   || fail "agent.start's required parameters changed: expected name,kind,pane_id, got '$START_REQUIRED'"
 
-# The only argv-shaped fields may be the LIVE process read and the agent_started
-# RESPONSE. Anything under a persisted session/pane record would be a replayable
-# launch command, which is precisely what this guard exists to catch.
-# Each matching path is truncated at its own argv/argv0 component, so the
-# schema's sub-keys (.items.type, .type.0) collapse onto the property itself and
-# the comparison is against field identity rather than leaf shape.
-UNEXPECTED_ARGV=$(printf '%s' "$SCHEMA" | jq -r '
-  [ paths(scalars) as $p
-    | $p | map(tostring) | join(".")
-    | select(test("argv"; "i"))
-    | sub("(?<keep>\\.argv0?)\\..*$"; "\(.keep)")
-  ]
-  | unique
-  | map(select(
-      test("^schemas\\.success_response\\.\\$defs\\.PaneProcessInfoProcess\\.properties\\.argv0?$") == false
-      and test("^schemas\\.success_response\\.\\$defs\\.ResponseResult\\.oneOf\\.[0-9]+\\.properties\\.argv$") == false
-    ))
-  | join(" ")' 2>/dev/null)
-[ -z "$UNEXPECTED_ARGV" ] \
-  || fail "$HERDR_VERSION exposes an unexpected argv field ($UNEXPECTED_ARGV); a persisted launch command may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
+snapshot_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".SessionSnapshot.properties | keys | join(",")' 2>/dev/null)
+pane_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".PaneInfo.properties | keys | join(",")' 2>/dev/null)
+agent_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".AgentInfo.properties | keys | join(",")' 2>/dev/null)
+agent_session_keys=$(printf '%s' "$SCHEMA" | jq -r '.schemas.success_response."$defs".AgentSessionInfo.properties | keys | join(",")' 2>/dev/null)
+
+[ "$snapshot_keys" = "agents,focused_pane_id,focused_tab_id,focused_workspace_id,layouts,panes,protocol,tabs,version,workspaces" ] \
+  || fail "$HERDR_VERSION changed the persisted session snapshot shape ($snapshot_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
+[ "$pane_keys" = "agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,label,pane_id,revision,scroll,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id" ] \
+  || fail "$HERDR_VERSION changed the persisted pane record shape ($pane_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
+[ "$agent_keys" = "agent,agent_session,agent_status,cwd,display_agent,focused,foreground_cwd,interactive_ready,launch_pending,name,pane_id,revision,screen_detection_skipped,state_change_seq,state_labels,tab_id,terminal_id,terminal_title,terminal_title_stripped,title,tokens,workspace_id" ] \
+  || fail "$HERDR_VERSION changed the persisted agent record shape ($agent_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
+[ "$agent_session_keys" = "agent,kind,source,value" ] \
+  || fail "$HERDR_VERSION changed the persisted agent-session shape ($agent_session_keys); a replay field may have returned - revisit docs/herdr-backend.md 'Launch-argv replay'"
 pass "herdr launch-argv: protocol $PROTOCOL persists no launch command, only a live process read and a start response"
 
 # --- 3. the persisted cwd follows the live shell and survives a restart ----

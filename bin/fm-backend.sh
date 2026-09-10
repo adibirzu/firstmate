@@ -835,68 +835,6 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
 # uses unknown as the cue for harness-scoped pane-tail detection, while
 # fm-crew-state.sh also corroborates native idle verdicts with the recorded
 # harness's signature before treating a no-run crew as not busy.
-# fm_backend_agent_descendant_argv: print the command line of the agent running
-# under <pid>, or fail when the process table cannot be read or holds no
-# candidate. Shared by the adapters whose session provider exposes a pane pid
-# but not the agent's own argv.
-#
-# The agent is the SHALLOWEST descendant that is neither a shell nor a launch
-# wrapper, and the walk stops at it. Both halves of that rule are load-bearing:
-#
-#   - Skipping shells and wrappers is required because firstmate's launch-env
-#     isolation mode runs the harness under `/usr/bin/env -i ... /bin/sh -c
-#     '<launch>'`, so the pane shell's own child is the wrapper, not the agent.
-#   - Stopping at the shallowest match is required because a working agent
-#     spawns its own tool subprocesses. Descending past the agent would report
-#     whatever `git`, `rg`, or test runner happened to be executing at that
-#     instant, and the launch-drift comparison would read every busy worker as
-#     having lost its flags.
-#
-# The walk is bounded so a pathological or cyclic process table cannot spin.
-fm_backend_agent_descendant_argv() {  # <pid>
-  local pid=$1 table row_pid row_ppid row_cmd child_pid child_cmd depth=0
-  table=$(ps -eo pid=,ppid=,command= 2>/dev/null) || return 1
-  [ -n "$table" ] || return 1
-  while [ "$depth" -lt 32 ]; do
-    child_pid=''
-    child_cmd=''
-    while read -r row_pid row_ppid row_cmd; do
-      [ "$row_ppid" = "$pid" ] || continue
-      child_pid=$row_pid
-      child_cmd=$row_cmd
-      break
-    done <<ROWS
-$table
-ROWS
-    [ -n "$child_pid" ] || return 1
-    if ! fm_backend_command_is_launch_scaffolding "${child_cmd%% *}"; then
-      printf '%s\n' "$child_cmd"
-      return 0
-    fi
-    pid=$child_pid
-    depth=$((depth + 1))
-  done
-  return 1
-}
-
-# fm_backend_command_is_launch_scaffolding: return 0 when <command-word> names a
-# shell or a launch wrapper that stands between the pane and the agent, rather
-# than the agent itself.
-#
-# Matched on the basename with any login-shell leading dash removed, so
-# `/bin/zsh`, `-zsh`, and `zsh` all classify identically, and a name that merely
-# ends in "sh" cannot be swept in by a suffix glob - `fish` is a shell, `ssh` is
-# not, and an agent is never skipped by accident.
-fm_backend_command_is_launch_scaffolding() {  # <command-word>
-  local base=${1##*/}
-  base=${base#-}
-  case "$base" in
-    sh|bash|zsh|dash|ksh|csh|tcsh|fish) return 0 ;;
-    env|nohup|setsid|stdbuf|time) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # fm_backend_current_path: the live working directory of <target>, or a nonzero
 # return when this backend cannot answer. Supervision must NEVER type into a
 # live pane: fm-crew-state.sh calls this on every state read, so it may use only
@@ -922,7 +860,7 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
 # not a failure: bin/fm-launch-drift-lib.sh reports `unknown` on the argv axis
 # and checks the working-directory axis only on passive-read backends (tmux and
 # Herdr). Zellij, cmux, and Orca report unknown on the cwd axis.
-fm_backend_pane_argv() {  # <backend> <target>
+fm_backend_pane_argv() {  # <backend> <target> <harness>
   local backend=$1
   shift
   fm_backend_source "$backend" || return 1

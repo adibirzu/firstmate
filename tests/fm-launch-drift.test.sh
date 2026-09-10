@@ -11,8 +11,7 @@
 # uses only tmux and Herdr's passive cwd reads; zellij, cmux, and Orca remain
 # unknown on that axis so a state read never types into a live pane.
 #
-# Both halves run with real processes and no harness, so CI enforces them
-# everywhere:
+# Both halves run without a harness, so CI enforces them everywhere:
 #   (a) the verdict matrix, driven directly through the library's public
 #       functions: healthy, argv loss, cwd drift, the severe primary-checkout
 #       case, and both axes diverging at once.
@@ -23,9 +22,8 @@
 #   (c) the launch-env isolation regression: a launch wrapped in
 #       `/usr/bin/env -i ... /bin/sh -c '<launch>'` must not report the
 #       WRAPPER's own -i and -c as flags the harness lost.
-#   (d) end-to-end through fm-crew-state.sh over a real process tree, proving
-#       the severe finding reaches the supervisor's line and that a healthy
-#       worker adds nothing to it.
+#   (d) end-to-end through fm-crew-state.sh, proving the severe finding reaches
+#       the supervisor's line and that a healthy worker adds nothing to it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -44,34 +42,34 @@ mkdir -p "$PROJECT/src" "$WORKTREE" "$ELSEWHERE"
 LAUNCH="FM_HOME=/h claude --dangerously-skip-permissions --model opus --add-dir /x"
 WRAPPED="/usr/bin/env -i HOME=/h /bin/sh -c 'FM_HOME=/h claude --dangerously-skip-permissions'"
 
-# verdict_field <n> <recorded> <worktree> <project> <live-cwd> <live-argv>
+# verdict_field <n> <harness> <recorded> <worktree> <project> <live-cwd> <live-argv>
 verdict_field() {
-  local n=$1
-  shift
-  fm_launch_drift_verdict "$@" | cut -f"$n"
+  local n=$1 harness=$2
+  shift 2
+  fm_launch_drift_verdict "$1" "$harness" "${@:2}" | cut -f"$n"
 }
 
 # --- (a) the verdict matrix ------------------------------------------------
 
-[ "$(verdict_field 1 "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = ok ] \
+[ "$(verdict_field 1 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = ok ] \
   || fail "a healthy worker in its own worktree with intact flags must read ok"
 pass "launch drift: matching worktree and intact flags read ok"
 
-[ "$(verdict_field 2 "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus --add-dir /x")" = argv-loss ] \
+[ "$(verdict_field 2 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus --add-dir /x")" = argv-loss ] \
   || fail "a worker missing a launched flag must read argv-loss"
 assert_contains \
-  "$(fm_launch_drift_verdict "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus --add-dir /x")" \
+  "$(fm_launch_drift_verdict "$LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus --add-dir /x")" \
   "--dangerously-skip-permissions" \
   "argv-loss must name the flag that went missing"
 pass "launch drift: a dropped flag reads argv-loss and names the flag"
 
-[ "$(verdict_field 2 "$LAUNCH" "$WORKTREE" "$PROJECT" "$ELSEWHERE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = cwd-drift ] \
+[ "$(verdict_field 2 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$ELSEWHERE" "claude --dangerously-skip-permissions --model opus --add-dir /x")" = cwd-drift ] \
   || fail "a worker outside both its worktree and the project must read cwd-drift"
 pass "launch drift: a worker in an unrelated directory reads cwd-drift"
 
 # The severe case. This is the whole reason the detector exists: edits made here
 # land in the checkout firstmate itself operates from.
-SEVERE=$(fm_launch_drift_verdict "$LAUNCH" "$WORKTREE" "$PROJECT" "$PROJECT/src" "claude --dangerously-skip-permissions --model opus --add-dir /x")
+SEVERE=$(fm_launch_drift_verdict "$LAUNCH" claude "$WORKTREE" "$PROJECT" "$PROJECT/src" "claude --dangerously-skip-permissions --model opus --add-dir /x")
 [ "$(printf '%s' "$SEVERE" | cut -f1)" = severe ] \
   || fail "a worker inside the project's primary checkout must read severe, got: $SEVERE"
 [ "$(printf '%s' "$SEVERE" | cut -f2)" = primary-checkout ] \
@@ -80,7 +78,7 @@ pass "launch drift: a worker in the primary checkout reads severe/primary-checko
 
 # Worst axis wins, and the weaker finding is still reported: a supervisor must
 # never be told only about the flags while the worker stands in the checkout.
-BOTH=$(fm_launch_drift_verdict "$LAUNCH" "$WORKTREE" "$PROJECT" "$PROJECT/src" "claude --model opus")
+BOTH=$(fm_launch_drift_verdict "$LAUNCH" claude "$WORKTREE" "$PROJECT" "$PROJECT/src" "claude --model opus")
 [ "$(printf '%s' "$BOTH" | cut -f1)" = severe ] \
   || fail "both axes diverging must keep the severe severity, got: $BOTH"
 assert_contains "$BOTH" "primary-checkout+argv-loss" "both axes diverging must report both codes"
@@ -88,89 +86,124 @@ pass "launch drift: both axes diverging keep severe and report both findings"
 
 # --- (b) the unknown cases that must not raise an alarm --------------------
 
-[ "$(verdict_field 1 "$LAUNCH" "$WORKTREE" "$PROJECT" "" "")" = unknown ] \
+[ "$(verdict_field 1 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "" "")" = unknown ] \
   || fail "an endpoint that could not be read must be unknown, never drift"
-[ "$(verdict_field 1 "" "" "" "" "")" = unknown ] \
+[ "$(verdict_field 1 "" "" "" "" "" "")" = unknown ] \
   || fail "an unreadable pre-detector endpoint must be unknown, never drift"
 # A pre-detector record leaves only its argv axis unknown. A verified-good cwd
 # keeps the verdict silent, while a verified cwd divergence remains actionable.
-[ "$(verdict_field 1 "" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" = unknown ] \
+[ "$(verdict_field 1 claude "" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" = unknown ] \
   || fail "a pre-detector record with a healthy cwd must keep its argv axis unknown"
 assert_contains \
-  "$(fm_launch_drift_verdict "" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" \
+  "$(fm_launch_drift_verdict "" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --whatever")" \
   "argv-unreadable" \
   "an unknown verdict must name which axis could not be verified"
 pass "launch drift: unreadable endpoints and an unverified argv axis never alarm"
 
 # A pane back at its shell prompt is a different condition entirely, owned by
 # fm-crew-state.sh's own state read. Reporting it as lost flags would bury it.
-SHELL_VERDICT=$(verdict_field 1 "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "-zsh")
+SHELL_VERDICT=$(verdict_field 1 claude "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "")
 case "$SHELL_VERDICT" in
   ok|unknown) ;;
   *) fail "a pane at a shell prompt must not be reported as drift, got: $SHELL_VERDICT" ;;
 esac
 assert_contains \
-  "$(fm_launch_drift_verdict "$LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "-zsh")" \
-  "not running claude" \
-  "an exited agent must be described as such, not as lost flags"
+  "$(fm_launch_drift_verdict "$LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "")" \
+  "argv-unreadable" \
+  "an unreadable argv axis must stay silent"
 pass "launch drift: a pane back at its shell prompt is not reported as lost flags"
 
 # --- (c) the launch-env isolation regression -------------------------------
 
-WRAPPED_VERDICT=$(verdict_field 1 "$WRAPPED" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --dangerously-skip-permissions")
+WRAPPED_VERDICT=$(verdict_field 1 claude "$WRAPPED" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --dangerously-skip-permissions")
 [ "$WRAPPED_VERDICT" = ok ] \
   || fail "a launch-env-isolated launch must not report the wrapper's own -i/-c as lost harness flags, got: $WRAPPED_VERDICT"
 assert_not_contains \
-  "$(fm_launch_drift_flags "$WRAPPED")" "-i" \
+  "$(fm_launch_drift_flags "$WRAPPED" claude)" "-i" \
   "wrapper flags must not be collected as harness flags"
 assert_contains \
-  "$(fm_launch_drift_flags "$WRAPPED")" "--dangerously-skip-permissions" \
+  "$(fm_launch_drift_flags "$WRAPPED" claude)" "--dangerously-skip-permissions" \
   "the harness's own flags must still be collected from inside the wrapper"
 pass "launch drift: the launch-env isolation wrapper's own flags are not attributed to the harness"
 
 # Env options and relaunch shell prefixes must not become a false harness token.
 ENV_UNSET_LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI claude --dangerously-skip-permissions --model opus"
-[ "$(verdict_field 2 "$ENV_UNSET_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+[ "$(verdict_field 2 claude "$ENV_UNSET_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
   || fail "an env -u wrapper must compare the real harness flags, not its removed variable names"
 assert_contains \
-  "$(fm_launch_drift_verdict "$ENV_UNSET_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "$(fm_launch_drift_verdict "$ENV_UNSET_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
   "--dangerously-skip-permissions" \
   "an env -u wrapper must name the real harness flag that went missing"
 
 RELAUNCH="unset TRACEPARENT; claude --dangerously-skip-permissions --model opus"
-[ "$(verdict_field 2 "$RELAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+[ "$(verdict_field 2 claude "$RELAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
   || fail "an unset relaunch prefix must compare the real harness flags, not TRACEPARENT"
 assert_contains \
-  "$(fm_launch_drift_verdict "$RELAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "$(fm_launch_drift_verdict "$RELAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
   "--dangerously-skip-permissions" \
   "an unset relaunch prefix must name the real harness flag that went missing"
 pass "launch drift: env and relaunch prefixes preserve the true harness boundary"
 
 QUOTED_HOME_LAUNCH="FM_HOME='/tmp/Second Mate' claude --dangerously-skip-permissions --model opus"
-[ "$(verdict_field 2 "$QUOTED_HOME_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
+[ "$(verdict_field 2 claude "$QUOTED_HOME_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" = argv-loss ] \
   || fail "a quoted assignment must preserve the true harness after a spaced value"
 assert_contains \
-  "$(fm_launch_drift_verdict "$QUOTED_HOME_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
+  "$(fm_launch_drift_verdict "$QUOTED_HOME_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "claude --model opus")" \
   "--dangerously-skip-permissions" \
   "a quoted assignment must preserve the flag that the true harness lost"
 pass "launch drift: quoted assignment values preserve the true harness boundary"
 
 PI_LAUNCH="pi --thinking high"
-[ "$(verdict_field 1 "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "pip --thinking high")" = unknown ] \
-  || fail "a strict executable-name prefix must not be treated as the recorded harness"
-[ "$(verdict_field 1 "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "/opt/local/bin/pi --thinking high")" = ok ] \
-  || fail "a path-qualified executable must match the recorded harness by its final component"
-pass "launch drift: argv harness matching requires an executable token boundary"
+tmux_live_argv() {  # <harness>
+  (
+    # shellcheck source=bin/fm-backend.sh
+    . "$ROOT/bin/fm-backend.sh"
+    fm_backend_source tmux
+    fm_backend_tmux_foreground_comms() { printf '%s\n' "$FM_TEST_FG_COMM"; }
+    fm_backend_tmux_foreground_args() { printf '%s\n' "$FM_TEST_FG_ARGS"; }
+    fm_backend_tmux_foreground_argv0s() { printf '%s\n' "$FM_TEST_FG_ARGV0"; }
+    fm_backend_pane_argv tmux '%0' "$1"
+  )
+}
+
+FM_TEST_FG_COMM=pip FM_TEST_FG_ARGS='pip --thinking high' FM_TEST_FG_ARGV0=pip
+export FM_TEST_FG_COMM FM_TEST_FG_ARGS FM_TEST_FG_ARGV0
+if tmux_live_argv pi >/dev/null; then
+  fail "a strict executable-name prefix must not be treated as the recorded harness"
+fi
+FM_TEST_FG_COMM=/opt/local/bin/pi FM_TEST_FG_ARGS='/opt/local/bin/pi --thinking high' FM_TEST_FG_ARGV0=/opt/local/bin/pi
+PI_ARGV=$(tmux_live_argv pi) || fail "a path-qualified executable must match the recorded harness by its final component"
+[ "$(verdict_field 1 pi "$PI_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$PI_ARGV")" = ok ] \
+  || fail "a path-qualified executable must stay comparable after adapter identity selection"
+pass "launch drift: foreground identity requires an executable token boundary"
 
 CURSOR_LAUNCH="cursor-agent --trust --yolo"
-[ "$(verdict_field 1 "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "node /opt/cursor/cursor-agent --trust --yolo")" = ok ] \
-  || fail "a node-bundled harness must match its path token in the live argv"
-CURSOR_LOSS=$(fm_launch_drift_verdict "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "node /opt/cursor/cursor-agent --trust")
+FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /opt/cursor/cursor-agent --trust --yolo' FM_TEST_FG_ARGV0=node
+CURSOR_ARGV=$(tmux_live_argv cursor-agent) || fail "a node-bundled Cursor worker must identify through the foreground adapter"
+[ "$(verdict_field 1 cursor-agent "$CURSOR_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CURSOR_ARGV")" = ok ] \
+  || fail "a node-bundled Cursor worker with intact flags must read ok"
+FM_TEST_FG_ARGS='node /opt/cursor/cursor-agent --trust'
+CURSOR_ARGV_LOSS=$(tmux_live_argv cursor-agent) || fail "a node-bundled Cursor worker must remain identifiable after a flag loss"
+CURSOR_LOSS=$(fm_launch_drift_verdict "$CURSOR_LAUNCH" cursor-agent "$WORKTREE" "$PROJECT" "$WORKTREE" "$CURSOR_ARGV_LOSS")
 [ "$(printf '%s' "$CURSOR_LOSS" | cut -f2)" = argv-loss ] \
   || fail "a node-bundled harness missing --yolo must read argv-loss, got: $CURSOR_LOSS"
 assert_contains "$CURSOR_LOSS" "--yolo" \
   "a node-bundled harness argv-loss must name the dropped flag"
 pass "launch drift: node-bundled harnesses retain argv-loss detection"
+
+CLAUDE_NODE_LAUNCH="claude --dangerously-skip-permissions"
+FM_TEST_FG_COMM=node FM_TEST_FG_ARGS='node /x/@anthropic-ai/claude-code/cli.js --dangerously-skip-permissions' FM_TEST_FG_ARGV0=node
+CLAUDE_NODE_ARGV=$(tmux_live_argv claude) || fail "an interpreter-launched Claude worker must identify through the foreground adapter"
+[ "$(verdict_field 1 claude "$CLAUDE_NODE_LAUNCH" "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLAUDE_NODE_ARGV")" = ok ] \
+  || fail "an interpreter-launched Claude worker with intact flags must read ok"
+FM_TEST_FG_ARGS='node /x/@anthropic-ai/claude-code/cli.js'
+CLAUDE_NODE_ARGV_LOSS=$(tmux_live_argv claude) || fail "an interpreter-launched Claude worker must remain identifiable after a flag loss"
+CLAUDE_NODE_LOSS=$(fm_launch_drift_verdict "$CLAUDE_NODE_LAUNCH" claude "$WORKTREE" "$PROJECT" "$WORKTREE" "$CLAUDE_NODE_ARGV_LOSS")
+[ "$(printf '%s' "$CLAUDE_NODE_LOSS" | cut -f2)" = argv-loss ] \
+  || fail "an interpreter-launched Claude worker missing its flag must read argv-loss, got: $CLAUDE_NODE_LOSS"
+assert_contains "$CLAUDE_NODE_LOSS" "--dangerously-skip-permissions" \
+  "an interpreter-launched Claude argv-loss must name the dropped flag"
+pass "launch drift: interpreter-launched Claude workers retain argv-loss detection"
 
 # State reads must use only passive cwd readers and leave active adapter probes
 # reserved for fm-spawn.sh before a harness starts.
@@ -201,21 +234,18 @@ pass "launch drift: supervision dispatches only passive cwd readers"
 
 # --- (d) end to end through fm-crew-state.sh -------------------------------
 
-# A real process tree: a shell parent standing in for the pane, with a real
-# flag-carrying child standing in for the agent. The fake tmux reports that
-# shell as the pane pid, so fm_backend_tmux_pane_argv's descendant walk runs
-# against a genuine process table rather than a canned string.
+# A controlled tmux process view supplies the foreground worker command line.
 FAKEBIN="$TMP_ROOT/fakebin"
 mkdir -p "$FAKEBIN"
 
 cat > "$FAKEBIN/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-# Only the three reads the detector and the readability probe make.
+# Only the reads the detector and the readability probe make.
 for arg in "$@"; do
   case "$arg" in
     '#{pane_current_path}') printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-    '#{pane_pid}') printf '%s\n' "${FM_FAKE_PANE_PID:-}"; exit 0 ;;
+    '#{pane_tty}') printf '/dev/pts/fm-launch-drift\n'; exit 0 ;;
     '#{pane_id}') printf '%%0\n'; exit 0 ;;
   esac
 done
@@ -223,57 +253,40 @@ exit 0
 SH
 chmod +x "$FAKEBIN/tmux"
 
+REAL_PS=$(command -v ps)
+export REAL_PS
+cat > "$FAKEBIN/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case " $* " in
+  *' -t pts/fm-launch-drift '*) printf '4242 4242 4242 claude\n' ;;
+  *' -p 4242 '*) printf '%s\n' "${FAKE_AGENT_ARGV:-}" ;;
+  *) exec "$REAL_PS" "$@" ;;
+esac
+SH
+chmod +x "$FAKEBIN/ps"
+
 PATH="$FAKEBIN:$PATH"
 export PATH
 
 STATE_DIR="$TMP_ROOT/state"
 mkdir -p "$STATE_DIR"
 
-# `exec -a` renames the process so the table really carries the launched flags,
-# rather than a shebang script whose interpreter is what ps would report. The
-# subshell keeps the outer bash alive as the pane pid with the agent as its
-# child, which is the shape the descendant walk expects.
-FAKE_AGENT_ARGV='fmfakeagent --dangerously-skip-permissions --model opus'
-start_fake_agent() {  # <argv-string>
-  # The wrapper shell's stderr is discarded: when stop_fake_agent kills the
-  # stand-in agent, that shell reports its terminated child, and the notice
-  # would land in the suite's own output looking like a failure.
-  bash -c "( exec -a \"\$1\" sleep 300 )" _ "$1" 2>/dev/null &
-  FAKE_PANE_PID=$!
-  local waited=0
-  while [ "$waited" -lt 40 ]; do
-    pgrep -P "$FAKE_PANE_PID" >/dev/null 2>&1 && return 0
-    sleep 0.1
-    waited=$((waited + 1))
-  done
-  return 1
-}
-stop_fake_agent() {
-  [ -n "${FAKE_PANE_PID:-}" ] || return 0
-  pkill -P "$FAKE_PANE_PID" 2>/dev/null || true
-  kill "$FAKE_PANE_PID" 2>/dev/null || true
-  # Reap it here: an unwaited killed job makes bash print a "Terminated" notice
-  # into the suite's own output at exit, which reads like a failure in CI logs.
-  wait "$FAKE_PANE_PID" 2>/dev/null || true
-  FAKE_PANE_PID=''
-}
-trap 'stop_fake_agent; fm_test_cleanup' EXIT
+FAKE_AGENT_ARGV='claude --dangerously-skip-permissions --model opus'
+export FAKE_AGENT_ARGV
+trap 'fm_test_cleanup' EXIT
 
-start_fake_agent "$FAKE_AGENT_ARGV" || fail "the stand-in agent process never appeared"
-
-# Prove the reader actually sees the flags before any verdict is trusted:
-# without this the healthy case below could pass merely because the argv was
-# unreadable and the axis went quiet.
+# Prove the foreground reader selects the recorded harness before any verdict
+# is trusted: without this the healthy case below could pass merely because the
+# argv was unreadable and the axis went quiet.
 . "$ROOT/bin/fm-backend.sh"
-READ_ARGV=$(fm_backend_agent_descendant_argv "$FAKE_PANE_PID") \
-  || fail "the descendant walk could not read the stand-in agent's command line"
+READ_ARGV=$(fm_backend_pane_argv tmux '%0' claude) \
+  || fail "the foreground reader could not read the stand-in agent's command line"
 assert_contains "$READ_ARGV" "--dangerously-skip-permissions" \
-  "the descendant walk must read the agent's own launched flags"
-assert_contains "$READ_ARGV" "fmfakeagent" \
-  "the descendant walk must read the agent, not its wrapper shell"
-pass "launch drift: the process-table reader sees the agent's real command line"
-
-export FM_FAKE_PANE_PID="$FAKE_PANE_PID"
+  "the foreground reader must read the agent's own launched flags"
+assert_contains "$READ_ARGV" "claude" \
+  "the foreground reader must read the recorded harness, not a shell helper"
+pass "launch drift: the foreground reader sees the agent's real command line"
 
 # kind=scout keeps the no-mistakes run lookup out of this suite: the run-step
 # source has its own coverage in tests/fm-crew-state.test.sh, and this suite is
@@ -297,7 +310,7 @@ crew_state() {  # <id>
 
 # Healthy: the worker is in its worktree with its flags. The supervisor's line
 # must stay clean - a detector that annotates healthy workers is noise.
-write_task_meta healthy "fmfakeagent --dangerously-skip-permissions --model opus"
+write_task_meta healthy "claude --dangerously-skip-permissions --model opus"
 FM_FAKE_PANE_PATH="$WORKTREE"
 export FM_FAKE_PANE_PATH
 HEALTHY_LINE=$(crew_state healthy)
@@ -318,9 +331,8 @@ pass "launch drift: fm-crew-state.sh surfaces the primary-checkout case on the s
 # The production symptom itself: the worker came back, in the right place, but
 # without the flags it was launched with. Restarting the stand-in agent under a
 # reduced argv reproduces exactly that.
-stop_fake_agent
-start_fake_agent 'fmfakeagent --model opus' || fail "the reduced stand-in agent never appeared"
-export FM_FAKE_PANE_PID="$FAKE_PANE_PID"
+FAKE_AGENT_ARGV='claude --model opus'
+export FAKE_AGENT_ARGV
 FM_FAKE_PANE_PATH="$WORKTREE"
 export FM_FAKE_PANE_PATH
 ARGV_LOSS_LINE=$(crew_state healthy)

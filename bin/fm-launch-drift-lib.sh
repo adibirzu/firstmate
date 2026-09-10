@@ -105,20 +105,19 @@ fm_launch_drift_shell_tokens() {  # <launch-command>
 }
 
 # fm_launch_drift_parsed_tokens: print tab-separated harness and flag tokens
-# from <launch-command>. Whitespace splitting is deliberate and sufficient: a
-# flag the harness was launched with appears as its own token in the live
-# process argv.
+# from <launch-command> after locating its recorded <harness>. Whitespace
+# splitting is deliberate and sufficient: a flag the harness was launched with
+# appears as its own token in the live process argv.
 #
 # The launch can have an env wrapper, an isolation shell, or the relaunch's
 # `unset TRACEPARENT;` prefix. Env options that take a separate operand are
-# consumed before executable selection, and an unset prefix is skipped through
-# its command separator. Keeping that parser here makes harness identification
-# and flag collection use the same true harness boundary.
-fm_launch_drift_parsed_tokens() {  # <launch-command>
-  local token base harness_seen=0 skip_option_arg=0 skip_to_separator=0 shell_wrapper=0 shell_command=0
+# consumed before harness selection, and an unset prefix is skipped through its
+# command separator.
+fm_launch_drift_parsed_tokens() {  # <launch-command> <harness>
+  local launch=$1 harness=$2 token base harness_seen=0 skip_option_arg=0 skip_to_separator=0 shell_wrapper=0 shell_command=0
   while IFS= read -r token; do
     if [ "$shell_command" = 1 ]; then
-      fm_launch_drift_parsed_tokens "$(fm_launch_drift_unquote "$token")"
+      fm_launch_drift_parsed_tokens "$(fm_launch_drift_unquote "$token")" "$harness"
       return 0
     fi
     token=$(fm_launch_drift_unquote "$token")
@@ -157,16 +156,20 @@ fm_launch_drift_parsed_tokens() {  # <launch-command>
         continue
         ;;
     esac
+    case "$harness:$base" in
+      cursor:cursor-agent|cursor-agent:cursor-agent|"$harness:$harness") ;;
+      *) continue ;;
+    esac
     harness_seen=1
-    printf 'harness\t%s\n' "$base"
-  done < <(fm_launch_drift_shell_tokens "$1")
+    printf 'harness\t%s\n' "$harness"
+  done < <(fm_launch_drift_shell_tokens "$launch")
 }
 
 # fm_launch_drift_flags: print the HARNESS's own flag tokens from a recorded
 # launch command, one per line. Wrapper flags never reach the harness process,
 # so they are excluded. Tokens are deduplicated so a flag repeated in the
 # wrapper is not required twice.
-fm_launch_drift_flags() {  # <launch-command>
+fm_launch_drift_flags() {  # <launch-command> <harness>
   local kind token seen=$'\n'
   while IFS=$'\t' read -r kind token; do
     [ "$kind" = flag ] || continue
@@ -179,18 +182,14 @@ fm_launch_drift_flags() {  # <launch-command>
     esac
     seen="$seen$token"$'\n'
     printf '%s\n' "$token"
-  done < <(fm_launch_drift_parsed_tokens "$1")
+  done < <(fm_launch_drift_parsed_tokens "$1" "$2")
 }
 
-# fm_launch_drift_harness_token: print the harness executable token a recorded
-# launch is expected to produce in a live argv.
-fm_launch_drift_harness_token() {  # <launch-command>
+fm_launch_drift_recorded_has_harness() {  # <launch-command> <harness>
   local kind token
   while IFS=$'\t' read -r kind token; do
-    [ "$kind" = harness ] || continue
-    printf '%s\n' "$token"
-    return 0
-  done < <(fm_launch_drift_parsed_tokens "$1")
+    [ "$kind" = harness ] && return 0
+  done < <(fm_launch_drift_parsed_tokens "$1" "$2")
   return 1
 }
 
@@ -213,21 +212,11 @@ fm_launch_drift_path_within() {  # <path> <root>
 # different condition, already owned by bin/fm-crew-state.sh's own state read,
 # and reporting it as lost flags would bury the real signal under noise. A
 # verified cwd divergence remains independently actionable without launch_argv.
-fm_launch_drift_live_argv_has_harness() {  # <harness> <live-argv>
-  local harness=$1 live_argv=$2 executable
-  for executable in $live_argv; do
-    executable=$(fm_launch_drift_unquote "$executable")
-    executable=${executable##*/}
-    [ "$executable" = "$harness" ] && return 0
-  done
-  return 1
-}
-
-fm_launch_drift_verdict() {  # <recorded-argv> <worktree> <project> <live-cwd> <live-argv>
-  local recorded=$1 worktree=$2 project=$3 live_cwd=$4 live_argv=$5
+fm_launch_drift_verdict() {  # <recorded-argv> <harness> <worktree> <project> <live-cwd> <live-argv>
+  local recorded=$1 harness=$2 worktree=$3 project=$4 live_cwd=$5 live_argv=$6
   local cwd_sev=unknown cwd_code=cwd-unreadable cwd_detail
   local argv_sev=unknown argv_code=argv-unreadable argv_detail
-  local harness flag missing=
+  local flag missing=
 
   if [ -z "$live_cwd" ]; then
     cwd_detail="endpoint working directory could not be read"
@@ -247,10 +236,10 @@ fm_launch_drift_verdict() {  # <recorded-argv> <worktree> <project> <live-cwd> <
     argv_detail="task record has no launch command to compare against"
   elif [ -z "$live_argv" ]; then
     argv_detail="endpoint command line could not be read"
-  elif ! harness=$(fm_launch_drift_harness_token "$recorded"); then
-    argv_detail="recorded launch command names no harness executable"
-  elif ! fm_launch_drift_live_argv_has_harness "$harness" "$live_argv"; then
-    argv_detail="endpoint is not running $harness"
+  elif [ -z "$harness" ]; then
+    argv_detail="task record names no harness to compare against"
+  elif ! fm_launch_drift_recorded_has_harness "$recorded" "$harness"; then
+    argv_detail="recorded launch command does not name $harness"
   else
     argv_sev=ok argv_code=argv-ok argv_detail="launched flags intact"
     while IFS= read -r flag; do
@@ -261,7 +250,7 @@ fm_launch_drift_verdict() {  # <recorded-argv> <worktree> <project> <live-cwd> <
       missing=$flag
       break
     done <<FLAGS
-$(fm_launch_drift_flags "$recorded")
+$(fm_launch_drift_flags "$recorded" "$harness")
 FLAGS
     if [ -n "$missing" ]; then
       argv_sev=warn argv_code=argv-loss

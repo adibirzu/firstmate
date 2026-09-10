@@ -104,6 +104,26 @@ fm_harness_process_matches() {  # <comm> <args>
   return 1
 }
 
+fm_harness_process_matches_name() {  # <expected-harness> <comm> <args> [argv0]
+  local expected=$1 comm=$2 args=$3 argv0=${4:-} name
+  case "$expected" in
+    cursor|cursor-agent)
+      fm_cursor_process_matches "$comm" "$args" "$argv0"
+      return
+      ;;
+  esac
+  fm_harness_process_matches "$comm" "$args" || return 1
+  case "$expected" in
+    claude) [ "$FM_HARNESS_IS_CLAUDE" = 1 ] && return 0 ;;
+    *)
+      if name=$(fm_harness_path_name "$comm") || name=$(fm_harness_path_name "$argv0"); then
+        [ "$name" = "$expected" ] && return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
 # Walk the current process ancestry (up to 16 hops) and print this session's
 # contiguous verified-harness ancestry, innermost pid first.
 #

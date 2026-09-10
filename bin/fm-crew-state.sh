@@ -261,9 +261,9 @@ launch_drift_note() {
   [ -z "$REMOTE_HOST" ] || return 0
   [ -n "$BACKEND_TARGET" ] || return 0
   live_cwd=$(fm_backend_current_path "$TASK_BACKEND" "$BACKEND_TARGET" "$EXPECTED_LABEL" 2>/dev/null) || live_cwd=''
-  live_argv=$(fm_backend_pane_argv "$TASK_BACKEND" "$BACKEND_TARGET" 2>/dev/null) || live_argv=''
+  live_argv=$(fm_backend_pane_argv "$TASK_BACKEND" "$BACKEND_TARGET" "$HARNESS" 2>/dev/null) || live_argv=''
   verdict=$(fm_launch_drift_verdict \
-    "$(meta_value launch_argv)" "$WT" "$(meta_value project)" "$live_cwd" "$live_argv")
+    "$(meta_value launch_argv)" "$HARNESS" "$WT" "$(meta_value project)" "$live_cwd" "$live_argv")
   IFS=$'\t' read -r severity code detail <<VERDICT
 $verdict
 VERDICT
