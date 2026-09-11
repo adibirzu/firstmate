@@ -77,6 +77,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # every backend so the decision cannot drift.
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-composer-lib.sh"
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-launch-drift-identity-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-launch-drift-identity-lib.sh"
 
 # Shared, backend-neutral normalized-transition shape and the single-owner
 # status->action policy table (bin/fm-transition-lib.sh). This adapter's event
@@ -2593,9 +2597,18 @@ fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
+# fm_backend_herdr_target_observe: parse a target for a passive read only.
+# Unlike fm_backend_herdr_target_ready, this MUST NOT ensure or start its server:
+# a stopped session must leave supervision's cwd/argv axis unreadable rather
+# than reviving persisted panes as a side effect of observing them.
+fm_backend_herdr_target_observe() {  # <target>
+  fm_backend_herdr_parse_target "$1"
+}
+
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
-# any error. Mirrors tmux's pane_current_path poll used for worktree-path
-# discovery after `treehouse get`.
+# any error. It serves both the spawn-time worktree-path poll after `treehouse
+# get` and passive supervision, so it uses target_observe rather than the
+# operational target_ready path that starts a stopped server.
 #
 # Verified pitfall: `pane get`'s `.result.pane.cwd` is the pane's cwd AT
 # CREATION TIME - the top-level shell's cwd - and does NOT update when that
@@ -2606,9 +2619,39 @@ fm_backend_herdr_target_ready() {  # <target>
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
 fm_backend_herdr_current_path() {  # <target>
-  fm_backend_herdr_target_ready "$1" || return 0
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
-    | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+  local pane
+  fm_backend_herdr_target_observe "$1" || return 1
+  pane=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 1
+  printf '%s' "$pane" | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+}
+
+# fm_backend_herdr_pane_argv: the live command line of the recorded harness in
+# the pane's foreground process group, or a nonzero return when it cannot be
+# read. This is the only launch evidence Herdr offers. From 0.8.0 it persists
+# no launch command at all, so nothing here survives a restart and the
+# comparison must be made against firstmate's own record
+# (docs/herdr-backend.md "Launch-argv replay").
+fm_backend_herdr_pane_argv() {  # <target> <harness>
+  fm_backend_herdr_target_observe "$1" || return 1
+  local harness=$2 rows name argv0 flattened argv
+  [ -n "$harness" ] || return 1
+  rows=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info \
+    --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+    | jq -r '.result.process_info.foreground_processes[]?
+      | select((.argv // []) | length > 0)
+      | [(.name // ""), (.argv0 // .argv[0] // ""), (.argv | join(" ")), (.argv | join("\u001f"))]
+      | @tsv' 2>/dev/null) || return 1
+  [ -n "$rows" ] || return 1
+  while IFS=$'\t' read -r name argv0 flattened argv; do
+    [ -n "$argv" ] || continue
+    if fm_launch_drift_process_matches "$harness" "$name" "$flattened" "$argv0"; then
+      printf '%s\n' "$argv"
+      return 0
+    fi
+  done <<ROWS
+$rows
+ROWS
+  return 1
 }
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,

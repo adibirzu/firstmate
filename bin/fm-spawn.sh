@@ -4103,6 +4103,50 @@ spawn_record_traceparent() {
   return "$status"
 }
 
+# spawn_record_launch_argv publishes the fully resolved launch command as the
+# task record's launch_argv= line, using the same locked rewrite as
+# spawn_record_traceparent and for the same concurrency reason.
+#
+# It runs late because the command is only final after model, effort, brief, and
+# launch-env substitution. bin/fm-crew-state.sh's launch-drift detector compares
+# this recorded command against what the endpoint is live running, which is the
+# only cover firstmate has for a restored worker that came back without its
+# flags: no supported backend replays a launch command
+# (bin/fm-launch-drift-lib.sh owns that rationale).
+#
+# A command carrying a newline would forge a second key=value line in the
+# record, so it is refused rather than written. That is not reachable from any
+# current launch construction - every substituted value is a shell-quoted path -
+# and a refusal only costs the detector its argv axis, which reports `unknown`.
+spawn_record_launch_argv() {
+  local meta="$STATE/$ID.meta" tmp status=0 acquired=0
+  case "$LAUNCH" in
+    *$'\n'*)
+      echo "warning: resolved launch command contains a newline; not recording launch_argv= for $ID" >&2
+      return 1
+      ;;
+  esac
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+    SPAWN_META_LOCK_HELD=1
+    acquired=1
+  fi
+  tmp="$STATE/.$ID.meta.launch.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "launch_argv"' "$meta" > "$tmp" \
+     || ! printf 'launch_argv=%s\n' "$LAUNCH" >> "$tmp" \
+     || ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  if [ "$acquired" = 1 ]; then
+    fm_lock_release "$SPAWN_META_LOCK" || status=1
+    SPAWN_META_LOCK_HELD=0
+  fi
+  return "$status"
+}
+
 # spawn_write_meta serializes the whole read-modify-write against every other
 # metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,
 # ...), so a Relay reply publishing concurrently between the read and the write
@@ -4140,7 +4184,12 @@ spawn_write_meta_locked() {
   # keep the previous adapter's routing provider: every reuse caller that can
   # prove a correct provider passes it explicitly (fm-runtime-handoff.sh and
   # fm-control.sh), so an unprovable one is dropped instead of left lying.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  # launch_argv= belongs here for the same reason as traceparent=: it is written
+  # late (bin/fm-spawn.sh's spawn_record_launch_argv, once the launch command is
+  # fully resolved), so a relaunch must drop the previous incarnation's command
+  # rather than leave the launch-drift detector comparing the live worker against
+  # a retired run's flags.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|launch_argv|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then
@@ -4445,6 +4494,11 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
 sleep 0.3
+# Record the resolved command before submitting it: this is the last point where
+# $LAUNCH is final, and a record written here still describes the incarnation the
+# next line starts. A failure to record is not fatal - it costs the launch-drift
+# detector its argv axis, which then reports `unknown` rather than a false alarm.
+spawn_record_launch_argv || true
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then

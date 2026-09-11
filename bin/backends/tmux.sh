@@ -100,11 +100,62 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
   printf '%s\n' "$wid"
 }
 
+fm_backend_tmux_target_pane_snapshot() {  # <target>
+  local target=$1 row_session row_window row_window_id row_pane_id row_active row_path row_tty
+  [ -n "$target" ] || return 1
+  while IFS=$'\t' read -r row_session row_window row_window_id row_pane_id row_active row_path row_tty; do
+    case "$target" in
+      %*) [ "$row_pane_id" = "$target" ] || continue ;;
+      @*) [ "$row_window_id" = "$target" ] && [ "$row_active" = 1 ] || continue ;;
+      *:*)
+        [ "$row_session" = "${target%%:*}" ] \
+          && [ "$row_window" = "${target#*:}" ] \
+          && [ "$row_active" = 1 ] || continue
+        ;;
+      *) return 1 ;;
+    esac
+    printf '%s\037%s\037%s\n' "$row_pane_id" "$row_path" "$row_tty"
+    return 0
+  done < <(tmux list-panes -a -F '#{session_name}\t#{window_name}\t#{window_id}\t#{pane_id}\t#{pane_active}\t#{pane_current_path}\t#{pane_tty}' 2>/dev/null)
+  return 1
+}
+
 # fm_backend_tmux_current_path: the live pane's current working directory, or
 # empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
 # `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+#
+# This stays the cheap direct read because fm-spawn.sh polls it up to 60 times
+# while waiting for a pane it JUST created to enter its leased worktree. tmux's
+# active-pane fallback is not a hazard there: the target is a stable window id
+# the spawn just captured, and the spawn independently proves the worktree with
+# validate_spawn_worktree before launching. Supervision has the opposite threat
+# model - it observes panes that may already be gone - so it uses the bound
+# reader below instead.
 fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+}
+
+# fm_backend_tmux_bound_current_path: the same value, but read out of the target
+# inventory snapshot so it is bound to the pane that actually matches <target>.
+#
+# Supervision needs this stronger contract: `display-message -t` silently falls
+# back to the ACTIVE pane when its target no longer exists, so a torn-down task
+# would return firstmate's own pane path. If that pane sits in the project
+# checkout, the launch-drift detector would report a severe primary-checkout
+# landing for a worker that is simply gone - the worst false positive the
+# feature can produce. Returning failure here maps to a silent `unknown`.
+fm_backend_tmux_bound_current_path() {  # <target>
+  local snapshot pane_id path tty
+  snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
+  IFS=$'\037' read -r pane_id path tty <<EOF
+$snapshot
+EOF
+  [ -n "$pane_id" ] || return 1
+  printf '%s\n' "$path"
+}
+
+fm_backend_tmux_pane_argv() {  # <target> <harness>
+  return 1
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
@@ -224,9 +275,9 @@ fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
 # absent target from the client's active window rather than failing, so callers
 # must confirm exact window membership first, exactly as the classifier below
 # does, or they will describe some other pane entirely.
-fm_backend_tmux_foreground_comms() {  # <target>
-  local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_comms() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -239,9 +290,9 @@ fm_backend_tmux_foreground_comms() {  # <target>
 # The foreground group's full command lines. Needed because a node-bundle
 # harness carries its identity in argv[1] rather than in its command name or
 # argv[0]; bin/fm-gemini-lib.sh owns what counts as evidence inside one.
-fm_backend_tmux_foreground_args() {  # <target>
-  local target=$1 tty pid pgid tpgid comm args
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_args() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm args
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -252,9 +303,9 @@ fm_backend_tmux_foreground_args() {  # <target>
       done
 }
 
-fm_backend_tmux_foreground_pids() {  # <target>
-  local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_pids() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -264,9 +315,9 @@ fm_backend_tmux_foreground_pids() {  # <target>
       done
 }
 
-fm_backend_tmux_foreground_argv0s() {  # <target>
-  local target=$1 tty pid pgid tpgid comm args argv0
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_argv0s() {  # <target> [tty]
+  local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
+  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do

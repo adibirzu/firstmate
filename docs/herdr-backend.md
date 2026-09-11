@@ -205,7 +205,8 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 
 ## Current transport behavior
 
-The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
+The adapter starts and polls a named server before operational workspace, tab, pane, or agent calls.
+Passive supervision observations are the exception; [Launch-argv replay](#launch-argv-replay) owns that no-autostart contract.
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
 When the selected named server is not running, the adapter launches it without inherited Firstmate home and directory overrides, harness identity markers, or the supervision-model override.
@@ -278,6 +279,31 @@ Unlike tmux process-name inspection, native registration can classify Pi without
 The session-start sweep uses this probe.
 Mid-session secondmate agent-process liveness is not implemented because idle secondmates are deliberately exempt from stale-pane escalation and need a separate periodic identity signal.
 
+### Launch-argv replay
+
+Herdr does not replay a worker's launch command, and from 0.8.0 it records none at all.
+A restored pane therefore comes back with no way to reconstruct the flags its agent was started with.
+
+Earlier releases persisted a `launch_argv` field for a pane created through `agent start <name> --cwd <dir> --workspace <id>`, and that record survived a real server restart.
+Protocol 20 removes both halves.
+`agent.start` now takes `name`, `kind`, and `pane_id` and attaches an agent to an existing pane at a shell prompt, so it accepts neither a cwd nor a workspace, and `--kind` is a fixed enum that does not cover every harness Firstmate dispatches.
+Its `argv` is a response field only.
+The persisted pane record carries `cwd` alone, and the schema's only other `argv` belongs to `pane.process_info`, which reads the live process rather than restore state.
+
+The working directory is the one axis Herdr does restore, and it tracks the pane's live cwd rather than freezing the creation value, so a worker that has `cd`ed into its task worktree persists that worktree.
+That makes the recorded cwd correct in the steady state, but it is not a guarantee: it depends on the `cd` having landed, and the workspace's own seeded pane still sits in the project checkout.
+
+Because no supported backend replays a launch, firstmate detects the loss instead of preventing it.
+`bin/fm-spawn.sh` records the resolved command as the task record's `launch_argv=`, and `bin/fm-crew-state.sh` compares it, and the recorded `worktree=`, against what a local endpoint is live running on every state read.
+`bin/fm-launch-drift-lib.sh` owns that verdict policy, including which divergences are severe.
+`fm_backend_herdr_pane_argv` supplies the live side here through `pane.process_info`.
+Herdr alone covers the argv axis because `pane.process_info` returns one atomic argv array.
+Tmux reports argv unknown because it exposes no atomic boundary-preserving argv source.
+The cwd axis covers tmux and Herdr through their passive readers.
+Zellij and cmux's cwd probes are active and remain limited to fm-spawn.sh before a harness launches, while Orca has no cwd reader, so those backends report unknown on the cwd axis.
+These supervision reads never start a Herdr server, revive a pane, or type into it.
+A stopped or unreadable server leaves the affected axis unknown rather than causing a state read to change the workspace.
+
 ## Push events and polling fallback
 
 Protocol 16 can subscribe to `pane.agent_status_changed` over one bounded Unix-socket reader.
@@ -328,6 +354,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Ghost and placeholder recognition uses ANSI de-emphasis when available; an unstyled glyph row carrying trailing non-idle text fails safely to `unknown`.
 - Mid-session secondmate agent-process liveness is not implemented.
 - Only tmux and Herdr can host the away-mode supervisor terminal.
+- No launch command is persisted from 0.8.0, so a restored worker's flags cannot be replayed and are only detected as drift.
 
 ## Regression entry points
 
@@ -340,6 +367,7 @@ tests/fm-backend-herdr-prune-safety-e2e.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh
 tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
+tests/fm-backend-herdr-launch-argv-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-herdr-session-cleanup.test.sh
@@ -349,4 +377,4 @@ tests/fm-afk-pi-herdr-return-e2e.test.sh
 ```
 
 Real Herdr tests use the named lab helper and default-session tripwire.
-[`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) records the active version, CLI, projection, event, and lifecycle evidence without task-specific chronology.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) records the active version, CLI, launch-replay, projection, event, and lifecycle evidence without task-specific chronology.

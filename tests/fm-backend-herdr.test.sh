@@ -3208,6 +3208,32 @@ test_current_path_reads_cwd() {
   pass "fm_backend_herdr_current_path: reads pane foreground_cwd (the live running process), not the frozen creation-time cwd"
 }
 
+test_drift_reads_observe_without_server_start() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/drift-observe"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '1\n' > "$resp/1.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      . "$0/bin/fm-launch-drift-lib.sh"
+      cwd=$(fm_backend_herdr_current_path stopped:w1:p2) || cwd=""
+      argv=$(fm_backend_herdr_pane_argv stopped:w1:p2 claude) || argv=""
+      fm_launch_drift_verdict "claude --model opus" claude /tmp/worktree /tmp/project "$cwd" "$argv"
+    ' "$ROOT" )
+  [ "$(printf '%s' "$out" | cut -f1)" = unknown ] \
+    || fail "stopped Herdr drift reads must become unknown, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2' \
+    "the passive cwd read did not query the recorded pane directly"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''process-info'$'\x1f''--pane'$'\x1f''w1:p2' \
+    "the passive argv read did not query the recorded pane directly"
+  assert_not_contains "$(cat "$log")" $'\x1f''status'$'\x1f''--json' \
+    "a passive drift read must not check readiness through server-starting status"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' \
+    "a passive drift read must never start a stopped server"
+  pass "launch drift reads: a stopped Herdr session stays unknown without starting"
+}
+
 # --- busy_state (semantic agent state) ---------------------------------------
 
 test_busy_state_working_maps_to_busy() {
@@ -4823,6 +4849,7 @@ test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
+test_drift_reads_observe_without_server_start
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent
