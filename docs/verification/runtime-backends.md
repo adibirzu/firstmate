@@ -877,6 +877,8 @@ ok - version floor: an unconfigured home falls back flat on herdr 0.7.5 and the 
 evidence: herdr=0.7.5 protocol=17 steal_live=1 floor_verdict=1 default-session-tripwire=armed
 ```
 
+The preserved fallback line reporting a bounded wrong-focus window of 4 samples is superseded by the event-based removal boundary and no longer describes current behavior.
+
 Observed output on Herdr 0.8.0:
 
 ```text
@@ -893,7 +895,9 @@ The same guarded named-lab command passed on 2026-09-03 against Herdr 0.8.2 afte
 It reported `steal_live=0 floor_verdict=0 default-session-tripwire=armed`, with the fleet's default session unchanged before and after.
 
 Part C is the case the suite could not reach before: a doomed pane whose shell holds a persistent background child fails the lone-idle-shell proof on every sample, so the plan takes the plain explicit close, in the geometry where the closing workspace's right neighbour is a spacer rather than the focused anchor.
-On 0.7.5 that fallback exposed a bounded four-sample wrong-focus window and restored the anchor exactly; on 0.8.0 the same fallback exposed none, which is why default-on projection is floored at 0.8.0 rather than mitigated further below it.
+The 0.7.5 four-sample conclusion is superseded by the event-based removal boundary and no longer describes current behavior, while the retained 0.8.0 result remains an observation of that prior run.
+No replacement below-floor measurement is recorded here because this document step precedes CI, local development ran on Herdr 0.8.2 where the below-floor focus steal may not occur, and the behavior is specific to a below-floor release such as the CI-pinned Herdr 0.7.4 protocol 16 with `steal_live=1`.
+The record needs a gated real-Herdr run on Herdr 0.7.4 protocol 16 from the required `real-herdr-gated` lane, including its date, exact command, exact observed output with `steal_live`, `floor_verdict`, and the default-session tripwire, plus a conclusion on any wrong-focus interval the event-based boundary exposes and whether the anchor is exactly restored when teardown returns.
 The suite also cross-checks its own Part A measurement against the floor classifier on whatever release it runs, so a drifted protocol-to-release mapping fails there rather than silently gating on the wrong thing.
 
 ### Presentation version floor
