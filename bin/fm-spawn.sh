@@ -949,7 +949,17 @@ if [ "$KIND" = secondmate ]; then
   else
     remote_spawn_rc=$?
   fi
-  [ "$remote_spawn_rc" -eq 3 ] || exit "$remote_spawn_rc"
+  if [ "$remote_spawn_rc" -ne 3 ]; then
+    # Every refusal inside the remote route returns before the EXIT trap below
+    # is armed, so this home's task-set lock is handed back here rather than
+    # left on disk for a later spawn to steal. Code 3 is not a refusal: it
+    # hands the task to the local path below, which keeps the same hold.
+    if [ "${SPAWN_TASK_SET_LOCK_HELD:-0}" = 1 ]; then
+      SPAWN_TASK_SET_LOCK_HELD=0
+      fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
+    fi
+    exit "$remote_spawn_rc"
+  fi
 fi
 
 # agy, cline and copilot are verified as CREWMATE/SCOUT adapters only. A
