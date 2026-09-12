@@ -49,8 +49,8 @@
 #   (aj) distinct merged PRs for a reused task each survive queue deduplication
 #   (ak) pr= is already recorded when the forge call that can land the merge runs
 #   (al) a failed gh read falls back to the gh-axi view, which can prove a merge
-#   (am) a failed merge command still names an outcome read that proves a landed
-#       or queued pull request, without masking the forge failure
+#   (am) a merge command whose post-merge report exits invalid still succeeds
+#       when live read-back proves that exact pull request landed
 #   (an) a refusal after a zero-exit merge quotes the forge's own output, marked
 #       apart from the wrapper's verdict and never leaked to stdout
 #   (ao) a caller-requested auto-merge on a queue-less base refuses and says
@@ -974,12 +974,31 @@ test_github_failed_gh_read_falls_back_to_gh_axi() {
   pass "fm-pr-merge falls back to the gh-axi view when gh's read fails"
 }
 
-test_github_failed_merge_names_an_observed_landed_state() {
+test_github_post_merge_report_failure_preserves_landed_success() {
   local case_dir rc
-  case_dir=$(make_case github-failed-merge-actually-landed)
+  case_dir=$(make_case github-post-merge-report-fails)
   mkdir -p "$case_dir/wt"
-  add_gh_mocks_merge_fails "$case_dir"
-  write_github_outcome "$case_dir" MERGED true false main
+  add_gh_mocks "$case_dir" 6464646464646464646464646464646464646464
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+case "${1:-} ${2:-}" in
+  "pr merge")
+    # Reproduce the live incident: the forge lands the PR, then its own
+    # post-merge response path exits with the wrapper's invalid-request text.
+    printf '%s\n' \
+      'state=MERGED' \
+      'merged=true' \
+      'queued=false' \
+      'base=main' > "$FM_TEST_GH_OUTCOME"
+    echo 'error: invalid PR merge request' >&2
+    exit 2
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/gh-axi"
+  write_github_outcome "$case_dir" OPEN false false main
   : > "$case_dir/gh-axi.log"
   : > "$case_dir/gh.log"
 
@@ -989,16 +1008,24 @@ test_github_failed_merge_names_an_observed_landed_state() {
   rc=$?
   set -e
 
-  expect_code 1 "$rc" "github-failed-merge-actually-landed: the forge failure must still fail the wrapper"
-  assert_grep 'error: pr merge failed' "$case_dir/stderr" \
-    "github-failed-merge-actually-landed: the original forge error was masked"
-  assert_grep 'state=MERGED, merged=true, isInMergeQueue=false' "$case_dir/stderr" \
-    "github-failed-merge-actually-landed: the observed landed state was never named"
-  assert_no_grep 'verified: ' "$case_dir/stdout" \
-    "github-failed-merge-actually-landed: a failed merge command was reported as verified"
+  expect_code 0 "$rc" "github-post-merge-report-fails: a proved landed merge must succeed"
+  assert_grep 'verified: https://github.com/example/repo/pull/64 is merged' \
+    "$case_dir/stdout" \
+    "github-post-merge-report-fails: the landed result was not reported as verified"
+  assert_grep 'notice: the GitHub merge command exited 2, but live read-back proved https://github.com/example/repo/pull/64 landed' \
+    "$case_dir/stderr" \
+    "github-post-merge-report-fails: the post-merge command failure was hidden"
+  assert_grep 'notice: > error: invalid PR merge request' "$case_dir/stderr" \
+    "github-post-merge-report-fails: the exact post-merge diagnostic was discarded"
+  assert_no_grep '^error: invalid PR merge request$' "$case_dir/stderr" \
+    "github-post-merge-report-fails: a successful merge remained a raw invalid-request error"
   assert_grep 'pr=https://github.com/example/repo/pull/64' "$case_dir/state/task-x1.meta" \
-    "github-failed-merge-actually-landed: the landed PR lost its reference"
-  pass "fm-pr-merge names a landed state hiding behind a failed GitHub merge command"
+    "github-post-merge-report-fails: the landed PR lost its reference"
+  assert_grep 'https://github.com/example/repo/pull/64' "$case_dir/state/.wake-queue" \
+    "github-post-merge-report-fails: the landed PR never reached outcome publication"
+  assert_present "$case_dir/state/task-x1.pr-poll-merge-notified" \
+    "github-post-merge-report-fails: the landed outcome was not marked as published"
+  pass "fm-pr-merge preserves success when only the forge's post-merge report fails"
 }
 
 test_github_without_gh_still_uses_gh_axi_merge() {
@@ -2103,7 +2130,7 @@ test_github_auto_merge_without_queue_refuses_legibly
 test_github_failed_merge_never_claims_armed_auto_merge
 test_github_failed_merge_with_queue_flags_never_claims_acceptance
 test_github_failed_gh_read_falls_back_to_gh_axi
-test_github_failed_merge_names_an_observed_landed_state
+test_github_post_merge_report_failure_preserves_landed_success
 test_github_without_gh_still_uses_gh_axi_merge
 test_github_without_gh_failed_read_keeps_bookkeeping
 test_github_merged_outcome_is_verified
