@@ -2,6 +2,12 @@
 
 `bin/fm-review.sh` wraps Alibaba's Open Code Review (`ocr`, https://github.com/alibaba/open-code-review) into a two-stage review that keeps most PRs on a zero-LLM-token path.
 
+## Setup
+
+`ocr` is required by every ship task's delivery contract (`bin/fm-dod-lib.sh`, both direct-PR and no-mistakes modes run Stage 1 before delivery).
+It is npm-distributed, not a pinned GitHub release binary, so install it with `bin/fm-install-ocr.sh <destination-directory>` (put that directory on `PATH` afterward) rather than a manual `npm install -g`.
+`bin/fm-review.sh` fails fast with that same install command when `ocr` is missing from `PATH`.
+
 ## How it works
 
 **Stage 1 (always runs, zero LLM tokens).**
@@ -79,5 +85,6 @@ A secondmate home inherits this repo's own `config/code-review` the same way it 
 ## See also
 
 - `bin/fm-review.sh` - wrapper implementation and `--help`.
+- `bin/fm-install-ocr.sh` - installs `ocr` with no sudo, no pinned checksum (npm-distributed).
 - `tests/fm-review.test.sh` - test suite (fake `ocr`/`gh` binaries, no network).
 - https://github.com/alibaba/open-code-review - OCR documentation and the AACR-bench dataset.

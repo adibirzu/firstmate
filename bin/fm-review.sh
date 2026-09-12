@@ -117,7 +117,11 @@ done
 
 for tool in ocr jq git; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "error: required tool '$tool' not found on PATH" >&2
+    if [[ "$tool" == "ocr" ]]; then
+      echo "error: required tool 'ocr' not found on PATH; install it with bin/fm-install-ocr.sh <destination-directory> and put that directory on PATH" >&2
+    else
+      echo "error: required tool '$tool' not found on PATH" >&2
+    fi
     exit 1
   fi
 done
