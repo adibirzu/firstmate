@@ -28,6 +28,7 @@ DESTINATION=${1:?usage: fm-install-ocr.sh <destination-directory>}
 command -v npm >/dev/null 2>&1 || die "npm is required to install $OCR_NPM_PACKAGE"
 
 mkdir -p "$DESTINATION"
+DESTINATION=$(cd "$DESTINATION" && pwd) || die "could not resolve destination directory to an absolute path"
 PREFIX="$DESTINATION/.ocr-npm-prefix"
 mkdir -p "$PREFIX"
 
