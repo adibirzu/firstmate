@@ -3,6 +3,7 @@
 Google's `gemini` TUI, verified end to end on 2026-09-04 with gemini-cli 0.58.0 on Linux.
 Launch shape: `GEMINI_CLI_TRUST_WORKSPACE=true gemini -y "$(cat <brief>)"`.
 Verified as a CREWMATE and SCOUT adapter only; `../../../../../bin/fm-spawn.sh` refuses a secondmate launch on it because `../../../../../docs/supervision-protocols/` carries no gemini wake protocol.
+Every fact below assumes the resolved `gemini` executable IS genuine gemini-cli. `bin/fm-spawn.sh`'s `gemini_binary_is_genuine` guard checks that narrowly (gemini-cli ships as a node script; a resolved `gemini` whose shebang does not invoke node is refused with a diagnostic naming the resolved path) before every dispatch, because a PATH shadowing something else entirely - a personal compatibility shim redirecting to a different harness, observed live on this fleet - reads none of the env this doc describes and would otherwise launch uninstrumented instead of failing loudly.
 
 ## Operating facts
 
