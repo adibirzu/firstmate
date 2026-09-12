@@ -680,7 +680,7 @@ case "$PROVIDER" in
         if [ "$github_premerge_merged" = false ] && [ "$FM_PR_GITHUB_MERGED" = true ]; then
           github_outcome_already_read=true
           github_report_recovered_landed_output "$merge_output" "$merge_status"
-        elif [ "$FM_PR_GITHUB_QUEUED" != true ]; then
+        elif [ "$FM_PR_GITHUB_QUEUED" != true ] && [ "$FM_PR_GITHUB_MERGED" != true ]; then
           [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
           github_report_unmerged_outcome
         else
