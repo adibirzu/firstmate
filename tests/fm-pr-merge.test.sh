@@ -715,6 +715,30 @@ test_github_failed_merge_with_queue_flags_never_claims_acceptance() {
   pass "fm-pr-merge claims no acceptance for a failed merge command carrying queue flags"
 }
 
+test_github_failed_merge_on_already_merged_pr_reports_actionable_not_unsuccessful() {
+  local case_dir rc
+  case_dir=$(make_case github-failed-merge-already-merged)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_merge_fails "$case_dir"
+  write_github_outcome "$case_dir" MERGED true false main
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/75 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "github-failed-merge-already-merged: an unrecovered failed merge command must still fail closed"
+  assert_grep 'actionable: the merge command for https://github.com/example/repo/pull/75 failed, but the pull request reads back as state=MERGED, merged=true, isInMergeQueue=false' \
+    "$case_dir/stderr" \
+    "github-failed-merge-already-merged: an already-merged pre-state was not reported with the actionable message"
+  assert_no_grep 'error: GitHub merge outcome was not successful' "$case_dir/stderr" \
+    "github-failed-merge-already-merged: an already-merged outcome was self-contradictorily reported as unsuccessful"
+  pass "fm-pr-merge reports an already-merged pre-state as actionable, not as a contradictory unsuccessful outcome"
+}
+
 test_github_accepted_queue_flags_do_not_echo_back_the_same_command() {
   local case_dir rc
   case_dir=$(make_case github-accepted-queue-flags)
@@ -2129,6 +2153,7 @@ test_github_fallback_view_refusal_says_the_queue_was_unobservable
 test_github_auto_merge_without_queue_refuses_legibly
 test_github_failed_merge_never_claims_armed_auto_merge
 test_github_failed_merge_with_queue_flags_never_claims_acceptance
+test_github_failed_merge_on_already_merged_pr_reports_actionable_not_unsuccessful
 test_github_failed_gh_read_falls_back_to_gh_axi
 test_github_post_merge_report_failure_preserves_landed_success
 test_github_without_gh_still_uses_gh_axi_merge
