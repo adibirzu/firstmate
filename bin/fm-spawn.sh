@@ -3283,22 +3283,32 @@ spawn_current_path() {  # <target>
   esac
 }
 spawn_send_literal() {  # <target> <text>
+  local rc=0
   case "$BACKEND" in
-    tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
-    herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-    zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
-    orca) fm_backend_orca_send_literal "$1" "$2" ;;
-    cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+    tmux) fm_backend_tmux_send_literal "$1" "$2" || rc=$? ;;
+    herdr) fm_backend_herdr_send_literal "$1" "$2" || rc=$? ;;
+    zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" || rc=$? ;;
+    orca) fm_backend_orca_send_literal "$1" "$2" || rc=$? ;;
+    cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send literal text to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 spawn_send_key() {  # <target> <key>
+  local rc=0
   case "$BACKEND" in
-    tmux) fm_backend_tmux_send_key "$1" "$2" ;;
-    herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-    zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
-    orca) fm_backend_orca_send_key "$1" "$2" ;;
-    cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
+    tmux) fm_backend_tmux_send_key "$1" "$2" || rc=$? ;;
+    herdr) fm_backend_herdr_send_key "$1" "$2" || rc=$? ;;
+    zellij) fm_backend_zellij_send_key "$1" "$2" "$W" || rc=$? ;;
+    orca) fm_backend_orca_send_key "$1" "$2" || rc=$? ;;
+    cmux) fm_backend_cmux_send_key "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send key '$2' to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 
 kimi_capture() {
