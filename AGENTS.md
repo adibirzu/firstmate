@@ -207,7 +207,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, `cursor`, and `omp`, plus `muse`, `gemini`, `agy`, `cline`, `copilot`, and `rovo` for crewmate and scout launches only; never dispatch on an unverified adapter, and never select one of those six for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
+The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, `cursor`, and `omp`, plus `muse`, `agy`, `cline`, `copilot`, and `rovo` for crewmate and scout launches only (Google Gemini CLI is deprecated and migrated to `agy` / Antigravity CLI); never dispatch on an unverified adapter, and never select one of those six for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
