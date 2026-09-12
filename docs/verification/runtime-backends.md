@@ -983,6 +983,27 @@ ok - forced secondmate teardown retains Herdr child identity until exact pane di
 ok - forced teardown retains a nested secondmate home and its grandchild's Herdr identity when the grandchild close is unconfirmed
 ```
 
+### Stale default-workspace scaffold
+
+Observed on 2026-09-12 against the installed Herdr 0.8.2, macOS aarch64, through the guarded lab helper: a brand-new session carries one workspace labeled `~` before Firstmate ever calls `workspace create`.
+This is the empirical basis for [`herdr-backend.md`](../herdr-backend.md) "Stale default-workspace reap".
+Left unreaped it accumulated as an orphaned workspace for the life of every fresh session, which was the root cause of `tests/fm-backend-herdr-presentation-e2e.test.sh` observing an unexpected active workspace/tab shift across a projected teardown.
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh bin/fm-test-run.sh tests/fm-backend-herdr-presentation-e2e.test.sh
+```
+
+```text
+ok - real Herdr lab: a home that configured nothing is projected by default on herdr 0.8.2
+ok - real Herdr lab: every projected create, task-tab create, seeded prune, and move preserves active workspace and tab
+```
+
+The reap logic itself is pinned portably with no Herdr installed:
+
+```sh
+tests/fm-backend-herdr.test.sh
+```
+
 ### Launch-argv replay removal
 
 Measured on 2026-09-10 against the installed Herdr 0.8.2, protocol 20, macOS aarch64, through the guarded lab helper.

@@ -1599,10 +1599,10 @@ fm_backend_herdr_server_ensure() {  # <session>
 # duplicate means for them - fm_backend_herdr_workspace_ensure refuses to guess
 # which one is the caller's, while the read-only recovery path below keeps its
 # historical first-match behavior.
-fm_backend_herdr_workspace_find_all() {  # <session>
-  local session=$1 label list
+fm_backend_herdr_workspace_find_all() {  # <session> [<pre-fetched-workspace-list-json>]
+  local session=$1 label list=${2:-}
   label=$(fm_backend_herdr_workspace_label)
-  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
+  [ -n "$list" ] || list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
   # NOTE: the jq variable is $want, NOT $label - `label` is a jq reserved
   # keyword (label/break), so declaring a jq variable named "label" is a
   # compile error that `2>/dev/null` would silently swallow, making this find
@@ -1872,8 +1872,32 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 #
 # Returns 0 on success, 3 for a refusal whose exact reason is already on
 # stderr, and 1 for a failed or unparseable herdr call.
+# fm_backend_herdr_stale_default_workspace_id: the workspace id of the
+# session's sole, untouched herdr-seeded default workspace ("~", herdr's own
+# auto-provisioned scaffold on a session with nothing in it yet), or empty.
+# Herdr 0.8.2 provisions every fresh session with exactly one workspace
+# labeled "~" before firstmate ever calls workspace create (verified
+# empirically: `herdr workspace list` on a session right after provision).
+# Only matches when the session has EXACTLY one workspace and its label is
+# that literal sentinel, so a captain's own real workspace that merely still
+# carries the unrenamed default label is never mistaken for the scaffold
+# once anything else exists in the session alongside it.
+# Takes an optional pre-fetched `workspace list` JSON response as its 2nd arg
+# so a caller that already fetched the list (fm_backend_herdr_workspace_ensure)
+# never issues a second redundant herdr call for the same information.
+fm_backend_herdr_stale_default_workspace_id() {  # <session> [<pre-fetched-workspace-list-json>]
+  local session=$1 list=${2:-} wsid label count
+  [ -n "$list" ] || list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
+  count=$(printf '%s' "$list" | jq -r '.result.workspaces | length' 2>/dev/null) || return 0
+  [ "$count" = 1 ] || return 0
+  label=$(printf '%s' "$list" | jq -r '.result.workspaces[0].label // empty' 2>/dev/null)
+  [ "$label" = '~' ] || return 0
+  wsid=$(printf '%s' "$list" | jq -r '.result.workspaces[0].workspace_id // empty' 2>/dev/null)
+  printf '%s' "$wsid"
+}
+
 fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship>]
-  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label matches count status
+  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label matches count status stale_default list
   FM_BACKEND_HERDR_WS_ID=""
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=""
   if [ "$relationship" = launcher-home ]; then
@@ -1889,7 +1913,8 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
     esac
   fi
   label=$(fm_backend_herdr_workspace_label)
-  matches=$(fm_backend_herdr_workspace_find_all "$session")
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || list=""
+  matches=$(fm_backend_herdr_workspace_find_all "$session" "$list")
   count=$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)
   if [ "$count" -gt 1 ]; then
     echo "error: ${count} herdr workspaces in session '$session' are labeled '$label' (${matches//$'\n'/ }) and this spawn has no herdr parent pane to identify which one is its own; rename or close the extras, or run firstmate inside the workspace its workers belong in" >&2
@@ -1901,9 +1926,15 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
     printf '%s' "$wsid"
     return 0
   fi
+  stale_default=$(fm_backend_herdr_stale_default_workspace_id "$session" "$list")
   out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
   [ -n "$wsid" ] || return 1
+  # Reap herdr's own pre-existing scaffold workspace now that this HOME has a
+  # real one of its own - otherwise it leaks for the life of the session.
+  # Best-effort: never fails the spawn over cleanup of an artifact that is not
+  # this call's own workspace.
+  [ -z "$stale_default" ] || fm_backend_herdr_cli "$session" workspace close "$stale_default" >/dev/null 2>&1 || true
   FM_BACKEND_HERDR_WS_ID=$wsid
   # Herdr seeds a new workspace with one auto-created default tab firstmate
   # never uses. It is NOT pruned here: at this instant it is the workspace's
