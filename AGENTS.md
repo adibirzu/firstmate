@@ -85,6 +85,7 @@ config/turnend-churn-absorb  optional presence flag opting this home into the de
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
+config/code-review  optional JSON policy for bin/fm-review.sh's deterministic-first code review (size threshold, risk patterns, Stage 2 mode/provider/model); LOCAL, gitignored; absent = built-in defaults; inherited by secondmate homes like every other config/ file; see docs/code-review.md
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
@@ -341,6 +342,7 @@ The selected delivery path owns its own rigor.
 Every new feature lands in the fork (`adibirzu/firstmate`) and is verified working there before anything pushes to upstream (`kunchenguid/firstmate`).
 Upstream propagation is downstream distribution, never a feature source, and happens only after the captain verifies the merged fork state.
 When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, documentation, push, PR, and CI; otherwise follow the faster path without adding an independent reviewer.
+Every ship task's Stage 1 code review is deterministic-first and runs before the pipeline or the PR: see [`docs/code-review.md`](docs/code-review.md).
 Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
 If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
