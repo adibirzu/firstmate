@@ -278,6 +278,8 @@
 #     __CLINESETTINGS__ absolute path to state/<task-id>.cline-settings.json, the
 #                  firstmate-owned settings copy that forces cline's act mode
 #     __GEMINISETTINGS__ firstmate-owned per-task gemini settings file (busy-state hooks)
+#     __GEMINIBIN__ resolved, genuine-gemini-cli-verified executable for a gemini launch
+#                  (see gemini_binary_is_genuine below; refuses a shadowed `gemini`)
 #     __ROVOBIN__   resolved, rovo-verified executable for a rovo launch
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
@@ -1579,6 +1581,45 @@ resolve_pi_executable() {
   esac
 }
 
+# Resolve whatever `gemini` PATH would hand the pane, same shape as
+# resolve_pi_executable above: pinning the absolute path here and threading it
+# through __GEMINIBIN__ makes the genuineness check below and the pane's actual
+# launch agree, even if PATH changes between this spawn and the pane starting.
+resolve_gemini_binary() {
+  local candidate dir
+  candidate=$(type -P -- gemini 2>/dev/null) || return 1
+  [ -x "$candidate" ] || return 1
+  case "$candidate" in
+    /*) printf '%s\n' "$candidate" ;;
+    *)
+      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || return 1
+      printf '%s/%s\n' "$dir" "$(basename "$candidate")"
+      ;;
+  esac
+}
+
+# gemini_binary_is_genuine: 0 when the resolved `gemini` executable is actually
+# gemini-cli rather than something shadowing it on PATH. This Mac's own PATH
+# carries exactly that shadow, found while investigating a "gemini dispatch
+# idles at first turn" report: a personal ~/.local/bin/gemini compatibility
+# shim (a bash script) that transparently execs a different harness (agy)
+# ahead of the genuine /opt/homebrew/bin/gemini (a node script) on PATH. None
+# of this template's gemini-cli-specific env (GEMINI_CLI_TRUST_WORKSPACE,
+# GEMINI_CLI_SYSTEM_SETTINGS_PATH carrying the busy-state/turn-end hooks
+# firstmate's supervision depends on) is read by whatever such a shim execs,
+# so a shadowed `gemini` launches uninstrumented with no supervision wired
+# instead of failing loudly - exactly the observed symptom.
+# The check is deliberately narrow and structural rather than a path
+# denylist, so it catches any future shadow, not just this one shim:
+# gemini-cli ships as a node CLI (verified, gemini-cli 0.58.0 -
+# .agents/skills/harness-adapters/references/harness/gemini.md), so a
+# resolved `gemini` whose shebang does not invoke node is refused.
+gemini_binary_is_genuine() {
+  local resolved=$1 shebang
+  IFS= read -r shebang < "$resolved" 2>/dev/null || return 1
+  printf '%s\n' "$shebang" | grep -Eq '^#!(/usr/bin/env[[:space:]]+node([[:space:]]|$)|.*/node([[:space:]]|$))'
+}
+
 # Pi's TUI mode is version-dependent. A failed or inconclusive capability probe
 # leaves the flag out so older Pi versions stay launchable.
 pi_supports_tui_mode() {
@@ -1762,7 +1803,13 @@ launch_template() {
     # stays in task metadata only, per the record-and-omit contract.
     # Its turn-end and busy-state signals do NOT ride the launch command:
     # they are project hooks written into the worktree below.
-    gemini) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS GEMINI_CLI_TRUST_WORKSPACE=true GEMINI_CLI_SYSTEM_SETTINGS_PATH=__GEMINISETTINGS__ gemini -y __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # __GEMINIBIN__ (not a bare `gemini`) is the gemini_binary_is_genuine-verified
+    # executable resolved below: a `gemini` earlier on PATH can silently be
+    # something else entirely (verified on this fleet: a personal compatibility
+    # shim that execs a different harness), and every env var in this template is
+    # gemini-cli-specific, so a shadowed `gemini` would launch uninstrumented with
+    # none of it wired rather than fail loudly.
+    gemini) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS GEMINI_CLI_TRUST_WORKSPACE=true GEMINI_CLI_SYSTEM_SETTINGS_PATH=__GEMINISETTINGS__ __GEMINIBIN__ -y __MODELFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -1966,6 +2013,16 @@ case "$HARNESS" in
       echo "error: omp worker posture overlay missing at $OMP_WORKER_CFG; a worker launched without it can park on the captain's own approval or plan-mode settings" >&2
       exit 1
     }
+    ;;
+  gemini)
+    GEMINI_BIN=$(resolve_gemini_binary) || {
+      echo "error: gemini executable not found on PATH; install gemini-cli or select a different verified harness" >&2
+      exit 1
+    }
+    if ! gemini_binary_is_genuine "$GEMINI_BIN"; then
+      echo "error: refusing to dispatch gemini - the 'gemini' resolved from PATH ('$GEMINI_BIN') is not genuine gemini-cli (a node CLI, per .agents/skills/harness-adapters/references/harness/gemini.md); something else is shadowing it on PATH ahead of the real binary, most likely a personal compatibility shim. Launching it anyway would silently run whatever it actually execs with none of firstmate's gemini-specific supervision wiring applied. Fix PATH so 'gemini' resolves to the genuine gemini-cli, or select a different verified harness." >&2
+      exit 1
+    fi
     ;;
 esac
 
@@ -4391,7 +4448,10 @@ case "$HARNESS" in
   pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
   cline) LAUNCH=${LAUNCH//__CLINESETTINGS__/"$(shell_quote "$STATE/$ID.cline-settings.json")"} ;;
-  gemini) LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"} ;;
+  gemini)
+    LAUNCH=${LAUNCH//__GEMINISETTINGS__/"$(shell_quote "$STATE_REAL/$ID.gemini-settings.json")"}
+    LAUNCH=${LAUNCH//__GEMINIBIN__/"$(shell_quote "$GEMINI_BIN")"}
+    ;;
   omp) LAUNCH=${LAUNCH//__OMPBIN__/"$(shell_quote "$OMP_BIN")"} ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
