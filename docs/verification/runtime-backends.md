@@ -230,6 +230,58 @@ Valid cleanup removed only the exact task-bound target and left the control wind
 The metadata-only validation covers tmux, Herdr, Zellij, Orca, and cmux before backend dispatch.
 Claude, Codex, OpenCode, Pi, pi-signed, Grok, Kimi, Cursor, Muse, Cline, and Copilot share that backend cleanup boundary; their harness-specific hook files, tokens, transcript bindings, and session-log sidecars are cleaned only after it, so no harness needs a separate endpoint parser.
 
+## Codex autonomous launch configuration
+
+Verified 2026-09-09 with the installed Codex CLI on macOS.
+
+```sh
+codex --version
+```
+
+```text
+codex-cli 0.153.4
+```
+
+The local help documented configuration overrides and the two values used by Firstmate's Codex launch template:
+
+```sh
+codex --help
+```
+
+Bounded literal excerpts from the captured output:
+
+```text
+-c, --config <key=value>
+Override a configuration value that would otherwise be loaded from ~/.codex/config.toml.
+-s, --sandbox <SANDBOX_MODE>
+[possible values: read-only, workspace-write, danger-full-access]
+-a, --ask-for-approval <APPROVAL_POLICY>
+- never: Never ask for user approval Execution failures are immediately returned to the model
+```
+
+The installed CLI loaded the exact configuration keys and reported their effective policy without starting a model turn:
+
+```sh
+codex -c approval_policy=never -c sandbox_mode=danger-full-access doctor --json
+```
+
+The command exited 1 because `overallStatus` was `fail` from unrelated environment checks.
+The configuration and sandbox checks themselves succeeded, with these bounded noncontiguous literal excerpts from the captured JSON:
+
+```text
+"config.load": {
+"status": "ok",
+"summary": "config loaded",
+"sandbox.helpers": {
+"status": "ok",
+"summary": "sandbox configuration is readable",
+"approval policy": "Never",
+"filesystem sandbox": "unrestricted"
+```
+
+This proves the configuration syntax and effective values against codex-cli 0.153.4 only.
+The requested live non-interactive approval smoke against Codex 0.148.0 was unavailable because that exact version was not installed, so no live acceptance is claimed for 0.148.0 or from help text, configuration loading, or rendered-command regressions.
+
 ## OpenCode
 
 OpenCode was verified on 2026-08-23 at `/opt/homebrew/bin/opencode`, installed through Homebrew, with version 1.18.20.

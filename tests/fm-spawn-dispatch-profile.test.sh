@@ -354,7 +354,7 @@ test_active_dispatch_profile_allows_explicit_harness() {
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' -c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-approvals-and-sandbox" \
     "explicit harness launch did not thread model and effort"
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
@@ -450,9 +450,34 @@ test_codex_threads_model_and_effort() {
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' -c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
   pass "codex receives --model and model_reasoning_effort profile flags"
+}
+
+test_codex_launches_render_explicit_autonomy_config() {
+  local rec ship_id mate_id sm out status launch expected
+  ship_id=profile-codex-autonomy-ship-z3a
+  mate_id=profile-codex-autonomy-mate-z3b
+  rec=$(make_spawn_case profile-codex-autonomy codex "$ship_id" "$mate_id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ship_id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex crewmate spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI codex -c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-approvals-and-sandbox -c \"notify=[\\\"bash\\\",\\\"-c\\\",\\\"touch '$HOME_DIR/state/$ship_id.turn-ended'\\\"]\" \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$ship_id/launch-brief.md')\""
+  [ "$launch" = "$expected" ] || fail "codex crewmate launch did not render the canonical autonomy and turn-end command"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$mate_id"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$mate_id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "codex secondmate spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  expected="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='$HOME_DIR' FM_HOME='$sm' FM_TRACE_CONTEXT=off FM_SUPERVISION_MODEL=persistent env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI codex -c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-approvals-and-sandbox \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$sm/data/charter.md')\""
+  [ "$launch" = "$expected" ] || fail "codex secondmate launch did not render the canonical autonomy command"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  pass "codex crewmate and secondmate launches render complete explicit autonomy commands"
 }
 
 test_codex_omits_invalid_max_effort() {
@@ -466,7 +491,7 @@ test_codex_omits_invalid_max_effort() {
   expect_code 0 "$status" "codex spawn with unsupported max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
   pass "codex omits unsupported max effort instead of passing a bad config value"
@@ -1269,6 +1294,7 @@ test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
+test_codex_launches_render_explicit_autonomy_config
 test_codex_omits_invalid_max_effort
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
