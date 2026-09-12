@@ -237,6 +237,12 @@ case "$cmd $sub" in
     tab=${3:-}
     jq_state --arg t "$tab" '.tabs |= [.[]|select(.tab_id != $t)]' | save
     ;;
+  "workspace close")
+    wsid=${3:-}
+    jq_state --arg w "$wsid" \
+      '.workspaces |= [.[]|select(.workspace_id != $w)]
+       | .tabs |= [.[]|select(.workspace_id != $w)]' | save
+    ;;
   "agent get")
     pane=${3:-}
     status=$(jq_state -r --arg p "$pane" '.agent_status[$p] // empty')
@@ -4385,6 +4391,61 @@ EOF
   pass "fm_backend_herdr_create_task: prunes exactly the seeded default tab container_ensure identified, once the first real task tab exists"
 }
 
+# fm_backend_herdr_stale_default_workspace_id / the reap call in
+# fm_backend_herdr_workspace_ensure in bin/backends/herdr.sh and
+# docs/herdr-backend.md's "Stale default-workspace reap" section.
+# Herdr 0.8.2 seeds a brand-new session with its own workspace labeled "~"
+# before firstmate ever calls workspace create; left alone it leaks for the
+# life of the session (the real-Herdr e2e regression this test complements
+# is tests/fm-backend-herdr-presentation-e2e.test.sh).
+test_workspace_ensure_reaps_stale_default_workspace() {
+  local dir log state fb raw container wscount labels
+  dir="$TMP_ROOT/reap-stale-default"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  jq '.next = 3
+      | .workspaces = [{workspace_id:"w1", label:"~"}]
+      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
+    || fail "container_ensure failed against a session pre-seeded with herdr's own '~' scaffold workspace"
+  container=${raw%%$'\t'*}
+  case "$container" in
+    fmtest:w1) fail "container_ensure adopted herdr's own scaffold workspace '~' as this home's own" ;;
+    fmtest:w*) : ;;
+    *) fail "unexpected container '$container'" ;;
+  esac
+  wscount=$(jq -r '.workspaces|length' "$state")
+  [ "$wscount" = 1 ] || fail "expected the stale '~' scaffold reaped and exactly the new workspace to remain, got $wscount: $(jq -c '.workspaces' "$state")"
+  labels=$(jq -r '.workspaces[].label' "$state")
+  [ "$labels" = firstmate ] || fail "expected only the real 'firstmate' workspace to survive the reap, got: $labels"
+  assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close'$'\x1f''w1' \
+    "workspace_ensure did not close herdr's own '~' scaffold workspace by its exact id"
+  pass "fm_backend_herdr_workspace_ensure: reaps herdr's own pre-seeded '~' scaffold workspace once this home has a real one"
+}
+
+test_workspace_ensure_never_reaps_a_captains_own_default_labeled_workspace() {
+  local dir log state fb raw container wscount labels
+  dir="$TMP_ROOT/no-reap-real-default-label"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  jq '.next = 3
+      | .workspaces = [{workspace_id:"w1", label:"~"}, {workspace_id:"w2", label:"captains-own"}]
+      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
+    || fail "container_ensure failed against a session with two pre-existing workspaces"
+  container=${raw%%$'\t'*}
+  case "$container" in fmtest:w*) : ;; *) fail "unexpected container '$container'" ;; esac
+  wscount=$(jq -r '.workspaces|length' "$state")
+  [ "$wscount" = 3 ] || fail "a session with more than one pre-existing workspace must never be treated as the herdr-seeded scaffold case, got $wscount: $(jq -c '.workspaces' "$state")"
+  labels=$(jq -r '.workspaces[]|select(.workspace_id=="w1").label' "$state")
+  [ "$labels" = '~' ] || fail "the '~'-labeled workspace must survive once it is not the session's sole workspace, got label '$labels'"
+  assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close' \
+    "workspace_ensure must never call workspace close when more than one workspace already exists in the session"
+  pass "fm_backend_herdr_stale_default_workspace_id: never mistakes a '~'-labeled workspace for herdr's scaffold once a second workspace already exists"
+}
+
 test_repeated_cycles_reuse_one_workspace_no_orphans() {
   local dir log state fb i raw container seeded wsid ids pane first_ws="" wscount total tabcount created
   dir="$TMP_ROOT/cycles"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
@@ -4917,6 +4978,8 @@ test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label
 test_workspace_ensure_prunes_default_tab
+test_workspace_ensure_reaps_stale_default_workspace
+test_workspace_ensure_never_reaps_a_captains_own_default_labeled_workspace
 test_repeated_cycles_reuse_one_workspace_no_orphans
 test_adopted_workspace_never_prunes_default_tab
 test_label_collision_startup_workspace_leaves_live_tab_alone
