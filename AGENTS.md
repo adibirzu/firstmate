@@ -341,6 +341,7 @@ The selected delivery path owns its own rigor.
 Every new feature lands in the fork (`adibirzu/firstmate`) and is verified working there before anything pushes to upstream (`kunchenguid/firstmate`).
 Upstream propagation is downstream distribution, never a feature source, and happens only after the captain verifies the merged fork state.
 When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, documentation, push, PR, and CI; otherwise follow the faster path without adding an independent reviewer.
+Every ship task's Stage 1 code review is deterministic-first and runs before the pipeline or the PR: see [`docs/code-review.md`](docs/code-review.md).
 Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
 If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
