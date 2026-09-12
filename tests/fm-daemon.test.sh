@@ -1125,10 +1125,14 @@ test_housekeeping_paused_unpaused_cleared() {
   pass "housekeeping clears a paused marker once the crew is no longer declaring the pause"
 }
 
-# Once the captain answers, the hold is no longer a declared wait: the resolved line
-# takes over the last-line read, so the pause cadence must stop claiming the task
-# rather than keep re-surfacing a settled decision.
-test_housekeeping_captain_held_resolved_cleared() {
+# A bare resolved: line does not by itself end a captain-held wait: the daemon
+# shares status_paused_governing_line's fold with fm-watch.sh, which never treats
+# resolved as a state transition - only a genuine working/done/blocked/failed line,
+# the crew itself moving on, supersedes a declared wait (see
+# tests/fm-watch-triage.test.sh's test_status_paused_governing_line_classifier).
+# The pause cadence must therefore keep claiming the task until the crew resumes,
+# rather than dropping the marker the moment the captain's answer lands.
+test_housekeeping_captain_held_resolved_survives() {
   local dir state fakebin win pane key
   dir=$(make_supercase captain-held-resolved)
   state="$dir/state"; fakebin="$dir/fakebin"
@@ -1139,9 +1143,28 @@ test_housekeeping_captain_held_resolved_cleared() {
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ -e "$state/.subsuper-paused-$key" ] && fail "an answered captain hold kept its pause marker"
-  [ ! -s "$state/.subsuper-escalations" ] || fail "an answered captain hold was re-surfaced as a declared wait"
-  pass "housekeeping clears the pause marker once a captain hold is answered"
+  [ -e "$state/.subsuper-paused-$key" ] || fail "a resolved captain hold with no working: resumption line lost its pause marker"
+  pass "housekeeping keeps the pause marker across a resolved captain hold until the crew resumes"
+}
+
+# Once the crew resumes work after the captain's answer, the working: line is a
+# genuine state transition and supersedes the captain-held declaration, so the
+# pause cadence must stop claiming the task.
+test_housekeeping_captain_held_working_resumed_cleared() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase captain-held-resumed)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-held-w13i"; pane="$dir/pane.txt"
+  printf 'captain-held [key=route]: tracked by task-decision-route\nresolved [key=route]: captain chose the direct path\nworking: resumed on the direct path\n' \
+    > "$state/held-w13i.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "held-w13i" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ -e "$state/.subsuper-paused-$key" ] && fail "a resumed captain hold kept its pause marker"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "a resumed captain hold was re-surfaced as a declared wait"
+  pass "housekeeping clears the pause marker once the crew resumes after a captain hold is answered"
 }
 
 test_housekeeping_stale_marker_transitions_to_pause() {
@@ -2642,7 +2665,8 @@ test_housekeeping_captain_held_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_busy_declared_wait_matures_its_window
 test_housekeeping_paused_unpaused_cleared
-test_housekeeping_captain_held_resolved_cleared
+test_housekeeping_captain_held_resolved_survives
+test_housekeeping_captain_held_working_resumed_cleared
 test_housekeeping_stale_marker_transitions_to_pause
 test_housekeeping_captain_held_stale_marker_transitions_to_pause
 test_housekeeping_pause_marker_transitions_to_clear
