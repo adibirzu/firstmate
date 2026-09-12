@@ -6,9 +6,11 @@
 #
 #   Stage 1 (always, zero LLM tokens): `ocr delegate preview` selects the
 #   reviewable file set and reports changeset size; the target repo's own
-#   configured linter runs against that same diff (bin/fm-lint.sh when the
-#   target repo is firstmate itself, otherwise a `package.json` "lint"
-#   script when one exists - nothing else is auto-detected).
+#   configured linter runs against that same diff (bin/fm-lint.sh, invoked
+#   with exactly the OCR-selected files that fall in its canonical set -
+#   bin/*.sh, bin/backends/*.sh, tests/*.sh - when the target repo is
+#   firstmate itself, otherwise a `package.json` "lint" script when one
+#   exists - nothing else is auto-detected).
 #
 #   Stage 2 (only when Stage 1 flags a reason): a high-risk file matched a
 #   configured pattern, the linter reported findings, or the changeset
@@ -171,13 +173,38 @@ total_changed=$(( total_insertions + total_deletions ))
 mapfile -t reviewable_files < <(echo "$stage1_json" | jq -r '.reviewable_files[]?.path // empty')
 
 # Repo's own configured linter, run only against the reviewable diff.
+# fm-lint.sh's own canonical set (a direct *.sh child of bin/, bin/backends/,
+# or tests/); explicit-path mode requires at least one match, otherwise
+# no-arg mode would fall back to its own unrelated file-set auto-detection.
+review_lint_target() {  # <path>
+  local path=$1 dir base
+  case "$path" in
+    */*) dir=${path%/*}; base=${path##*/} ;;
+    *) dir=; base=$path ;;
+  esac
+  case "$base" in
+    *.sh) : ;;
+    *) return 1 ;;
+  esac
+  case "$dir" in
+    bin|bin/backends|tests) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+lint_targets=()
+for f in "${reviewable_files[@]}"; do
+  review_lint_target "$f" && lint_targets+=("$f")
+done
+
 lint_ran=false
 lint_findings=0
 lint_output=""
 if [[ -x "$DIR/bin/fm-lint.sh" ]]; then
-  lint_ran=true
-  if ! lint_output="$("$DIR/bin/fm-lint.sh" 2>&1)"; then
-    lint_findings=1
+  if [[ ${#lint_targets[@]} -gt 0 ]]; then
+    lint_ran=true
+    if ! lint_output="$("$DIR/bin/fm-lint.sh" "${lint_targets[@]}" 2>&1)"; then
+      lint_findings=1
+    fi
   fi
 elif [[ -f "$DIR/package.json" ]] && jq -e '.scripts.lint' "$DIR/package.json" >/dev/null 2>&1; then
   lint_ran=true

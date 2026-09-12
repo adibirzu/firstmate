@@ -6,7 +6,7 @@
 
 **Stage 1 (always runs, zero LLM tokens).**
 `ocr delegate preview` selects the reviewable file set for the diff and reports its size.
-The target repo's own already-configured linter then runs against that same worktree: `bin/fm-lint.sh` when the target repo is firstmate itself, otherwise a `package.json` `"lint"` script when one exists.
+The target repo's own already-configured linter then runs against exactly that OCR-selected file set: `bin/fm-lint.sh` when the target repo is firstmate itself (invoked with the OCR-selected files that fall in its own canonical set - `bin/*.sh`, `bin/backends/*.sh`, `tests/*.sh` - so lint findings always correspond to the reviewed diff, even in `pr` mode or with a custom `--from`/`--to`), otherwise a `package.json` `"lint"` script when one exists (which lints the whole repo, per that script's own convention).
 No other linter is auto-detected; a repo with neither simply skips this step.
 
 **Stage 2 (only when Stage 1 gives a reason).**

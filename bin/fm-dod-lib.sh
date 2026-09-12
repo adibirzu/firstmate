@@ -200,6 +200,7 @@ Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict before opening the PR; see \`docs/code-review.md\`.
+If it escalates to Stage 2 in delegate mode (exit 2), fix what the printed rules call for in the flagged files before opening the PR.
 Push your branch, open a PR with \`gh-axi\`, and paste the Stage 1 verdict into the PR body under a \`## Code Review (Stage 1)\` heading, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF

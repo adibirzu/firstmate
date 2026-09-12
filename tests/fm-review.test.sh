@@ -141,23 +141,40 @@ rm -f "$TMP_ROOT/config/code-review"
 # --- linter integration -------------------------------------------------------
 
 mkdir -p "$TMP_ROOT/bin"
-cat > "$TMP_ROOT/bin/fm-lint.sh" <<'SH'
+LINT_ARGS_LOG="$TMP_ROOT/lint-args.log"
+cat > "$TMP_ROOT/bin/fm-lint.sh" <<SH
 #!/usr/bin/env bash
+printf '%s\n' "\$@" > "$LINT_ARGS_LOG"
 echo "fake-lint: 1 problem found"
 exit 1
 SH
 chmod +x "$TMP_ROOT/bin/fm-lint.sh"
-fake_ocr 10 0 "'x.py'"
+
+# Two reviewable files: one in fm-lint.sh's canonical set (bin/*.sh), one not.
+# The linter must run scoped to exactly the canonical one, never bare (a bare
+# call would let fm-lint.sh's own merge-base auto-detection diverge from the
+# range fm-review.sh was asked to review).
+fake_ocr 10 0 "'bin/x.sh' 'src/other.py'"
 OUT=$(run_review worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
 [ "$CODE" = 2 ] || fail "linter findings must escalate to Stage 2 (delegate default), got $CODE"
 assert_contains "$OUT" "linter reported findings" "escalation reason must name the linter"
 assert_contains "$OUT" "fake-lint: 1 problem found" "verdict must include the linter's own output"
-pass "a repo-configured linter's findings escalate to Stage 2 and are printed in the verdict"
+LINT_ARGS=$(cat "$LINT_ARGS_LOG")
+[ "$LINT_ARGS" = "bin/x.sh" ] || fail "fm-lint.sh must be invoked with exactly the OCR-selected canonical file(s), got: $LINT_ARGS"
+pass "a repo-configured linter's findings escalate to Stage 2 and are printed in the verdict, scoped to the OCR-selected canonical files"
 
 OUT=$(run_review worktree --dir "$TMP_ROOT" --from base --to head --stage1-only); CODE=$?
 [ "$CODE" = 1 ] || fail "--stage1-only with real lint findings must still exit 1, got $CODE"
 pass "--stage1-only still reports lint findings via exit 1 without escalating to Stage 2"
-rm -f "$TMP_ROOT/bin/fm-lint.sh"
+
+: > "$LINT_ARGS_LOG"
+fake_ocr 10 0 "'src/only.py'"
+OUT=$(run_review worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 0 ] || fail "no canonical lint target must not escalate, got exit $CODE"
+assert_contains "$OUT" "none configured for this repo" "fm-lint.sh must not run when no reviewable file is in its canonical set"
+[ -s "$LINT_ARGS_LOG" ] && fail "fm-lint.sh must not be invoked at all when no reviewable file is in its canonical set"
+pass "fm-lint.sh is skipped (never invoked bare) when no reviewable file falls in its canonical lint set"
+rm -f "$TMP_ROOT/bin/fm-lint.sh" "$LINT_ARGS_LOG"
 
 # --- stage2Mode: litellm -------------------------------------------------------
 
