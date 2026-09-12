@@ -891,4 +891,9 @@ if [ -n "$LOG_VERB" ]; then
   fi
 fi
 
+PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+if status_is_paused_or_captain_held "$PAUSE_GOVERNING_LINE"; then
+  emit paused status-log "$(status_line_note "$PAUSE_GOVERNING_LINE")"
+fi
+
 emit unknown none "no current-state source available"
