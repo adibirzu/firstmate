@@ -443,6 +443,77 @@ test_status_is_paused_classifier() {
   pass "status_is_paused: only the leading paused verb matches, paused is not captain-relevant, and the two declared-wait verbs stay separable"
 }
 
+# status_paused_governing_line: the fold that answers "what DECLARED
+# pause/captain-held/working/done/blocked/failed state does this status log's
+# tail currently govern by", not simply "what is the last line" (last_status_line).
+# Regression for the last-line-matching sibling of the already-fixed
+# agent-liveness precondition (PR #3): a declared pause must keep governing
+# across a later line whose verb is NOT a real state transition - an
+# intervening `resolved:` closing some unrelated open decision on the same
+# task chief among them - and only a genuine working/done/blocked/failed line
+# may supersede it.
+test_status_paused_governing_line_classifier() {
+  local dir f line
+  dir=$(make_case paused-governing-line); f="$dir/state/x.status"
+
+  # The exact reported sequence: a declared pause, then an unrelated resolved:
+  # line (as lands when firstmate closes some other open decision on the same
+  # task). The pause must still govern - long recheck cadence, not bare stale.
+  printf 'paused: holding for the upstream release\nresolved [key=other]: captain answered\n' > "$f"
+  status_is_paused "$(status_paused_governing_line "$f")" \
+    || fail "an intervening unrelated resolved: line silently cancelled a still-standing declared pause"
+  status_is_paused_or_captain_held "$(status_paused_governing_line "$f")" \
+    || fail "the bounded-idle classifier lost the declared pause behind an intervening resolved: line"
+
+  # Any number of further non-superseding lines (another resolved:, a bare
+  # no-verb note) - the pause keeps governing.
+  printf 'paused: holding for the upstream release\nresolved [key=a]: x\nnote: still waiting\nresolved [key=b]: y\n' > "$f"
+  status_is_paused "$(status_paused_governing_line "$f")" \
+    || fail "multiple intervening non-superseding lines still cancelled the declared pause"
+
+  # A declared captain-held transfer survives the same way.
+  printf 'captain-held [key=route]: tracked by task-decision-route\nresolved [key=other]: x\n' > "$f"
+  status_is_captain_held "$(status_paused_governing_line "$f")" \
+    || fail "an intervening unrelated resolved: line cancelled a still-standing captain-held transfer"
+
+  # A genuine state transition - working/done/blocked/failed - DOES supersede
+  # an earlier declared pause: the already-correct case must not regress.
+  printf 'paused: holding for the upstream release\nworking: resumed after the release\n' > "$f"
+  line=$(status_paused_governing_line "$f")
+  status_is_paused "$line" && fail "a later working: line did not supersede an earlier declared pause"
+  [ "$(status_line_verb "$line")" = working ] || fail "working: did not become the governing line after a declared pause"
+
+  printf 'paused: holding for the upstream release\ndone: shipped\n' > "$f"
+  status_is_paused_or_captain_held "$(status_paused_governing_line "$f")" \
+    && fail "a later done: line did not supersede an earlier declared pause"
+
+  printf 'paused: holding for the upstream release\nblocked: now stuck on something else\n' > "$f"
+  status_is_paused_or_captain_held "$(status_paused_governing_line "$f")" \
+    && fail "a later blocked: line did not supersede an earlier declared pause"
+
+  printf 'paused: holding for the upstream release\nfailed: the run crashed\n' > "$f"
+  status_is_paused_or_captain_held "$(status_paused_governing_line "$f")" \
+    && fail "a later failed: line did not supersede an earlier declared pause"
+
+  # A resumed pause after a supersession is picked up again (most-recent wins).
+  printf 'paused: first wait\nworking: resumed\npaused: second wait\n' > "$f"
+  line=$(status_paused_governing_line "$f")
+  status_is_paused "$line" || fail "a fresh pause after a supersession was not recognized"
+  [ "$line" = 'paused: second wait' ] || fail "the most recent declared pause did not win the fold"
+
+  # A log with no declared verb at all folds to empty, exactly as the raw last
+  # line would have reported not-paused.
+  printf 'needs-decision: pick one\nresolved: picked\n' > "$f"
+  [ -z "$(status_paused_governing_line "$f")" ] \
+    || fail "a log with no declared pause/held/working/done/blocked/failed verb folded to a non-empty line"
+
+  # A missing status file is a successful empty fold, matching last_status_line.
+  [ -z "$(status_paused_governing_line "$dir/state/missing.status")" ] \
+    || fail "a missing status file did not fold to empty"
+
+  pass "status_paused_governing_line: a declared pause/captain-held state keeps governing across intervening non-superseding lines, and only a later working/done/blocked/failed line supersedes it"
+}
+
 # crew_absorb_class: the single fm-crew-state.sh read that returns BOTH absorb
 # reasons - working (active run/busy pane), paused (declared external wait), or none
 # (surface it) - so the watcher's stale path gets both for one bounded call.
@@ -2040,6 +2111,55 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the paused re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "paused re-surface was not queued"
   pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
+}
+
+# Regression for the hospital secondmate extraction incident (2026-09-12): an
+# ordinary intermediate `resolved:` line - closing some OTHER open decision on
+# the same task - landed after a still-standing `paused:` declaration, and the
+# watcher's last-line-only read silently cancelled the pause classification,
+# restarting the bare stale escalation ladder even though the pause was still
+# genuinely in effect. This is the last-line-matching sibling of the
+# agent-liveness precondition PR #3 already fixed in pause_state_class.
+# The task must still classify as paused - bounded long-cadence recheck, never
+# a bare/immediate stale escalation - exactly as it would with no intervening
+# resolved: line at all.
+test_nonterminal_stale_paused_survives_intervening_resolved_line() {
+  local dir state fakebin out capture_file window key pane_hash sig pid statusf
+  dir=$(make_case nonterminal-stale-paused-resolved); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-held-resolved"
+  printf 'idle, holding for upstream' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/held.meta"
+  statusf="$state/held.status"
+  # The exact reported sequence: a declared pause, then an unrelated resolved:
+  # line, as lands when firstmate closes some other open decision on this same
+  # task while the pause itself still stands.
+  printf 'paused: holding for the upstream tool release\nresolved [key=unrelated]: captain answered a different decision\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  key=$(watch_marker_key "$window")
+  pane_hash=$(hash_text "idle, holding for upstream")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # crew_absorb_class reads the declared pause from fm-crew-state.sh, exactly as
+  # the sibling test above - the pause is still what the crew itself reports.
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · holding for the upstream tool release'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher exited for a declared pause behind an intervening resolved: line (should absorb): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a still-standing pause behind an intervening resolved: line printed a bare stale wake reason"
+  [ ! -s "$state/.wake-queue" ] || fail "a still-standing pause behind an intervening resolved: line enqueued a bare stale wake"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on paused absorb"
+  [ -e "$state/.paused-$key" ] || fail "paused flag not recorded: the intervening resolved: line silently cancelled the pause classification"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a paused absorb must not start the wedge timer even behind an intervening resolved: line"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional paused phase stop"
+  pass "an intervening unrelated resolved: line does not cancel a still-standing declared pause: the task keeps the bounded long-cadence recheck, never bare stale escalation"
 }
 
 # A captain-held crew can leave a stable backend endpoint after its agent exits.
@@ -4379,6 +4499,7 @@ test_stale_is_terminal_classifier
 test_classifier_primitives
 test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
+test_status_paused_governing_line_classifier
 test_crew_absorb_class_classifier
 test_crew_worktree_written_since_classifier
 test_empty_write_prune_widens_the_probe
@@ -4438,6 +4559,7 @@ test_afk_busy_declared_pause_hands_off_plain_stale
 test_afk_busy_declared_pause_ticking_pane_hands_off_once
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_nonterminal_stale_paused_survives_intervening_resolved_line
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
