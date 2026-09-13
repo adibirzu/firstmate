@@ -80,6 +80,11 @@
 # parser would have seen); only --key still crosses to the remote pane as a
 # keystroke.
 #
+# Before any typed text is sent to a recorded task selector, a positively
+# agent-free endpoint (a bare shell left by an exited agent) is refused rather
+# than typed into (fm_send_require_live_agent below). An explicit backend
+# target is the escape hatch and is not checked.
+#
 # Stage-1 compatibility boundary: classification uses the original pre-marker
 # text, but secondmate marking still precedes every typed submission. Therefore
 # a marked parser-native secondmate invocation intentionally reaches the harness
@@ -427,6 +432,32 @@ fm_send_resolve_target() {  # <raw-target>
   return 1
 }
 
+# fm_send_require_live_agent: refuse to type text into a task pane whose agent
+# has exited. An exited agent leaves a bare shell behind, and text typed there is
+# executed as a shell command or swallowed into whatever continuation prompt the
+# shell is sitting in (a `quote>`, `dquote>`, or heredoc prompt), which is how a
+# steer once silently wedged a task and then consumed the relaunch that
+# followed. The verdict comes from the ONE owner of agent liveness
+# (bin/fm-backend.sh's fm_backend_agent_state, whose `dead` verdict for a bare
+# shell rests on bin/fm-composer-lib.sh's dead-shell rule); this adds no second
+# classifier. Only a positively `dead` or `missing` endpoint refuses - an
+# `ambiguous`, `unreadable`, or `unverified` endpoint keeps its prior behavior,
+# exactly as the inbox doorbell's own narrow skip does. Only a recorded task
+# selector is checked: an explicit backend target is the documented escape hatch
+# naming an arbitrary endpoint (not a task), and passes through unchanged.
+fm_send_require_live_agent() {  # <backend> <target> <resolution>
+  local backend=$1 target=$2 resolution=$3 state
+  [ "$backend" != remote ] || return 0
+  state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)
+  case "$state" in
+    dead|missing)
+      echo "error: refusing to type into $target ($backend; tried $resolution) because no agent is running there (state=$state), so the pane holds a bare shell that could execute or swallow the text. Relaunch the task's agent with bin/fm-control.sh <id> relaunch first. Nothing was typed." >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 RAW_TARGET=$1
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
@@ -685,11 +716,13 @@ fm_send_feed_resolved_holds() {  # <answer-text>
 # unknown and treated as non-codex (the safe default that keeps the fast path).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
-# Do not add a separate passive liveness preflight here. Active send paths own
-# backend readiness: herdr, for example, must route through its session-aware
-# target_ready path before sending, while zellij verifies pane labels in its
-# send implementation. A failed backend send is still surfaced below as a hard
-# error with the attempted resolution attached.
+# A typed-plane send to a recorded task selector additionally refuses when its
+# endpoint positively has no agent (fm_send_require_live_agent below). This is
+# not a readiness substitute: active send paths still own backend readiness
+# (herdr routes through its session-aware target_ready path before sending,
+# while zellij verifies pane labels in its send implementation), and a failed
+# backend send is still surfaced below as a hard error with the attempted
+# resolution attached.
 
 if [ "${1:-}" = "--key" ]; then
   [ -z "$FIRE_AND_FORGET_ID" ] \
@@ -1014,6 +1047,13 @@ else
       3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
     esac
     exit 0
+  fi
+  # Typed plane only (the inbox plane above handles its own dead-pane skip).
+  # Refuse before typing when a recorded task pane positively has no agent: a
+  # bare shell executes or swallows the text instead of reaching a worker. An
+  # explicit backend target keeps its escape-hatch behavior.
+  if [ -n "$TARGET_SELECTOR" ]; then
+    fm_send_require_live_agent "$TARGET_BACKEND" "$T" "$RESOLUTION_TRIED" || exit 1
   fi
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing, so give the popup time to settle before
