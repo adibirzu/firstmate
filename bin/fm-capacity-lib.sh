@@ -83,6 +83,13 @@
 #   max_fleet_memory_pct  integer 0-100 of installed RAM the fleet's own process
 #                         trees may hold, or off, default 40 - the operator keeps
 #                         the majority of his own machine
+#   max_fleet_agents      positive integer, or off (default) - a ceiling on the
+#                         machine-wide agent count, measured as the SAME
+#                         "across N agents" figure the fleet-memory signal
+#                         reports, so the knob and the printed row can never
+#                         disagree about what an agent is; off leaves the count
+#                         uncapped. The limit is refused at or above the number,
+#                         so max_fleet_agents = 5 admits a fleet of 4
 #   load_per_core_max     positive decimal, or off (default) - off because load
 #                         rises on paging stalls, not only on CPU demand
 #   on_unknown            refuse (default) | allow
@@ -117,6 +124,7 @@ FM_CAPACITY_MIN_FREE_MEMORY_MB=""
 FM_CAPACITY_MAX_SWAP_USED_PCT=""
 FM_CAPACITY_MAX_MEMORY_PRESSURE=""
 FM_CAPACITY_MAX_FLEET_MEMORY_PCT=""
+FM_CAPACITY_MAX_FLEET_AGENTS=""
 FM_CAPACITY_LOAD_PER_CORE_MAX=""
 FM_CAPACITY_ON_UNKNOWN=""
 FM_CAPACITY_CONFIG_ERROR=""
@@ -549,6 +557,10 @@ fm_capacity_load_config() {
   FM_CAPACITY_MAX_SWAP_USED_PCT=50
   FM_CAPACITY_MAX_MEMORY_PRESSURE=normal
   FM_CAPACITY_MAX_FLEET_MEMORY_PCT=40
+  # Off by default, like the load limit: a footprint limit and a headcount limit
+  # answer different questions, and the fleet-memory default already protects
+  # the machine without capping how many agents the operator may run.
+  FM_CAPACITY_MAX_FLEET_AGENTS=off
   # Off by default: on the measured incident machine the 1m load average read
   # 299 while CPU usage was about 4.6 of 10 cores, because the load was
   # processes frozen on paging. Load is reported as corroborating evidence and
@@ -616,6 +628,13 @@ fm_capacity_load_config() {
           return 1
         fi
         FM_CAPACITY_MAX_FLEET_MEMORY_PCT=$value
+        ;;
+      max_fleet_agents)
+        if [ "$value" != off ] && { ! fm_capacity_is_uint "$value" || [ "$value" -eq 0 ]; }; then
+          fm_capacity_config_fail "$path: max_fleet_agents must be a positive integer or off, got '$value'"
+          return 1
+        fi
+        FM_CAPACITY_MAX_FLEET_AGENTS=$value
         ;;
       load_per_core_max)
         if [ "$value" != off ] && { ! fm_capacity_is_decimal "$value" || ! fm_capacity_gt "$value" 0; }; then
@@ -765,7 +784,29 @@ fm_capacity_evaluate() {
     fi
   fi
 
-  # 5. Load average. Corroborating evidence, printed always. It is a limit only
+  # 5. Machine-wide agent count. A headcount ceiling, off by default. It reads
+  #    the very same measurement the fleet-memory signal prints as "across N
+  #    agents", so the operator's cap and the memory row can never disagree
+  #    about what an agent is. The limit is refused at or above the number.
+  if [ "$FM_CAPACITY_MAX_FLEET_AGENTS" = off ]; then
+    fm_capacity_row "fleet agents" "not checked" "not checked" skipped
+  elif [ "$FM_CAPACITY_M_FLEET_AGENTS" = unknown ]; then
+    fm_capacity_row "fleet agents" "unknown (could not count running agents)" \
+      "fewer than $FM_CAPACITY_MAX_FLEET_AGENTS agents" unknown
+    unknown="$unknown agents"
+  else
+    measured="$FM_CAPACITY_M_FLEET_AGENTS agents machine-wide"
+    if [ "$FM_CAPACITY_M_FLEET_AGENTS" -ge "$FM_CAPACITY_MAX_FLEET_AGENTS" ]; then
+      fm_capacity_row "fleet agents" "$measured" \
+        "fewer than $FM_CAPACITY_MAX_FLEET_AGENTS agents" OVER
+      over="$over agents"
+    else
+      fm_capacity_row "fleet agents" "$measured" \
+        "fewer than $FM_CAPACITY_MAX_FLEET_AGENTS agents" ok
+    fi
+  fi
+
+  # 6. Load average. Corroborating evidence, printed always. It is a limit only
   #    when the operator set one, because a high load average does not
   #    distinguish CPU demand from processes frozen on paging.
   if [ "$FM_CAPACITY_M_LOAD1" = unknown ] || [ "$FM_CAPACITY_M_CORES" = unknown ]; then
