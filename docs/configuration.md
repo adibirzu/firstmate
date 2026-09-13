@@ -353,6 +353,7 @@ On Zellij, cmux, and Orca a typed-plane Cursor send (a harness-native invocation
 muse is verified for crewmate and scout launches ONLY, and `fm-spawn.sh` refuses it for a secondmate, because muse ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
 muse also needs a worker-reachable credential before spawning, and the portable fleet path is the `<config>/muse/auth.json` credential stored by `muse login`, because a caller-only `META_API_KEY` does not cross a long-lived backend daemon.
 gemini is likewise refused for secondmates because it has no primary supervision protocol; [its adapter reference](../.agents/skills/harness-adapters/references/harness/gemini.md) owns the credential precondition, canonical-launch wiring, and raw-launch limitations.
+`bin/fm-spawn.sh` also refuses a gemini dispatch outright, for any kind, when the `gemini` executable PATH resolves is not genuine gemini-cli - for example a personal compatibility shim shadowing it ahead of the real install with a different harness - because none of this template's gemini-cli-specific env (`GEMINI_CLI_TRUST_WORKSPACE`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`) would reach whatever such a shim actually execs; `gemini_binary_is_genuine` in `bin/fm-spawn.sh` owns that check.
 rovo is likewise verified for crewmate and scout launches ONLY, refused for a secondmate for the same reason - no turn-end hook and no primary supervision protocol; [`docs/verification/rovo.md`](verification/rovo.md) owns that evidence, including the OAuth token's silent background refresh from a stored refresh token and both tmux and herdr pane liveness (herdr placement is verified live, with a Herdr-side agent-detection gap left open for recovery classification).
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter evidence - each harness's busy-state source, interrupt and exit behavior, skill-invocation syntax, and per-harness quirks - lives in the skill tree rooted at [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
@@ -445,6 +446,9 @@ Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
 This section is the single owner of the canonical schema and its per-field semantics.
 `AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the subscription-aware profile-array selection judgment boundary.
+When the two axi tools are installed, firstmate routes a task descriptor through `llm-router-axi route` under the `router-dispatch` skill and records outcomes with `llm-router-axi record`; the routing doctrine then lives in the human-editable `~/.config/llm-router-axi/policy.json`, and `usage-axi` becomes the preferred telemetry source behind `bin/fm-dispatch-select.mjs` and `bin/fm-capacity.sh`.
+`bin/fm-router-lib.sh` owns local resolution of both tools and the one-line install hint.
+Each tool's README owns its own flags, lanes, and install steps; this file does not restate them.
 
 ```json
 {

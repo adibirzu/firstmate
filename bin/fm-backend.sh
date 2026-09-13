@@ -828,6 +828,38 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
   esac
 }
 
+# fm_backend_shell_quote: single-quote <string> for a shell command line, the
+# way a launch command needs its paths quoted. Shared by the adapters' shell
+# reset primitive so the quoting cannot drift between backends.
+fm_backend_shell_quote() {  # <string>
+  local s=$1
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+# fm_backend_reset_shell: return a pane whose agent has exited (leaving a bare
+# shell) to a fresh, empty input state so a launch command typed next cannot be
+# swallowed. An exited agent can leave the shell mid-continuation (a `quote>`,
+# `dquote>`, or heredoc prompt) or holding a half-typed line, and anything typed
+# into that construct is appended to it instead of executing. The adapter clears
+# the line/continuation with the shell's own keys and PROVES the shell executes
+# commands again by `cd`-ing into <reset-dir> and confirming the pane's cwd
+# moved there; a backend with no verified reset primitive refuses by name rather
+# than letting the launch command be consumed. Prints nothing; returns 0 only
+# when the reset is proven.
+fm_backend_reset_shell() {  # <backend> <target> <reset-dir> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_reset_shell "$@" ;;
+    herdr) fm_backend_herdr_reset_shell "$@" ;;
+    *)
+      echo "error: backend '$backend' has no verified bare-shell reset primitive, so an inherited continuation prompt could swallow the launch command; refusing to launch into it" >&2
+      return 1
+      ;;
+  esac
+}
+
 # fm_backend_busy_state: semantic busy/idle/unknown for backends that expose
 # native agent-state (herdr-addendum "busy state" row - the first backend
 # where this gets real semantics beyond pane-regex). Backends with no such
