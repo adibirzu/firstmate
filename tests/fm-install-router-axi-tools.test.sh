@@ -13,7 +13,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 INSTALLER="$ROOT/bin/fm-install-router-axi-tools.sh"
-LLM_SHA=1bced7c6b399e65eaa79b06972cdd00eafed7aff
+LLM_SHA=bf42cff713ce8501301663a8377f4d6bca7c3881
 USAGE_SHA=b140738e6bf074f280aca46dc48a3339e8ef1f6d
 
 TMP_ROOT=$(fm_test_tmproot fm-install-router-axi-tools)
