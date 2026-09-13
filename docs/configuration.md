@@ -274,6 +274,7 @@ The retired local `config/spawn-capacity` file is no longer read; move any limit
 The tools must be installed for admission to run: an absent `llm-router-axi` makes the guard decline rather than spawn blind, and the refusal names the missing tool.
 Both tools are unpublished on npm; build and install each from its GitHub main clone (`git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`).
 `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
+The behavior lanes do not float on main: `bin/fm-install-router-axi-tools.sh` is the single owner of the pinned CI and local lane install, building both tools at verified commits into `~/.local` (the location a spawn's sanitized remote-job PATH resolves) and exposing a cache key for the CI build cache, while `bin/fm-test-run.sh` runs it as its `--lane`, `--family`, and `--all` preflight.
 This posture is primary-authoritative and shared by every home because they all run on one physical machine.
 ## Stow pass horizon (config/stow-pass-horizon)
 
