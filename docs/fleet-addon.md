@@ -99,7 +99,7 @@ harness, model, or effort for dispatch, and `fm-fleet.sh pick` must never be
 wired into `fm-spawn` or any other dispatch path — that is exactly the routing
 wrapper / producer-side route recommendation the dispatch owner forbids.
 Dispatch selection from these same signals is owned by
-[`AGENTS.md`](../AGENTS.md) section 4 and the `quota-array-dispatch` skill it
+[`AGENTS.md`](../AGENTS.md) section 4 and the `router-dispatch` skill it
 names; this add-on only reads and renders what `quota-axi` reports.
 
 ### Cross-uid safety (non-negotiable)

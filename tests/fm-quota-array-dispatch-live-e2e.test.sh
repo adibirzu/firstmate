@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Credentialed behavior regression for the agent-owned quota-array-dispatch skill.
+# Credentialed behavior regression for the agent-owned dispatch skill.
 #
 # This drives the public Pi skill-loading interface against a fake quota-axi
 # executable rather than parsing instruction source bytes or recreating the
 # selector in test code. The fake serves default TOON from the schema-5 JSON
 # fixture; --json remains available so a TOON-first skill cannot silently
-# fall back without the call log catching it.
+# fall back without the call log catching it. The case loads quota-array-dispatch,
+# now a one-release pointer, so the test also proves the pointer resolves to
+# router-dispatch, the procedure's current owner.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -15,6 +17,7 @@ fm_live_gate opt-in FM_QUOTA_ARRAY_DISPATCH_LIVE_E2E pi python3
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OWNER="$ROOT/.agents/skills/quota-array-dispatch/SKILL.md"
+ROUTER_OWNER="$ROOT/.agents/skills/router-dispatch/SKILL.md"
 
 fail() {
   printf 'not ok - %s\n' "$1" >&2
@@ -22,6 +25,7 @@ fail() {
 }
 
 [ -f "$OWNER" ] || fail "quota-array-dispatch skill not found"
+[ -f "$ROUTER_OWNER" ] || fail "router-dispatch skill not found"
 
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-quota-array-dispatch-live.XXXXXX")
 PROJECT="$LAB/project"
@@ -34,8 +38,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$PROJECT/.agents/skills/quota-array-dispatch" "$FAKEBIN"
+mkdir -p "$PROJECT/.agents/skills/quota-array-dispatch" "$PROJECT/.agents/skills/router-dispatch" "$FAKEBIN"
 cp "$OWNER" "$PROJECT/.agents/skills/quota-array-dispatch/SKILL.md"
+cp "$ROUTER_OWNER" "$PROJECT/.agents/skills/router-dispatch/SKILL.md"
 
 cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
