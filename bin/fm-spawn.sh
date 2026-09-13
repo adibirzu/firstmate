@@ -1581,23 +1581,6 @@ resolve_pi_executable() {
   esac
 }
 
-# Resolve whatever `gemini` PATH would hand the pane, same shape as
-# resolve_pi_executable above: pinning the absolute path here and threading it
-# through __GEMINIBIN__ makes the genuineness check below and the pane's actual
-# launch agree, even if PATH changes between this spawn and the pane starting.
-resolve_gemini_binary() {
-  local candidate dir
-  candidate=$(type -P -- gemini 2>/dev/null) || return 1
-  [ -x "$candidate" ] || return 1
-  case "$candidate" in
-    /*) printf '%s\n' "$candidate" ;;
-    *)
-      dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || return 1
-      printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-      ;;
-  esac
-}
-
 # gemini_binary_is_genuine: 0 when the resolved `gemini` executable is actually
 # gemini-cli rather than something shadowing it on PATH. This Mac's own PATH
 # carries exactly that shadow, found while investigating a "gemini dispatch
@@ -2015,7 +1998,7 @@ case "$HARNESS" in
     }
     ;;
   gemini)
-    GEMINI_BIN=$(resolve_gemini_binary) || {
+    GEMINI_BIN=$(resolve_pi_executable gemini) || {
       echo "error: gemini executable not found on PATH; install gemini-cli or select a different verified harness" >&2
       exit 1
     }
