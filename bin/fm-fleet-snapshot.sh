@@ -89,9 +89,14 @@
 #     Next gate line) rather than silent empty Underway.
 #   secondmate_current: {records[],total,shown,truncated} - bounded current summaries
 #     for registered secondmates, selected from validated structured state inside
-#     each home with explicit provenance, freshness, endpoint evidence, and unknown
-#     failure reasons. Parent status and bounded terminal evidence are historical,
-#     untrusted supplements only and never override readable structured-home facts.
+#     each home with explicit provenance, freshness, endpoint evidence, and explicit
+#     failure reasons. A remote home's ledger read that exceeds the shared
+#     FM_SNAPSHOT_SECONDMATE_TIMEOUT gets current.state "timeout" - never "unknown" -
+#     which means its decisions_open, active_children, and landed arrays are empty
+#     because the read never finished, not because the home has nothing to report.
+#     Every other failure keeps "unknown". Parent status and bounded terminal
+#     evidence are historical, untrusted supplements only and never override
+#     readable structured-home facts.
 #     Each structured-home record carries active_children, decisions_open, holds,
 #     queued, landed, endpoints, counts, and omitted. provenance.summary_source
 #     distinguishes "local-ledger", "remote-ledger", and "remote-ledger-cache";
@@ -103,13 +108,15 @@
 #     Structured-home input must declare the current hold-classifier schema; an
 #     older live ledger or cached copy is invalid even when it contains no captain
 #     holds, and leaves the home explicitly unreadable until its producer refreshes it.
-#   secondmate_landed: {records[],truncated[],unreadable[],partial[]} - the
-#     compatibility landed-work roll-up derived from secondmate_current. Readable
+#   secondmate_landed: {records[],truncated[],unreadable[],timed_out[],partial[]} -
+#     the compatibility landed-work roll-up derived from secondmate_current. Readable
 #     structured homes are partial, not unreadable, when an unavailable child state
 #     or a backlog-vs-metadata inventory mismatch makes their summary incomplete;
 #     they retain independently trustworthy structured surfaces. An inventory
 #     mismatch also keeps the home's own current classification, which only an
 #     unavailable child state or an untrustworthy backlog collapses to unknown.
+#     timed_out lists homes whose ledger read never finished; it stays distinct from
+#     unreadable so a slow home is never rendered the same as an empty one.
 #   secondmate_guidance: return-channel action note for renderers and bearings.
 #
 # Compatibility: JSON is the primary machine-readable surface.
@@ -153,7 +160,14 @@ esac
 FM_SNAPSHOT_SECONDMATES=${FM_SNAPSHOT_SECONDMATES:-20}
 FM_SNAPSHOT_CREW_STATE_TIMEOUT=${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-10}
 FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=${FM_SNAPSHOT_LOCAL_READ_CONCURRENCY:-8}
-FM_SNAPSHOT_BUDGET=${FM_SNAPSHOT_BUDGET:-5}
+# Per-home remote ledger read bound. Every sampled home is read concurrently, so
+# this single deadline is both the per-home allowance and the whole-collection
+# deadline: one wedged home cannot extend the snapshot past it. 45s matches the
+# default SSH dead-peer window in bin/fm-on.sh (FM_SSH_ALIVE_INTERVAL 15 x
+# FM_SSH_ALIVE_COUNT_MAX 3), so a live-but-slow home is given as long as the
+# transport itself would take to declare a peer dead. FM_SNAPSHOT_BUDGET is honored
+# as a legacy input alias when the newer knob is unset.
+FM_SNAPSHOT_SECONDMATE_TIMEOUT=${FM_SNAPSHOT_SECONDMATE_TIMEOUT:-${FM_SNAPSHOT_BUDGET:-45}}
 FM_SNAPSHOT_CACHE_DIR=${FM_SNAPSHOT_CACHE_DIR:-$STATE/secondmate-summary-cache}
 FM_SNAPSHOT_SECONDMATE_MAX_BYTES=${FM_SNAPSHOT_SECONDMATE_MAX_BYTES:-262144}
 FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN:-20}
@@ -186,7 +200,7 @@ case "$FM_SNAPSHOT_SECONDMATES" in
 esac
 validate_positive_bound FM_SNAPSHOT_CREW_STATE_TIMEOUT "$FM_SNAPSHOT_CREW_STATE_TIMEOUT"
 validate_positive_bound FM_SNAPSHOT_LOCAL_READ_CONCURRENCY "$FM_SNAPSHOT_LOCAL_READ_CONCURRENCY"
-validate_positive_bound FM_SNAPSHOT_BUDGET "$FM_SNAPSHOT_BUDGET"
+validate_positive_bound FM_SNAPSHOT_SECONDMATE_TIMEOUT "$FM_SNAPSHOT_SECONDMATE_TIMEOUT"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_MAX_BYTES "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_CHILDREN "$FM_SNAPSHOT_SECONDMATE_CHILDREN"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_QUEUED "$FM_SNAPSHOT_SECONDMATE_QUEUED"
@@ -262,9 +276,14 @@ hold-until date has arrived, and an undated hold remains below the aging thresho
 Cross-home collection uses FM_SNAPSHOT_SECONDMATES (default 20, 0 lifts the
 count bound) and FM_SNAPSHOT_SECONDMATE_MAX_BYTES.
 Every sampled remote home's state/home-summary.json is fetched concurrently
-under one FM_SNAPSHOT_BUDGET (default 5 seconds), with a valid prior copy under
+under one FM_SNAPSHOT_SECONDMATE_TIMEOUT (default 45 seconds), which bounds both
+each home's read and the whole collection, with a valid prior copy under
 FM_SNAPSHOT_CACHE_DIR used when the live read fails, is invalid, or consumes the
-budget. Every ledger and cached copy must declare the current hold-classifier
+budget. A home whose read consumes the budget and has no valid cached copy is
+reported with current.state "timeout" and appears in secondmate_landed.timed_out,
+never as "unknown". FM_SNAPSHOT_BUDGET is honored as a legacy alias when
+FM_SNAPSHOT_SECONDMATE_TIMEOUT is unset.
+Every ledger and cached copy must declare the current hold-classifier
 schema, even when it contains no captain holds; older summaries are rejected. A
 home with neither a valid current ledger nor a valid current cached copy is
 reported unreadable with the reason; collection never computes a summary in
@@ -1434,7 +1453,7 @@ wait
 BASH
   chmod 700 "$collector"
   SNAPSHOT_COLLECTION_TIMED_OUT=0
-  if fm_run_timed "$FM_SNAPSHOT_BUDGET" bash "$collector" \
+  if fm_run_timed "$FM_SNAPSHOT_SECONDMATE_TIMEOUT" bash "$collector" \
       "$SCRIPT_DIR" "$manifest" "$SNAPSHOT_COLLECT_DIR" "$SNAPSHOT_SUMMARY_FILTER" \
       "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES"; then
     :
@@ -1684,6 +1703,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
   local tasks_file=$1 output_file=$2 registry_file union_file records_file rows total_registered total shown truncated
   local row id home host remote registered registry_error task sampled_spawn_gen status_file status_observation_file event_raw event_note event_epoch event_age
   local activity_scan activities decisions reconciliation provenance freshness reason summary_file summary_sampled summary_valid summary_invalidity state terminal terminal_contradiction contradiction
+  local timed_out current_state_value
   local summary_source summary_age summary_observed summary_freshness cache_path collection_status collection_slot summary_index=0
   local seen_homes=''
   registry_file="$JSON_TRANSPORT_DIR/secondmate-registry.json"
@@ -1750,6 +1770,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
     printf '{}\n' > "$summary_file" || return 1
     summary_sampled=false
     summary_valid=false
+    timed_out=false
     if [ -z "$reason" ] && [ -z "$home" ]; then reason="no recorded secondmate home"; fi
     if [ -z "$reason" ]; then
       case "$home" in
@@ -1793,6 +1814,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
           reason="structured home ledger exceeded byte limit and no valid cached copy is available"
         elif [ "$SNAPSHOT_COLLECTION_TIMED_OUT" -eq 1 ] && [ -z "$collection_status" ]; then
           reason="structured home ledger collection timed out and no valid cached copy is available"
+          timed_out=true
         else
           reason="structured home ledger is missing, unreadable, or invalid and no valid cached copy is available"
         fi
@@ -1869,17 +1891,26 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
         terminal=$(jq -n --arg observed "$SNAPSHOT_NOW" \
           '{provenance:"parent-direct-report-terminal",trust:"untrusted-supplement",captured:false,observed_at:$observed,freshness:"not-collected",reason:"no parent event to compare",lines:0,bytes:0,event_note_seen:false,contradiction:false}')
       fi
+      # A timed-out read is loudly distinct from "unknown": "unknown" means the
+      # read completed and found nothing trustworthy to report, while "timeout"
+      # means the read never finished, so decisions_open/active_children/landed
+      # below are empty because they were never collected, not because they are
+      # actually empty. Collapsing the two back into one value is the defect this
+      # state split exists to prevent - never do it.
+      current_state_value=unknown
+      [ "$timed_out" = true ] && current_state_value=timeout
       jq -n \
         --arg id "$id" --arg home "$home" --arg host "$host" --argjson remote "$remote" --arg reason "$reason" --arg observed "$SNAPSHOT_NOW" \
         --arg spawn_gen "$sampled_spawn_gen" \
         --arg provenance "$provenance" --arg freshness "$freshness" --arg event_raw "$event_raw" --arg event_note "$event_note" \
+        --arg current_state "$current_state_value" \
         --argjson registered "$registered" --argjson event_age "$event_age" --argjson activities "$activities" --argjson activity_scan "$activity_scan" \
         --argjson decisions "$decisions" --argjson terminal "$terminal" --slurpfile summary "$summary_file" --argjson summary_sampled "$summary_sampled" '
         ($summary[0]) as $summary
         |
         {id:$id,home:($home | if . == "" then null else . end),host:($host | if . == "" then null else . end),remote:$remote,registered:$registered,
          spawn_gen:($spawn_gen | if . == "" then null else . end),
-         current:{state:"unknown",reason:(if $summary_sampled then "structured home state invalid: " + ($summary.reason // "unknown reason") else $reason end)},invalidity:null,
+         current:{state:$current_state,reason:(if $summary_sampled then "structured home state invalid: " + ($summary.reason // "unknown reason") else $reason end)},invalidity:null,
          reconcile_inventory:(if $summary_sampled then $summary.invalidity else null end),
          provenance:{selected:$provenance,structured_home:($home | if . == "" then null else . end),parent_event_role:"fallback-only-not-current"},
          freshness:{status:$freshness,observed_at:$observed,age_seconds:$event_age},
@@ -1915,6 +1946,9 @@ secondmate_landed_from_current_json() {  # <secondmate-current-json-file> <outpu
      unreadable:[ $current.records[]
        | select(.current.state == "unknown" and .provenance.selected != "structured-home")
        | .home // ("<" + .id + ": unavailable>")],
+     timed_out:[ $current.records[]
+       | select(.current.state == "timeout")
+       | .home // ("<" + .id + ": timed out>")],
      partial:[ $current.records[]
        | select(.provenance.selected == "structured-home" and .provenance.trust == "partial-structured")
        | .home // ("<" + .id + ": partial>")]}
