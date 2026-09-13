@@ -17,6 +17,11 @@
 #      appears in the continuation).
 #   2. bin/fm-control.sh relaunch clears that same continuation first, so the
 #      launch command reaches a fresh agent and the replacement comes up alive.
+#   3. The reset primitive itself (fm_backend_reset_shell) clears every input
+#      shape an exited agent can leave behind - heredoc, `quote>`, `dquote>`,
+#      a for-loop continuation, and a half-typed line - and proves the shell
+#      executes again by moving its cwd. This is the tmux counterpart of the
+#      proven herdr reset smoke (tests/fm-control-herdr-smoke.test.sh).
 #
 # Skips cleanly when tmux is absent; needs no harness and no credentials.
 set -u
@@ -195,3 +200,56 @@ state=$(fm_backend_agent_state tmux "$TARGET")
 pass "fm-control relaunch: the shell reset clears the continuation and the launch reaches a new live agent"
 
 pass "fm-send/fm-control: exited-pane shell continuations can no longer swallow a steer or a relaunch"
+
+# --- 3. the reset primitive clears every inherited input shape ---------------
+#
+# A relaunch whose reset cannot clear the inherited input will type its launch
+# command straight into that construct. This drives a REAL tmux pane through a
+# heredoc, a `quote>`, a `dquote>`, a for-loop continuation, and a half-typed
+# line, and asserts fm_backend_reset_shell clears each one and PROVES the shell
+# executes commands again by moving its cwd to the reset directory - the same
+# guarantee the herdr smoke proves for herdr.
+
+RESET_WINDOW="fm-resetshapes"
+"$REAL_TMUX" -L "$SOCKET" new-window -d -t "$SESSION:" -n "$RESET_WINDOW" \
+  || fail "could not create the reset-shapes window"
+RESET_TARGET="$SESSION:$RESET_WINDOW"
+
+reset_capture() {
+  "$REAL_TMUX" -L "$SOCKET" capture-pane -p -t "$RESET_TARGET" -S -200 2>/dev/null || true
+}
+reset_ready=0
+for _ in $(seq 1 100); do
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" C-c
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" -l "printf 'fm-reset-%s\\n' ready"
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" Enter
+  case "$(reset_capture)" in *fm-reset-ready*) reset_ready=1; break ;; esac
+  sleep 0.1
+done
+[ "$reset_ready" = 1 ] || fail "the reset-probe shell never became ready"
+
+# reset_shape <label> <typing> <submit 0|1>: leave the pane holding that input
+# shape, then reset it and assert the cwd proof moved to a fresh reset dir. Each
+# shape uses its own dir, so a swallowed `cd` can never coincidentally match.
+reset_shape() {
+  local label=$1 typing=$2 submit=$3 dir expected raw observed
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" -l "$typing"
+  [ "$submit" = 1 ] \
+    && "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" Enter
+  sleep 0.3
+  dir="$LAB/reset-$label"
+  mkdir -p "$dir"
+  fm_backend_reset_shell tmux "$RESET_TARGET" "$dir" \
+    || fail "the tmux reset did not clear the '$label' input shape"$'\n'"$(reset_capture)"
+  expected=$(cd "$dir" && pwd -P)
+  raw=$(fm_backend_tmux_current_path "$RESET_TARGET" 2>/dev/null || true)
+  observed=$(cd "$raw" 2>/dev/null && pwd -P) || observed=$raw
+  [ "$observed" = "$expected" ] \
+    || fail "the '$label' input shape swallowed the reset's cd (cwd '$observed', expected '$expected')"
+}
+reset_shape heredoc "cat <<'FMEOF'" 1
+reset_shape single-quote "echo 'unterminated" 1
+reset_shape double-quote 'echo "unterminated' 1
+reset_shape for-loop "for x in a b; do" 1
+reset_shape half-typed "echo half-typed-line" 0
+pass "fm_backend_reset_shell: heredoc, quote>, dquote>, for-loop, and half-typed input are all cleared and proven on real tmux"
