@@ -99,6 +99,15 @@
 #   against. Inspection modes execute nothing and stay available, and a run with
 #   no FM_TASK_ID set is unchanged.
 #
+# Lane router-tool preflight:
+#   An executing --lane, --family, or --all run needs llm-router-axi and
+#   usage-axi, the two tools that own machine-capacity spawn admission. The
+#   runner names both versions when they already resolve, and otherwise builds
+#   the pinned commits through bin/fm-install-router-axi-tools.sh (default
+#   prefix ~/.local). FM_TEST_ROUTER_AXI_PREFIX moves that install and
+#   FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 opts out; targeted --scripts and --changed
+#   runs are unchanged.
+#
 # Exit status is non-zero if any selected script exits non-zero, a configured
 # --fail-on-gate-skip token appears, the measured duration exceeds
 # --max-wall-ms, timing-artifact finalization fails, or a concurrent worker
@@ -272,6 +281,7 @@ family_for_basename() {
     fm-rovo-harness.test.sh|fm-omp-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
+    fm-install-router-axi-tools.test.sh|\
     fm-harness-adapter-references.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
@@ -678,6 +688,7 @@ tests/fm-herdr-version-floor-live-e2e.test.sh 50
 tests/fm-home-summary-refresh.test.sh 35282
 tests/fm-inactive-reconcile.test.sh 71218
 tests/fm-install-ocr.test.sh 3440
+tests/fm-install-router-axi-tools.test.sh 7300
 tests/fm-kimi-harness.test.sh 17775
 tests/fm-launch-drift.test.sh 2316
 tests/fm-lint-workflows.test.sh 814
@@ -1463,6 +1474,14 @@ families_for_changed_path() {
       printf '%s\n' secondmate
       printf '%s\n' real-herdr-gated
       ;;
+    bin/fm-install-router-axi-tools.sh)
+      # The pinned installer for the capacity tools: a pin or recipe change
+      # re-runs its own contract test plus the secondmate and real-Herdr suites
+      # that drive real spawns and therefore need the tools.
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' secondmate
+      printf '%s\n' real-herdr-gated
+      ;;
     bin/fm-task-inbox-lib.sh)
       # The steering-inbox record/doorbell/ladder owner: fm-send's data plane
       # (backend-dispatch), the watcher's re-ring check (watcher-wake-lock),
@@ -2170,6 +2189,43 @@ if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
   [ -r "$ROOT/bin/fm-timeout-lib.sh" ] || die "per-script timeout helper not found: bin/fm-timeout-lib.sh"
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$ROOT/bin/fm-timeout-lib.sh"
+fi
+
+# The two router tools own machine-capacity admission, so every behavior lane
+# that can spawn an agent needs them on PATH. CI installs them as an explicit
+# step; a local lane run gets the same tools here. When both already resolve the
+# runner only names the versions, so a host with the tools installed spends
+# nothing; otherwise it builds the pinned commits through the shared installer.
+# The default prefix is ~/.local, the same location the documented install uses
+# and the one a real spawn's sanitized remote-job PATH composes from
+# (bin/fm-remote-job-lib.sh), so a local run of the remote secondmate suites
+# also resolves the tool. Set FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 to opt out, and
+# FM_TEST_ROUTER_AXI_PREFIX to place the local install elsewhere.
+ensure_router_axi_tools() {
+  local llm usage prefix
+  llm=$(fm_router_axi_bin)
+  usage=$(fm_usage_axi_bin)
+  if [ -n "$llm" ] && [ -n "$usage" ]; then
+    printf 'fm-test-run: llm-router-axi %s\n' "$("$llm" --version 2>/dev/null || printf 'unknown')"
+    printf 'fm-test-run: usage-axi %s\n' "$("$usage" --version 2>/dev/null || printf 'unknown')"
+    return 0
+  fi
+  prefix=${FM_TEST_ROUTER_AXI_PREFIX:-${HOME:-/tmp}/.local}
+  log "llm-router-axi/usage-axi missing from PATH; installing pinned builds into $prefix"
+  "$ROOT/bin/fm-install-router-axi-tools.sh" "$prefix" \
+    || die "could not install the router tools required for machine-capacity admission"
+  PATH="$prefix/bin:$PATH"
+  export PATH
+}
+
+if [ "${FM_TEST_SKIP_ROUTER_AXI_ENSURE:-}" != 1 ]; then
+  case "${MODE:-}" in
+    lane|family|all)
+      # shellcheck source=bin/fm-router-lib.sh
+      . "$ROOT/bin/fm-router-lib.sh"
+      ensure_router_axi_tools
+      ;;
+  esac
 fi
 
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")

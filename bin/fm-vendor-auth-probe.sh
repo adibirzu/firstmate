@@ -6,7 +6,7 @@
 # or provider, reads no quota, and never decides whether a dispatch candidate is
 # eligible. The dispatching first mate owns that judgment from `quota-axi`'s data
 # plus each harness's authoritative model catalog; the decision procedure is
-# owned once by .agents/skills/quota-array-dispatch/SKILL.md.
+# owned once by .agents/skills/router-dispatch/SKILL.md.
 #
 # Why it exists rather than the agent running the vendor CLI itself: the
 # captain's 2026-07-30 `firstmate-grok-auth-preflight` decision approved exactly

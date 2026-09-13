@@ -39,4 +39,4 @@ For an unfamiliar namespace, establish support and provider identity from that h
 An account-reaching listing that omits a model is concrete unsupported evidence; block the candidate and quote it.
 An unreachable surface establishes nothing; report uncertainty instead of a verdict.
 
-For a matched profile array, return to `quota-array-dispatch` only after establishing every candidate's harness support, provider relationship, and uncertainty.
+For a matched profile array, return to `router-dispatch` only after establishing every candidate's harness support, provider relationship, and uncertainty.
