@@ -1222,13 +1222,24 @@ fm_firstmate_root_home() {
 # It is anchored in the local root home's state directory so that every home on
 # this machine that can reach the same pool - the root, and each secondmate home
 # below it, including a remote-seeded home and its own local descendants -
-# derives the identical path. Its identity is the project's resolved origin, so
-# separate clones of one origin share a single lock; an origin-less local-only
-# project falls back to its own worktree top instead of failing to resolve.
+# derives the identical path. That state directory is the effective one: a home
+# may redirect its state via FM_STATE_OVERRIDE, and the redirect applies to the
+# anchor exactly when the anchor IS this home (no local parent hop). A
+# descendant home keeps anchoring on the literal root, so it can never retarget
+# the shared lock with a local override. Its identity is the project's resolved
+# origin, so separate clones of one origin share a single lock; an origin-less
+# local-only project falls back to its own worktree top instead of failing to
+# resolve.
 fm_treehouse_project_lock_path() {  # <project-dir>
-  local project=$1 root origin identity hash top
+  local project=$1 root origin identity hash top home_real state
   [ -d "$project" ] || return 1
   root=$(fm_firstmate_root_home "$FM_HOME") || return 1
+  home_real=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || return 1
+  if [ "$root" = "$home_real" ]; then
+    state=${FM_STATE_OVERRIDE:-$root/state}
+  else
+    state="$root/state"
+  fi
   origin=$(git -C "$project" remote get-url origin 2>/dev/null || true)
   if [ -n "$origin" ]; then
     case "$origin" in
@@ -1243,8 +1254,8 @@ fm_treehouse_project_lock_path() {  # <project-dir>
     identity=$top
   fi
   hash=$(printf '%s' "$identity" | git hash-object --stdin 2>/dev/null) || return 1
-  [ -d "$root/state" ] || return 1
-  printf '%s/.treehouse-project-%s.lock\n' "$root/state" "$hash"
+  [ -d "$state" ] || return 1
+  printf '%s/.treehouse-project-%s.lock\n' "$state" "$hash"
 }
 
 fm_failure_episode_reset() {
