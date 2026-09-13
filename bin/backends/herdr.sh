@@ -2793,6 +2793,31 @@ fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
 }
 
+# fm_backend_herdr_reset_shell: the Herdr analogue of
+# fm_backend_tmux_reset_shell (see bin/backends/tmux.sh): ctrl+c aborts a
+# continuation prompt or half-typed line, ctrl+u drops a remaining line, and the
+# shell must execute a `cd <reset-dir>` proven by the pane's foreground cwd.
+# Herdr exposes no pane respawn, so the same key-based reset is the
+# deterministic option; the cwd proof is what distinguishes a real reset from a
+# command the continuation swallowed.
+fm_backend_herdr_reset_shell() {  # <target> <reset-dir>
+  local target=$1 dir=$2 expected raw observed i=0
+  fm_backend_herdr_send_key "$target" C-c || return 1
+  fm_backend_herdr_send_key "$target" C-u || return 1
+  fm_backend_herdr_send_text_line "$target" "cd $(fm_backend_shell_quote "$dir")" || return 1
+  expected=$(cd "$dir" 2>/dev/null && pwd -P) || expected=$dir
+  while [ "$i" -lt 20 ]; do
+    raw=$(fm_backend_herdr_current_path "$target" 2>/dev/null || true)
+    if [ -n "$raw" ]; then
+      observed=$(cd "$raw" 2>/dev/null && pwd -P) || observed=$raw
+      [ "$observed" = "$expected" ] && return 0
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # fm_backend_herdr_capture: bounded plain-text pane capture. Mirrors
 # fm-peek.sh's/fm-watch.sh's `tmux capture-pane -p -t T -S -N`. --source recent
 # is the closest herdr analogue to tmux's scrollback-bounded capture.
