@@ -4351,6 +4351,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
+# Without a pending backlog commit the published record is already final and
+# teardown owns its lease, so refresh the side-band home summary now: a launch
+# or readiness failure below keeps this durable endpoint and must leave it
+# visible. A provisional record waits for the post-commit refresh instead,
+# because a failure before that commit rolls it back.
+if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
