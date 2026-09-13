@@ -1,0 +1,25 @@
+=== bin/fm-teardown.sh legacy-record / husk-retirement scenarios (live end-to-end CLI runs) ===
+
+--- tests/fm-teardown.test.sh (legacy-record subset) ---
+ok - a landed legacy record with a dead endpoint retires without --legacy-record
+ok - a legacy record whose endpoint cannot be read as dead still refuses a plain teardown
+ok - a no-window legacy record still requires --legacy-record for a plain teardown
+ok - a landed legacy record with no window endpoint retires with --legacy-record
+ok - --legacy-record refuses a no-window legacy record whose worktree holds unlanded work
+ok - a no-window legacy record whose worktree is already gone retires with --legacy-record
+ok - a landed legacy record with a dead endpoint tears down and logs its accepted incarnation
+ok - --legacy-record never relaxes the unlanded-work refusal
+ok - an endpoint that cannot be confidently read as dead refuses --legacy-record teardown
+ok - --legacy-record teardown rolls its stamp back when the close marker write fails
+ok - a legacy stamp a failed rollback left behind still faces the endpoint gate
+ok - a corrupt spawn_gen is never accepted as a legacy record
+ok - fractional legacy retry wait remains supported without arithmetic
+
+--- tests/fm-teardown-endpoint-safety.test.sh (pool-slot husk subset) ---
+ok - fm-teardown: a pool slot named by a second task record is never returned, killed, or reset
+ok - fm-teardown: a pool slot held by another firstmate home is never returned
+ok - fm-teardown: a retirable pre-spawn_gen husk no longer pins its reused pool slot
+ok - fm-teardown: a pre-spawn_gen husk with an unknown endpoint still pins its slot
+ok - fm-teardown: a task that solely holds its slot still returns it
+ok - fm-teardown: a remote-seeded secondmate home returns its own uncontested pool slot
+ok - fm-teardown: slot ownership across a remote-seeded home and its local child still refuses
