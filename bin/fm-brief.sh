@@ -47,7 +47,11 @@
 # "Delivery contract: mode=<mode>" line. bin/fm-spawn.sh reads that line and refuses
 # to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
 # recorded task metadata cannot drift apart.
-# Ship briefs begin with a worktree-isolation assertion before the branch step.
+# Ship and scout briefs begin with a worktree-isolation assertion before the
+# branch step. It names the exact assigned worktree through a {WORKTREE}
+# placeholder that bin/fm-spawn.sh substitutes with the leased path when it
+# renders the launch brief, and it runs bin/fm-worker-isolation-check.sh against
+# that path as the worker's first command.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
@@ -360,6 +364,22 @@ If the graph-first surface is unreachable, proceed with normal targeted file rea
 EOF
 GRAPH_FIRST_SECTION=${GRAPH_FIRST_SECTION%$'\n'}
 
+# Worktree-isolation assertion, defined once and included in both the scout and
+# ship scaffolds below (one-owner rule; firstmate-coding-guidelines): the worker's
+# first command checks that its shell is the exact worktree it was launched in,
+# so a worker misdirected into a firstmate home or the primary checkout stops
+# before branching or editing. bin/fm-spawn.sh substitutes the {WORKTREE}
+# placeholder with the leased path when it renders the launch brief; the
+# __FM_ROOT__ token is replaced here with the scaffold-time helper path.
+IFS= read -r -d '' ISOLATION_SECTION <<'EOF' || true
+**Verify isolation before anything else.** Your assigned worktree is {WORKTREE}.
+Run `"__FM_ROOT__/bin/fm-worker-isolation-check.sh" {WORKTREE}` as your first command; it stops you when your shell is not exactly that worktree or when it is a firstmate home or a primary checkout.
+The path check is authoritative: the check compares your `pwd -P` and `git rev-parse --show-toplevel` against the assigned path, because `git rev-parse --git-dir` and `git rev-parse --git-common-dir` can help inspect the repo but do not prove you are outside the primary checkout.
+If it fails, STOP - do not branch or commit here - append `blocked: launched in primary checkout, not an isolated worktree` to the status file and stop.
+EOF
+ISOLATION_SECTION=${ISOLATION_SECTION%$'\n'}
+ISOLATION_SECTION=${ISOLATION_SECTION//__FM_ROOT__/$FM_ROOT}
+
 # Shared worker-safety rules, defined once and referenced by both the scout
 # and ship Rules sections below (one-owner rule; firstmate-coding-guidelines).
 RULE_NO_PROMPT="8. A decision above your authority is reported only through rule 6's status-file mechanism, then you stop.
@@ -390,6 +410,8 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
+
+$ISOLATION_SECTION
 
 $GRAPH_FIRST_SECTION
 
@@ -477,9 +499,7 @@ $HERDR_SECTION
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 
-**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
-The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+$ISOLATION_SECTION
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 

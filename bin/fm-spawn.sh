@@ -16,7 +16,12 @@
 #   placeholders, an empty Task, or an incomplete pair of Task subsections.
 #   Every ship or scout spawn renders `launch-brief.md`; for a no-mistakes ship
 #   it also carries the current `--intent` contract and the extracted captain
-#   intent. A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
+#   intent. The ship/scout isolation assertion names the assigned worktree through
+#   a `{WORKTREE}` placeholder bin/fm-brief.sh emits, which this script replaces
+#   with the exact leased or reused path once it is known, so the worker's first
+#   command checks that path; a brief scaffolded before the placeholder existed
+#   warns once and launches without it, matching the delivery-contract pattern.
+#   A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
 #   provenance-marking rules; unmarked legacy Tasks stop for migration rather
 #   than becoming intent. That library owns the parsing and intent rules. When
 #   the explicit mode carries less rigor than the project's standing posture, a
@@ -2046,6 +2051,26 @@ shell_quote() {
   printf "'"
   printf '%s' "$1" | sed "s/'/'\\\\''/g"
   printf "'"
+}
+
+# bin/fm-brief.sh emits the exact assigned-worktree placeholder {WORKTREE} in the
+# ship/scout isolation assertion. Once the worktree is known (leased, Orca-created,
+# or reused in place) render it into the final launch brief so the worker's first
+# command checks the exact path it was launched in. A brief scaffolded before the
+# placeholder existed names no assigned worktree: warn once, matching the missing
+# delivery-contract pattern, rather than refuse.
+render_brief_worktree_name() {  # <brief-file> <worktree>
+  local brief=$1 worktree=$2 content quoted
+  [ -f "$brief" ] || return 0
+  if ! grep -qF '{WORKTREE}' "$brief"; then
+    if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+      echo "warning: $brief names no assigned worktree (scaffolded before the isolation assertion named it); launching without the exact-path isolation check - re-scaffold the brief to enable it" >&2
+    fi
+    return 0
+  fi
+  content=$(cat "$brief")
+  quoted=$(shell_quote "$worktree")
+  printf '%s\n' "${content//'{WORKTREE}'/$quoted}" > "$brief"
 }
 
 resolve_kimi_binary() {
@@ -4403,6 +4428,7 @@ fi
 if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
+render_brief_worktree_name "$BRIEF" "$WT"
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
