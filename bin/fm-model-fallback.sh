@@ -217,9 +217,19 @@ advance_fallback_cursor() {
   lock=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
   fm_lock_acquire_wait "$lock" || die "could not acquire the meta lock for $META"
   update_ok=1
+  # Insert the cursor immediately before the canonical pr= identity block
+  # rather than appending it. Appending after pr=/pr_head= pushed a
+  # non-identity key past the identity block, which bin/fm-pr-lib.sh's
+  # fm_pr_metadata_identity_parse used to read as a corrupt record and
+  # silently disarm the task's merge poll. When no pr= line exists the cursor
+  # still lands at the end; the identity block, once present, stays trailing.
   {
-    grep -v '^fallback_cursor=' "$META" || true
-    printf '%s\n' "$new_cursor_line"
+    awk -v cursor_line="$new_cursor_line" '
+      /^fallback_cursor=/ { next }
+      /^pr=/ && !placed { print cursor_line; placed=1 }
+      { print }
+      END { if (!placed) print cursor_line }
+    ' "$META"
   } > "$META.locked-update" || update_ok=0
   if [ "$update_ok" = 1 ]; then
     mv "$META.locked-update" "$META" || update_ok=0

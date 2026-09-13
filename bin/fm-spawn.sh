@@ -216,10 +216,13 @@
 #   Every kind - crewmate, scout, and secondmate - is admitted by the
 #   machine-capacity guard first (bin/fm-capacity-lib.sh, backed by
 #   llm-router-axi's `capacity` verdict and policy): it reads live free memory,
-#   swap in use, kernel memory pressure, worker-root agent count, load per core,
-#   and the one-suite-at-a-time slot, and refuses a spawn when the machine has no
-#   headroom, printing what it measured against what it wanted. It only declines
-#   NEW work and never touches anything already running.
+#   swap in use, kernel memory pressure, worker-root agent count, and load per
+#   core, and refuses a spawn when the machine has no headroom, printing what it
+#   measured against what it wanted. The one-suite-at-a-time slot is context
+#   here and never refuses a spawn; bin/fm-test-run.sh enforces it with
+#   `capacity --for suite` before starting a full suite, because that rule
+#   serializes suite starts, not agent launches. The guard only declines NEW
+#   work and never touches anything already running.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.

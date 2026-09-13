@@ -76,7 +76,6 @@ RECORD="$STATE/.tool-updates"
 CHECK_ID=tool-updates
 CHECK_SHIM="$STATE/$CHECK_ID.check.sh"
 CHECK_TRUST="$STATE/$CHECK_ID.check-trust"
-REGISTER_BIN="$SCRIPT_DIR/fm-check-register.sh"
 RECORD_SCHEMA=fm-tool-updates-v1
 # Wider than the digest default because one finding names two absolute paths and
 # their two versions, and several tools can report in the same sweep.
@@ -88,8 +87,8 @@ MAX_LINE=1000
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
-# shellcheck source=bin/fm-check-lib.sh
-. "$SCRIPT_DIR/fm-check-lib.sh"
+# shellcheck source=bin/fm-check-shim-lib.sh
+. "$SCRIPT_DIR/fm-check-shim-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -752,87 +751,6 @@ shim_content() {
     "exec $(printf '%q' "$SCRIPT_DIR/fm-tool-update-check.sh") check"
 }
 
-# Write the shim the way this repo writes its other trusted check shim: the
-# guards run before anything is written, so a symlink at the shim path is
-# refused instead of followed, and the bytes arrive by rename so the watcher
-# never reads a half-written shim and rejects it as unauthenticated.
-SHIM_WRITE_TMP=
-
-shim_write() {
-  local want=$1 device tmp
-  [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
-  device=$(fm_pr_file_device "$STATE") || return 1
-  [ -n "$device" ] || return 1
-  fm_pr_regular_destination_on_device_or_absent "$CHECK_SHIM" "$device" || return 1
-  if [ -e "$CHECK_SHIM" ] && [ "$(fm_pr_file_mode "$CHECK_SHIM")" = 700 ] \
-    && [ "$(cat "$CHECK_SHIM" 2>/dev/null)" = "$want" ]; then
-    return 0
-  fi
-  tmp=$(umask 077; mktemp "$STATE/.fm-tool-updates-check.XXXXXX" 2>/dev/null) || return 1
-  SHIM_WRITE_TMP=$tmp
-  if ! printf '%s\n' "$want" > "$tmp" \
-    || ! chmod 0700 "$tmp" \
-    || ! fm_pr_private_file_valid "$tmp" 700 "$device"; then
-    rm -f -- "$tmp"
-    SHIM_WRITE_TMP=
-    return 1
-  fi
-  if ! fm_pr_regular_destination_on_device_or_absent "$CHECK_SHIM" "$device" \
-    || ! mv -f -- "$tmp" "$CHECK_SHIM"; then
-    rm -f -- "$tmp"
-    SHIM_WRITE_TMP=
-    return 1
-  fi
-  SHIM_WRITE_TMP=
-  fm_pr_private_file_valid "$CHECK_SHIM" 700 "$device"
-}
-
-# Keep a byte copy of a shim that is already in place, so a failed arm can put
-# back the shim a working home was already using rather than an equivalent
-# rewrite. The trust binding is over the bytes, so a rewrite would satisfy it
-# too, but a home that was armed stays armed with what it had.
-shim_backup() {
-  local device tmp
-  device=$(fm_pr_file_device "$STATE") || return 1
-  [ -n "$device" ] || return 1
-  tmp=$(umask 077; mktemp "$STATE/.fm-tool-updates-check.XXXXXX" 2>/dev/null) || return 1
-  if ! cat "$CHECK_SHIM" > "$tmp" 2>/dev/null \
-    || ! chmod 0700 "$tmp" \
-    || ! fm_pr_private_file_valid "$tmp" 700 "$device"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  printf '%s\n' "$tmp"
-}
-
-ARM_BACKUP=
-
-# An unregistered shim is not inert: the watcher rejects it on every cycle and
-# wakes firstmate about unauthenticated state checks. So the one rule after a
-# failed or interrupted arm is that the home never holds a shim without a
-# matching trust binding. The shim a working home had is put back and kept only
-# when it is still bound; otherwise the shim goes, so the home is plainly not
-# armed and the failure is the only thing the operator has to act on.
-arm_rollback() {
-  [ -z "$SHIM_WRITE_TMP" ] || rm -f -- "$SHIM_WRITE_TMP"
-  SHIM_WRITE_TMP=
-  if [ -n "$ARM_BACKUP" ]; then
-    mv -f -- "$ARM_BACKUP" "$CHECK_SHIM" 2>/dev/null || rm -f -- "$ARM_BACKUP"
-    ARM_BACKUP=
-    if fm_custom_check_registered "$STATE" "$CHECK_ID"; then
-      return 0
-    fi
-  fi
-  rm -f -- "$CHECK_SHIM"
-}
-
-# shellcheck disable=SC2329  # Registered by action_arm's signal trap.
-arm_interrupted() {
-  arm_rollback
-  printf 'fm-tool-update-check: arming was interrupted, so state/%s.check.sh is not armed\n' "$CHECK_ID" >&2
-  exit 1
-}
-
 action_arm() {
   local want home
   if [ ! -f "$CONFIG" ]; then
@@ -854,33 +772,7 @@ action_arm() {
       ;;
   esac
   want=$(shim_content "$home")
-  ARM_BACKUP=
-  if [ -f "$CHECK_SHIM" ] && [ ! -L "$CHECK_SHIM" ]; then
-    ARM_BACKUP=$(shim_backup) || {
-      printf 'fm-tool-update-check: could not save the existing %s\n' "$CHECK_SHIM" >&2
-      return 1
-    }
-  fi
-  # The shim exists unbound from the rename until the register returns, so a
-  # signal in that window rolls back the same way a failure does.
-  trap arm_interrupted HUP INT TERM
-  if ! shim_write "$want"; then
-    trap - HUP INT TERM
-    arm_rollback
-    printf 'fm-tool-update-check: could not write %s\n' "$CHECK_SHIM" >&2
-    return 1
-  fi
-  if ! FM_HOME="$home" "$REGISTER_BIN" "$CHECK_ID" >/dev/null; then
-    trap - HUP INT TERM
-    arm_rollback
-    printf 'fm-tool-update-check: could not register %s\n' "$CHECK_SHIM" >&2
-    return 1
-  fi
-  trap - HUP INT TERM
-  [ -z "$ARM_BACKUP" ] || rm -f -- "$ARM_BACKUP"
-  ARM_BACKUP=
-  printf 'armed: state/%s.check.sh\n' "$CHECK_ID"
-  return 0
+  fm_check_shim_install "$SCRIPT_DIR" "$STATE" "$CHECK_ID" "$want"
 }
 
 action_disarm() {

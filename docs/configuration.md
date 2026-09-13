@@ -263,7 +263,9 @@ It never stops, reaps, or deprioritizes an agent that is already running, becaus
 Restoring headroom on a machine that is already saturated is the operator's decision, not this check's.
 
 Memory is the binding signal, not CPU.
-The binding resources are free memory, swap in use, kernel memory pressure, worker-root agent count, load per core, and the one-suite-at-a-time slot; `llm-router-axi` measures them and compares each against its own threshold.
+The binding resources for spawn admission are free memory, swap in use, kernel memory pressure, worker-root agent count, and load per core; `llm-router-axi` measures them and compares each against its own threshold.
+The one-suite-at-a-time slot is separate: spawn admission treats it as context and never refuses a spawn on it, while a full-suite start asks `llm-router-axi capacity --for suite` and refuses while another suite holds the slot.
+`bin/fm-test-run.sh` owns that suite-start gate for its `--lane`, `--family`, and `--all` modes, before it runs any suite work; targeted script and `--changed` runs are unchanged.
 Load average is corroborating context and is a limit only when the operator sets `maxLoadPerCore`.
 
 The gauges and their thresholds are owned by `llm-router-axi`, not by this repo: its README and policy schema define every gauge, and `~/.config/llm-router-axi/policy.json` carries `memoryFreeReservePercent`, `memoryPressureMax`, `maxSwapUsedPercent`, `agentCeiling`, `maxLoadPerCore`, and `oneSuiteAtATime`.
@@ -976,6 +978,17 @@ FM_TOOL_UPDATE_INTERVAL=900   # seconds between watched-tool probe sweeps; 0 pro
 FM_TOOL_UPDATE_PROBE_SECS=5   # 1..30 seconds allowed for one version or git probe
 FM_TOOL_UPDATE_BUDGET_SECS=20   # 1..120 seconds allowed for a whole watched-tool sweep; cut to fit FM_CHECK_TIMEOUT, and the cut is reported
 FM_TOOL_UPDATE_NOW=     # test override for the watched-tool sweep clock; the sweep budget still uses real time
+FM_STATION_TIMEOUT=8    # 1..60 seconds allowed per station read inside bin/fm-station-idle.sh
+FM_STATION_BUDGET=20    # 1..120 seconds allowed for a whole station probe; cut to fit FM_CHECK_TIMEOUT
+FM_STATION_ENDPOINT_LIMIT=20   # most task endpoint records proven per home during a probe
+FM_STATION_IDLE_WINDOW=300     # continuous idle seconds required before a station-idle line is reported; 0 disables the window
+FM_STATION_LOCAL_NAMES='local mini'   # station names bin/fm-station-idle.sh treats as the local host
+FM_STATION_SSH=ssh      # ssh executable for a remote station's bounded reads
+FM_STATION_HERDR=herdr  # herdr executable for a station's bounded reads
+FM_STATION_TASKS_AXI=tasks-axi   # tasks-axi executable for a station's bounded reads
+FM_STATION_CREW_STATE=bin/fm-crew-state.sh   # fm-crew-state.sh path override, mainly for tests
+FM_STATION_JQ=jq        # jq executable for parsing a remote station's captured output
+FM_STATION_NOW=         # test override for the idle-window clock
 FM_PROCEVENT_MAX_OUTPUT_BYTES=1048576   # bound on one captured process-to-event result
 FM_PROCEVENT_CLAIM_ROOT=                # machine-wide source claim root; default $XDG_STATE_HOME/firstmate/procevent-claims
 FM_PROCEVENT_OWNER_LEASE_SECONDS=600    # how long a source runner keeps going with no activity in its owning home; 1..86400
@@ -1019,7 +1032,7 @@ FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked
-FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats
+FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, which a declared wait enters immediately regardless of agent liveness
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age of a busy pane's latest state/<id>.turn-ended marker, or its state/<id>.meta spawn record before any turn completes, before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait or verified captain-held transfer takes the FM_PAUSE_RESURFACE_SECS recheck below instead
 FM_PAUSE_RESURFACE_SECS=3600       # seconds between bounded rechecks of a declared external wait or verified captain-held transfer, and between repeated new-hash stale alarms for an ordinary crew task with an open backlog captain call; this includes a live idle pane after its first inconclusive stale wake and a live busy pane past FM_BUSY_TURN_MAX_SECS, while the away-mode daemon uses the same setting and ages its window against the crew's own latest status line rather than pane busy state
 FM_SECONDMATE_WAKE_STALL_SECS=180  # minimum interval with no change of the oldest actionable foreign wake-queue row (it advances as the mate drains, and a queue reprovisioned under the same task id starts a fresh interval at whatever sequence it restarts) before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification for that no-progress episode; a mate that is provably inside an active turn (an exact busy verdict, bounded by the same FM_BUSY_TURN_MAX_SECS above) never escalates whatever this interval says, declared external-wait pause rows are excluded, and zero or invalid values use 180
