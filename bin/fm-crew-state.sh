@@ -222,6 +222,10 @@ if [ -n "$REMOTE_HOST" ]; then
           emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
+      REMOTE_PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+      if status_is_paused_or_captain_held "$REMOTE_PAUSE_GOVERNING_LINE"; then
+        emit paused status-log "$(status_line_note "$REMOTE_PAUSE_GOVERNING_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
+      fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
       ;;
     dead|missing)

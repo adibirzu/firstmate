@@ -1812,6 +1812,19 @@ test_remote_alive_idle_is_healthy_not_gone() {
   pass "fm-crew-state remote: an idle alive endpoint reads alive, never gone or dead"
 }
 
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line() {
+  reset_fakes
+  local d out rc
+  d=$(setup_remote_case remote-alive-paused-then-resolved)
+  make_fakebin "$d" >/dev/null
+  printf 'paused: holding for review\nresolved [key=other]: closed an unrelated decision\n' > "$d/state/rsm.status"
+  out=$(FM_FAKE_REMOTE_STATE_OUT=alive FM_FAKE_SSH_RC=0 run_remote_crew_state "$d" rsm); rc=$?
+  expect_code 0 "$rc" "remote alive exits 0"
+  assert_contains "$out" "state: paused" "a still-standing declared pause must survive an unrelated later resolved line"
+  assert_contains "$out" "remote endpoint alive on remote-mac" "the remote liveness read should be visible"
+  pass "fm-crew-state remote: a genuinely standing pause is not silently cancelled by an unrelated resolved line"
+}
+
 test_remote_unreachable_is_unknown_remote_not_dead() {
   reset_fakes
   local d out rc
@@ -2374,6 +2387,7 @@ test_scout_skips_run_lookup
 test_torn_down_worktree
 test_remote_alive_with_log_uses_status_log
 test_remote_alive_idle_is_healthy_not_gone
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line
 test_remote_unreachable_is_unknown_remote_not_dead
 test_remote_dead_reports_remote_verdict
 test_missing_meta
