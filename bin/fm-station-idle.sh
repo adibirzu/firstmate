@@ -35,6 +35,12 @@
 # process-event-sources requires for a disruptive action. It is read-only over
 # the network; its only write is its own dedupe record under this home's state/.
 #
+# Remote reads use a bounded SSH call rather than bin/fm-on.sh: fm-on.sh runs
+# only tracked bin/fm-*.sh commands, so a new remote helper would not exist on a
+# station until after the very update this gate guards, while tasks-axi and
+# herdr are already installed there. Every remote argv is fixed and every
+# registry value is validated before it is used.
+#
 # The line is news once, not on every poll. The station must also have been idle
 # continuously for FM_STATION_IDLE_WINDOW seconds (default 300) before the line
 # is printed, so a brief gap between tasks is not mistaken for a real window;
@@ -91,7 +97,7 @@ CHECK_ID_PREFIX='station-idle'
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
 usage() {
-  sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,71p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die_usage() {
