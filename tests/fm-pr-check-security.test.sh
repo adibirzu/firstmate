@@ -394,6 +394,50 @@ EOF
   pass "raw-byte parser accepts canonical URLs and rejects the complete adversarial matrix"
 }
 
+# A task meta is written by many owners, and some legitimately append after the
+# canonical pr=/pr_head= block (bin/fm-model-fallback.sh's fallback_cursor=,
+# bin/fm-captain-hold.sh's decisions_reviewed=/decision_keys=,
+# bin/fm-teardown.sh's spawn_gen=). The PR identity parser arms and validates
+# the merge poll, so rejecting a record merely because unrelated metadata
+# follows the identity silently disarms the watcher. This pins tolerance both
+# on the parser and on an armed poll, while duplicate or malformed identity
+# stays refused.
+test_metadata_identity_tolerates_trailing_keys() {
+  local dir state meta
+  dir=$(make_case metadata-identity-trailing)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  meta="$state/task-a.meta"
+  printf 'pr_head=0123456789abcdef0123456789abcdef01234567\nfallback_cursor=4096\n' >> "$meta"
+  fm_pr_metadata_identity_parse "$meta" \
+    || fail "a trailing fallback_cursor= rejected the whole PR identity record"
+  [ "$FM_PR_META_URL" = https://github.com/o/r/pull/1 ] || fail "trailing-key parse lost the PR URL"
+  [ "$FM_PR_META_NUMBER" = 1 ] || fail "trailing-key parse lost the PR number"
+
+  printf 'decisions_reviewed=1\ndecision_keys=hold-1\nspawn_gen=7\n' >> "$meta"
+  fm_pr_metadata_identity_parse "$meta" \
+    || fail "further trailing non-identity keys rejected the PR identity record"
+
+  # The armed poll validates through the same parser: a trailing cursor must
+  # not disarm an otherwise canonical registration.
+  write_poll_meta "$state" task-b https://github.com/o/r/pull/2
+  seed_canonical_poll "$dir" task-b https://github.com/o/r/pull/2
+  printf 'fallback_cursor=99\n' >> "$state/task-b.meta"
+  fm_pr_poll_artifacts_valid "$state" task-b "$POLL" \
+    || fail "a trailing fallback_cursor= disarmed an otherwise valid merge poll"
+
+  # Tolerance is only for keys that carry no identity.
+  fm_write_meta "$meta" \
+    'pr=https://github.com/o/r/pull/1' \
+    'pr=https://github.com/o/r/pull/2'
+  ! fm_pr_metadata_identity_parse "$meta" || fail "a duplicate pr= line was tolerated"
+  fm_write_meta "$meta" \
+    'pr=https://github.com/o/r/pull/1' \
+    'pr_head=not-a-sha'
+  ! fm_pr_metadata_identity_parse "$meta" || fail "a malformed pr_head= was tolerated"
+  pass "PR identity parsing tolerates trailing non-identity keys and still refuses bad identity"
+}
+
 test_invalid_entrypoints_have_zero_side_effects() {
   local dir before after value rc
   dir=$(make_case invalid-entrypoints)
@@ -2128,6 +2172,7 @@ test_gitlab_merged_poll_retires() {
 }
 
 test_parser_matrix
+test_metadata_identity_tolerates_trailing_keys
 test_gitlab_merge_watch
 test_merged_poll_retires_once
 test_merged_poll_reregistration_after_notification_is_absorbed

@@ -285,6 +285,15 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# Parse the canonical pr=<url> identity, plus an optional pr_head=<sha>, out of
+# a task meta. The identity is whichever single pr= line the file carries; no
+# other key contributes to it. A task meta is shared by many writers, and some
+# of them (fallback_cursor=, decisions_reviewed=, decision_keys=, spawn_gen=,
+# and the X link keys) legitimately append after the identity block, so any
+# non-identity key is ignored rather than treated as corruption. Rejecting the
+# whole record because unrelated metadata follows the identity is the silent
+# disarm this parser must never reintroduce: bin/fm-pr-check.sh arms the merge
+# poll on a successful parse, and a failed parse leaves the poll unwatched.
 fm_pr_metadata_identity_parse() {
   local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
   FM_PR_META_PROVIDER=
@@ -315,10 +324,9 @@ fm_pr_metadata_identity_parse() {
           fm_pr_head_valid "$value" || post_pr_invalid=1
         fi
         ;;
-      x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
-        ;;
       *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        # Ordinary task metadata carries no identity, so it is ignored whether
+        # it precedes or follows pr=. Only identity keys are load-bearing.
         ;;
     esac
   done < "$file"
