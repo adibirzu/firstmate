@@ -47,7 +47,9 @@
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
 #              Records a durable checkpoint and that note, exits the old agent,
-#              then delegates the launch to its single owner,
+#              resets the endpoint's bare shell so an inherited continuation
+#              prompt or half-typed line cannot swallow the launch command, then
+#              delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
 #              the prior durable record in place and reports the concrete
 #              state; it never leaves a half-transitioned task claiming to be
@@ -510,6 +512,32 @@ do_exit() {
   printf 'stopped'
 }
 
+# reset_shell_before_launch: after the old agent is confirmed gone and before
+# the replacement is launched, return the endpoint's bare shell to a fresh,
+# empty input state. An exited agent can leave the shell mid-continuation (a
+# `quote>`, `dquote>` or heredoc prompt) or holding a half-typed line, and the
+# launch command fm-spawn types next would be appended to that construct instead
+# of executing - which is how a relaunch once silently did nothing. The reset
+# keys and the cwd proof are owned by the backend adapter
+# (fm_backend_reset_shell); this plane owns only the transaction ordering and
+# the refusal. A missing endpoint needs no reset - fm-spawn creates a fresh one.
+reset_shell_before_launch() {
+  local state reset_dir
+  state=$(agent_state)
+  case "$state" in
+    missing) return 0 ;;
+    dead) ;;
+    *) die "task $ID's endpoint reads '$state' after its agent stopped, not a bare shell; refusing to relaunch into an endpoint whose input state cannot be reset" ;;
+  esac
+  fm_control_backend_supports_key "$BACKEND" C-c \
+    || die "the $BACKEND backend cannot deliver the reset key C-c that relaunch needs to clear a bare shell left by the exited agent; refusing to launch into a shell that could swallow the launch command"
+  reset_dir="$STATE/.control-reset-$ID"
+  mkdir -p "$reset_dir" \
+    || die "could not create the shell-reset directory $reset_dir for task $ID"
+  fm_backend_reset_shell "$BACKEND" "$T" "$reset_dir" "$LABEL" \
+    || die "could not reset the bare shell at task $ID's endpoint on $BACKEND: an inherited continuation prompt or half-typed line could swallow the launch command; refusing to relaunch"
+}
+
 # --- transactional relaunch -------------------------------------------------
 #
 # The transaction's durable record is state/<id>.control-relaunch, with the
@@ -843,6 +871,10 @@ do_relaunch() {
     exit_result=$(do_exit)
   fi
   journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+
+  # The old agent is gone; clear whatever its bare shell was left holding before
+  # the launch command is typed (see reset_shell_before_launch).
+  reset_shell_before_launch
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.
