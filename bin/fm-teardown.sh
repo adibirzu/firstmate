@@ -3277,8 +3277,20 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
       echo "error: herdr pane $T for $ID could not persist its focus recovery checkpoint; retaining every durable task record" >&2
       exit 1
     }
-    if ! fm_backend_herdr_projection_close_pane_focus_preserving \
+    if fm_backend_herdr_projection_close_pane_focus_preserving \
       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" "$HERDR_FOCUS_SNAPSHOT"; then
+      HERDR_PROJECTED_CLOSE_RC=0
+    else
+      HERDR_PROJECTED_CLOSE_RC=$?
+    fi
+    # Exit status 2 means the exact prior focus itself could not be restored -
+    # the captain may now be looking at the wrong workspace/tab, so this must
+    # stop immediately and keep the checkpoint for the next run to recover
+    # from. Exit status 1 (pane close issued but not yet confirmed gone, focus
+    # already back where it was) is not fatal here: the presence classification
+    # and the endpoint-confirmation gate further below are what decide whether
+    # any durable record may be removed, exactly as before this reordering.
+    if [ "$HERDR_PROJECTED_CLOSE_RC" -eq 2 ]; then
       echo "error: herdr pane $T for $ID could not be closed while preserving the captain's active workspace and tab; retaining every durable task record" >&2
       exit 1
     fi
@@ -3288,10 +3300,6 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     }
   else
     echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
-    exit 1
-  fi
-  if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
-    echo "error: herdr pane $T for $ID is not confirmed gone after its projected close; retaining every durable task record" >&2
     exit 1
   fi
 fi
