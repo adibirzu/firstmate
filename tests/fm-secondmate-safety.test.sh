@@ -1990,6 +1990,7 @@ harness=echo
 kind=ship
 mode=no-mistakes
 yolo=off
+spawn_gen=spawn-$child
 EOF
   done
   fakebin=$(make_fake_tmux "$TMP_ROOT/force-duplicate-slot-fake")

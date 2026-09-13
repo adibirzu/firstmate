@@ -459,10 +459,10 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
   # The reuse collision: the pool slot recorded for a finished task has already
   # been handed to another task, whose worker is live in it right now.
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$dir/home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   # Staged in this shell, not a command substitution: a background child of a
   # $(...) subshell does not outlive it, and the point of this worker is to be
@@ -492,10 +492,10 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
   dir=$(make_case slot-reuse-home)
   mark_case_as_treehouse_pool "$dir"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$dir/home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "home=$dir/worktree" \
     "project=$dir/project" "kind=secondmate"
   set +e
@@ -525,10 +525,10 @@ test_cross_home_pool_slot_collision_refuses() {
   printf '%s\n' "- mate - fixture (home: $second_home; scope: test; projects: project; added 2026-01-01)" \
     > "$dir/home/data/secondmates.md"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$second_home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$second_project" "kind=scout"
 
   set +e
@@ -544,6 +544,70 @@ test_cross_home_pool_slot_collision_refuses() {
   assert_contains "$(cat "$dir/stderr")" "$other" \
     "cross-home refusal should name the task holding the slot"
   pass "fm-teardown: a pool slot held by another firstmate home is never returned"
+}
+
+# Override fakebin/tmux so the recovery-grade classifier reads any recorded
+# endpoint as unreadable (a session inventory failure it cannot attribute).
+add_unreadable_tmux_to_case() {  # <case>
+  cat > "$1/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) echo "error connecting to fixture: permission denied" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$1/fakebin/tmux"
+}
+
+# A pre-spawn_gen husk that records no window endpoint at all is retirable, so a
+# later task that reused its pool slot is no longer pinned by it.
+test_retirable_legacy_husk_does_not_pin_a_reused_slot() {
+  local dir id=current-task husk=stale-husk
+  dir=$(make_case slot-reuse-husk-retirable)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  # A pre-update husk: no spawn_gen and no window endpoint.
+  fm_write_meta "$dir/home/state/$husk.meta" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a retirable legacy husk still pinned the reused slot: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "the current task's record survived teardown"
+  assert_present "$dir/home/state/$husk.meta" "teardown removed the husk's own record"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "teardown did not return the slot the husk no longer holds: $(cat "$dir/runtime.log")"
+  pass "fm-teardown: a retirable pre-spawn_gen husk no longer pins its reused pool slot"
+}
+
+# A husk whose recorded endpoint cannot be read as gone is still a possible live
+# owner and must keep blocking the slot.
+test_legacy_husk_with_unknown_endpoint_still_pins_the_slot() {
+  local dir id=current-task husk=stale-husk rc
+  dir=$(make_case slot-reuse-husk-unknown)
+  mark_case_as_treehouse_pool "$dir"
+  add_unreadable_tmux_to_case "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$husk.meta" \
+    "window=firstmate:fm-$husk" "worktree=$dir/worktree" \
+    "project=$dir/project" "kind=ship"
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a legacy husk with an unreadable endpoint did not block the slot"
+  assert_present "$dir/home/state/$id.meta" "the blocked task's record was removed"
+  assert_present "$dir/home/state/$husk.meta" "the husk's record was removed"
+  assert_present "$dir/worktree/sentinel" "the contested slot was reset"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the contested slot was returned before the refusal: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$husk" \
+    "the refusal should name the husk holding the slot"
+  pass "fm-teardown: a pre-spawn_gen husk with an unknown endpoint still pins its slot"
 }
 
 test_sole_slot_record_still_tears_down() {
@@ -753,10 +817,10 @@ test_remote_seeded_home_still_refuses_a_slot_its_child_holds() {
   printf '%s\n' "- mate - fixture (home: $child_home; scope: test; projects: project; added 2026-01-01)" \
     > "$dir/home/data/secondmates.md"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$child_home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$child_project" "kind=scout"
 
   set +e
@@ -899,6 +963,8 @@ test_isolated_tmux_invalid_and_valid_cleanup
 test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
+test_retirable_legacy_husk_does_not_pin_a_reused_slot
+test_legacy_husk_with_unknown_endpoint_still_pins_the_slot
 test_sole_slot_record_still_tears_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts
