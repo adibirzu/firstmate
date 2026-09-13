@@ -265,7 +265,7 @@ family_for_basename() {
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|fm-decision-hold-lifecycle.test.sh|\
-    fm-dispatch-select.test.sh|fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|\
+    fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|\
     fm-router-dispatch.test.sh|\
     fm-openrouter-quota.test.sh|\
     fm-grok-harness.test.sh|fm-kimi-harness.test.sh|fm-model-refresh.test.sh|fm-muse-harness.test.sh|\
@@ -655,7 +655,6 @@ tests/fm-cursor-primary-live-e2e.test.sh 49
 tests/fm-cursor-primary.test.sh 55571
 tests/fm-daemon.test.sh 26424
 tests/fm-decision-hold-lifecycle.test.sh 204088
-tests/fm-dispatch-select.test.sh 2223
 tests/fm-documentation-audiences.test.sh 1818
 tests/fm-extension-binding.test.sh 20399
 tests/fm-fleet-snapshot-view.test.sh 9428
