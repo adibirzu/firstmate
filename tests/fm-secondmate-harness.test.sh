@@ -49,6 +49,8 @@ set -u
 . "$ROOT/bin/fm-ff-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-pending-reply-lib.sh
+. "$ROOT/bin/fm-pending-reply-lib.sh"
 
 # The harness-detection cases below fake `ps` so process ancestry is fully
 # controlled, but bin/fm-harness.sh checks verified ENV markers before ancestry.
@@ -1243,6 +1245,18 @@ assert_no_reread_pending() {
   done
 }
 
+# No automated nudge may leave an unresolved parent pending-reply expectation.
+assert_no_pending_replies() {
+  local home=$1 dir rec phase
+  dir="$home/state/pending-replies"
+  [ -d "$dir" ] || return 0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    phase=$(fm_pending_reply_get "$rec" phase)
+    [ "$phase" = resolved ] || fail "unresolved pending-reply record left by an automated nudge: $rec ($phase)"
+  done
+}
+
 assert_no_reread_retry_stages() {
   local home=$1 id=$2 retry_dir path
   retry_dir="$home/state/.fm-inherited-config-reread-retry/$id"
@@ -1818,6 +1832,56 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
   assert_not_contains "$(inbox_stream "$w/home/state" alpha)" "Default worker" "sent message must not summarize"
   assert_not_contains "$(cat "$log")" '"harness": "grok"' "the typed doorbell must not inline multiline JSON"
   pass "B15 config reread is per-home, exact-byte, ordered, and pointer-only"
+}
+
+# Regression (captain direction 2026-09-13): the automated config-reread nudge
+# is one-way. It must not create a reply-bearing parent expectation, because the
+# mate applies the config and never posts a correlated report, leaving an open
+# pending-reply escalation nobody answers. The per-instruction delivery id keeps
+# an uncertain retry idempotent, and the pending/retry staging still surfaces a
+# genuinely undeliverable nudge.
+test_config_reread_nudge_leaves_no_pending_reply() {
+  local w head log out status open_count err first_instr
+  w=$(new_world config-reread-no-pending)
+  head=$(git -C "$w/main" rev-parse HEAD)
+  add_sm_worktree "$w" sm "$head"
+  mkdir -p "$w/sm/config" "$w/sm/state"
+  printf 'old\n' > "$w/sm/config/crew-harness"
+  printf 'codex\n' > "$w/home/config/crew-harness"
+
+  log="$w/config-reread-no-pending.tmux.log"
+  out=$(run_config_push "$w" "$log" 2>/dev/null); status=$?
+  expect_code 0 "$status" "config push with a nudge should succeed"
+  assert_contains "$out" "config-reread: sent" "config push should send the reread nudge"
+  # The nudge still reaches the mate as a durable marked inbox record, but it is
+  # a fire-and-forget delivery (an idempotent delivery token, no correlation)
+  # rather than a reply-bearing request, so no parent expectation is created.
+  if ! inbox_stream "$w/home/state" sm | grep -Eq 'delivery=[a-f0-9]{16}'; then
+    fail "reread nudge must ride the fire-and-forget delivery plane"
+  fi
+  assert_not_contains "$(inbox_stream "$w/home/state" sm)" "corr=" \
+    "reread nudge must not carry a pending-reply correlation token"
+  first_instr=$(reread_instruction_path "$w/sm") || fail "reread instruction missing"
+
+  assert_no_pending_replies "$w/home"
+  open_count=$(fm_pending_reply_task_has_open "$w/home/state" sm && printf 'open' || printf 'none')
+  [ "$open_count" = none ] || fail "delivered reread nudge left an open pending-reply record"
+
+  # A genuinely undeliverable nudge must still surface and stay retryable. On the
+  # inbox plane the real local failure is an unwritable steer record.
+  rm -rf "$w/home/state/sm.inbox"
+  : > "$w/home/state/sm.inbox"
+  printf 'pi\n' > "$w/home/config/crew-harness"
+  err="$w/config-reread-no-pending-fail.err"
+  out=$(PATH="$(make_fake_toolchain "$w"):$BASE_PATH" \
+    FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-config-push.sh" 2>"$err"); status=$?
+  expect_code 1 "$status" "an undeliverable reread nudge must fail loudly"
+  assert_contains "$out" "CONFIG_REREAD: secondmate" "undeliverable nudge diagnostic missing"
+  assert_present "$(reread_pending_path "$w/sm")" \
+    "undeliverable reread nudge did not record a retry marker"
+  assert_no_pending_replies "$w/home"
+  pass "B15a automated config reread leaves no open pending-reply escalation and still reports failure"
 }
 
 test_config_reread_isolation_and_absent_and_send_failure() {
@@ -2600,6 +2664,7 @@ test_config_push_reports_skips_dirty_and_invalid_home
 test_config_push_exits_nonzero_on_copy_error
 test_config_push_rereads_after_partial_propagation
 test_config_reread_per_home_changed_sets_and_exact_bytes
+test_config_reread_nudge_leaves_no_pending_reply
 test_config_reread_isolation_and_absent_and_send_failure
 test_config_reread_publication_failure_retries_exact_generation
 test_config_reread_write_failure_retains_exact_retry_generation

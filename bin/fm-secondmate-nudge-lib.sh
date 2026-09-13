@@ -8,6 +8,13 @@
 FM_SECOND_MATE_NUDGE_MESSAGE='firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'
 FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE='Firstmate instructions or inherited config changed on this host. Re-read AGENTS.md and the inherited config files before further work.'
 
+# A stable 16-lowercase-hex delivery id for the automated instruction nudge.
+# At most one such nudge is pending per home, and the same nudge is re-sent only
+# for a retry of that pending marker, so a constant id makes an uncertain retry
+# idempotent without collapsing two logically distinct instructions that the
+# marker's one-at-a-time contract already serializes.
+FM_SECOND_MATE_NUDGE_DELIVERY_ID='0000000000000001'
+
 fm_secondmate_nudge_marker_path() { # <state-dir> <id>
   local state=$1 id=$2
   case "$id" in *[!/A-Za-z0-9._-]*|''|*/*) return 1 ;; esac
