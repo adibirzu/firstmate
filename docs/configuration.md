@@ -279,6 +279,7 @@ A malformed file refuses with the parse error rather than reverting to defaults,
 | `max_swap_used_pct` | `50` | share of configured swap already in use; `off` to skip |
 | `max_memory_pressure` | `normal` | worst kernel memory-pressure verdict still admitted: `normal`, `warn`, or `ignore` |
 | `max_fleet_memory_pct` | `40` | share of installed memory the fleet's own process trees may hold, leaving the majority of the machine to its operator; `off` to skip |
+| `max_fleet_agents` | `off` | machine-wide count of firstmate agent process trees, the same "across N agents" figure the fleet-memory signal reports; a positive integer refuses a spawn when the count is at or above it, `off` to leave the count uncapped |
 | `load_per_core_max` | `off` | 1m load average per logical core, off by default because load also rises on paging stalls; set a positive decimal to make it a limit |
 | `on_unknown` | `refuse` | what to do when a signal cannot be read at all |
 
