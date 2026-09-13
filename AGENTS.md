@@ -123,6 +123,7 @@ state/               runtime records and signals; gitignored
   x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   berths/<slug>/     one berthed project's own state slice (its lock, wake queue, and task records); present only when this home opted into berths
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll
+  station-idle-<station>.check.sh  generated per-station idle-window poll shim and its .check-trust binding; present only after bin/fm-station-idle.sh arm <station>; its dedupe record .station-idle-<station> is what keeps a proven idle window from being reported on every poll (docs/remote-secondmates.md "Idle-window update gate")
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (section 13)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
