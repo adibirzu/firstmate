@@ -1,0 +1,74 @@
+Manual, independent live drives of bin/fm-spawn.sh's gemini genuineness guard
+(fm/fm-gemini-shim-dispatch-guard branch), run directly against the real
+`bin/fm-spawn.sh` CLI script (not through the automated test harness), using
+throwaway HOME/FM_HOME sandboxes plus FM_GATE_REFUSE_BYPASS=1 and a temporary
+`mode = off` spawn-capacity override (this host was under genuine memory/swap
+pressure from other running agents at test time; the override only silences
+that unrelated admission-control guard, mirroring tests/fm-spawn-capacity.test.sh's
+own bypass convention).
+
+=== Scenario 1: shadowed (non-gemini-cli) `gemini` on PATH is refused ===
+A fake PATH entry "gemini" was dropped with a bash shebang (#!/usr/bin/env bash)
+that echoes "shim: this should never execute" and exits 1 if ever invoked -
+modeling the real personal ~/.local/bin/gemini shim described in the commit
+that this guard was written to catch.
+
+Command: bin/fm-spawn.sh gid1-shadow <worktree> --mode no-mistakes --yolo off
+(PATH prefixed with the fake bin dir; FM_SPAWN_NO_GUARD=1, FM_GATE_REFUSE_BYPASS=1)
+
+Result: EXIT=1
+stderr:
+  error: refusing to dispatch gemini - the 'gemini' resolved from PATH
+  ('<tmp>/fake/gemini') is not genuine gemini-cli (a node CLI, per
+  .agents/skills/harness-adapters/references/harness/gemini.md); something else
+  is shadowing it on PATH ahead of the real binary, most likely a personal
+  compatibility shim. Launching it anyway would silently run whatever it
+  actually execs with none of firstmate's gemini-specific supervision wiring
+  applied. Fix PATH so 'gemini' resolves to the genuine gemini-cli, or select a
+  different verified harness.
+
+No launch command was ever typed (launch.log stayed empty) and no task
+metadata file was written - the refusal happens before any dispatch or fleet
+mutation, confirming the guard is fail-closed and diagnostic.
+
+=== Scenario 2: genuine (node-shebang) gemini-cli dispatches normally ===
+The same fake PATH entry was replaced with a node-shebang script
+(#!/usr/bin/env node) - the real gemini-cli's actual shape per
+.agents/skills/harness-adapters/references/harness/gemini.md.
+
+Command: bin/fm-spawn.sh manual-gemini-genuine-z9 <worktree> --mode no-mistakes
+--yolo off (via the project's own tests/fixtures.sh helpers for correct
+treehouse worktree/pool plumbing, still executing the real bin/fm-spawn.sh)
+
+Result: EXIT=0
+stdout:
+  spawned manual-gemini-genuine-z9 harness=gemini kind=ship mode=no-mistakes
+  yolo=off window=firstmate:fm-manual-gemini-genuine-z9 worktree=...
+
+Actual typed launch command (captured from the fake tmux send-keys log):
+  env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI env -u CLAUDECODE
+  -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS GEMINI_CLI_TRUST_WORKSPACE=true
+  GEMINI_CLI_SYSTEM_SETTINGS_PATH='<tmp>/.../manual-gemini-genuine-z9.gemini-settings.json'
+  '<tmp>/.../fake/fakebin/gemini' -y "$(... encode launch-brief < .../launch-brief.md)"
+
+Confirms __GEMINIBIN__ is substituted with the resolved, verified absolute
+path (not a bare `gemini`), so the genuine binary launches with the full
+gemini-cli-specific env wiring intact.
+
+=== Regression coverage (existing automated test, run as-is) ===
+`./bin/fm-test-run.sh tests/fm-gemini-shim-dispatch-guard.test.sh` - both cases
+pass (exit=0): "refuses a shadowed gemini binary with a clear diagnostic
+instead of launching it" and "dispatches a genuine gemini-cli binary normally".
+
+=== ANTIGRAVITY_AGENT test-hygiene fix (kept, not new in this diff) ===
+`ANTIGRAVITY_AGENT=1 ./bin/fm-test-run.sh tests/fm-agy-harness.test.sh` still
+passes cleanly (all 4 cases ok) with a leaked ANTIGRAVITY_AGENT=1 present in
+the invoking shell, confirming tests/lib.sh's `unset ANTIGRAVITY_AGENT` keeps
+that marker from polluting agy harness-detection tests.
+
+Cleanup: the temporary git worktree and branch created for scenario 1
+(manual-gemini-shadow-wt) were removed via `git worktree remove --force` and
+`git branch -D`; `git status --short` in the actual worktree under test is
+clean. Scratch directories used for these drives live under the OS temp
+directory (/private/var/folders/.../T/...), outside the worktree, and were not
+committed.
