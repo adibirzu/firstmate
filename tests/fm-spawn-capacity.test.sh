@@ -109,4 +109,30 @@ SH
   pass "fm-capacity.sh reports usage-axi machine only when the tool is installed"
 }
 
+# Spawn admission asks the bare `capacity` purpose, whose verdict keeps the
+# one-suite-at-a-time slot as context. Only a full-suite start enforces the
+# slot, through `capacity --for suite` in bin/fm-test-run.sh. A spawn must
+# therefore be admitted while that slot is occupied, and must never ask the
+# purpose-scoped question itself.
+{
+  dir="$TMP_ROOT/suite-slot-is-context"; mkdir -p "$dir"
+  cat > "$dir/llm-router-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_CAPACITY_CALL_LOG"
+case "$*" in
+  *"--for suite"*) exit 1 ;;
+esac
+printf '{"ok":true,"measured":{},"reasons":[],"signals":[]}\n'
+exit 0
+SH
+  chmod +x "$dir/llm-router-axi"
+  : >"$dir/calls"
+  if FM_LLM_ROUTER_AXI="$dir/llm-router-axi" FM_CAPACITY_CALL_LOG="$dir/calls" \
+    bash -c '. "$1"; fm_capacity_guard ignored "ship task t1"' _ "$CAPACITY_LIB" 2>"$dir/err"; then rc=0; else rc=$?; fi
+  [ "$rc" -eq 0 ] || fail "an occupied suite slot must not block spawn admission, rc=$rc: $(cat "$dir/err")"
+  calls=$(cat "$dir/calls")
+  assert_not_contains "$calls" "--for suite" "spawn admission must not ask the purpose-scoped suite verdict"
+  pass "an occupied suite slot is context for spawn admission and never refuses a spawn"
+}
+
 printf 'All fm-spawn-capacity tests passed.\n'

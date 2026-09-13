@@ -263,7 +263,9 @@ It never stops, reaps, or deprioritizes an agent that is already running, becaus
 Restoring headroom on a machine that is already saturated is the operator's decision, not this check's.
 
 Memory is the binding signal, not CPU.
-The binding resources are free memory, swap in use, kernel memory pressure, worker-root agent count, load per core, and the one-suite-at-a-time slot; `llm-router-axi` measures them and compares each against its own threshold.
+The binding resources for spawn admission are free memory, swap in use, kernel memory pressure, worker-root agent count, and load per core; `llm-router-axi` measures them and compares each against its own threshold.
+The one-suite-at-a-time slot is separate: spawn admission treats it as context and never refuses a spawn on it, while a full-suite start asks `llm-router-axi capacity --for suite` and refuses while another suite holds the slot.
+`bin/fm-test-run.sh` owns that suite-start gate for its `--lane`, `--family`, and `--all` modes, before it runs any suite work; targeted script and `--changed` runs are unchanged.
 Load average is corroborating context and is a limit only when the operator sets `maxLoadPerCore`.
 
 The gauges and their thresholds are owned by `llm-router-axi`, not by this repo: its README and policy schema define every gauge, and `~/.config/llm-router-axi/policy.json` carries `memoryFreeReservePercent`, `memoryPressureMax`, `maxSwapUsedPercent`, `agentCeiling`, `maxLoadPerCore`, and `oneSuiteAtATime`.
