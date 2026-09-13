@@ -4743,6 +4743,38 @@ test_afk_one_shot_never_hands_off_captain_held_under_away_record() {
   pass "the daemon-owned one-shot never hands off a captain-held pane while the away-posture record exists"
 }
 
+test_afk_busy_captain_held_under_unrelated_line_absorbed_by_away_record() {
+  local dir state fakebin out capture_file statusf window sig pid
+  dir=$(make_case away-record-held-afk-busy); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held-busy.status"
+  window="test:fm-held-busy"
+  printf 'Working... (7200.4s) lavish-axi poll' > "$capture_file"
+  printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/held-busy.meta"
+  record_pi_busy "$state" held-busy
+  printf '%s\n' 'captain-held [key=route]: tracked by task-decision-route' \
+    'resolved [key=other]: closed an unrelated decision' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-busy_status"
+  touch -t 200001010000 "$state/held-busy.meta"
+  date '+%s' > "$state/.afk"
+  write_away_record "$state"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness busy (pi-ext)' \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "the away-mode busy-turn bound handed off a captain-held pane under a later unrelated status line: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -s "$out" ] || fail "a busy captain-held pane was surfaced while the away-posture record exists: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a busy captain-held pane was queued while the away-posture record exists"
+  grep -F 'absorbed busy over-age pane (captain-held' "$state/.watch-triage.log" >/dev/null \
+    || fail "the busy-turn bound did not absorb the captain-held pane under the away-posture rule"
+  pass "the away-mode busy-turn bound absorbs a captain-held pane even after a later unrelated status line"
+}
+
 # --- declared waits are condition-aware: `until <UTC ISO 8601>` --------------
 # A paused: line naming when the wait clears is rechecked at that time when it
 # falls within the flat cadence, but a distant or mistyped time cannot extend
@@ -4937,6 +4969,7 @@ test_captain_held_never_rechecked_while_away_record_exists
 test_live_captain_held_first_sight_silenced_by_away_record
 test_backlog_hold_never_rechecked_while_away_record_exists
 test_afk_one_shot_never_hands_off_captain_held_under_away_record
+test_afk_busy_captain_held_under_unrelated_line_absorbed_by_away_record
 test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_until_wrong_year_is_bounded_by_the_cadence
 test_paused_until_that_passed_is_rechecked_before_the_cadence

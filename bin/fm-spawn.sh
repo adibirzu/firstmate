@@ -757,6 +757,7 @@ spawn_remote_secondmate() {
   meta="$STATE/$id.meta"
   if [ -e "$meta" ] || [ -L "$meta" ]; then
     if [ ! -f "$meta" ] || [ -L "$meta" ] \
+      || ! fm_backlog_record_present "$meta" "task record" "$STATE" \
       || [ "$(fm_meta_get "$meta" kind)" != secondmate ] \
       || [ "$(fm_meta_get "$meta" remote_host)" != "$host" ] \
       || [ "$(fm_meta_get "$meta" remote_root)" != "$root" ] \
@@ -943,82 +944,6 @@ spawn_remote_secondmate() {
   return 0
 }
 
-if [ "$KIND" = secondmate ]; then
-  if spawn_remote_secondmate "${POS[0]:-}"; then
-    exit 0
-  else
-    remote_spawn_rc=$?
-  fi
-  if [ "$remote_spawn_rc" -ne 3 ]; then
-    # Every refusal inside the remote route returns before the EXIT trap below
-    # is armed, so this home's task-set lock is handed back here rather than
-    # left on disk for a later spawn to steal. Code 3 is not a refusal: it
-    # hands the task to the local path below, which keeps the same hold.
-    if [ "${SPAWN_TASK_SET_LOCK_HELD:-0}" = 1 ]; then
-      SPAWN_TASK_SET_LOCK_HELD=0
-      fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
-    fi
-    exit "$remote_spawn_rc"
-  fi
-fi
-
-# agy, cline and copilot are verified as CREWMATE/SCOUT adapters only. A
-# secondmate is a firstmate instance and needs a primary supervision protocol
-# none of them can arm (agy/copilot expose no reawakening handler; cline's
-# state model is crewmate-only). Refuse a bare secondmate name here so the gap
-# stays loud rather than standing up a secondmate whose supervision cycle could
-# never begin. The post-resolution guard below is the backstop for the
-# --harness and config/secondmate-harness paths that never reach this parse.
-secondmate_harness_unsupported() {  # <harness>
-  echo "error: $1 is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-}
-if [ "$KIND" = secondmate ]; then
-  case "${POS[1]:-}" in
-    agy) secondmate_harness_unsupported agy ;;
-    cline) secondmate_harness_unsupported cline ;;
-    copilot) secondmate_harness_unsupported copilot ;;
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse) : ;;
-    *) : ;;
-  esac
-fi
-
-# Backend selection (data/fm-backend-design-d7): explicit --backend, else
-# FM_BACKEND env, else config/backend, else runtime auto-detection, else
-# default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
-# non-spawn-capable backends. The resolved value is
-# recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
-# window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
-# so the default path's meta stays byte-identical.
-# --reuse-worktree is special: when --backend is omitted, keep the backend
-# already recorded for the task so a handoff does not silently move the
-# endpoint to a different session provider. That resolution runs after the
-# task id and meta are known (see reuse block below).
-BACKEND=
-if [ "$BACKEND_SET" -eq 1 ]; then
-  BACKEND=$BACKEND_ARG
-elif [ "$REUSE_WORKTREE" != 1 ]; then
-  BACKEND=$(fm_backend_name)
-fi
-spawn_validate_backend() {
-  fm_backend_validate_spawn "$BACKEND" || return 1
-  fm_backend_source "$BACKEND" || return 1
-  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=orca does not support --secondmate spawns yet" >&2
-    return 1
-  fi
-  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
-    return 1
-  fi
-  if [ "$BACKEND" = orca ]; then
-    fm_backend_orca_runtime_check || return 1
-  fi
-  return 0
-}
-if [ -n "$BACKEND" ]; then
-  spawn_validate_backend || exit 1
-fi
 TREEHOUSE_LEASE_ABORT_CLEANUP=0
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
@@ -1216,6 +1141,73 @@ spawn_abort_cleanup() {
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
+
+if [ "$KIND" = secondmate ]; then
+  if spawn_remote_secondmate "${POS[0]:-}"; then
+    exit 0
+  else
+    remote_spawn_rc=$?
+  fi
+  [ "$remote_spawn_rc" -eq 3 ] || exit "$remote_spawn_rc"
+fi
+
+# agy, cline and copilot are verified as CREWMATE/SCOUT adapters only. A
+# secondmate is a firstmate instance and needs a primary supervision protocol
+# none of them can arm (agy/copilot expose no reawakening handler; cline's
+# state model is crewmate-only). Refuse a bare secondmate name here so the gap
+# stays loud rather than standing up a secondmate whose supervision cycle could
+# never begin. The post-resolution guard below is the backstop for the
+# --harness and config/secondmate-harness paths that never reach this parse.
+secondmate_harness_unsupported() {  # <harness>
+  echo "error: $1 is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+}
+if [ "$KIND" = secondmate ]; then
+  case "${POS[1]:-}" in
+    agy) secondmate_harness_unsupported agy ;;
+    cline) secondmate_harness_unsupported cline ;;
+    copilot) secondmate_harness_unsupported copilot ;;
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse) : ;;
+    *) : ;;
+  esac
+fi
+
+# Backend selection (data/fm-backend-design-d7): explicit --backend, else
+# FM_BACKEND env, else config/backend, else runtime auto-detection, else
+# default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
+# non-spawn-capable backends. The resolved value is
+# recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
+# window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
+# so the default path's meta stays byte-identical.
+# --reuse-worktree is special: when --backend is omitted, keep the backend
+# already recorded for the task so a handoff does not silently move the
+# endpoint to a different session provider. That resolution runs after the
+# task id and meta are known (see reuse block below).
+BACKEND=
+if [ "$BACKEND_SET" -eq 1 ]; then
+  BACKEND=$BACKEND_ARG
+elif [ "$REUSE_WORKTREE" != 1 ]; then
+  BACKEND=$(fm_backend_name)
+fi
+spawn_validate_backend() {
+  fm_backend_validate_spawn "$BACKEND" || return 1
+  fm_backend_source "$BACKEND" || return 1
+  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=orca does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = orca ]; then
+    fm_backend_orca_runtime_check || return 1
+  fi
+  return 0
+}
+if [ -n "$BACKEND" ]; then
+  spawn_validate_backend || exit 1
+fi
 
 # One bounded lock per live Herdr session/socket, shared across all homes.
 # <session> is required so secondmate and primary spawns serialize against the

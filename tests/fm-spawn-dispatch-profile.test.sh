@@ -848,6 +848,36 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
   pass "pi-signed shares Pi launch semantics while preserving its configured and recorded identity"
 }
 
+test_pi_tui_mode_probe_is_safe_for_old_and_new_pi() {
+  local harness version rec id out status launch
+  for harness in pi pi-signed; do
+    for version in 0.82.0 0.84.0; do
+      id="profile-${harness}-tui-${version//./}-z8d"
+      rec=$(make_spawn_case "profile-__MODELFLAG__-${harness}-tui-${version//./}" "$harness" "$id")
+      read_case_record "$rec"
+
+      out=$(FM_TEST_PI_VERSION="$version" \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+        "$id" "$PROJ_DIR")
+      status=$?
+      expect_code 0 "$status" "$harness $version spawn should succeed"
+      launch=$(cat "$LAUNCH_LOG")
+      assert_contains "$launch" "'$FAKEBIN_DIR/$harness'" \
+        "$harness $version launch must use the executable selected for probing"
+      assert_not_contains "$launch" "FM_PI_HARNESS=$harness $harness" \
+        "$harness $version launch must not re-resolve a bare executable in the worker"
+      if [ "$version" = 0.82.0 ]; then
+        assert_not_contains "$launch" "--tui-mode" \
+          "$harness $version launch must omit unsupported --tui-mode"
+      else
+        assert_contains "$launch" "'$FAKEBIN_DIR/$harness' --tui-mode regular" \
+          "$harness $version launch must preserve the regular TUI"
+      fi
+    done
+  done
+  pass "Pi launch probing omits --tui-mode on older Pi and preserves it on supporting Pi"
+}
+
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata() {
   local rec id out status
   id=profile-pi-signed-missing-z8c
@@ -1353,6 +1383,7 @@ test_native_effort_validator_keeps_axes_separate
 test_native_pi_ultra_is_explicit_and_model_scoped
 test_batch_preserves_native_ultra
 test_pi_threads_model_and_max_effort
+test_pi_tui_mode_probe_is_safe_for_old_and_new_pi
 test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
 test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity

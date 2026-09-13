@@ -140,7 +140,6 @@ test_spawn_home_layout() {
   pass "spawn-home layout writes harness pin, beat, and brief"
 }
 
-test_touch_epoch_preserves_repeated_dst_hour
 # A fixture secondmate home bound to a local parent, plus one task record in a
 # separate state dir: the shape a live secondmate session exports while a test
 # redirects only FM_STATE_OVERRIDE.
@@ -193,6 +192,8 @@ test_lib_clears_ambient_live_home() {
     || fail "the isolated run did not register the PR in its own state"
   pass "lib.sh clears an ambient live home so fixture reports stay in the sandbox"
 }
+
+test_touch_epoch_preserves_repeated_dst_hour
 test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers
 test_fake_gh_and_gh_axi

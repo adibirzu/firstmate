@@ -1228,7 +1228,7 @@ ok - real herdr: a drifted agent-free shell returns to its worktree and reuses t
 ```
 
 `tests/fm-backend-herdr.test.sh` pins the logic portably by driving the two signals apart - the same failed pane read yields `missing` under a stopped server and `unreadable` under a running one - and asserts that the husk classifier still refuses on that identical read.
-`tests/fm-control-herdr-smoke.test.sh` proves that drift recovery against a real binary in an isolated lab session, on Herdr. The recovery is not Herdr-only: the reused-worktree path returns any supported backend endpoint to its recorded worktree.
+`tests/fm-control-herdr-smoke.test.sh` proves drift recovery against a real Herdr binary in an isolated lab session. The recovery is not Herdr-only: the reused-worktree path returns any supported backend endpoint to its recorded worktree.
 `tests/fm-control-relaunch.test.sh` drives a tmux stub and proves the same shape there - the pane receives exactly the recorded-worktree correction `cd '<worktree>'` and nothing else - while the relaunch stays fail-closed, refusing without launching an agent when a subsequent path read does not confirm the move.
 The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
 

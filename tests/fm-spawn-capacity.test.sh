@@ -211,6 +211,7 @@ test_secondmate_spawn_refuses_when_saturated() {
   expect_code 1 "$status" "a secondmate spawn must be declined on a machine that is out of memory"
   assert_contains "$out" "refusing to start secondmate task $id" "refusal did not name the declined secondmate work"
   assert_absent "$HOME_DIR/state/$id.meta" "a declined secondmate spawn must leave no task record behind"
+  assert_absent "$HOME_DIR/state/.task-set.lock" "a declined secondmate spawn must release the home's task-set lock"
   pass "a secondmate spawn is declined when the machine has no headroom"
 }
 
