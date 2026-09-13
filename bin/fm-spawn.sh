@@ -1086,6 +1086,11 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
+  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+    if ! spawn_fresh_commit_rollback; then
+      status=1
+    fi
+  fi
   # The treehouse lease is durable, so a spawn that fails before publishing
   # state/<id>.meta must return it here: teardown never runs for a task that
   # never existed, so nothing else would ever free that pool slot. The one
@@ -1097,6 +1102,8 @@ spawn_abort_cleanup() {
     if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
       if [ "$herdr_pane_close_refused" = 1 ]; then
         echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      elif [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+        echo "warning: leased worktree $WT was not returned because failed-dispatch rollback retained its task record; reconcile the record and endpoint before returning the lease" >&2
       else
         fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
           || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
@@ -1146,11 +1153,6 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
     fm_lock_release "$SPAWN_TASK_LOCK" || true
-  fi
-  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
-    if ! spawn_fresh_commit_rollback; then
-      status=1
-    fi
   fi
   # An aborted relaunch must not leave the REPLACEMENT's wiring armed: the task
   # keeps running its previous incarnation's record, so a stray hook file or
@@ -4288,11 +4290,7 @@ spawn_write_meta_locked() {
     SPAWN_META_PUBLISH_FAILED=1
     return 1
   fi
-  # Publication transfers worktree ownership to fm-teardown.sh.  Disarm the
-  # spawn-only lease cleanup in this same critical section: an interrupt after
-  # the atomic publish but before the caller regains control must never return
-  # the leased worktree underneath the now-live task record.
-  TREEHOUSE_LEASE_ABORT_CLEANUP=0
+  [ "$BACKLOG_TRANSITION" = 1 ] || TREEHOUSE_LEASE_ABORT_CLEANUP=0
 }
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PUBLISH_FAILED=0
@@ -4353,17 +4351,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-# The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Disarm lease-abort and provisional-record rollback before the side-band
-# home-summary refresh: an interrupt during that refresh must not roll the
-# published record back or return a live task's lease.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
-SPAWN_REFRESH_SAVED_PENDING=$SPAWN_FRESH_COMMIT_PENDING
-SPAWN_FRESH_COMMIT_PENDING=0
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-SPAWN_FRESH_COMMIT_PENDING=$SPAWN_REFRESH_SAVED_PENDING
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
-
+# Without a pending backlog commit the published record is already final and
+# teardown owns its lease, so refresh the side-band home summary now: a launch
+# or readiness failure below keeps this durable endpoint and must leave it
+# visible. A provisional record waits for the post-commit refresh instead,
+# because a failure before that commit rolls it back.
+if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
@@ -4655,6 +4650,12 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi
 fi
+if [ "$BACKLOG_TRANSITION" = 1 ] && [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ]; then
+  # A successful final commit transfers the lease to teardown. This must happen
+  # before deferred-signal handling, because that path can exit after a committed
+  # delivery while reporting the interrupt to its caller.
+  TREEHOUSE_LEASE_ABORT_CLEANUP=0
+fi
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
@@ -4677,6 +4678,9 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"

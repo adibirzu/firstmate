@@ -2653,24 +2653,41 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
   pass "herdr projection teardown retains every record when post-close presence is unknown"
 }
 
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup() {
+test_herdr_projection_teardown_retains_records_when_focus_restore_fails() {
   local case_dir log closed restored
   case_dir=$(make_case herdr-projection-restore-failure)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
   log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
 
+  local rc=0
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
     FM_FAKE_HERDR_RESTORE_FAIL=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-restore-failure: a confirmed close with a failed focus restore blocked teardown"
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "herdr-projection-restore-failure: teardown succeeded after failing to restore the captain's active tab"
   [ -e "$closed" ] \
     || fail "herdr-projection-restore-failure: regression did not exercise the exact projected-pane close"
-  [ ! -e "$case_dir/state/task-x1.herdr-presentation" ] \
-    || fail "herdr-projection-restore-failure: confirmed closure did not retire the presentation journal"
+  [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure retired the presentation journal"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure erased the durable endpoint metadata"
+  [ -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure did not preserve the exact focus checkpoint"
   assert_grep "exact-tab restoration failed" "$case_dir/stderr" \
     "herdr-projection-restore-failure: teardown swallowed the focus helper's restore warning"
-  pass "herdr projection teardown surfaces failed focus restoration without turning confirmed cleanup into a hard failure"
+  assert_grep "could not be closed while preserving" "$case_dir/stderr" \
+    "herdr-projection-restore-failure: teardown did not explain why durable records were retained"
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/retry-stdout" 2> "$case_dir/retry-stderr" \
+    || fail "herdr-projection-restore-failure: retry could not restore the saved captain focus"
+  [ ! -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: verified focus recovery did not retire its checkpoint"
+  [ ! -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-projection-restore-failure: retry retained metadata after restoring the saved focus"
+  assert_contains "$(cat "$log")" "tab focus w2:t2" \
+    "herdr-projection-restore-failure: retry did not restore the saved exact tab"
+  pass "herdr projection teardown retains durable records when focus restoration fails"
 }
 
 # --- Fix 1: conclude/abort the task's own parked no-mistakes run before the
@@ -3718,7 +3735,7 @@ test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
+test_herdr_projection_teardown_retains_records_when_focus_restore_fails
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

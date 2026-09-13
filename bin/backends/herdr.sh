@@ -940,12 +940,12 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # pane-death path. The exact-tab restore below remains the backstop, and any
 # ambiguity falls back to the plain explicit close, which the backstop masks
 # exactly as before this hardening.
-fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
-  local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws doomed_ws focus_settle_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0
+fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state] [focus-snapshot]
+  local session=$1 pane_id=$2 required_agent_state=${3:-} before=${4:-}
+  local active_tab info target_pane target_tab target_ws doomed_ws focus_settle_ws close_status state plan plan_shell_pid plan_move_record workspace_presence removal_attempt=0
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
-  before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
+  [ -n "$before" ] || before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
     echo "warning: herdr presentation cleanup could not capture exact active workspace and tab; refusing focus-unsafe pane close" >&2
     return 1
   }
@@ -1599,10 +1599,10 @@ fm_backend_herdr_server_ensure() {  # <session>
 # duplicate means for them - fm_backend_herdr_workspace_ensure refuses to guess
 # which one is the caller's, while the read-only recovery path below keeps its
 # historical first-match behavior.
-fm_backend_herdr_workspace_find_all() {  # <session>
-  local session=$1 label list
+fm_backend_herdr_workspace_find_all() {  # <session> [<pre-fetched-workspace-list-json>]
+  local session=$1 label list=${2:-}
   label=$(fm_backend_herdr_workspace_label)
-  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
+  [ -n "$list" ] || list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
   # NOTE: the jq variable is $want, NOT $label - `label` is a jq reserved
   # keyword (label/break), so declaring a jq variable named "label" is a
   # compile error that `2>/dev/null` would silently swallow, making this find
@@ -1872,8 +1872,52 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 #
 # Returns 0 on success, 3 for a refusal whose exact reason is already on
 # stderr, and 1 for a failed or unparseable herdr call.
+# fm_backend_herdr_stale_default_workspace_id: the workspace id of the
+# session's sole, untouched herdr-seeded default workspace ("~", herdr's own
+# auto-provisioned scaffold on a session with nothing in it yet), or empty.
+# Herdr 0.8.2 provisions every fresh session with exactly one workspace
+# labeled "~" before firstmate ever calls workspace create (verified
+# empirically: `herdr workspace list` on a session right after provision).
+# Only matches when the session has EXACTLY one workspace and its label is
+# that literal sentinel, so a captain's own real workspace that merely still
+# carries the unrenamed default label is never mistaken for the scaffold
+# once anything else exists in the session alongside it.
+# Takes an optional pre-fetched `workspace list` JSON response as its 2nd arg
+# so a caller that already fetched the list (fm_backend_herdr_workspace_ensure)
+# never issues a second redundant herdr call for the same information.
+#
+# Two further guards, both required, on top of the label+count match above -
+# label alone cannot tell an untouched scaffold from a captain's own real
+# workspace that happens to share it:
+#   1. HERDR_SESSION must be EXPLICITLY set by the caller. When it is unset,
+#      fm_backend_herdr_session() falls back to herdr's own ambient "default"
+#      session - the same session an operator's own interactive herdr usage
+#      lives in - and this never reaps there, regardless of the candidate
+#      workspace's shape.
+#   2. The candidate workspace must have ZERO panes of any kind, checked by
+#      listing its panes directly (never inferred from agent_status - a live
+#      pane a captain is using manually, or one hosting an idle/finished
+#      agent, is still live work and herdr's agent tracker would not flag
+#      either as "working"). Any pane at all means a captain has actually
+#      used this workspace, and it is never reaped.
+fm_backend_herdr_stale_default_workspace_id() {  # <session> [<pre-fetched-workspace-list-json>]
+  local session=$1 list=${2:-} wsid label count panes pane_count
+  [ -n "${HERDR_SESSION:-}" ] || return 0
+  [ -n "$list" ] || list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
+  count=$(printf '%s' "$list" | jq -r '.result.workspaces | length' 2>/dev/null) || return 0
+  [ "$count" = 1 ] || return 0
+  label=$(printf '%s' "$list" | jq -r '.result.workspaces[0].label // empty' 2>/dev/null)
+  [ "$label" = '~' ] || return 0
+  wsid=$(printf '%s' "$list" | jq -r '.result.workspaces[0].workspace_id // empty' 2>/dev/null)
+  [ -n "$wsid" ] || return 0
+  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || return 0
+  pane_count=$(printf '%s' "$panes" | jq -r '.result.panes? // [] | length' 2>/dev/null)
+  [ "$pane_count" = 0 ] || return 0
+  printf '%s' "$wsid"
+}
+
 fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship>]
-  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label matches count status
+  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label matches count status stale_default list
   FM_BACKEND_HERDR_WS_ID=""
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=""
   if [ "$relationship" = launcher-home ]; then
@@ -1889,7 +1933,8 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
     esac
   fi
   label=$(fm_backend_herdr_workspace_label)
-  matches=$(fm_backend_herdr_workspace_find_all "$session")
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || list=""
+  matches=$(fm_backend_herdr_workspace_find_all "$session" "$list")
   count=$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)
   if [ "$count" -gt 1 ]; then
     echo "error: ${count} herdr workspaces in session '$session' are labeled '$label' (${matches//$'\n'/ }) and this spawn has no herdr parent pane to identify which one is its own; rename or close the extras, or run firstmate inside the workspace its workers belong in" >&2
@@ -1901,9 +1946,15 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
     printf '%s' "$wsid"
     return 0
   fi
+  stale_default=$(fm_backend_herdr_stale_default_workspace_id "$session" "$list")
   out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
   [ -n "$wsid" ] || return 1
+  # Reap herdr's own pre-existing scaffold workspace now that this HOME has a
+  # real one of its own - otherwise it leaks for the life of the session.
+  # Best-effort: never fails the spawn over cleanup of an artifact that is not
+  # this call's own workspace.
+  [ -z "$stale_default" ] || fm_backend_herdr_cli "$session" workspace close "$stale_default" >/dev/null 2>&1 || true
   FM_BACKEND_HERDR_WS_ID=$wsid
   # Herdr seeds a new workspace with one auto-created default tab firstmate
   # never uses. It is NOT pruned here: at this instant it is the workspace's

@@ -5,7 +5,9 @@
 # fakebin and exec those stubs. Assertions are on the binaries' observable
 # output, exit status, and files they create - never on fixtures.sh source
 # text. Migrated spawn suites cover fm_test_run_spawn through the real
-# fm-spawn.sh; this file pins the stubs those suites now share.
+# fm-spawn.sh; this file pins the stubs those suites now share. It also pins
+# the ambient-home isolation that tests/lib.sh, which fixtures.sh builds on,
+# gives every suite.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -124,9 +126,63 @@ test_spawn_home_layout() {
   pass "spawn-home layout writes harness pin, beat, and brief"
 }
 
+# A fixture secondmate home bound to a local parent, plus one task record in a
+# separate state dir: the shape a live secondmate session exports while a test
+# redirects only FM_STATE_OVERRIDE.
+make_bound_secondmate() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/parent/state" "$dir/home" "$dir/state"
+  printf 'mate-x\n' > "$dir/home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
+    "$dir/parent" > "$dir/home/.fm-secondmate-parent"
+  fm_write_meta "$dir/state/task-x1.meta" "window=firstmate:fm-task-x1" "kind=ship" "mode=no-mistakes"
+}
+
+# The PR-ready publisher run with only its state redirected, as the suites do.
+pr_check_with_state_only() {  # <dir>
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$1/state" \
+    "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
+}
+
+test_lib_clears_ambient_live_home() {
+  local dir leaked
+  dir="$TMP_ROOT/live-home"
+  leaked="$dir/parent/state/mate-x.status"
+
+  # Control: an ambient secondmate FM_HOME really does route the fixture's
+  # ready line into the parent's status log, so the isolation case below
+  # cannot pass vacuously.
+  make_bound_secondmate "$dir"
+  ( export FM_HOME="$dir/home"; pr_check_with_state_only "$dir" ) \
+    || fail "control: fm-pr-check failed under an ambient secondmate home"
+  assert_grep 'child task-x1 PR ready' "$leaked" \
+    "control: an ambient secondmate home did not reach its parent channel"
+
+  rm -rf "$dir"
+  make_bound_secondmate "$dir"
+  FM_HOME="$dir/home" FM_PUBLIC_FOLLOWUP_PRIMARY_HOME="$dir/parent" \
+    FM_STATE_OVERRIDE="$dir/parent/state" FM_ROOT_OVERRIDE="$dir/parent" \
+    bash -c '
+      set -u
+      . "$1/tests/lib.sh"
+      for v in FM_HOME FM_PUBLIC_FOLLOWUP_PRIMARY_HOME FM_STATE_OVERRIDE FM_ROOT_OVERRIDE; do
+        [ -z "${!v+set}" ] || echo "$v survived: ${!v}"
+      done
+      FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$2/state" \
+        "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
+    ' _ "$ROOT" "$dir" > "$dir/child.out" 2>&1 \
+    || fail "fm-pr-check failed in a test that sourced lib.sh: $(cat "$dir/child.out")"
+  assert_absent "$leaked" "a test sourcing lib.sh wrote into the ambient home's parent channel"
+  assert_no_grep survived "$dir/child.out" "lib.sh kept a live home variable: $(cat "$dir/child.out")"
+  grep -qxF 'pr=https://github.com/example/repo/pull/7' "$dir/state/task-x1.meta" \
+    || fail "the isolated run did not register the PR in its own state"
+  pass "lib.sh clears an ambient live home so fixture reports stay in the sandbox"
+}
+
 test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers
 test_fake_gh_and_gh_axi
 test_spawn_tmux_and_fakebin
 test_send_stubs_and_ssh
 test_spawn_home_layout
+test_lib_clears_ambient_live_home

@@ -2740,6 +2740,47 @@ FMEOF
   return 1
 }
 
+teardown_herdr_focus_checkpoint_write() {  # <path> <session> <snapshot>
+  local path=$1 session=$2 snapshot=$3 workspace tab tmp
+  workspace=${snapshot%%$'\t'*}
+  tab=${snapshot#*$'\t'}
+  [ -n "$workspace" ] && [ -n "$tab" ] && [ "$workspace" != "$snapshot" ] || return 1
+  case "$session:$workspace:$tab" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  tmp=$(mktemp "$STATE/.${ID}.herdr-focus.XXXXXX") || return 1
+  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  {
+    printf 'version=1\n'
+    printf 'session=%s\n' "$session"
+    printf 'workspace_id=%s\n' "$workspace"
+    printf 'tab_id=%s\n' "$tab"
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path"
+}
+
+teardown_herdr_focus_checkpoint_restore() {  # <path> <session>
+  local path=$1 session=$2 version saved_session workspace tab
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  version=$(meta_value "$path" version)
+  saved_session=$(meta_value "$path" session)
+  workspace=$(meta_value "$path" workspace_id)
+  tab=$(meta_value "$path" tab_id)
+  [ "$version" = 1 ] && [ "$saved_session" = "$session" ] || return 1
+  [ -n "$workspace" ] && [ -n "$tab" ] || return 1
+  case "$workspace:$tab" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  case "$workspace" in
+    *:*) return 1 ;;
+  esac
+  case "$tab" in
+    "$workspace":?*) ;;
+    *) return 1 ;;
+  esac
+  fm_backend_herdr_projection_focus_restore "$session" "$workspace"$'\t'"$tab" "pane close"
+}
+
 teardown_herdr_require_prerequisites() {  # <task-id>
   local task_id=$1 prerequisite
   if ! fm_backend_source herdr; then
@@ -3099,6 +3140,39 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+HERDR_FOCUS_CHECKPOINT="$STATE/$ID.herdr-focus"
+HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_PANE=
+if [ "$BACKEND" = herdr ] \
+   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+  fm_backend_source herdr || true
+  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
+  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_PANE" ] \
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+  fi
+fi
+
+if [ "$BACKEND" = herdr ] && { [ -e "$HERDR_FOCUS_CHECKPOINT" ] || [ -L "$HERDR_FOCUS_CHECKPOINT" ]; }; then
+  if ! teardown_herdr_focus_checkpoint_restore "$HERDR_FOCUS_CHECKPOINT" "$TEARDOWN_HERDR_SESSION"; then
+    echo "error: herdr focus recovery for $ID could not restore the captain's active workspace and tab; retaining every durable task record" >&2
+    exit 1
+  fi
+  rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+    echo "error: herdr focus recovery for $ID could not retire its verified checkpoint; retaining every durable task record" >&2
+    exit 1
+  }
+fi
+
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
 BACKLOG_TRANSITION_FLAGS=()
@@ -3186,6 +3260,51 @@ fi
 # not by task-worktree cleanup.
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
+fi
+
+# A projected pane must close while its session lock is held and before any
+# worktree cleanup can kill its shell.
+# Killing that shell first lets Herdr remove the last pane outside the exact
+# focus-restore path, which can switch the captain to a neighboring workspace.
+if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+  if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
+    HERDR_FOCUS_SNAPSHOT=$(fm_backend_herdr_projection_focus_snapshot "$HERDR_PRESENTATION_SESSION") || {
+      echo "error: herdr pane $T for $ID has no unambiguous active workspace and tab to preserve; retaining every durable task record" >&2
+      exit 1
+    }
+    teardown_herdr_focus_checkpoint_write "$HERDR_FOCUS_CHECKPOINT" \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_FOCUS_SNAPSHOT" || {
+      echo "error: herdr pane $T for $ID could not persist its focus recovery checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
+    if fm_backend_herdr_projection_close_pane_focus_preserving \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" "$HERDR_FOCUS_SNAPSHOT"; then
+      HERDR_PROJECTED_CLOSE_RC=0
+    else
+      HERDR_PROJECTED_CLOSE_RC=$?
+    fi
+    # Exit status 2 means the exact prior focus itself could not be restored -
+    # the captain may now be looking at the wrong workspace/tab, so this must
+    # stop immediately and keep the checkpoint for the next run to recover
+    # from. Exit status 1 (pane close issued but not yet confirmed gone, focus
+    # already back where it was) is not fatal here: the presence classification
+    # and the endpoint-confirmation gate further below are what decide whether
+    # any durable record may be removed, exactly as before this reordering.
+    if [ "$HERDR_PROJECTED_CLOSE_RC" -eq 2 ]; then
+      echo "error: herdr pane $T for $ID could not be closed while preserving the captain's active workspace and tab; retaining every durable task record" >&2
+      exit 1
+    fi
+    rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+      echo "error: herdr pane $T for $ID could not retire its verified focus checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
+  else
+    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    exit 1
+  fi
+fi
+
+if [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
 
@@ -3236,45 +3355,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   }
 fi
 
-HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
-HERDR_PRESENTATION_RETIRE_CANDIDATE=0
-HERDR_PRESENTATION_SESSION=
-HERDR_PRESENTATION_PANE=
-if [ "$BACKEND" = herdr ] \
-   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  fm_backend_source herdr || true
-  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
-  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
-  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
-     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
-     && [ -n "$HERDR_PRESENTATION_PANE" ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
-     && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
-  fi
-fi
-
-if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  # The presentation lock was acquired before the worktree return above; a
-  # contended lock already refused this teardown while everything was intact.
-  if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
-    # stderr is deliberately NOT discarded here. This is the highest-frequency
-    # projected-close call site, and the helper's only stderr output is a real
-    # warning - unverifiable workspace.move support, a refused focus-unsafe
-    # close, an unconfirmed repositioned-workspace removal, or a failed exact
-    # restore.
-    # Swallowing them left a wrong active workspace with no operator-visible
-    # signal at all. The close stays non-fatal exactly as before: the presence
-    # gate below is what decides whether any durable record may be removed.
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || true
-  else
-    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
-  fi
-elif [ "$BACKEND" = herdr ]; then
+if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] && [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
   else

@@ -192,6 +192,16 @@ A prior label heuristic could adopt a captain-owned workspace named `firstmate` 
 The current structural gate removes label inference from cleanup authority.
 `tests/fm-backend-herdr-prune-safety-e2e.test.sh` reproduces the collision in an isolated named session and proves the adopted pane remains untouched.
 
+## Stale default-workspace reap
+
+Herdr 0.8.2 seeds every fresh session with exactly one workspace labeled `~` before Firstmate ever calls `workspace create` (verified empirically against the real client).
+`fm_backend_herdr_stale_default_workspace_id` identifies that scaffold only when the session has exactly one workspace and its label is that literal sentinel - but label and count alone cannot tell an untouched scaffold from a captain's own real, actively-used workspace that merely still carries the unrenamed default label, so two further guards are required:
+- `HERDR_SESSION` must be explicitly set by the caller. When it is unset, `fm_backend_herdr_session` falls back to herdr's own ambient `default` session - the same session an operator's own interactive herdr usage lives in - and the reap never runs there, regardless of the candidate workspace's shape.
+- The candidate workspace must have zero panes of any kind, checked by listing its panes directly rather than inferred from agent status - a live pane a captain is using manually, or one hosting an idle/finished agent, is still live work and would not be flagged as "working" by herdr's agent tracker. Any pane at all means a captain has actually used the workspace, and it is never reaped.
+
+`fm_backend_herdr_workspace_ensure` reaps it, best-effort, right after creating this home's own workspace.
+A failed reap never fails the spawn.
+
 ## Endpoint metadata
 
 ```text

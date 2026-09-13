@@ -73,7 +73,8 @@ make_crewmate_worktree_dir() {
 run_autoarm() {
   local dir=$1 rc=0
   printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
-    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-autoarm FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="autoarm-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1 || rc=$?
@@ -206,7 +207,8 @@ RUN_AUTOARM_BG_PID=
 run_autoarm_bg() {
   local dir=$1 out=$2
   printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
-    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-autoarm FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="autoarm-background-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' > "$out" 2>&1 &
@@ -266,7 +268,8 @@ test_reclaims_stale_session_lock_before_arming() {
   printf '9999999\n' > "$dir/state/.lock"
   write_arm_fixture "$dir" actionable
   out=$(printf '%s\n' '{"session_id":"stale"}' \
-    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=stale FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="stale-lock-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1); status=$?
@@ -352,7 +355,8 @@ test_resolves_outermost_claude_pid_in_nested_bgspare_chain() {
   # so bash cannot tail-exec-collapse it into the outer pid, which would
   # collapse the two-hop chain this test depends on down to one hop.
   out=$(printf '%s\n' '{"session_id":"nested"}' \
-    | CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=nested FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="nested-chain-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FAKE_CLAUDE" -c "
           printf \"%s\n\" \"\$\$\" > \"\$FM_HOME/state/inner-pid\"
@@ -653,7 +657,8 @@ test_single_flight_admits_exactly_one_owner() {
   dir=$(make_primary_dir "$TMP_ROOT/single-flight")
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" slow-actionable
-  CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-autoarm FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="single-flight-fixture-$$" CLAUDE_PID=$$
     printf "%s\n" "$$" > "$FM_HOME/state/.lock"
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err1" &
     p1=$!

@@ -1116,6 +1116,33 @@ test_turn_ended_colliding_window_key_surfaced() {
   pass "a turn-end whose marker key matches another recorded endpoint surfaces"
 }
 
+test_turn_ended_colliding_window_key_isolated() {
+  local dir state fakebin out capture_file window colliding key pid
+  dir=$(make_case turn-ended-colliding-key-isolated); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-a.b"; colliding="test:fm-a_b"
+  : > "$state/a.b.turn-ended"
+  printf 'window=%s\nkind=ship\nharness=codex\n' "$window" > "$state/a.b.meta"
+  printf 'window=%s\nkind=ship\nharness=codex\n' "$colliding" > "$state/a_b.meta"
+  printf 'rendered after the prior poll' > "$capture_file"
+  key=$(watch_marker_key "$window")
+  printf '%s' "$(hash_text 'the other window pane')" > "$state/.hash-$key"
+  printf '0\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: pane · harness state unavailable (unknown codex-unverified)'
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_CONFIG_OVERRIDE="$(churn_config "$dir")" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_POLL=3 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_absorbed "$state" "$pid" "absorbed benign signal:" \
+    || { reap "$pid"; fail "v2 markers did not isolate a churning colliding endpoint: $(cat "$out")"; }
+  [ ! -s "$out" ] || fail "an isolated colliding endpoint printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "an isolated colliding endpoint enqueued a durable wake record"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "v2 marker keys isolate colliding endpoint names during turn-end churn"
+}
+
 test_turn_ended_duplicate_endpoint_records_surfaced() {
   local dir state fakebin out drain_out capture_file window key pid
   dir=$(make_case turn-ended-duplicate-endpoint); state="$dir/state"; fakebin="$dir/fakebin"
@@ -2967,7 +2994,9 @@ test_paused_authoritative_working_preserves_wedge_timer() {
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_numeric_file "$state/.stale-since-$key" 30 || { reap "$pid"; fail "authoritative working state did not start wedge tracking"; }
+  # Loaded-runner budget: see the identical rationale at the corrupt-timer
+  # repair wait below (watcher startup does bounded recovery scans first).
+  wait_numeric_file "$state/.stale-since-$key" 100 || { reap "$pid"; fail "authoritative working state did not start wedge tracking"; }
   since=$(cat "$state/.stale-since-$key")
   sleep 2
   [ "$(cat "$state/.stale-since-$key" 2>/dev/null || true)" = "$since" ] \
@@ -3665,7 +3694,9 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_numeric_file "$state/.stale-since-$key" 30 || { reap "$pid"; fail "matching stale suppressor with missing timer did not initialize stale-since"; }
+  # Loaded-runner budget: watcher startup does bounded recovery scans before
+  # its first stale poll, same rationale as the corrupt-timer wait just below.
+  wait_numeric_file "$state/.stale-since-$key" 100 || { reap "$pid"; fail "matching stale suppressor with missing timer did not initialize stale-since"; }
   if ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid" 2>/dev/null || true
     fail "watcher exited while repairing a missing stale-since timer: $(cat "$out")"
@@ -3680,7 +3711,7 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_numeric_file "$state/.stale-since-$key" 30 || { reap "$pid"; fail "matching stale suppressor with corrupt timer did not repair stale-since"; }
+  wait_numeric_file "$state/.stale-since-$key" 100 || { reap "$pid"; fail "matching stale suppressor with corrupt timer did not repair stale-since"; }
   since=$(cat "$state/.stale-since-$key" 2>/dev/null || true)
   [ "$since" != "corrupt" ] || { reap "$pid"; fail "corrupt stale-since value was left in place"; }
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "corrupt stale-since repair enqueued a wake"; }
@@ -4517,6 +4548,8 @@ test_turn_ended_still_pane_surfaced
 test_turn_ended_malformed_prior_hash_surfaced
 test_turn_ended_trailing_newline_prior_hash_surfaced
 test_secondmate_turn_ended_churning_pane_surfaced
+test_turn_ended_colliding_window_key_surfaced
+test_turn_ended_colliding_window_key_isolated
 test_turn_ended_duplicate_endpoint_records_surfaced
 test_turn_ended_mixed_positive_evidence_batch_absorbed
 test_turn_ended_mixed_positive_evidence_batch_default_off
