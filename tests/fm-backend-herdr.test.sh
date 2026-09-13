@@ -4446,6 +4446,74 @@ test_workspace_ensure_never_reaps_a_captains_own_default_labeled_workspace() {
   pass "fm_backend_herdr_stale_default_workspace_id: never mistakes a '~'-labeled workspace for herdr's scaffold once a second workspace already exists"
 }
 
+# A captain who opens herdr directly (no HERDR_SESSION set) lands in herdr's
+# own ambient "default" session - the exact same session
+# fm_backend_herdr_session() falls back to when firstmate's own HERDR_SESSION
+# is unset. If that captain then works in the auto-provisioned lone '~'
+# workspace and later runs firstmate in the same ambient session, the reap
+# must never fire there, no matter what the workspace's tab/pane shape is -
+# this is the safety boundary docs/herdr-backend.md's "Stale default-workspace
+# reap" section actually guarantees.
+test_workspace_ensure_never_reaps_ambient_default_session_live_pane() {
+  local dir log state fb raw container wscount labels
+  dir="$TMP_ROOT/no-reap-ambient-default-live-pane"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  jq '.next = 3
+      | .workspaces = [{workspace_id:"w1", label:"~"}]
+      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  fake_herdr_set_agent_status "$state" "w1:p2" working
+  raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" \
+    bash -c 'unset HERDR_SESSION; . "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
+    || fail "container_ensure failed against an ambient default session holding a lone live '~' workspace"
+  container=${raw%%$'\t'*}
+  case "$container" in
+    default:w1) fail "container_ensure adopted the ambient default session's own live '~' workspace as this home's own" ;;
+    default:w*) : ;;
+    *) fail "unexpected container '$container'" ;;
+  esac
+  wscount=$(jq -r '.workspaces|length' "$state")
+  [ "$wscount" = 2 ] || fail "the ambient default session's pre-existing '~' workspace must survive alongside the new one, got $wscount: $(jq -c '.workspaces' "$state")"
+  labels=$(jq -r '.workspaces[]|select(.workspace_id=="w1").label' "$state")
+  [ "$labels" = '~' ] || fail "the ambient default session's '~' workspace must never be reaped, got label '$labels'"
+  assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close'$'\x1f''w1' \
+    "workspace_ensure must never reap the ambient default session's own '~' workspace, live pane or not"
+  pass "fm_backend_herdr_stale_default_workspace_id: never reaps the ambient 'default' session's own '~' workspace, even with a live pane"
+}
+
+# Defense in depth for the firstmate-owned-session case: even when
+# HERDR_SESSION is explicitly set and the sole '~' workspace still carries
+# only its single auto-created default tab, a working agent in that tab's
+# pane means a captain is actually using it, and the reap must still refuse -
+# mirroring fm_backend_herdr_workspace_prune_seeded_default_tab's own
+# working-agent guard.
+test_workspace_ensure_never_reaps_scaffold_with_working_agent() {
+  local dir log state fb raw container wscount labels
+  dir="$TMP_ROOT/no-reap-scaffold-working-agent"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  jq '.next = 3
+      | .workspaces = [{workspace_id:"w1", label:"~"}]
+      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  fake_herdr_set_agent_status "$state" "w1:p2" working
+  raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
+    || fail "container_ensure failed against a firstmate-owned session with a working agent in the sole '~' workspace"
+  container=${raw%%$'\t'*}
+  case "$container" in
+    fmtest:w1) fail "container_ensure adopted the scaffold workspace despite its pane hosting a working agent" ;;
+    fmtest:w*) : ;;
+    *) fail "unexpected container '$container'" ;;
+  esac
+  wscount=$(jq -r '.workspaces|length' "$state")
+  [ "$wscount" = 2 ] || fail "the scaffold workspace with a working agent must survive alongside the new one, got $wscount: $(jq -c '.workspaces' "$state")"
+  labels=$(jq -r '.workspaces[]|select(.workspace_id=="w1").label' "$state")
+  [ "$labels" = '~' ] || fail "the scaffold workspace with a working agent must never be reaped, got label '$labels'"
+  assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close'$'\x1f''w1' \
+    "workspace_ensure must never reap a '~' scaffold whose sole tab's pane hosts a working agent"
+  pass "fm_backend_herdr_stale_default_workspace_id: never reaps a '~' scaffold whose sole default tab hosts a working agent"
+}
+
 test_repeated_cycles_reuse_one_workspace_no_orphans() {
   local dir log state fb i raw container seeded wsid ids pane first_ws="" wscount total tabcount created
   dir="$TMP_ROOT/cycles"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
@@ -4980,6 +5048,8 @@ test_container_ensure_uses_secondmate_home_label
 test_workspace_ensure_prunes_default_tab
 test_workspace_ensure_reaps_stale_default_workspace
 test_workspace_ensure_never_reaps_a_captains_own_default_labeled_workspace
+test_workspace_ensure_never_reaps_ambient_default_session_live_pane
+test_workspace_ensure_never_reaps_scaffold_with_working_agent
 test_repeated_cycles_reuse_one_workspace_no_orphans
 test_adopted_workspace_never_prunes_default_tab
 test_label_collision_startup_workspace_leaves_live_tab_alone

@@ -1885,14 +1885,48 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 # Takes an optional pre-fetched `workspace list` JSON response as its 2nd arg
 # so a caller that already fetched the list (fm_backend_herdr_workspace_ensure)
 # never issues a second redundant herdr call for the same information.
+#
+# Two further guards, both required, on top of the label+count match above -
+# label alone cannot tell an untouched scaffold from a captain's own real
+# workspace that happens to share it:
+#   1. HERDR_SESSION must be EXPLICITLY set by the caller. When it is unset,
+#      fm_backend_herdr_session() falls back to herdr's own ambient "default"
+#      session - the same session an operator's own interactive herdr usage
+#      lives in - and this never reaps there, regardless of the candidate
+#      workspace's shape.
+#   2. The candidate workspace's tabs must still be in herdr's own untouched
+#      seeded shape: zero tabs, or exactly the one auto-created default tab
+#      (label "1") with no working agent in its pane. Any other shape - more
+#      tabs, a renamed tab, or a working agent - means a captain has actually
+#      used this workspace, and it is never reaped.
 fm_backend_herdr_stale_default_workspace_id() {  # <session> [<pre-fetched-workspace-list-json>]
   local session=$1 list=${2:-} wsid label count
+  local tabs tab_count tab_id tab_label pane_id agent_out agent_status
+  [ -n "${HERDR_SESSION:-}" ] || return 0
   [ -n "$list" ] || list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
   count=$(printf '%s' "$list" | jq -r '.result.workspaces | length' 2>/dev/null) || return 0
   [ "$count" = 1 ] || return 0
   label=$(printf '%s' "$list" | jq -r '.result.workspaces[0].label // empty' 2>/dev/null)
   [ "$label" = '~' ] || return 0
   wsid=$(printf '%s' "$list" | jq -r '.result.workspaces[0].workspace_id // empty' 2>/dev/null)
+  [ -n "$wsid" ] || return 0
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
+  tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs? // [] | length' 2>/dev/null)
+  case "$tab_count" in
+    0) ;;
+    1)
+      tab_id=$(printf '%s' "$tabs" | jq -r '.result.tabs[0].tab_id // empty' 2>/dev/null)
+      tab_label=$(printf '%s' "$tabs" | jq -r '.result.tabs[0].label // empty' 2>/dev/null)
+      [ "$tab_label" = "1" ] || return 0
+      pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || pane_id=""
+      if [ -n "$pane_id" ]; then
+        agent_out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null)
+        agent_status=$(printf '%s' "$agent_out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+        [ "$agent_status" != working ] || return 0
+      fi
+      ;;
+    *) return 0 ;;
+  esac
   printf '%s' "$wsid"
 }
 
