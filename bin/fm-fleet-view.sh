@@ -29,13 +29,19 @@ command -v jq >/dev/null 2>&1 || { echo "fm-fleet-view: jq not found" >&2; exit 
 SNAPSHOT=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --json) || exit $?
 
 printf '%s\n' "$SNAPSHOT" | jq -r '
-  def dash($v): if $v == null or $v == "" then "-" else $v end;
+  (.secondmate_current.records // []) as $secondmate_current
+  | def dash($v): if $v == null or $v == "" then "-" else $v end;
   def endpoint_exists($t):
     if $t.endpoint.exists == null then "unknown"
     elif $t.endpoint.exists then "present"
     else "absent" end;
+  def home_ledger_timed_out($t):
+    if $t.kind == "secondmate" then
+      any($secondmate_current[]; .id == $t.id and .current.state == "timeout")
+    else false end;
   def endpoint_of($t):
-    if $t.kind == "secondmate" then "\(endpoint_exists($t)) / \($t.endpoint.agent_alive)"
+    if home_ledger_timed_out($t) then "timed out"
+    elif $t.kind == "secondmate" then "\(endpoint_exists($t)) / \($t.endpoint.agent_alive)"
     else endpoint_exists($t) end;
   def artifact($t):
     if $t.pr.url != null then $t.pr.url
