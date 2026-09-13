@@ -34,7 +34,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
-| `fm-dispatch-select.mjs` | Fail-closed subscription readiness, reserve, cooldown, spendPriority ranking, and deterministic crew-profile rotation |
+| `fm-dispatch-select.mjs` | Thin forwarding shim over `llm-router-axi select` / `record` / `classify-evidence`, kept for existing callers |
 | `fm-openrouter-quota.sh` | Live OpenRouter key usage, model pricing, free-model eligibility, and per-model rate-limit cooldown |
 | `fm-model-refresh.sh`    | Record each installed harness's own model listing in a dated catalog, name what is new since the previous run, and probe usability only behind `--probe` |
 | [`fm-dod-lib.sh`](../bin/fm-dod-lib.sh) | Own ship/scout worker role scope, ship definitions of done, and the no-mistakes `--intent` contract |
@@ -65,8 +65,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-name.sh`             | Derive a stable readable crew name from a task id                                    |
 | `fm-graphify.sh`         | Build or query a fleet-only Graphify orientation index stored outside the project    |
 | `fm-treehouse-lib.sh`    | Shared per-project worktree-pool placement and the worktree/object-store same-filesystem invariant |
-| `fm-capacity.sh`         | Report live machine headroom and what a spawn attempted now would decide             |
-| `fm-capacity-lib.sh`     | Memory-first machine-capacity probes and the spawn-admission decision                |
+| `fm-capacity.sh`         | Report the llm-router-axi machine-capacity reading and the usage-axi measurement      |
+| `fm-capacity-lib.sh`     | Spawn admission through the llm-router-axi capacity verdict                          |
 | `fm-router-lib.sh`       | Resolve usage-axi / llm-router-axi and the one-line install hint                     |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |

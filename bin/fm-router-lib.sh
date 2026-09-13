@@ -2,11 +2,10 @@
 # fm-router-lib.sh - single owner of firstmate's usage-axi / llm-router-axi
 # tool resolution.
 #
-# Firstmate's accepted P3 shim-first posture is: prefer the two axi tools when
-# they are installed, and keep the in-repo dispatch, capacity, and telemetry
-# path when they are absent. This file resolves those executables plus the
-# operator-facing install hint so every caller agrees on the names, the env
-# overrides, and the "tool absent" contract.
+# The two axi tools own the dispatch selector, the in-run step-down chain, the
+# depletion classifier, and the machine-capacity gauges. This file resolves
+# those executables plus the operator-facing install hint so every caller agrees
+# on the names, the env overrides, and the "tool absent" contract.
 #
 # Env overrides (operator escape hatch and test seam):
 #   FM_USAGE_AXI       usage-axi executable       (default: usage-axi)
@@ -20,10 +19,11 @@
 #   fm_router_axi_install_hint  print the documented install command
 #
 # Resolution is PATH-only, plus an absolute path passed through the override.
-# Firstmate never vendors a private copy of either tool: install both with
-# `npm install -g usage-axi llm-router-axi`, or run one off with
-# `npx -y usage-axi` / `npx -y llm-router-axi`. A caller that finds the tool
-# absent must keep its in-repo fallback rather than failing closed.
+# Firstmate never vendors a private copy of either tool. Both are unpublished on
+# npm, so install each from its GitHub main clone (fm_router_axi_install_hint
+# owns the exact commands). A missing tool is a blocker, not a reason to hand
+# dispatch: the capacity guard declines and the selector refuses rather than
+# running unguarded.
 
 fm_router_lib_resolve() {  # <name-or-path> -> resolved executable, or empty
   local name=${1:-} path
@@ -50,5 +50,5 @@ fm_router_axi_have() {
 }
 
 fm_router_axi_install_hint() {
-  printf '%s\n' 'npm install -g usage-axi llm-router-axi   # or: npx -y usage-axi / npx -y llm-router-axi'
+  printf '%s\n' 'git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .   # repeat for https://github.com/adibirzu/usage-axi; neither is on npm yet'
 }
