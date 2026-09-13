@@ -1841,7 +1841,7 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
 # an uncertain retry idempotent, and the pending/retry staging still surfaces a
 # genuinely undeliverable nudge.
 test_config_reread_nudge_leaves_no_pending_reply() {
-  local w head log out status open_count err first_instr
+  local w head log out status open_count err first_instr second_instr first_delivery second_delivery
   w=$(new_world config-reread-no-pending)
   head=$(git -C "$w/main" rev-parse HEAD)
   add_sm_worktree "$w" sm "$head"
@@ -1867,11 +1867,33 @@ test_config_reread_nudge_leaves_no_pending_reply() {
   open_count=$(fm_pending_reply_task_has_open "$w/home/state" sm && printf 'open' || printf 'none')
   [ "$open_count" = none ] || fail "delivered reread nudge left an open pending-reply record"
 
+  # A second DISTINCT config change must notify again. Moving the first record
+  # into handled/ models the mate acknowledging it; a delivery id that did not
+  # change with the instruction would let the second send dedupe onto that
+  # acknowledged record, reporting success while the mate is never notified.
+  mkdir -p "$w/home/state/sm.inbox/handled"
+  mv "$w/home/state/sm.inbox/001.msg" "$w/home/state/sm.inbox/handled/001.msg"
+  printf 'pi\n' > "$w/home/config/crew-harness"
+  out=$(run_config_push "$w" "$log" 2>/dev/null); status=$?
+  expect_code 0 "$status" "a second config push with a nudge should succeed"
+  assert_contains "$out" "config-reread: sent" "second config push should send a fresh reread nudge"
+  second_instr=$(reread_instruction_path "$w/sm") || fail "second reread instruction missing"
+  [ "$second_instr" != "$first_instr" ] || fail "the second push did not publish a new instruction"
+  [ -f "$w/home/state/sm.inbox/002.msg" ] \
+    || fail "a second distinct reread nudge must create a new live inbox record"
+  first_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm.inbox/handled/001.msg" | head -1)
+  second_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm.inbox/002.msg" | head -1)
+  [ -n "$first_delivery" ] || fail "first reread nudge carried no delivery id"
+  [ -n "$second_delivery" ] || fail "second reread nudge carried no delivery id"
+  [ "$first_delivery" != "$second_delivery" ] \
+    || fail "a distinct reread instruction must derive a distinct delivery id"
+  assert_no_pending_replies "$w/home"
+
   # A genuinely undeliverable nudge must still surface and stay retryable. On the
   # inbox plane the real local failure is an unwritable steer record.
   rm -rf "$w/home/state/sm.inbox"
   : > "$w/home/state/sm.inbox"
-  printf 'pi\n' > "$w/home/config/crew-harness"
+  printf 'grok\n' > "$w/home/config/crew-harness"
   err="$w/config-reread-no-pending-fail.err"
   out=$(PATH="$(make_fake_toolchain "$w"):$BASE_PATH" \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" FM_SEND_SETTLE=0 \

@@ -8,12 +8,30 @@
 FM_SECOND_MATE_NUDGE_MESSAGE='firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'
 FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE='Firstmate instructions or inherited config changed on this host. Re-read AGENTS.md and the inherited config files before further work.'
 
-# A stable 16-lowercase-hex delivery id for the automated instruction nudge.
-# At most one such nudge is pending per home, and the same nudge is re-sent only
-# for a retry of that pending marker, so a constant id makes an uncertain retry
-# idempotent without collapsing two logically distinct instructions that the
-# marker's one-at-a-time contract already serializes.
-FM_SECOND_MATE_NUDGE_DELIVERY_ID='0000000000000001'
+# fm_secondmate_nudge_delivery_id <id> <recorded-seed>
+# A stable 16-lowercase-hex delivery id for one automated nudge, derived from
+# the nudge's identity: its secondmate id plus the seed the pending marker
+# records for it (the instruction commit for a local home, the inheritance
+# generation for a remote one). Re-deriving from the same recorded seed keeps an
+# uncertain retry idempotent on the fire-and-forget inbox plane, while a later
+# distinct instruction records a different seed and therefore a different id, so
+# it lands as a new record instead of deduping onto one the mate already
+# acknowledged. A constant id would silently drop the second and every later
+# nudge while still reporting delivery success.
+fm_secondmate_nudge_delivery_id() {
+  local id=$1 seed=$2 digest
+  [ -n "$id" ] || return 1
+  if command -v shasum >/dev/null 2>&1; then
+    digest=$(printf '%s' "fm-secondmate-nudge:$id:$seed" | shasum -a 256 | awk '{print $1}') || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s' "fm-secondmate-nudge:$id:$seed" | sha256sum | awk '{print $1}') || return 1
+  elif command -v openssl >/dev/null 2>&1; then
+    digest=$(printf '%s' "fm-secondmate-nudge:$id:$seed" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}') || return 1
+  else
+    return 1
+  fi
+  printf '%s' "$digest" | cut -c1-16
+}
 
 fm_secondmate_nudge_marker_path() { # <state-dir> <id>
   local state=$1 id=$2
