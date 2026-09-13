@@ -13,6 +13,11 @@
 # config/spawn-capacity format. docs/configuration.md "Machine capacity
 # (config/spawn-capacity)" owns the operator-facing settings contract.
 #
+# When usage-axi is installed, its live `machine` measurement is printed
+# alongside the legacy verdict as the router's preferred capacity source; when
+# it is absent the report above is the whole answer. Resolution is owned by
+# bin/fm-router-lib.sh.
+#
 # Settings are read from the effective firstmate home, resolved the same way
 # every other home-local config is: FM_CONFIG_OVERRIDE, else FM_HOME/config,
 # else the tracked code root's config/.
@@ -48,6 +53,22 @@ if [ "$rc" -ne 0 ]; then
   printf '%s\n' '  A spawn attempted now would be declined. Nothing already running is affected.'
   printf '  Raise the limits or set mode = off in %s to proceed anyway.\n' \
     "${FM_CAPACITY_CONFIG_PATH:-$CONFIG/$FM_CAPACITY_CONFIG_FILE}"
+fi
+
+# usage-axi machine is the router's preferred capacity reading. Resolution
+# lives in bin/fm-router-lib.sh; the tool stays optional so a host without it
+# keeps the legacy verdict unchanged.
+# shellcheck source=bin/fm-router-lib.sh
+. "$SCRIPT_DIR/fm-router-lib.sh"
+if fm_usage_axi_have; then
+  usage_axi_machine_bin=$(fm_usage_axi_bin)
+  printf '\nusage-axi machine (%s):\n' "$usage_axi_machine_bin"
+  usage_axi_machine_out=$("$usage_axi_machine_bin" machine 2>/dev/null || true)
+  if [ -n "$usage_axi_machine_out" ]; then
+    printf '%s\n' "$usage_axi_machine_out" | sed 's/^/  /'
+  else
+    printf '%s\n' '  usage-axi machine returned no reading'
+  fi
 fi
 
 [ "$MODE" = check ] || exit 0

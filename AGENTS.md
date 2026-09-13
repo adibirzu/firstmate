@@ -214,6 +214,8 @@ If static `config/crew-harness` or `config/secondmate-harness` names an unverifi
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
+`bin/fm-router-lib.sh` owns usage-axi and llm-router-axi resolution, and `router-dispatch` owns the tool-based path.
+When `llm-router-axi` is installed, route the task descriptor through `llm-router-axi route --flags` (its telemetry is `usage-axi`) and record outcomes with `llm-router-axi record`; when it is absent, keep the in-repo path below.
 Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to the subscription-aware selector owned by `quota-array-dispatch` and `bin/fm-dispatch-select.mjs`.
 Account for every candidate; unresolved identity is a configuration error, while stale or unavailable capacity evidence makes only that provider ineligible and permits inspectable failover to another eligible candidate.
 The selector applies fail-closed capacity (fresh telemetry, reserve, cooldown, and declared `quotaWindow`) and ranks remaining eligible candidates by `spendPriority` when quota-axi publishes a known scalar, otherwise by persisted least-recent use.
@@ -221,7 +223,7 @@ Preserve malformed profile configuration as an actionable error rather than sele
 When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report the tight choice if that class cannot proceed.
 Never bypass the configured reserve or evidence-backed cooldown; if no comparable candidate remains eligible, stop the dispatch.
 Kimi 0.29.1 remains outside automatic subscription dispatch because its guarded Herdr lifecycle exit was not deterministic after interrupt.
-`quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends a route, and no stale telemetry is dispatch capacity.
+`usage-axi` and `quota-axi` remain data-only: they publish `spendPriority` as a comparable scalar and never recommend a route, and no stale telemetry is dispatch capacity.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill owns the selection judgment boundary.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
@@ -579,7 +581,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 - `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
 - `graphify-orientation` - load before broadly exploring unfamiliar code, discovering relevant files, mapping ownership, or tracing cross-file relationships.
-- `multi-account` - load before launching a crewmate under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`) or selecting an account by quota headroom.
+- `router-dispatch` - load before choosing a worker or reviewer runtime by task descriptor, before resolving a subscription-aware profile array, or before launching under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`).
 
 ## 14. Relay
 
