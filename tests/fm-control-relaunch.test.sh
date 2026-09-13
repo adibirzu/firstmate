@@ -83,6 +83,20 @@ case "${1:-}" in
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
+        'cd '*)
+          # The relaunch shell reset types `cd '<reset-dir>'`; model the shell
+          # executing it so the reset's cwd proof succeeds. A shell executes any
+          # cd, so other cd sends (fm-spawn's `cd <worktree>`) are modeled too -
+          # unless a case sets FM_FAKE_SHELL_EXECUTES_CD=0 to keep a pane pinned
+          # outside its worktree (the cwd-mismatch refusal cases).
+          cd_dir=${payload#cd }
+          cd_dir=${cd_dir#\'}
+          cd_dir=${cd_dir%\'}
+          case "$cd_dir" in
+            */.control-reset-*) printf '%s' "$cd_dir" > "$D/cwd" ;;
+            *) [ "${FM_FAKE_SHELL_EXECUTES_CD:-0}" = 1 ] && printf '%s' "$cd_dir" > "$D/cwd" ;;
+          esac
+          ;;
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
@@ -196,6 +210,7 @@ run_control() {  # <case-dir> <args...>
     FM_FAKE_TRACE_RELEASE="${FM_FAKE_TRACE_RELEASE:-}" \
     FM_FAKE_META_WRITER_READY="${FM_FAKE_META_WRITER_READY:-}" \
     FM_FAKE_TRACE_EXPORTED="${FM_FAKE_TRACE_EXPORTED:-}" \
+    FM_FAKE_SHELL_EXECUTES_CD="${FM_FAKE_SHELL_EXECUTES_CD:-1}" \
     "$CONTROL" "$@" 2>&1
 }
 
@@ -1073,10 +1088,11 @@ test_launch_failure_keeps_the_prior_record_and_reports_it() {
   dir=$(new_case rollback rl13)
   add_ship_task "$dir" rl13 claude
   before=$(cat "$dir/home/state/rl13.meta")
-  # The endpoint's shell is not in the recorded worktree, so the launch owner
-  # refuses AFTER the previous agent has already been stopped.
+  # The endpoint's shell refuses to enter the recorded worktree, so the launch
+  # owner refuses AFTER the previous agent has already been stopped.
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
-  out=$(run_control "$dir" rl13 relaunch --harness codex --note "carry this forward"); rc=$?
+  out=$(FM_FAKE_SHELL_EXECUTES_CD=0 \
+    run_control "$dir" rl13 relaunch --harness codex --note "carry this forward"); rc=$?
   expect_code 1 "$rc" "a failed launch should fail closed"$'\n'"$out"
   assert_contains "$out" "no agent is running" "the failure should say no agent is running"
   assert_contains "$out" "$dir/wt" "the failure should say where the work is preserved"
@@ -1096,7 +1112,7 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
   dir=$(new_case rollback-race rl30)
   add_ship_task "$dir" rl30 claude
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
-  FM_FAKE_CWD_RACE_READY="$dir/cwd-race-ready" \
+  FM_FAKE_SHELL_EXECUTES_CD=0 FM_FAKE_CWD_RACE_READY="$dir/cwd-race-ready" \
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!

@@ -394,6 +394,115 @@ test_fleet_memory_is_weighed_by_footprint_not_headcount() {
   pass "the fleet limit is on memory held, not on how many agents are running"
 }
 
+# --- a machine-wide agent ceiling -------------------------------------------
+#
+# The fleet-memory signal is weighed by footprint, so a fleet of many small
+# agents can sit well under it. An operator with a standing headcount rule (the
+# captain's "never more than N agents on this machine") needs a knob that reads
+# the SAME "across N agents" figure the memory row prints, so the cap and the
+# row can never disagree about what an agent is.
+
+test_absent_agent_ceiling_leaves_the_count_uncapped() {
+  local out
+  # No config/spawn-capacity at all, and a fleet far larger than any default.
+  out=$(spawn_under agents-default 0 "${HEALTHY[@]}" FM_CAPACITY_FLEET_AGENTS=50)
+  assert_contains "$out" "spawned capacity-signal-agents-default" \
+    "an absent max_fleet_agents must leave the machine-wide count uncapped"
+  pass "an absent agent ceiling leaves the machine-wide count uncapped"
+}
+
+test_operator_can_switch_the_agent_ceiling_off() {
+  local rec id out status
+  id=capacity-agents-f1
+  rec=$(make_case agents-off "$id")
+  read_case_record "$rec"
+  printf 'max_fleet_agents = off\n' > "$HOME_DIR/config/spawn-capacity"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    FM_CAPACITY_FLEET_AGENTS=50 -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "max_fleet_agents = off must admit a large fleet"
+  assert_contains "$out" "spawned $id" "an explicit off ceiling did not admit the spawn"
+  pass "an explicit off agent ceiling leaves the machine-wide count uncapped"
+}
+
+test_agent_ceiling_refuses_at_or_above_with_both_numbers() {
+  local rec id out status
+  id=capacity-agents-f2
+  rec=$(make_case agents-cap "$id")
+  read_case_record "$rec"
+  printf 'max_fleet_agents = 7\n' > "$HOME_DIR/config/spawn-capacity"
+
+  # At the ceiling already: a spawn would push the fleet past it, so it is
+  # declined, naming both the measured count and the wanted maximum.
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    FM_CAPACITY_FLEET_AGENTS=7 -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "a count at the configured ceiling must decline a spawn"
+  assert_contains "$out" "no headroom left on agents" \
+    "the agent ceiling did not decline the spawn"
+  assert_contains "$out" "7 agents machine-wide" "the refusal omitted the measured agent count"
+  assert_contains "$out" "fewer than 7 agents" "the refusal omitted the wanted agent maximum"
+  assert_absent "$HOME_DIR/state/$id.meta" "a declined agent-ceiling spawn left a task record behind"
+  pass "the agent ceiling refuses at or above the configured count with both numbers"
+}
+
+test_agent_count_below_the_ceiling_is_admitted() {
+  local rec id out status
+  id=capacity-agents-f3
+  rec=$(make_case agents-under "$id")
+  read_case_record "$rec"
+  printf 'max_fleet_agents = 7\n' > "$HOME_DIR/config/spawn-capacity"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    FM_CAPACITY_FLEET_AGENTS=6 -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "a count below the configured ceiling must admit a spawn"
+  assert_contains "$out" "spawned $id" "the spawn was declined despite being under the agent ceiling"
+  pass "an agent count below the ceiling is admitted"
+}
+
+test_unreadable_agent_count_follows_the_unknown_policy() {
+  local rec id out status
+  id=capacity-agents-f4
+  rec=$(make_case agents-unknown "$id")
+  read_case_record "$rec"
+  printf 'max_fleet_agents = 7\n' > "$HOME_DIR/config/spawn-capacity"
+
+  # Default on_unknown = refuse: an unreadable count declines rather than passing.
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    FM_CAPACITY_FLEET_AGENTS=unknown -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "an unreadable agent count must decline by default"
+  assert_contains "$out" "agents could not be measured" "the unreadable count was not named"
+  assert_contains "$out" "headroom is unproven" "the refusal did not say headroom was unproven"
+
+  # on_unknown = allow: the same unreadable count proceeds, and is still shown.
+  printf 'max_fleet_agents = 7\non_unknown = allow\n' > "$HOME_DIR/config/spawn-capacity"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    FM_CAPACITY_FLEET_AGENTS=unknown -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "on_unknown = allow must let an unreadable agent count through"
+  assert_contains "$out" "spawned $id" "the opted-in spawn did not proceed"
+  pass "an unreadable agent count follows the configured unknown policy"
+}
+
+test_agent_ceiling_rejects_a_non_positive_value() {
+  local rec id out status
+  id=capacity-agents-f5
+  rec=$(make_case agents-malformed "$id")
+  read_case_record "$rec"
+  printf 'max_fleet_agents = 0\n' > "$HOME_DIR/config/spawn-capacity"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "${HEALTHY[@]}" \
+    -- "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 1 "$status" "a non-positive agent ceiling must refuse as malformed"
+  assert_contains "$out" "max_fleet_agents must be a positive integer or off" \
+    "the refusal did not name the malformed agent ceiling"
+  pass "a non-positive agent ceiling is refused as malformed rather than silently accepted"
+}
+
 # --- an unreadable signal is an explicit unknown ----------------------------
 
 test_unreadable_signal_refuses_by_default() {
@@ -570,6 +679,12 @@ test_each_memory_signal_can_refuse_alone
 test_load_alone_never_refuses
 test_operator_can_opt_into_a_load_limit
 test_fleet_memory_is_weighed_by_footprint_not_headcount
+test_absent_agent_ceiling_leaves_the_count_uncapped
+test_operator_can_switch_the_agent_ceiling_off
+test_agent_ceiling_refuses_at_or_above_with_both_numbers
+test_agent_count_below_the_ceiling_is_admitted
+test_unreadable_agent_count_follows_the_unknown_policy
+test_agent_ceiling_rejects_a_non_positive_value
 test_unreadable_signal_refuses_by_default
 test_operator_can_opt_into_allowing_unknown_signals
 test_absent_swap_is_an_answer_not_an_unknown

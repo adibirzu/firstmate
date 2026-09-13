@@ -410,15 +410,26 @@ fm_backend_of_meta() {  # <meta-file>
   printf '%s' "${v:-tmux}"
 }
 
+# fm_backend_target_of_meta: the endpoint target recorded in <meta-file> - the
+# Orca `terminal=` when backend=orca, otherwise `window=` - or empty when
+# neither is recorded. Always returns 0: callers assign it through command
+# substitution under `set -e` (bin/fm-spawn.sh, bin/fm-control.sh, ...), so an
+# absent field must read as a clean empty target rather than a nonzero status
+# that silently kills the caller.
 fm_backend_target_of_meta() {  # <meta-file>
   local meta=$1 backend terminal window
   backend=$(fm_backend_of_meta "$meta")
   if [ "$backend" = orca ]; then
     terminal=$(fm_meta_get "$meta" terminal)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
+    if [ -n "$terminal" ]; then
+      printf '%s' "$terminal"
+      return 0
+    fi
   fi
   window=$(fm_meta_get "$meta" window)
-  [ -n "$window" ] && printf '%s' "$window"
+  if [ -n "$window" ]; then
+    printf '%s' "$window"
+  fi
 }
 
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely
@@ -852,6 +863,38 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
   case "$backend" in
     orca) fm_backend_orca_worktree_path "$@" ;;
     *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
+  esac
+}
+
+# fm_backend_shell_quote: single-quote <string> for a shell command line, the
+# way a launch command needs its paths quoted. Shared by the adapters' shell
+# reset primitive so the quoting cannot drift between backends.
+fm_backend_shell_quote() {  # <string>
+  local s=$1
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+# fm_backend_reset_shell: return a pane whose agent has exited (leaving a bare
+# shell) to a fresh, empty input state so a launch command typed next cannot be
+# swallowed. An exited agent can leave the shell mid-continuation (a `quote>`,
+# `dquote>`, or heredoc prompt) or holding a half-typed line, and anything typed
+# into that construct is appended to it instead of executing. The adapter clears
+# the line/continuation with the shell's own keys and PROVES the shell executes
+# commands again by `cd`-ing into <reset-dir> and confirming the pane's cwd
+# moved there; a backend with no verified reset primitive refuses by name rather
+# than letting the launch command be consumed. Prints nothing; returns 0 only
+# when the reset is proven.
+fm_backend_reset_shell() {  # <backend> <target> <reset-dir> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_reset_shell "$@" ;;
+    herdr) fm_backend_herdr_reset_shell "$@" ;;
+    *)
+      echo "error: backend '$backend' has no verified bare-shell reset primitive, so an inherited continuation prompt could swallow the launch command; refusing to launch into it" >&2
+      return 1
+      ;;
   esac
 }
 

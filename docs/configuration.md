@@ -279,6 +279,7 @@ A malformed file refuses with the parse error rather than reverting to defaults,
 | `max_swap_used_pct` | `50` | share of configured swap already in use; `off` to skip |
 | `max_memory_pressure` | `normal` | worst kernel memory-pressure verdict still admitted: `normal`, `warn`, or `ignore` |
 | `max_fleet_memory_pct` | `40` | share of installed memory the fleet's own process trees may hold, leaving the majority of the machine to its operator; `off` to skip |
+| `max_fleet_agents` | `off` | machine-wide count of firstmate agent process trees, the same "across N agents" figure the fleet-memory signal reports; a positive integer refuses a spawn when the count is at or above it, `off` to leave the count uncapped |
 | `load_per_core_max` | `off` | 1m load average per logical core, off by default because load also rises on paging stalls; set a positive decimal to make it a limit |
 | `on_unknown` | `refuse` | what to do when a signal cannot be read at all |
 
@@ -353,6 +354,7 @@ On Zellij, cmux, and Orca a typed-plane Cursor send (a harness-native invocation
 muse is verified for crewmate and scout launches ONLY, and `fm-spawn.sh` refuses it for a secondmate, because muse ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
 muse also needs a worker-reachable credential before spawning, and the portable fleet path is the `<config>/muse/auth.json` credential stored by `muse login`, because a caller-only `META_API_KEY` does not cross a long-lived backend daemon.
 gemini is likewise refused for secondmates because it has no primary supervision protocol; [its adapter reference](../.agents/skills/harness-adapters/references/harness/gemini.md) owns the credential precondition, canonical-launch wiring, and raw-launch limitations.
+`bin/fm-spawn.sh` also refuses a gemini dispatch outright, for any kind, when the `gemini` executable PATH resolves is not genuine gemini-cli - for example a personal compatibility shim shadowing it ahead of the real install with a different harness - because none of this template's gemini-cli-specific env (`GEMINI_CLI_TRUST_WORKSPACE`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`) would reach whatever such a shim actually execs; `gemini_binary_is_genuine` in `bin/fm-spawn.sh` owns that check.
 rovo is likewise verified for crewmate and scout launches ONLY, refused for a secondmate for the same reason - no turn-end hook and no primary supervision protocol; [`docs/verification/rovo.md`](verification/rovo.md) owns that evidence, including the OAuth token's silent background refresh from a stored refresh token and both tmux and herdr pane liveness (herdr placement is verified live, with a Herdr-side agent-detection gap left open for recovery classification).
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter evidence - each harness's busy-state source, interrupt and exit behavior, skill-invocation syntax, and per-harness quirks - lives in the skill tree rooted at [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
@@ -445,6 +447,9 @@ Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
 This section is the single owner of the canonical schema and its per-field semantics.
 `AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the subscription-aware profile-array selection judgment boundary.
+When the two axi tools are installed, firstmate routes a task descriptor through `llm-router-axi route` under the `router-dispatch` skill and records outcomes with `llm-router-axi record`; the routing doctrine then lives in the human-editable `~/.config/llm-router-axi/policy.json`, and `usage-axi` becomes the preferred telemetry source behind `bin/fm-dispatch-select.mjs` and `bin/fm-capacity.sh`.
+`bin/fm-router-lib.sh` owns local resolution of both tools and the one-line install hint.
+Each tool's README owns its own flags, lanes, and install steps; this file does not restate them.
 
 ```json
 {
@@ -1003,7 +1008,7 @@ FM_HOME_SUMMARY_ERROR_LOG_MAX_BYTES=65536   # approximate size cap for state/.ho
 FM_HOME_SUMMARY_FAILURE_REPORT=2   # recorded publication failures since the ledger's own last publication before session start reports a HOME_SUMMARY line; invalid or zero values use 2
 FM_SNAPSHOT_CREW_STATE_TIMEOUT=10   # seconds bounding each local per-task current-state read inside bin/fm-fleet-snapshot.sh; remote endpoint liveness is not probed on the snapshot path
 FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=8   # maximum local tasks whose current-state and endpoint observations are collected concurrently during snapshot composition
-FM_SNAPSHOT_BUDGET=5                # one total seconds budget for all concurrent remote home-ledger reads
+FM_SNAPSHOT_SECONDMATE_TIMEOUT=45   # seconds bounding each registered remote home's ledger read inside bin/fm-fleet-snapshot.sh; because every sampled home is read concurrently, one deadline is also the whole-collection deadline, and 45 matches the default SSH dead-peer window in bin/fm-on.sh (FM_SSH_ALIVE_INTERVAL 15 x FM_SSH_ALIVE_COUNT_MAX 3); a home whose read consumes it with no valid cached copy is reported timed_out, never unknown. FM_SNAPSHOT_BUDGET is accepted as a legacy alias for this bound when it is unset
 FM_SNAPSHOT_CACHE_DIR=$FM_HOME/state/secondmate-summary-cache   # private parent-side cache of successfully fetched remote home ledgers
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=14  # floored elapsed-day threshold at which an undated captain hold (no hold-until; age from its UTC hold-set timestamp, falling back to since for legacy unstamped holds) is projected as a Charted Next gate instead of a live Captain's Call; 0 applies once the computed age is non-negative
 FM_RECONCILE_REQUEST_MAX_BYTES=1048576   # maximum captured Bearings or fleet snapshot accepted for durable reconcile-notify request publication

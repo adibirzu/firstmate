@@ -75,10 +75,15 @@
 // can never land in the wrong Firstmate home.
 //
 // Test-only seams:
-//   --quota-json reads a fixture instead of running quota-axi.
+//   --quota-json reads a fixture instead of running a quota tool.
 //   --now fixes the current epoch second.
-//   FM_DISPATCH_QUOTA_AXI overrides the quota-axi executable.
+//   FM_DISPATCH_QUOTA_AXI overrides the quota executable.
 //   FM_DISPATCH_STATE_FILE overrides the state path.
+//
+// Telemetry source: usage-axi is preferred because it speaks the same quota
+// JSON contract and adds OpenUsage-backed windows; when it is absent the
+// selector falls back to quota-axi, and FM_DISPATCH_QUOTA_AXI overrides both.
+// Install with `npm install -g usage-axi` (or `npx -y usage-axi`).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -420,6 +425,23 @@ function parseNow(raw) {
   return Number(raw);
 }
 
+// The preferred telemetry source is usage-axi, which speaks the same quota
+// JSON contract as quota-axi. An explicit FM_DISPATCH_QUOTA_AXI always wins;
+// otherwise resolve usage-axi on PATH and fall back to quota-axi when the
+// newer tool is absent, so a host without usage-axi keeps working.
+function defaultQuotaExecutable() {
+  const explicit = process.env.FM_DISPATCH_QUOTA_AXI;
+  if (explicit) return explicit;
+  for (const candidate of ['usage-axi', 'quota-axi']) {
+    const found = spawnSync('sh', ['-c', 'command -v "$1"', 'sh', candidate], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (found.status === 0 && found.stdout.trim()) return candidate;
+  }
+  return 'quota-axi';
+}
+
 function readQuota(options) {
   let text;
   if (options.quotaJson) {
@@ -429,7 +451,7 @@ function readQuota(options) {
       return { available: false, reason: 'quota fixture unreadable' };
     }
   } else {
-    const executable = process.env.FM_DISPATCH_QUOTA_AXI || 'quota-axi';
+    const executable = defaultQuotaExecutable();
     const result = spawnSync(executable, ['--json'], {
       encoding: 'utf8',
       timeout: 15000,
