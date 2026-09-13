@@ -23,7 +23,7 @@
 # ANTI-GOAL (standing, N1): fm_fleet_pick_surface answers "which pool has tokens
 # right now" for a human running `fm-fleet.sh pick` only. It must NEVER be called
 # from bin/fm-spawn.sh, crew dispatch, or any automated selection path — that
-# belongs solely to upstream's `quota-array-dispatch` skill. Moving these
+# belongs solely to upstream's `router-dispatch` skill. Moving these
 # functions into this leaf file must not make that any easier to reach; see the
 # function's own comment block below for the full rationale.
 
@@ -173,10 +173,10 @@ fm_fleet_models_report() {
 # OPERATOR-FACING DIAGNOSTIC ONLY — answers "which pool has tokens for grok right
 # now" for a human running `fm-fleet.sh pick`. NEVER called from `fm-spawn`, crew
 # dispatch, or any automated path (anti-goal §4.1) — dispatch's pace-aware
-# selection belongs solely to upstream's `quota-array-dispatch` skill. Selects
+# selection belongs solely to upstream's `router-dispatch` skill. Selects
 # among surfaces of ONE model family only (map is keyed by family); must never
 # become a cross-family selector — that needs the reasoning-class judgment
-# `quota-array-dispatch` owns (R4).
+# `router-dispatch` owns (R4).
 #
 #   pass 1: among surfaces with OBSERVABLE headroom >= FM_FLEET_QUOTA_MIN (raw
 #           floor, unchanged, still dominant), prefer by pace (§5.5):
@@ -190,7 +190,7 @@ fm_fleet_models_report() {
 #   pass 3: else the first listed surface (last resort)
 # Map order is a documented OPERATOR preference (map's own _comment says the
 # picker walks the list left-to-right), distinct from the array-order bias
-# quota-array-dispatch forbids for dispatch ties (that rule targets an
+# router-dispatch forbids for dispatch ties (that rule targets an
 # unordered config array; this map is explicitly ordered).
 # R1: only FRESH surfaces' pace is trusted for 1a/1b/1c; a stale surface's pace
 # is treated as unavailable (falls to 1b) though its raw headroom (pass 1) and
@@ -272,7 +272,7 @@ fm_fleet_reserve_cmp() { # a b -> exit 0 if a >= b
 # --- quota-window pace (quota-axi >= 0.1.15, schemaVersion 3) -----------------
 # See docs/fleet-addon.md "Per-surface pace" + .agents/skills/federation/SKILL.md.
 # Dispatch's pace-aware selection is owned solely by upstream's
-# `quota-array-dispatch` skill — these are read-only reporting primitives.
+# `router-dispatch` skill — these are read-only reporting primitives.
 
 # One quota-axi snapshot -> one TSV row per provider: <surface>\t<headroom>\t
 # <state>\t<pace>\t<reserve>. Resolution (PRD §5.1), reusing the SAME headroom
@@ -346,7 +346,7 @@ fm_fleet_render_reserve() { # reserve
   esac
 }
 
-# §5.2 conservation-pressure predicate, verbatim from quota-array-dispatch
+# §5.2 conservation-pressure predicate, verbatim from router-dispatch
 # (fa0d85d) — do not simplify to `status == ahead`; that misclassifies `mixed`
 # + remaining aheadWindowIds as healthy (R2), which the skill forbids.
 #   pressured := status=="ahead" OR (status=="mixed" AND aheadWindowIds non-empty)
