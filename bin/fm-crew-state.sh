@@ -29,7 +29,11 @@
 #      live on that host, so the local worktree and pane reads are skipped and
 #      the remote host is asked for the endpoint's recovery-grade state
 #      (fm-on.sh + fm-remote-secondmate-control.sh state). alive falls through
-#      to the routed status log; dead/missing report the remote verdict; an
+#      to the routed status log, then also checks the pause-governing fold
+#      (status_paused_governing_line in fm-classify-lib.sh) so a standing
+#      paused:/captain-held: declaration still reports paused even when a later
+#      unrelated append, such as a resolved: line closing a different decision,
+#      is the log's last line; dead/missing report the remote verdict; an
 #      unreachable or unreadable remote reports unknown-remote, never a false
 #      gone/dead.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
@@ -80,7 +84,10 @@
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line only
 #      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      `resolved` never become current state or detail. When the last line does
+#      not map to a state, the pause-governing fold (status_paused_governing_line)
+#      still reports paused for a standing paused:/captain-held: declaration that
+#      an unrelated later append has not genuinely superseded.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log. On tmux and herdr, which own a
@@ -221,6 +228,10 @@ if [ -n "$REMOTE_HOST" ]; then
         if [ "$LOG_STATE" != unknown ]; then
           emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
+      fi
+      REMOTE_PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+      if status_is_paused_or_captain_held "$REMOTE_PAUSE_GOVERNING_LINE"; then
+        emit paused status-log "$(status_line_note "$REMOTE_PAUSE_GOVERNING_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
       fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
       ;;
@@ -889,6 +900,11 @@ if [ -n "$LOG_VERB" ]; then
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
+fi
+
+PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+if status_is_paused_or_captain_held "$PAUSE_GOVERNING_LINE"; then
+  emit paused status-log "$(status_line_note "$PAUSE_GOVERNING_LINE")"
 fi
 
 emit unknown none "no current-state source available"

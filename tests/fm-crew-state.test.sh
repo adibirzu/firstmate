@@ -1553,6 +1553,43 @@ test_no_run_idle_secondmate_resolved_event_not_state() {
   pass "a trailing resolved: event does not corrupt state render (idle stays idle)"
 }
 
+# A still-standing paused: declaration must keep governing across a later
+# resolved: line that closes some OTHER open decision on the same task -
+# status_paused_governing_line's fold, shared with fm-watch.sh and the daemon,
+# recovers this declared state instead of the trailing-verb fallback defaulting
+# to unknown/none. The unrelated blocked:/needs-decision: + resolved: -> idle
+# cases above must stay unchanged: those trailing resolved: lines close a
+# decision, not a declared wait, so no earlier paused:/captain-held: line
+# stands behind them.
+test_no_run_idle_paused_survives_unrelated_resolved_event() {
+  reset_fakes
+  local d; d=$(new_case paused-resolved)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/mate.meta" "window=fm:fm-mate" "worktree=$d/wt" "kind=secondmate" "home=$d/wt"
+  printf 'paused: holding for the upstream release\n' > "$d/state/mate.status"
+  printf 'resolved [key=other]: an unrelated decision was answered\n' >> "$d/state/mate.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "state: paused" "an intervening unrelated resolved: line cancelled a still-standing declared pause"
+  assert_contains "$out" "source: status-log" "the recovered pause still reports its status-log source"
+  assert_contains "$out" "holding for the upstream release" "the recovered pause keeps its original reason"
+  # Control (unchanged): a keyed resolved: closing the SAME needs-decision chain
+  # still falls through to idle - the earlier line was never a declared wait.
+  printf 'needs-decision [key=race]: pick subscribe order\nresolved [key=race]: went with subscribe-before-write\n' \
+    > "$d/state/mate.status"
+  out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "state: unknown" "a resolved needs-decision chain must not be recovered as paused"
+  assert_contains "$out" "source: none" "a resolved needs-decision chain still has no status-log state source"
+  # Control (unchanged): a bare resolved: closing a blocked: declaration still
+  # falls through to idle - blocked: is a real state verb, not a declared wait.
+  printf 'blocked: waiting on infra\nresolved: infra access granted\n' > "$d/state/mate.status"
+  out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "source: none" "a resolved blocked: chain must not be recovered as paused"
+  pass "a still-standing paused: declaration survives an intervening unrelated resolved: line"
+}
+
 test_dead_window_ignores_stale_status_log() {
   reset_fakes
   local d; d=$(new_case dead-window)
@@ -1773,6 +1810,19 @@ test_remote_alive_idle_is_healthy_not_gone() {
   assert_not_contains "$out" "worktree gone" "a healthy remote mate must never read as torn down"
   assert_not_contains "$out" "backend target gone" "a healthy remote mate must never read as a dead target"
   pass "fm-crew-state remote: an idle alive endpoint reads alive, never gone or dead"
+}
+
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line() {
+  reset_fakes
+  local d out rc
+  d=$(setup_remote_case remote-alive-paused-then-resolved)
+  make_fakebin "$d" >/dev/null
+  printf 'paused: holding for review\nresolved [key=other]: closed an unrelated decision\n' > "$d/state/rsm.status"
+  out=$(FM_FAKE_REMOTE_STATE_OUT=alive FM_FAKE_SSH_RC=0 run_remote_crew_state "$d" rsm); rc=$?
+  expect_code 0 "$rc" "remote alive exits 0"
+  assert_contains "$out" "state: paused" "a still-standing declared pause must survive an unrelated later resolved line"
+  assert_contains "$out" "remote endpoint alive on remote-mac" "the remote liveness read should be visible"
+  pass "fm-crew-state remote: a genuinely standing pause is not silently cancelled by an unrelated resolved line"
 }
 
 test_remote_unreachable_is_unknown_remote_not_dead() {
@@ -2327,6 +2377,7 @@ test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
+test_no_run_idle_paused_survives_unrelated_resolved_event
 test_dead_window_ignores_stale_status_log
 test_no_run_tmux_unreadable_reads_unreachable_not_gone
 test_dead_window_still_reports_terminal_run_step
@@ -2336,6 +2387,7 @@ test_scout_skips_run_lookup
 test_torn_down_worktree
 test_remote_alive_with_log_uses_status_log
 test_remote_alive_idle_is_healthy_not_gone
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line
 test_remote_unreachable_is_unknown_remote_not_dead
 test_remote_dead_reports_remote_verdict
 test_missing_meta

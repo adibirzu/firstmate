@@ -476,8 +476,7 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   [ "$kind" = secondmate ] && return 0
   status="$STATE/$id.status"
   turn="$STATE/$id.turn-ended"
-  last=$(last_status_line "$status")
-  status_line_verb "$last" | grep -Fx captain-held >/dev/null 2>&1 && return 0
+  status_is_captain_held "$(status_paused_governing_line "$status")" && return 0
   # A ledger that states its own outcome is the ledger-first path's to deliver.
   if [ -n "$self" ] && child_terminal_ledger_line "$status" >/dev/null; then
     return 0
