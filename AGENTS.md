@@ -216,7 +216,7 @@ When dispatch profiles exist, consult them at every crewmate or scout intake and
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
 `bin/fm-router-lib.sh` owns usage-axi and llm-router-axi resolution, and `router-dispatch` owns the tool-based path.
 Route the task descriptor through `llm-router-axi route --flags` (its telemetry is `usage-axi`) and record outcomes with `llm-router-axi record`; the tool is required for the dispatch path, so a missing install is a blocker rather than a reason to hand-select.
-Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to `llm-router-axi select` under the `quota-array-dispatch` judgment boundary.
+Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to `llm-router-axi select` under the `router-dispatch` judgment boundary.
 Account for every candidate; unresolved identity is a configuration error, while stale or unavailable capacity evidence makes only that provider ineligible and permits inspectable failover to another eligible candidate.
 The selector applies fail-closed capacity (fresh telemetry, reserve, cooldown, and declared `quotaWindow`) and ranks remaining eligible candidates by `spendPriority` when quota-axi publishes a known scalar, otherwise by persisted least-recent use.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
@@ -224,7 +224,6 @@ When every candidate is tight, preserve the captain's strongest-reasoning class 
 Never bypass the configured reserve or evidence-backed cooldown; if no comparable candidate remains eligible, stop the dispatch.
 Kimi 0.29.1 remains outside automatic subscription dispatch because its guarded Herdr lifecycle exit was not deterministic after interrupt.
 `usage-axi` and `quota-axi` remain data-only: they publish `spendPriority` as a comparable scalar and never recommend a route, and no stale telemetry is dispatch capacity.
-Load `quota-array-dispatch` before choosing among a matched profile array; that skill owns the selection judgment boundary.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 
@@ -566,7 +565,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `NETWORK_CHECKS:`, `HOME_SUMMARY:`, `BACKLOG_RECONCILE:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`), or when `BOOTSTRAP_INFO:` says an interrupted backlog cleanup may have left an endpoint or local copy; silence and other `BOOTSTRAP_INFO:` facts need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding.
-- `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array through the subscription-aware selector.
+- `quota-array-dispatch` - load `router-dispatch` (quota-array-dispatch is a one-release pointer).
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `project-management` - load before adding, creating, removing, or initializing a project.

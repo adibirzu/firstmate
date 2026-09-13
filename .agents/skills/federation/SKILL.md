@@ -125,7 +125,7 @@ Four read-only, 0-token verbs expose this:
 These fleet verbs are **operator-facing diagnostics**: they never select a
 harness, model, or effort for dispatch, and `fm-fleet.sh pick` must never be
 wired into `fm-spawn` or any other dispatch path. Pace-aware dispatch selection
-stays with `quota-array-dispatch` under `AGENTS.md` section 4 (rationale:
+stays with `router-dispatch` under `AGENTS.md` section 4 (rationale:
 `docs/fleet-addon.md` "Per-surface pace").
 
 Authed readers (server-side usage): some surfaces don't report through quota-axi. The

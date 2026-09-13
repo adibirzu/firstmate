@@ -11,7 +11,7 @@
 #
 # It renders no dispatch verdict and maps nothing. A listing is evidence about
 # what a harness offers, not a decision about what to spawn; the dispatch
-# judgment stays with .agents/skills/quota-array-dispatch/SKILL.md and the
+# judgment stays with .agents/skills/router-dispatch/SKILL.md and the
 # per-harness facts stay in .agents/skills/harness-adapters/SKILL.md, whose
 # model rows this command is what keeps current.
 #

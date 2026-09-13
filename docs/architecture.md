@@ -239,8 +239,9 @@ The intake and authority contract in `AGENTS.md` owns when separate scout resear
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
-The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves profile arrays itself from current quota output under the `AGENTS.md` section 4 intake boundary and the `quota-array-dispatch` selection procedure, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
+The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves profile arrays itself from current quota output under the `AGENTS.md` section 4 intake boundary and the `router-dispatch` selection procedure, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
 The mechanical selection, step-down chain, and machine-capacity verdict are owned by `llm-router-axi`, with `bin/fm-dispatch-select.mjs` kept as a thin forwarding shim and `bin/fm-capacity-lib.sh` as the admission wrapper.
+Telemetry comes from `usage-axi`, the router's doctrine and thresholds live in `~/.config/llm-router-axi/policy.json`, both tools install from their GitHub main clones until npm publish, and `bin/fm-capacity.sh` is a thin wrapper over the router's capacity reading; [`docs/configuration.md`](configuration.md) owns those local surfaces and the install detail.
 The shell scripts validate the JSON shape and verified harness/effort combinations, but they do not parse task intent, match natural-language rules, or own array selection.
 The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
