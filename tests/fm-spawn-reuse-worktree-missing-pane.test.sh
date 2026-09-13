@@ -24,9 +24,10 @@
 # binary. It pins two things: (1) a herdr endpoint recorded in the record is
 # genuinely gone (pane_not_found) does not block --reuse-worktree from
 # creating a fresh one and completing the launch when every downstream herdr
-# call succeeds, and (2) a failure in the final launch-text-send step is
-# reported with a clear diagnostic and a clean nonzero exit, never a silent
-# unexplained exit or an unbound-variable crash.
+# call succeeds, and the relaunch says plainly that the recorded endpoint is
+# gone and a fresh one is being created, and (2) a failure in the final
+# launch-text-send step is reported with a clear diagnostic and a clean
+# nonzero exit, never a silent unexplained exit or an unbound-variable crash.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -252,6 +253,10 @@ test_reuse_worktree_recreates_endpoint_when_recorded_pane_is_gone() {
   out=$(run_reuse_worktree "$dir" rw1 2>&1); rc=$?
   expect_code 0 "$rc" "a gone recorded pane should not block --reuse-worktree from completing the relaunch"
   assert_contains "$out" "spawned rw1" "the relaunch should report a completed spawn"
+  assert_contains "$out" "recorded endpoint default:w1:p2 is gone" \
+    "the relaunch should say the recorded endpoint is gone, not silently fall back to a fresh one"
+  assert_contains "$out" "creating a fresh endpoint" \
+    "the relaunch should say it is creating a fresh endpoint in place of the gone one"
   assert_not_contains "$out" "unbound variable" \
     "the relaunch must not crash on an unbound endpoint variable"
   local pane_after

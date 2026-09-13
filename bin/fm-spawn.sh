@@ -3076,6 +3076,14 @@ if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ] && [ "${REUSE_OLD_STA
   WT_TARGET=$T
   SES=${T%%:*}
 else
+  # The recorded endpoint is gone (herdr reports pane_not_found, which the
+  # classifier reads as `missing`): recreate it here rather than treating a
+  # stale identity as adoptable. Say plainly that a fresh endpoint is being
+  # created, so a relaunch that silently fell back to a new endpoint is never
+  # mistaken for an ordinary in-place adoption of the recorded one.
+  if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ]; then
+    echo "note: task $ID's recorded endpoint $REUSE_OLD_TARGET is gone (read as '${REUSE_OLD_STATE:-unknown}'); creating a fresh endpoint" >&2
+  fi
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
