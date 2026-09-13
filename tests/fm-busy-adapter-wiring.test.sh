@@ -42,6 +42,13 @@ SH
   # stdout. An exit-0-with-no-output stub reads as treehouse failing to produce a
   # worktree at all, which aborts the spawn before any adapter is wired.
   fm_fake_exit0 "$fakebin" pi opencode claude codex
+  # gemini_binary_is_genuine (bin/fm-spawn.sh) refuses a resolved `gemini`
+  # whose shebang does not invoke node, so the exit0 bash stub above cannot
+  # stand in for it: dispatch would refuse it as a shadow, not launch it.
+  cat > "$fakebin/gemini" <<'SH'
+#!/usr/bin/env node
+SH
+  chmod +x "$fakebin/gemini"
   fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
