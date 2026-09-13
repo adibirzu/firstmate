@@ -66,7 +66,7 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context spawn-capacity launch-env-allowlist}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context launch-env-allowlist}"
 
 # Items whose value is a home-SESSION enablement decision rather than durable
 # local configuration. They are inherited at the launch convergence point, where
@@ -877,9 +877,29 @@ fm_config_reread_send_failure() {
   return 1
 }
 
+# fm_config_reread_delivery_id <instruction-path>
+# A stable 16-lowercase-hex delivery id for a reread instruction, derived from
+# its path. The generation name is unique per instruction and stable across
+# retries of that same instruction, so re-delivery of one instruction is
+# idempotent on the inbox plane while distinct instructions stay distinct.
+fm_config_reread_delivery_id() {
+  local seed=$1 digest
+  if command -v shasum >/dev/null 2>&1; then
+    digest=$(printf '%s' "$seed" | shasum -a 256 | awk '{print $1}') || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s' "$seed" | sha256sum | awk '{print $1}') || return 1
+  elif command -v openssl >/dev/null 2>&1; then
+    digest=$(printf '%s' "$seed" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}') || return 1
+  else
+    return 1
+  fi
+  printf '%s' "$digest" | cut -c1-16
+}
+
 # fm_config_reread_send_pointer <id> <instruction-path>
 fm_config_reread_send_pointer() {
   local id=$1 instruction_path=$2 pending_path selector out rc send_bin message pending_pointer
+  local delivery_id
   pending_path="$instruction_path.pending"
   if [ ! -f "$instruction_path" ] || [ -L "$instruction_path" ]; then
     printf 'CONFIG_REREAD: secondmate %s: send failed: pending instruction file is missing\n' "$id"
@@ -900,12 +920,21 @@ fm_config_reread_send_pointer() {
     fm_config_reread_send_failure "$id" "$instruction_path" "$pending_path" "FM_HOME is not set"
     return 1
   fi
+  # This is an automated one-way instruction, not a reply-bearing request: the
+  # mate applies the config and is never expected to post a correlated report,
+  # so a pending-reply expectation would only leave an open escalation nobody
+  # answers. The per-instruction delivery id makes an uncertain retry idempotent
+  # while the existing pending/retry staging still surfaces a real send failure.
+  if ! delivery_id=$(fm_config_reread_delivery_id "$instruction_path"); then
+    fm_config_reread_send_failure "$id" "$instruction_path" "$pending_path" "could not derive a delivery id"
+    return 1
+  fi
   message="CONFIG_REREAD: $instruction_path"
   out=$(FM_HOME="$FM_HOME" \
     FM_ROOT_OVERRIDE="${FM_ROOT_OVERRIDE:-}" \
     FM_STATE_OVERRIDE="${FM_STATE_OVERRIDE:-}" \
     FM_SEND_SETTLE="${FM_SEND_SETTLE:-0}" \
-    "$send_bin" "$selector" "$message" 2>&1) && rc=0 || rc=$?
+    "$send_bin" "$selector" --fire-and-forget "$delivery_id" "$message" 2>&1) && rc=0 || rc=$?
   if [ "$rc" -eq 0 ]; then
     rm -f "$pending_path"
     return 0

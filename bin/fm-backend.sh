@@ -383,15 +383,26 @@ fm_backend_of_meta() {  # <meta-file>
   printf '%s' "${v:-tmux}"
 }
 
+# fm_backend_target_of_meta: the endpoint target recorded in <meta-file> - the
+# Orca `terminal=` when backend=orca, otherwise `window=` - or empty when
+# neither is recorded. Always returns 0: callers assign it through command
+# substitution under `set -e` (bin/fm-spawn.sh, bin/fm-control.sh, ...), so an
+# absent field must read as a clean empty target rather than a nonzero status
+# that silently kills the caller.
 fm_backend_target_of_meta() {  # <meta-file>
   local meta=$1 backend terminal window
   backend=$(fm_backend_of_meta "$meta")
   if [ "$backend" = orca ]; then
     terminal=$(fm_meta_get "$meta" terminal)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
+    if [ -n "$terminal" ]; then
+      printf '%s' "$terminal"
+      return 0
+    fi
   fi
   window=$(fm_meta_get "$meta" window)
-  [ -n "$window" ] && printf '%s' "$window"
+  if [ -n "$window" ]; then
+    printf '%s' "$window"
+  fi
 }
 
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely

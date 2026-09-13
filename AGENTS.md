@@ -80,7 +80,6 @@ config/berths   optional presence flag enabling per-project session berths, so o
 config/stow-pass-horizon  optional presence flag opting this home in to /stow's default-off pass-count decay horizon; LOCAL, gitignored, and not inherited; see docs/configuration.md "Stow pass horizon"
 config/herdr-presentation-spaces  optional "off" opt-out from, or "on" opt-in to, Herdr's default-on disposable single-task visual projection, which is unconfigured-default-on only at or above a Herdr version floor; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Presentation spaces"
 config/trace-context  optional presence flag enabling default-off native W3C trace-context propagation to spawned agents; LOCAL, gitignored; inherited by secondmate homes; see docs/configuration.md "Trace context propagation" and docs/trace-context.md
-config/spawn-capacity  optional machine-capacity limits every spawn is admitted against; LOCAL, gitignored; primary-authoritative and inherited by secondmate homes because every home shares one physical machine; see docs/configuration.md "Machine capacity (config/spawn-capacity)"
 config/turnend-churn-absorb  optional presence flag opting this home into the default-off absorb of bare turn-end wakes on pane churn; LOCAL, gitignored, and not inherited; see docs/configuration.md "Turn-end pane-churn absorb"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
@@ -216,8 +215,8 @@ The same doctrine gates gemini specifically at launch time: `bin/fm-spawn.sh`'s 
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
 `bin/fm-router-lib.sh` owns usage-axi and llm-router-axi resolution, and `router-dispatch` owns the tool-based path.
-When `llm-router-axi` is installed, route the task descriptor through `llm-router-axi route --flags` (its telemetry is `usage-axi`) and record outcomes with `llm-router-axi record`; when it is absent, keep the in-repo path below.
-Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to the subscription-aware selector owned by `quota-array-dispatch` and `bin/fm-dispatch-select.mjs`.
+Route the task descriptor through `llm-router-axi route --flags` (its telemetry is `usage-axi`) and record outcomes with `llm-router-axi record`; the tool is required for the dispatch path, so a missing install is a blocker rather than a reason to hand-select.
+Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to `llm-router-axi select` under the `quota-array-dispatch` judgment boundary.
 Account for every candidate; unresolved identity is a configuration error, while stale or unavailable capacity evidence makes only that provider ineligible and permits inspectable failover to another eligible candidate.
 The selector applies fail-closed capacity (fresh telemetry, reserve, cooldown, and declared `quotaWindow`) and ranks remaining eligible candidates by `spendPriority` when quota-axi publishes a known scalar, otherwise by persisted least-recent use.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
@@ -233,7 +232,7 @@ Do not add model-specific versions of that policy.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
 When a live ship or scout is blocked by quota exhaustion or a harness limit, relaunch it in place with `bin/fm-runtime-handoff.sh <task-id> --harness <name>`, which preserves the worktree, lease, PR metadata, and work in progress.
-When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns chain order and lane moves from `config/crew-dispatch.json` (`modelFallback`, `fallbackLanes`), `bin/fm-dispatch-select.mjs classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
+When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns the in-place relaunch and reads chain order and lane moves from `llm-router-axi route chain`, `llm-router-axi classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
 Every automatic switch must be visible in status reporting; fallback walks the configured chain after dispatch and never replaces the strongest-reasoning-class rule that governs selection.
 
 ## 5. Recovery
@@ -324,7 +323,7 @@ Fill the task subsections according to section 11.
 
 Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in section 4.
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
-Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `docs/configuration.md` "Machine capacity (config/spawn-capacity)" owns that contract.
+Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `llm-router-axi` owns the gauges and thresholds and `docs/configuration.md` "Machine capacity (llm-router-axi policy)" owns that contract.
 A capacity refusal is a stop-and-report result: relay the measured numbers to the captain and never loosen or disable those limits without the captain's explicit word, and never restore headroom by stopping live work, which hard rule 3 forbids.
 When the configured tasks-axi backlog gate applies, the spawn itself moves the work item to In flight and refuses rather than dispatching work this home has no item for, so recording the dispatch is never a separate step to remember; a manual-backend home retains the hand-editing contract in `docs/configuration.md`.
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.

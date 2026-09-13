@@ -1045,6 +1045,71 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+write_remote_ledger_summary() {  # <home> <generated-epoch>
+  mkdir -p "$1/state"
+  jq -n --arg home "$1" --argjson epoch "$2" '{
+    schema:"fm-secondmate-home-summary.v1",
+    hold_classifier_schema:"fm-captain-hold-buckets.v1",
+    generated:"2026-09-01T22:00:00Z",generated_epoch:$epoch,home:$home,
+    valid:true,reason:null,invalidity:{kind:null,ids:[]},state:"no_active_work",
+    active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
+    counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
+  }' > "$home/state/home-summary.json"
+}
+
+make_timeout_remote_ssh() {  # <dir>
+  local fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/fake-ssh" <<'SH'
+#!/usr/bin/env bash
+set -u
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    --) shift; break ;;
+    *) exit 90 ;;
+  esac
+done
+if [ "${1:-}" = "${FM_TEST_SLOW_SSH_HOST:-}" ]; then
+  sleep 30
+  exit 1
+fi
+[ -f "${FM_TEST_HEALTHY_LEDGER:?}" ] || exit 1
+cat "$FM_TEST_HEALTHY_LEDGER"
+SH
+  chmod +x "$fb/fake-ssh"
+  printf '%s\n' "$fb"
+}
+
+test_view_reports_timed_out_secondmate_home_distinctly() {
+  local home fb slow_home ok_home view
+  home=$(make_home view-timeout)
+  slow_home="$TMP_ROOT/view-timeout-slow"
+  ok_home="$TMP_ROOT/view-timeout-ok"
+  mkdir -p "$slow_home/state"
+  write_remote_ledger_summary "$ok_home" 1000
+  cat > "$home/data/secondmates.md" <<EOF
+- ledger-slow - slow fixture (host: host-slow; root: /remote/root; home: $slow_home; scope: fixture; projects: sample; added 2026-09-01)
+- ledger-ok - healthy fixture (host: host-ok; root: /remote/root; home: $ok_home; scope: fixture; projects: sample; added 2026-09-01)
+EOF
+  fm_write_meta "$home/state/ledger-slow.meta" \
+    "kind=secondmate" "mode=secondmate" "harness=pi" \
+    "remote_host=host-slow" "remote_root=/remote/root" "home=$slow_home"
+  fm_write_meta "$home/state/ledger-ok.meta" \
+    "kind=secondmate" "mode=secondmate" "harness=pi" \
+    "remote_host=host-ok" "remote_root=/remote/root" "home=$ok_home"
+  fb=$(make_timeout_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" FM_TEST_SLOW_SSH_HOST=host-slow \
+    FM_TEST_HEALTHY_LEDGER="$ok_home/state/home-summary.json" \
+    FM_SNAPSHOT_SECONDMATE_TIMEOUT=2 "$VIEW")
+  assert_contains "$view" "| ledger-slow | unknown / none | secondmate | - | unknown | timed out |" \
+    "a timed-out remote home must render timed out, not unknown: $view"
+  assert_contains "$view" "| ledger-ok | unknown / none | secondmate | - | unknown | unknown / unknown |" \
+    "a healthy remote home must be unaffected by another home's timeout: $view"
+  pass "fleet view distinguishes a timed-out remote home from unknown"
+}
+
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory
@@ -1063,3 +1128,4 @@ test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
+test_view_reports_timed_out_secondmate_home_distinctly

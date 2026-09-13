@@ -132,6 +132,11 @@ restarted_count=0
 nudged_count=0
 unreached_count=0
 
+# One nonce per restart pass, so each fallback re-read nudge derives a distinct
+# fire-and-forget delivery id. Two distinct update passes must not dedupe the
+# second nudge onto the first, which the mate may already have acknowledged.
+NUDGE_RUN_NONCE="${BASHPID:-$$}.$(date +%s).$RANDOM"
+
 # The first line of a command's output that carries anything, flattened to one
 # readable line with its "error: " prefix dropped. A refusal's own words are the
 # most useful thing this report can carry, and its first line is often blank.
@@ -142,9 +147,14 @@ first_reported_line() {  # <text>
 # Send the ordinary re-read steer to a mate this pass will not restart, and say
 # plainly which it was. A nudge is a partial reload and is never reported as more.
 fall_back_to_nudge() {  # <id> <reason>
-  local id=$1 reason=$2 out
+  local id=$1 reason=$2 out delivery_id
+  if ! delivery_id=$(fm_secondmate_nudge_delivery_id "$id" "$NUDGE_RUN_NONCE"); then
+    unreached_count=$((unreached_count + 1))
+    printf 'unreached: %s: %s; a delivery id could not be derived\n' "$id" "$reason"
+    return
+  fi
   if out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-send.sh" "$id" "$FM_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+    "$SCRIPT_DIR/fm-send.sh" "$id" --fire-and-forget "$delivery_id" "$FM_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
     nudged_count=$((nudged_count + 1))
     printf 'nudged: %s: %s\n' "$id" "$reason"
   else

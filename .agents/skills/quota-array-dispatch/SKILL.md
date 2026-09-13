@@ -13,7 +13,7 @@ metadata:
 # quota-array-dispatch
 
 This skill is the single owner of the judgment boundary around subscription-aware profile-array selection.
-`bin/fm-dispatch-select.mjs` owns the exact telemetry, reserve, cooldown, spendPriority ranking, state, and deterministic rotation mechanics.
+`llm-router-axi select` owns the exact telemetry, reserve, cooldown, spendPriority ranking, state, and deterministic rotation mechanics; `bin/fm-dispatch-select.mjs` is now a thin forwarding shim kept only for existing callers.
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
 `quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends, selects, ranks, or infers a route.
@@ -92,21 +92,21 @@ Drop a candidate whose known runway will not last until the inspectable likely-c
 When every remaining eligible candidate lacks a known `spendPriority`, or when known scalars tie, the selector distributes by persisted least-recent use and breaks an initial never-used tie with a home-stable hash independent of candidate array order.
 Do not replace that choice with static array order, harness-name order, randomness, or an unexplained "best quota" label.
 
-The exact defaults, bounds, state schema, failure exit, and test seams are owned by `bin/fm-dispatch-select.mjs --help` and the canonical config schema in `docs/configuration.md`.
+The exact defaults, bounds, state schema, failure exit, and test seams are owned by `llm-router-axi select --help` and the router policy at `~/.config/llm-router-axi/policy.json`.
 
 ## Selection order
 
 Apply only among candidates satisfying required fit and strongest reasoning class.
 
 1. Reduce the matched rule or default to comparable candidates after model/provider discovery.
-2. Pass that exact object or array to `FM_HOME=<active-home> bin/fm-dispatch-select.mjs select`.
+2. Pass that exact object or array to `llm-router-axi select`.
 3. Read its sanitized per-provider diagnostics and selected JSON profile.
 4. Pass the selected `harness`, `provider`, `model`, and `effort` axes to `fm-spawn.sh`; it records `provider` as routing evidence without forwarding it to the harness CLI.
    Its `--provider` accepts every routable provider, including `cursor` and `agy`, and a native harness refuses any provider but its own; `docs/configuration.md` owns which adapters are native.
    Omitting the field on a native harness is equally safe, because the recorded harness alone establishes that provider for a later `record-failure`.
 5. If it exits 3, stop and report that no candidate has current dispatch-capacity evidence rather than choosing manually around the reserve, cooldown, or telemetry refusal.
-6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `fm-dispatch-select.mjs record-failure --provider <provider> --task <id>` before retrying the candidate set.
-7. Use `clear --provider <provider>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.
+6. If a running task with recorded routing-provider metadata records provider rate-limit or quota-exhaustion evidence in its status log, run `llm-router-axi record --provider <provider> --outcome rate_limit --task <id>` before retrying the candidate set.
+7. Run `llm-router-axi record --provider <provider> --outcome ok --task <id>` only after the credential or provider condition is known to be corrected; it clears the cooldown, not dispatch history.
 
 The selector accounts for every provider in sanitized diagnostics and rejects duplicate profiles.
 Another harness CLI cannot block the selected tuple's authentication check.
