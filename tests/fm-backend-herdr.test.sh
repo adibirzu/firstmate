@@ -4404,7 +4404,7 @@ test_workspace_ensure_reaps_stale_default_workspace() {
   fb=$(make_herdr_statefake "$dir")
   jq '.next = 3
       | .workspaces = [{workspace_id:"w1", label:"~"}]
-      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+      | .tabs = []' \
     "$state" > "$state.tmp" && mv "$state.tmp" "$state"
   raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
@@ -4482,11 +4482,11 @@ test_workspace_ensure_never_reaps_ambient_default_session_live_pane() {
 }
 
 # Defense in depth for the firstmate-owned-session case: even when
-# HERDR_SESSION is explicitly set and the sole '~' workspace still carries
-# only its single auto-created default tab, a working agent in that tab's
-# pane means a captain is actually using it, and the reap must still refuse -
-# mirroring fm_backend_herdr_workspace_prune_seeded_default_tab's own
-# working-agent guard.
+# HERDR_SESSION is explicitly set, ANY pane in the sole '~' workspace - here
+# one whose agent is reported "working" - means a captain is actually using
+# it, and the reap must still refuse. The check is pane existence, never
+# agent_status (see the plain-shell-pane test right below, which has no
+# agent at all and must be refused identically).
 test_workspace_ensure_never_reaps_scaffold_with_working_agent() {
   local dir log state fb raw container wscount labels
   dir="$TMP_ROOT/no-reap-scaffold-working-agent"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
@@ -4512,6 +4512,37 @@ test_workspace_ensure_never_reaps_scaffold_with_working_agent() {
   assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close'$'\x1f''w1' \
     "workspace_ensure must never reap a '~' scaffold whose sole tab's pane hosts a working agent"
   pass "fm_backend_herdr_stale_default_workspace_id: never reaps a '~' scaffold whose sole default tab hosts a working agent"
+}
+
+# A plain shell pane herdr never attributed any agent to (a captain typed
+# commands manually, or a previously-tracked agent finished and is no longer
+# "working") is still live work. The reap check must never treat a missing
+# or non-working agent_status as proof the pane is unused - it refuses on
+# pane existence alone, regardless of agent_status.
+test_workspace_ensure_never_reaps_scaffold_with_plain_shell_pane() {
+  local dir log state fb raw container wscount labels
+  dir="$TMP_ROOT/no-reap-scaffold-plain-shell-pane"; mkdir -p "$dir"; log="$dir/log"; state="$dir/state.json"; : > "$log"
+  fb=$(make_herdr_statefake "$dir")
+  jq '.next = 3
+      | .workspaces = [{workspace_id:"w1", label:"~"}]
+      | .tabs = [{tab_id:"w1:t2", label:"1", workspace_id:"w1", pane_id:"w1:p2"}]' \
+    "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+  raw=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /proj' "$ROOT" ) \
+    || fail "container_ensure failed against a firstmate-owned session with a plain shell pane in the sole '~' workspace"
+  container=${raw%%$'\t'*}
+  case "$container" in
+    fmtest:w1) fail "container_ensure adopted the scaffold workspace despite its plain shell pane" ;;
+    fmtest:w*) : ;;
+    *) fail "unexpected container '$container'" ;;
+  esac
+  wscount=$(jq -r '.workspaces|length' "$state")
+  [ "$wscount" = 2 ] || fail "the scaffold workspace with a plain shell pane must survive alongside the new one, got $wscount: $(jq -c '.workspaces' "$state")"
+  labels=$(jq -r '.workspaces[]|select(.workspace_id=="w1").label' "$state")
+  [ "$labels" = '~' ] || fail "the scaffold workspace with a plain shell pane must never be reaped, got label '$labels'"
+  assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''close'$'\x1f''w1' \
+    "workspace_ensure must never reap a '~' scaffold whose sole tab's pane is a plain shell with no agent"
+  pass "fm_backend_herdr_stale_default_workspace_id: never reaps a '~' scaffold whose sole tab's pane is a plain shell with no agent"
 }
 
 test_repeated_cycles_reuse_one_workspace_no_orphans() {
@@ -5050,6 +5081,7 @@ test_workspace_ensure_reaps_stale_default_workspace
 test_workspace_ensure_never_reaps_a_captains_own_default_labeled_workspace
 test_workspace_ensure_never_reaps_ambient_default_session_live_pane
 test_workspace_ensure_never_reaps_scaffold_with_working_agent
+test_workspace_ensure_never_reaps_scaffold_with_plain_shell_pane
 test_repeated_cycles_reuse_one_workspace_no_orphans
 test_adopted_workspace_never_prunes_default_tab
 test_label_collision_startup_workspace_leaves_live_tab_alone
