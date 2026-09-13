@@ -92,6 +92,21 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      # Model the pane's real shell EXECUTING a typed `cd`. The relaunch shell
+      # reset (bin/fm-backend.sh's fm_backend_reset_shell) `cd`s the bare shell
+      # to a reset directory and proves the move through pane_current_path; a
+      # double that pinned cwd here would model a shell that never runs what it
+      # is sent, so the reset would refuse even on a healthy shell. This mirrors
+      # tests/fm-control-relaunch.test.sh's stub for the same reason.
+      case "$payload" in
+        'cd '*)
+          cd_dir=${payload#cd }
+          case "$cd_dir" in
+            \'*\') cd_dir=${cd_dir#\'}; cd_dir=${cd_dir%\'} ;;
+          esac
+          printf '%s' "$cd_dir" > "$D/cwd"
+          ;;
+      esac
     fi
     exit 0 ;;
   display-message)

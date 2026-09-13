@@ -1118,11 +1118,6 @@ crew_dispatch_validate() {
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
     return 0
   fi
-  if ! fallback_err=$(node "$SCRIPT_DIR/fm-dispatch-select.mjs" validate-model-fallback --file "$file" 2>&1); then
-    fallback_err=${fallback_err#fm-dispatch-select: }
-    echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $fallback_err"
-    return 0
-  fi
   err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","muse","agy","cline","copilot","rovo","omp"] | index($h);
     def effort_ok($h; $e):
@@ -1154,13 +1149,6 @@ crew_dispatch_validate() {
       or ($items | any(has("quotaWindow") and (((.quotaWindow | type) != "string") or (.quotaWindow | length) == 0)));
     def malformed_provider($items):
       ($items | any(has("provider") and (((.provider | type) != "string") or (.provider | length) == 0)));
-    def routing_setting_ok($key; $value):
-      if ($value | type) != "number" or ($value | floor) != $value then false
-      elif $key == "reservePercent" then $value >= 0 and $value <= 99
-      elif $key == "telemetryMaxAgeSeconds" then $value >= 1 and $value <= 3600
-      elif $key == "cooldownSeconds" then $value >= 60 and $value <= 86400
-      else false
-      end;
     def bad_efforts:
       configured_profiles
       | map({h: .harness, e: .effort})
@@ -1170,11 +1158,6 @@ crew_dispatch_validate() {
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"
-    elif has("subscriptionRouting") and (.subscriptionRouting | type) != "object" then "subscriptionRouting must be an object"
-    elif has("subscriptionRouting") and ([.subscriptionRouting | keys[] | . as $key | select((["reservePercent","telemetryMaxAgeSeconds","cooldownSeconds"] | index($key)) == null)] | length) > 0 then
-      "subscriptionRouting has unknown field: " + ([.subscriptionRouting | keys[] | . as $key | select((["reservePercent","telemetryMaxAgeSeconds","cooldownSeconds"] | index($key)) == null)] | sort | join(", "))
-    elif has("subscriptionRouting") and ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not)] | length) > 0 then
-      "subscriptionRouting setting is out of range: " + ([.subscriptionRouting | to_entries[] | select(. as $entry | routing_setting_ok($entry.key; $entry.value) | not) | .key] | sort | join(", "))
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
