@@ -74,6 +74,36 @@ jobs:
           set -eu
           npm install -g @earendil-works/pi-coding-agent
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
+      - name: Compute llm-router-axi / usage-axi cache key
+        id: router_axi_cache_key
+        run: |
+          set -eu
+          echo "key=router-axi-${{ runner.os }}-$(bin/fm-install-router-axi-tools.sh --print-cache-key)" >> "$GITHUB_OUTPUT"
+      # Both tools own the machine-capacity spawn guard and are unpublished on
+      # npm, so build them from the pinned commits. Install into ~/.local, not
+      # $RUNNER_TEMP: a real spawn can run inside the remote-job worker, whose
+      # sanitized PATH is composed from the operator's ~/.local/bin and never
+      # from the runner temp dir. The install script is idempotent, so a cache
+      # hit restores straight through.
+      - name: Cache llm-router-axi / usage-axi builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/llm-router-axi
+            ~/.local/bin/usage-axi
+            ~/.local/lib/node_modules/llm-router-axi
+            ~/.local/lib/node_modules/usage-axi
+          key: ${{ steps.router_axi_cache_key.outputs.key }}
+      - name: Install llm-router-axi / usage-axi
+        run: |
+          set -eu
+          bin/fm-install-router-axi-tools.sh "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH only affects later steps, so make the tools resolvable now
+          # for the version print that proves the install.
+          export PATH="$HOME/.local/bin:$PATH"
+          llm-router-axi --version
+          usage-axi --version
       - name: Run portable parallel shard 1
         run: |
           set -eu
@@ -112,6 +142,36 @@ jobs:
           set -eu
           npm install -g tasks-axi
           tasks-axi --version
+      - name: Compute llm-router-axi / usage-axi cache key
+        id: router_axi_cache_key
+        run: |
+          set -eu
+          echo "key=router-axi-${{ runner.os }}-$(bin/fm-install-router-axi-tools.sh --print-cache-key)" >> "$GITHUB_OUTPUT"
+      # Both tools own the machine-capacity spawn guard and are unpublished on
+      # npm, so build them from the pinned commits. Install into ~/.local, not
+      # $RUNNER_TEMP: a real spawn can run inside the remote-job worker, whose
+      # sanitized PATH is composed from the operator's ~/.local/bin and never
+      # from the runner temp dir. The install script is idempotent, so a cache
+      # hit restores straight through.
+      - name: Cache llm-router-axi / usage-axi builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/llm-router-axi
+            ~/.local/bin/usage-axi
+            ~/.local/lib/node_modules/llm-router-axi
+            ~/.local/lib/node_modules/usage-axi
+          key: ${{ steps.router_axi_cache_key.outputs.key }}
+      - name: Install llm-router-axi / usage-axi
+        run: |
+          set -eu
+          bin/fm-install-router-axi-tools.sh "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH only affects later steps, so make the tools resolvable now
+          # for the version print that proves the install.
+          export PATH="$HOME/.local/bin:$PATH"
+          llm-router-axi --version
+          usage-axi --version
       - name: Run portable parallel shard 2
         run: |
           set -eu
@@ -182,6 +242,36 @@ jobs:
           set -eu
           npm install -g @earendil-works/pi-coding-agent
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
+      - name: Compute llm-router-axi / usage-axi cache key
+        id: router_axi_cache_key
+        run: |
+          set -eu
+          echo "key=router-axi-${{ runner.os }}-$(bin/fm-install-router-axi-tools.sh --print-cache-key)" >> "$GITHUB_OUTPUT"
+      # Both tools own the machine-capacity spawn guard and are unpublished on
+      # npm, so build them from the pinned commits. Install into ~/.local, not
+      # $RUNNER_TEMP: a real spawn can run inside the remote-job worker, whose
+      # sanitized PATH is composed from the operator's ~/.local/bin and never
+      # from the runner temp dir. The install script is idempotent, so a cache
+      # hit restores straight through.
+      - name: Cache llm-router-axi / usage-axi builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/llm-router-axi
+            ~/.local/bin/usage-axi
+            ~/.local/lib/node_modules/llm-router-axi
+            ~/.local/lib/node_modules/usage-axi
+          key: ${{ steps.router_axi_cache_key.outputs.key }}
+      - name: Install llm-router-axi / usage-axi
+        run: |
+          set -eu
+          bin/fm-install-router-axi-tools.sh "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH only affects later steps, so make the tools resolvable now
+          # for the version print that proves the install.
+          export PATH="$HOME/.local/bin:$PATH"
+          llm-router-axi --version
+          usage-axi --version
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
           # job-total rather than a literal, so shrinking or growing the matrix
@@ -295,6 +385,36 @@ jobs:
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-herdr"
           bin/fm-herdr-ci-cleanup.sh snapshot "$RUNNER_TEMP/fm-herdr/sessions-before.json"
+      - name: Compute llm-router-axi / usage-axi cache key
+        id: router_axi_cache_key
+        run: |
+          set -eu
+          echo "key=router-axi-${{ runner.os }}-$(bin/fm-install-router-axi-tools.sh --print-cache-key)" >> "$GITHUB_OUTPUT"
+      # Both tools own the machine-capacity spawn guard and are unpublished on
+      # npm, so build them from the pinned commits. Install into ~/.local, not
+      # $RUNNER_TEMP: a real spawn can run inside the remote-job worker, whose
+      # sanitized PATH is composed from the operator's ~/.local/bin and never
+      # from the runner temp dir. The install script is idempotent, so a cache
+      # hit restores straight through.
+      - name: Cache llm-router-axi / usage-axi builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/llm-router-axi
+            ~/.local/bin/usage-axi
+            ~/.local/lib/node_modules/llm-router-axi
+            ~/.local/lib/node_modules/usage-axi
+          key: ${{ steps.router_axi_cache_key.outputs.key }}
+      - name: Install llm-router-axi / usage-axi
+        run: |
+          set -eu
+          bin/fm-install-router-axi-tools.sh "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH only affects later steps, so make the tools resolvable now
+          # for the version print that proves the install.
+          export PATH="$HOME/.local/bin:$PATH"
+          llm-router-axi --version
+          usage-axi --version
       - name: Run real-Herdr family (serial, required)
         # Comfortably above the ~7 min healthy wall and far below the 75 min
         # job backstop. A hang must fail this step so cleanup still runs.
