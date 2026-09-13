@@ -538,6 +538,103 @@ test_mount_point_resolves_to_a_real_ancestor() {
   pass "the mount-point walk resolves to a real ancestor directory"
 }
 
+# --- worker isolation check --------------------------------------------------
+#
+# The ship/scout brief names the exact assigned worktree (bin/fm-brief.sh emits
+# a {WORKTREE} placeholder that fm-spawn.sh substitutes with the leased path) and
+# runs bin/fm-worker-isolation-check.sh as the worker's first command. A worker
+# misdirected into a firstmate home or the primary checkout must be stopped there
+# rather than editing the wrong copy. These cases drive the rendered launch brief
+# and the executable the brief names - never the scripts' source bytes.
+make_isolation_case() {
+  local name=$1 id=$2 case_dir home proj wt fakebin brief content
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/slot"
+  fakebin=$(make_settle_fakebin "$case_dir/fake")
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" project --mode no-mistakes >/dev/null 2>&1 \
+    || fail "could not scaffold the $id ship brief"
+  brief="$home/data/$id/brief.md"
+  content=$(cat "$brief")
+  content=${content//'{TASK}'/Exercise the worker-isolation check.}
+  content=${content//'{FIRSTMATE_SPEC}'/Name and enforce the assigned worktree.}
+  printf '%s\n' "$content" > "$brief"
+  touch "$home/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$wt|$fakebin|$case_dir/pane-count|0"
+}
+
+test_worker_isolation_check_names_and_enforces_the_assigned_worktree() {
+  local rec id out status helper mate brief launch
+  id=isolation-named-w1
+  rec=$(make_isolation_case isolation-named "$id")
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "the isolation-check spawn should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "the isolation-check spawn did not report success"
+
+  launch="$HOME_DIR/data/$id/launch-brief.md"
+  assert_present "$launch" "the launch brief was not rendered"
+  assert_grep "Your assigned worktree is '$WT_DIR'." "$launch" \
+    "the launch brief did not name the exact assigned worktree"
+  assert_grep "fm-worker-isolation-check.sh\" '$WT_DIR'" "$launch" \
+    "the launch brief did not run the isolation check against the assigned worktree"
+  assert_no_grep '{WORKTREE}' "$launch" \
+    "the launch brief kept the {WORKTREE} placeholder"
+
+  helper="$ROOT/bin/fm-worker-isolation-check.sh"
+
+  # The real assigned pool worktree passes.
+  ( cd "$WT_DIR" && "$helper" "$WT_DIR" ) >/dev/null 2>&1 \
+    || fail "the isolation check rejected the real assigned worktree"
+
+  # A firstmate home - a linked worktree carrying the secondmate-home marker -
+  # trips it even though it is a legitimate worktree of the repository.
+  mate="$CASE_DIR/mate-home"
+  git -C "$PROJ_DIR" worktree add -q -b mate-home "$mate"
+  printf 'mate-w1\n' > "$mate/.fm-secondmate-home"
+  out=$( cd "$mate" && "$helper" "$WT_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted a firstmate home"$'\n'"$out"
+  assert_contains "$out" "is a firstmate home" \
+    "the firstmate-home refusal did not name the firstmate home"
+
+  # The primary checkout of the repository trips it, both as the shell and when
+  # it is (wrongly) passed as the assigned worktree.
+  out=$( cd "$PROJ_DIR" && "$helper" "$WT_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted the primary checkout"$'\n'"$out"
+  assert_contains "$out" "primary checkout" \
+    "the primary-checkout refusal did not name the primary checkout"
+  out=$( cd "$PROJ_DIR" && "$helper" "$PROJ_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted a primary checkout as the assigned worktree"$'\n'"$out"
+  assert_contains "$out" "the assigned path is a primary checkout" \
+    "the check did not refuse a primary checkout named as the assigned worktree"
+
+  pass "fm-spawn: the launch brief names the assigned worktree and the isolation check enforces it"
+}
+
+# A brief scaffolded before the placeholder existed has no {WORKTREE}: the spawn
+# warns once and still launches, matching the missing delivery-contract pattern,
+# rather than breaking every task briefed before this change.
+test_legacy_brief_warns_about_the_missing_worktree_name() {
+  local rec id out status
+  id=isolation-legacy-w2
+  rec=$(make_settle_case isolation-legacy "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "a legacy brief spawn should still succeed"$'\n'"$out"
+  assert_contains "$out" "names no assigned worktree" \
+    "a legacy brief did not warn once about the missing worktree name"
+  assert_contains "$out" "spawned $id" "the legacy brief spawn did not report success"
+  pass "fm-spawn: a brief scaffolded before {WORKTREE} warns once and still launches"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_is_accepted_on_first_read
 test_transient_primary_checkout_is_not_accepted
@@ -552,5 +649,7 @@ test_same_named_projects_do_not_share_a_pool
 test_pool_home_moves_to_the_object_store_filesystem_when_split
 test_colocation_check_separates_split_from_undeterminable
 test_mount_point_resolves_to_a_real_ancestor
+test_worker_isolation_check_names_and_enforces_the_assigned_worktree
+test_legacy_brief_warns_about_the_missing_worktree_name
 
 echo "# all fm-spawn-worktree-settle tests passed"
