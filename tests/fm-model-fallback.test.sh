@@ -463,6 +463,53 @@ run_classify() {  # <text>
   pass "a healthy worker is never relaunched by fallback: no evidence, no action"
 }
 
+# A `paused:` line is the declared external-wait verb a crew OR firstmate
+# itself appends (bin/fm-classify-lib.sh's status_is_paused), including
+# firstmate's own bookkeeping prose after a deliberate `fm-control exit`.
+# Depletion vocabulary inside that prose must never read as live evidence: an
+# endpoint fm-control deliberately stopped must never be relaunched from its
+# own after-the-fact status note. Regression for the rkm-bot-self-evolving-
+# extraction incident (2026-09-12): firstmate exited an OpenCode agent whose
+# balance was exhausted, then recorded that fact as `paused: ... awaiting
+# external: ...`, and fallback wrongly read its own note as fresh depletion
+# evidence and relaunched the (deliberately stopped) task on a fallback model.
+PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exhausted); awaiting external: CRM rate-limit'
+
+{
+  setup_case refuse-paused-bookkeeping plan-r4b "$AGY_CHAIN_CONFIG" "$PAUSED_BOOKKEEPING_LINE"
+  out=$("$FALLBACK" plan-r4b plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "paused-bookkeeping plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "a declared-pause line plans nothing"
+  if out=$("$FALLBACK" plan-r4b apply 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 1 ] || fail "apply over a paused-only status log must refuse, rc=$rc: $out"
+  assert_contains "$out" "no depletion evidence" "apply-over-paused-bookkeeping refusal"
+  pass "firstmate's own paused: bookkeeping after a deliberate fm-control exit is never read as depletion evidence"
+}
+
+{
+  setup_case ignore-paused-real-evidence-follows plan-r4c "$AGY_CHAIN_CONFIG" "$PAUSED_BOOKKEEPING_LINE"
+  printf '%s\n' 'working: relaunched worker hit API Error 429 - Resource Exhausted: Quota exceeded for metric' \
+    >> "$CASE_HOME/state/plan-r4c.status"
+  out=$("$FALLBACK" plan-r4c plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "real evidence after a paused line should still plan a step, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "genuine live evidence after a filtered paused line still plans"
+  assert_contains "$out" "to_model=gemini-3.6-flash-high" "the real evidence, not the paused line, drives the step"
+  pass "filtering paused: bookkeeping never hides genuine depletion evidence that follows it"
+}
+
+{
+  setup_case fire-on-blocked-not-paused plan-r4d "$AGY_CHAIN_CONFIG" \
+    'blocked: hit API Error 429 - Resource Exhausted: Quota exceeded for metric'
+  out=$("$FALLBACK" plan-r4d plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "blocked-with-evidence plan should succeed, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "a blocked: line (worker stuck, not a declared pause) still classifies"
+  pass "only the paused verb is filtered; blocked: depletion evidence still triggers fallback"
+}
+
 {
   setup_case refuse-secondmate plan-r5 "$AGY_CHAIN_CONFIG" "$DEPLETED_LINE"
   sed -i.bak 's/^kind=ship$/kind=secondmate/' "$CASE_HOME/state/plan-r5.meta"

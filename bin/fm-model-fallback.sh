@@ -16,7 +16,16 @@
 #   1. Reads state/<id>.meta for kind=ship|scout, harness=, model=, and the
 #      fallback cursor (the byte offset of the last evidence this script
 #      consumed).
-#   2. Classifies status-file text AFTER that cursor through
+#   2. Drops every status line whose leading verb is the paused verb
+#      (bin/fm-classify-lib.sh's status_is_paused, the single owner of that
+#      vocabulary) before classifying anything. `paused:` is the declared
+#      external-wait verb a crew OR firstmate itself appends - including
+#      firstmate's own bookkeeping prose after a deliberate `fm-control exit`
+#      - and it means "leave this pane alone", never "act now". Depletion
+#      words inside that prose (a worker's own balance, a rate limit it is
+#      waiting out) must never be read as live evidence, so an endpoint
+#      fm-control deliberately stopped is never relaunched from its own
+#      after-the-fact status note. Only what remains is classified through
 #      bin/fm-dispatch-select.mjs classify-evidence, whose subscription
 #      vocabulary is the single owner of depletion signatures. No evidence,
 #      no fallback - a healthy or ambiguous worker is never relaunched by
@@ -79,6 +88,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -185,12 +196,32 @@ EVIDENCE_END=$STATUS_SIZE
 EVIDENCE_BYTES=$((EVIDENCE_END - CURSOR))
 
 if [ "$EVIDENCE_BYTES" -gt 0 ]; then
-  EVIDENCE_TEXT=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null \
+  EVIDENCE_RAW=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null \
     | head -c "$EVIDENCE_BYTES" \
     | sed '/^working: automatic model fallback .*; auto-step-down logged per standing quota rule$/d' \
     || true)
 else
-  EVIDENCE_TEXT=
+  EVIDENCE_RAW=
+fi
+# Drop declared-external-wait bookkeeping (paused: <reason>) before
+# classification. status_is_paused (bin/fm-classify-lib.sh) is the single
+# owner of that verb: a crew OR firstmate itself appends it - including
+# firstmate's own prose after a deliberate `fm-control exit` - and its whole
+# point is "leave this pane alone", never "act now". Depletion words inside
+# that after-the-fact note must never read as live worker/harness evidence,
+# so an endpoint fm-control deliberately stopped is never relaunched from its
+# own status-log bookkeeping.
+EVIDENCE_TEXT=
+if [ -n "$EVIDENCE_RAW" ]; then
+  while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
+    if status_is_paused "$evidence_line"; then
+      continue
+    fi
+    EVIDENCE_TEXT="${EVIDENCE_TEXT}${evidence_line}
+"
+  done <<EOF_EVIDENCE
+$EVIDENCE_RAW
+EOF_EVIDENCE
 fi
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" classify-evidence 2>/dev/null \
