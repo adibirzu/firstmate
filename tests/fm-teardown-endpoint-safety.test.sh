@@ -836,6 +836,58 @@ test_remote_layout_homes_serialize_on_one_project_lock() {
   pass "Treehouse project locking still serializes two homes across the remote-seeded boundary"
 }
 
+test_project_lock_honors_a_redirected_state_directory() {
+  local dir root_home root_project root_lock mate_home mate_project mate_override mate_lock
+  local redir_home redir_project redir_state redir_lock
+  dir=$(make_case project-lock-state-override)
+  git -C "$dir/project" -c user.name=test -c user.email=test@example.invalid \
+    commit --allow-empty -qm lock-override-fixture
+
+  # A normal root home and a local secondmate beneath it unify on the literal
+  # root state directory; the secondmate's own redirected state must never
+  # retarget the shared lock away from that anchor.
+  root_home="$dir/home"
+  root_project="$root_home/projects/project"
+  mkdir -p "$root_home/projects"
+  git clone -q "$dir/project" "$root_project"
+  root_lock=$(resolve_project_lock "$root_home" "$root_project") \
+    || fail "the root home could not resolve its project lock"
+  mate_home="$dir/local-mate"
+  make_home "$mate_home"
+  write_local_parent_record "$mate_home" "$root_home"
+  mate_project="$mate_home/projects/project"
+  git clone -q "$dir/project" "$mate_project"
+  mate_override="$dir/local-mate-redirect"
+  mkdir -p "$mate_override"
+  mate_lock=$(FM_HOME="$mate_home" FM_STATE_OVERRIDE="$mate_override" bash -c \
+    '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$mate_project") \
+    || fail "the local secondmate could not resolve the shared root lock"
+  [ "$mate_lock" = "$root_lock" ] \
+    || fail "a local secondmate's own state redirect retargeted the shared root lock"
+
+  # A stand-alone home with no literal $home/state resolves through the
+  # FM_STATE_OVERRIDE it was given instead of refusing the spawn.
+  redir_home="$dir/redirected-home"
+  mkdir -p "$redir_home/data" "$redir_home/config" "$redir_home/projects"
+  redir_project="$redir_home/projects/project"
+  git clone -q "$dir/project" "$redir_project"
+  redir_state="$dir/redirected-state"
+  mkdir -p "$redir_state"
+  redir_lock=$(FM_HOME="$redir_home" FM_STATE_OVERRIDE="$redir_state" bash -c \
+    '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$redir_project") \
+    || fail "a home with a redirected state directory could not resolve its project lock"
+  case "$redir_lock" in
+    "$redir_state/"*) ;;
+    *) fail "a redirected state directory did not anchor the project lock: $redir_lock" ;;
+  esac
+  [ ! -e "$redir_home/state" ] \
+    || fail "resolving the lock created a literal state directory instead of using the redirect"
+
+  pass "Treehouse project locking honors a redirected state directory while keeping descendants on the shared root anchor"
+}
+
 test_invalid_endpoint_records_refuse_before_mutation
 test_control_lock_contention_refuses_before_mutation
 test_non_pool_teardown_ignores_task_set_lock
@@ -850,6 +902,7 @@ test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts
+test_project_lock_honors_a_redirected_state_directory
 test_remote_seeded_home_returns_its_uncontested_slot
 test_remote_seeded_home_still_refuses_a_slot_its_child_holds
 test_remote_layout_homes_serialize_on_one_project_lock
