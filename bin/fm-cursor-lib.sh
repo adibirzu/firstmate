@@ -241,3 +241,25 @@ fm_cursor_process_matches() {  # <comm> <args> [argv0]
   return 1
 }
 
+fm_cursor_drift_process_matches() {  # <comm> <args> [argv0]
+  local comm=$1 args=$2 base token rest
+  fm_cursor_process_matches "$@" && return 0
+  base=$(basename -- "$comm")
+  base=${base#-}
+  case "$base" in
+    agent|MainThread|node|node-*|node[0-9]*|python|python[0-9]*|python[0-9].[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  rest=${args#"${args%%[![:space:]]*}"}
+  rest=${rest#"${rest%%[[:space:]]*}"}
+  while [ -n "$rest" ]; do
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    [ -n "$rest" ] || break
+    token=${rest%%[[:space:]]*}
+    rest=${rest#"$token"}
+    case "$token" in -*) continue ;; esac
+    fm_cursor_path_is_cursor "$token" && return 0
+    return 1
+  done
+  return 1
+}

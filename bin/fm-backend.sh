@@ -835,6 +835,43 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
 # uses unknown as the cue for harness-scoped pane-tail detection, while
 # fm-crew-state.sh also corroborates native idle verdicts with the recorded
 # harness's signature before treating a no-run crew as not busy.
+# fm_backend_current_path: the live working directory of <target>, or a nonzero
+# return when this backend cannot answer. Supervision must NEVER type into a
+# live pane: fm-crew-state.sh calls this on every state read, so it may use only
+# tmux and Herdr's passive readers. Zellij and cmux's active marker probes stay
+# scoped to fm-spawn.sh's pre-harness worktree-discovery poll, and Orca has no
+# current-path reader.
+#
+# fm-spawn.sh has its own spawn_current_path for the worktree-discovery poll,
+# which predates this dispatcher and stays as it is: it runs while $BACKEND is a
+# local, already-resolved variable inside a single spawn.
+fm_backend_current_path() {  # <backend> <target> [expected-label]
+  local backend=$1 target=$2
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_bound_current_path "$target" ;;
+    herdr) fm_backend_herdr_current_path "$target" ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_pane_argv: the live command line running in <target>, or a nonzero
+# return when this backend cannot answer. Herdr alone covers the argv axis: tmux
+# reports unknown because it has no atomic boundary-preserving argv surface.
+# bin/fm-launch-drift-lib.sh checks the working-directory axis only on
+# passive-read backends (tmux and Herdr). Zellij, cmux, and Orca report unknown
+# on the cwd axis.
+fm_backend_pane_argv() {  # <backend> <target> <harness>
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_pane_argv "$@" ;;
+    herdr) fm_backend_herdr_pane_argv "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
 fm_backend_busy_state() {  # <backend> <target>
   local backend=$1
   shift

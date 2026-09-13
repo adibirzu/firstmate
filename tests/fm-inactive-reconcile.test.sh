@@ -616,6 +616,21 @@ test_nonterminal_and_captain_held_states_do_not_report() {
   pass "nonterminal and captain-held workers remain outside inactive terminal reporting"
 }
 
+# A still-standing captain-held declaration must keep governing across a later
+# unrelated resolved: line closing some OTHER open decision on the same task -
+# the reported silent-cancellation bug this branch fixed for fm-watch.sh, here
+# reproduced through reconcile_direct_child_locked's own captain-held guard.
+test_captain_held_survives_unrelated_resolved_line() {
+  make_world captain-held-resolved
+  write_child "$MAIN" child 'captain-held [key=route]: awaiting captain'
+  printf 'resolved [key=other]: an unrelated decision was answered\n' >> "$MAIN/state/child.status"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status" "$MAIN/state/child.turn-ended"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  [ "$(outcome_count "$MAIN" pending)" = 0 ] \
+    || fail "an intervening unrelated resolved: line cancelled a still-standing captain-held guard"
+  pass "the captain-held guard survives an intervening unrelated resolved: line"
+}
+
 # The actual watcher poll invokes the helper, while an idle secondmate remains
 # exempt from wedge escalation and emits no false wake.
 test_watcher_hook_and_idle_secondmate_exemption() {
@@ -807,6 +822,7 @@ test_relaunch_cannot_replace_metadata_during_state_snapshot
 test_heartbeat_cap_does_not_delay_reconciliation
 test_scan_marker_replaces_symlink_safely
 test_nonterminal_and_captain_held_states_do_not_report
+test_captain_held_survives_unrelated_resolved_line
 test_watcher_hook_and_idle_secondmate_exemption
 test_watcher_poll_delivers_child_ledger_line_to_parent
 test_stalled_state_read_is_bounded_and_scan_progresses

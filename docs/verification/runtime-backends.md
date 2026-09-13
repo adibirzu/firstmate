@@ -940,6 +940,8 @@ ok - version floor: an unconfigured home falls back flat on herdr 0.7.5 and the 
 evidence: herdr=0.7.5 protocol=17 steal_live=1 floor_verdict=1 default-session-tripwire=armed
 ```
 
+The preserved fallback line reporting a bounded wrong-focus window of 4 samples is superseded by the event-based removal boundary and no longer describes current behavior.
+
 Observed output on Herdr 0.8.0:
 
 ```text
@@ -956,7 +958,9 @@ The same guarded named-lab command passed on 2026-09-03 against Herdr 0.8.2 afte
 It reported `steal_live=0 floor_verdict=0 default-session-tripwire=armed`, with the fleet's default session unchanged before and after.
 
 Part C is the case the suite could not reach before: a doomed pane whose shell holds a persistent background child fails the lone-idle-shell proof on every sample, so the plan takes the plain explicit close, in the geometry where the closing workspace's right neighbour is a spacer rather than the focused anchor.
-On 0.7.5 that fallback exposed a bounded four-sample wrong-focus window and restored the anchor exactly; on 0.8.0 the same fallback exposed none, which is why default-on projection is floored at 0.8.0 rather than mitigated further below it.
+The 0.7.5 four-sample conclusion is superseded by the event-based removal boundary and no longer describes current behavior, while the retained 0.8.0 result remains an observation of that prior run.
+No replacement below-floor measurement is recorded here because this document step precedes CI, local development ran on Herdr 0.8.2 where the below-floor focus steal may not occur, and the behavior is specific to a below-floor release such as the CI-pinned Herdr 0.7.4 protocol 16 with `steal_live=1`.
+The record needs a gated real-Herdr run on Herdr 0.7.4 protocol 16 from the required `real-herdr-gated` lane, including its date, exact command, exact observed output with `steal_live`, `floor_verdict`, and the default-session tripwire, plus a conclusion on any wrong-focus interval the event-based boundary exposes and whether the anchor is exactly restored when teardown returns.
 The suite also cross-checks its own Part A measurement against the floor classifier on whatever release it runs, so a drifted protocol-to-release mapping fails there rather than silently gating on the wrong thing.
 
 ### Presentation version floor
@@ -1041,6 +1045,87 @@ ok - forced secondmate teardown preflights every Herdr child before cleanup muta
 ok - forced secondmate teardown retains Herdr child identity until exact pane disappearance
 ok - forced teardown retains a nested secondmate home and its grandchild's Herdr identity when the grandchild close is unconfirmed
 ```
+
+### Stale default-workspace scaffold
+
+Observed on 2026-09-12 against the installed Herdr 0.8.2, macOS aarch64, through the guarded lab helper: a brand-new session carries one workspace labeled `~` before Firstmate ever calls `workspace create`.
+This is the empirical basis for [`herdr-backend.md`](../herdr-backend.md) "Stale default-workspace reap".
+Left unreaped it accumulated as an orphaned workspace for the life of every fresh session, which was the root cause of `tests/fm-backend-herdr-presentation-e2e.test.sh` observing an unexpected active workspace/tab shift across a projected teardown.
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh bin/fm-test-run.sh tests/fm-backend-herdr-presentation-e2e.test.sh
+```
+
+```text
+ok - real Herdr lab: a home that configured nothing is projected by default on herdr 0.8.2
+ok - real Herdr lab: every projected create, task-tab create, seeded prune, and move preserves active workspace and tab
+```
+
+The reap logic itself is pinned portably with no Herdr installed:
+
+```sh
+tests/fm-backend-herdr.test.sh
+```
+
+### Launch-argv replay removal
+
+Measured on 2026-09-10 against the installed Herdr 0.8.2, protocol 20, macOS aarch64, through the guarded lab helper.
+This is the empirical basis for [`herdr-backend.md`](../herdr-backend.md) "Launch-argv replay" and for the launch-drift detector existing at all.
+
+The pane-creating `agent start` signature earlier releases accepted is gone:
+
+```sh
+bin/fm-herdr-lab.sh run "$LAB" agent start argvold --cwd "$DIR" --workspace w1 --no-focus -- claude --dangerously-skip-permissions
+```
+
+```text
+unknown option: --cwd
+```
+
+`agent.start` now attaches an agent to an existing pane, and its `argv` is a response field rather than persisted state:
+
+```sh
+herdr api schema --json | jq -r '.schemas.request."$defs".AgentStartParams.required'
+```
+
+```text
+["name","kind","pane_id"]
+```
+
+No persisted launch record exists anywhere in the schema.
+The only `argv` fields belong to `pane.process_info`'s live process read and to the `agent_started` response:
+
+```sh
+herdr api schema --json | jq -r 'paths(scalars) as $p | select($p|map(tostring)|join(".")|test("argv";"i")) | $p|map(tostring)|join(".")' | sed 's/\.[^.]*$//' | sort -u
+```
+
+```text
+schemas.success_response.$defs.PaneProcessInfoProcess.properties.argv
+schemas.success_response.$defs.PaneProcessInfoProcess.properties.argv0
+schemas.success_response.$defs.ResponseResult.oneOf.13.properties.argv
+```
+
+A persisted pane record carries `cwd` alone, and that cwd follows the live shell rather than freezing at creation.
+A pane created at one directory and then `cd`ed into another persisted the second path across a real guarded stop:
+
+```sh
+bin/fm-herdr-lab.sh run "$LAB" tab create --workspace w1 --cwd "$DIR/project" --label cwdtab --no-focus
+bin/fm-herdr-lab.sh run "$LAB" pane run w1:p2 "cd $DIR/worktree"
+bin/fm-herdr-lab.sh stop "$LAB"
+jq -r '[.workspaces[].tabs[].panes[].cwd]' "$SESSION_JSON"
+```
+
+```text
+[
+  "<DIR>/project",
+  "<DIR>/worktree"
+]
+```
+
+The first entry is the workspace's own seeded pane; the second is the task pane, which followed the `cd`.
+
+`tests/fm-backend-herdr-launch-argv-e2e.test.sh` is the live regression guard for these protocol-20 facts.
+Run it after a Herdr upgrade; a reintroduced persisted launch command fails loudly with the installed version named.
 
 ### Composer and operational input
 

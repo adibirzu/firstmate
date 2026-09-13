@@ -17,13 +17,23 @@
 #
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
 #
+# Before producing that line for a local endpoint, the reader passively compares
+# its live cwd and, where a backend can read it atomically, argv with the spawn
+# record. A confirmed divergence is appended as a launch-drift annotation; it
+# never overrides the state, because the worker can still be working. The drift
+# policy and backend coverage are owned by bin/fm-launch-drift-lib.sh.
+#
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
 #      live on that host, so the local worktree and pane reads are skipped and
 #      the remote host is asked for the endpoint's recovery-grade state
 #      (fm-on.sh + fm-remote-secondmate-control.sh state). alive falls through
-#      to the routed status log; dead/missing report the remote verdict; an
+#      to the routed status log, then also checks the pause-governing fold
+#      (status_paused_governing_line in fm-classify-lib.sh) so a standing
+#      paused:/captain-held: declaration still reports paused even when a later
+#      unrelated append, such as a resolved: line closing a different decision,
+#      is the log's last line; dead/missing report the remote verdict; an
 #      unreachable or unreadable remote reports unknown-remote, never a false
 #      gone/dead.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
@@ -78,7 +88,10 @@
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line only
 #      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      `resolved` never become current state or detail. When the last line does
+#      not map to a state, the pause-governing fold (status_paused_governing_line)
+#      still reports paused for a standing paused:/captain-held: declaration that
+#      an unrelated later append has not genuinely superseded.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log. On tmux and herdr, which own a
@@ -108,6 +121,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-launch-drift-lib.sh
+. "$SCRIPT_DIR/fm-launch-drift-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -128,10 +143,18 @@ FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
 
+# Set by launch_drift_note() once the endpoint has been read, and appended by
+# emit() to whichever line this run produces. It is deliberately an ANNOTATION
+# rather than a state: a worker with lost flags, or one standing in the primary
+# checkout, is usually still `working` by every other measure, so overriding the
+# state would hide what it is actually doing. The supervisor needs both facts.
+LAUNCH_DRIFT_NOTE=''
+
 # Emit the one canonical line and exit 0. Detail is optional.
 emit() {  # <state> <source> [detail]
   local line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
+  [ -n "$LAUNCH_DRIFT_NOTE" ] && line="$line${SEP}$LAUNCH_DRIFT_NOTE"
   printf '%s\n' "$line"
   exit 0
 }
@@ -212,6 +235,10 @@ if [ -n "$REMOTE_HOST" ]; then
           emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
+      REMOTE_PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+      if status_is_paused_or_captain_held "$REMOTE_PAUSE_GOVERNING_LINE"; then
+        emit paused status-log "$(status_line_note "$REMOTE_PAUSE_GOVERNING_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
+      fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
       ;;
     dead|missing)
@@ -235,6 +262,42 @@ fi
 TASK_BACKEND=$(fm_backend_of_meta "$META")
 BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
+
+# --- launch drift ----------------------------------------------------------
+
+# Compare the endpoint's LIVE working directory and command line against what
+# the spawn RECORDED, and set LAUNCH_DRIFT_NOTE when they diverge. The policy,
+# including which divergences are severe and which reads are allowed to be
+# unknown, is owned by bin/fm-launch-drift-lib.sh; this function only gathers
+# the two live values and formats the note.
+#
+# It runs on every state read because a restore can strip a worker's flags or
+# move it into the primary checkout at any point in its life, not only at spawn.
+# Both reads are best-effort and their failure is not an error: an unreadable
+# endpoint yields `unknown`, which produces no note at all.
+#
+# A remote secondmate is skipped: its worktree and endpoint live on another
+# host, so both local reads would compare this machine's paths against that
+# host's record and manufacture a divergence that does not exist.
+launch_drift_note() {
+  local live_cwd='' live_argv='' verdict severity code detail
+  [ -z "$REMOTE_HOST" ] || return 0
+  [ -n "$BACKEND_TARGET" ] || return 0
+  live_cwd=$(fm_backend_current_path "$TASK_BACKEND" "$BACKEND_TARGET" "$EXPECTED_LABEL" 2>/dev/null) || live_cwd=''
+  live_argv=$(fm_backend_pane_argv "$TASK_BACKEND" "$BACKEND_TARGET" "$HARNESS" 2>/dev/null) || live_argv=''
+  verdict=$(fm_launch_drift_verdict \
+    "$(meta_value launch_argv)" "$HARNESS" "$WT" "$(meta_value project)" "$live_cwd" "$live_argv")
+  IFS=$'\t' read -r severity code detail <<VERDICT
+$verdict
+VERDICT
+  case "$severity" in
+    severe) LAUNCH_DRIFT_NOTE="LAUNCH DRIFT (severe, $code): $detail" ;;
+    warn) LAUNCH_DRIFT_NOTE="launch drift ($code): $detail" ;;
+    *) LAUNCH_DRIFT_NOTE='' ;;
+  esac
+}
+launch_drift_note
+
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
     tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
@@ -860,6 +923,11 @@ if [ -n "$LOG_VERB" ]; then
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
+fi
+
+PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+if status_is_paused_or_captain_held "$PAUSE_GOVERNING_LINE"; then
+  emit paused status-log "$(status_line_note "$PAUSE_GOVERNING_LINE")"
 fi
 
 emit unknown none "no current-state source available"

@@ -88,7 +88,10 @@ The empty file is the historical presence-based opt-in form, so every home that 
 A home that never created the file gains the projection at its next Herdr spawn on a supported release; that flip is deliberate, and it reaches only the Herdr backend because no other runtime backend has a projection path.
 
 Projecting each task into its own workspace makes every task cleanup a workspace-emptying removal, which is the only removal shape Herdr's pre-0.8.0 focus defect touches, and the focus-safe removal plan below can only avoid it while the closing pane's shell can be proved lone, childless, and idle.
-A persistent child of that shell - a `gitstatusd`, a `zsh-async` worker, or `direnv` - fails that proof permanently and forces the plain explicit close, which on those releases moves the active workspace for roughly a seventh of a second before the restore backstop pulls it back, once per task cleanup.
+A persistent child of that shell - a `gitstatusd`, a `zsh-async` worker, or `direnv` - fails that proof permanently and forces the plain explicit close.
+For a close that empties its workspace, the restore waits for that workspace to be observably removed before correcting focus, because removal is the transition that can steal focus and an earlier correction does not hold.
+Each removal boundary permits 100 polls at 0.1 seconds, roughly ten seconds, then restoration retries the exact prior tab up to three times with up to 20 confirmation polls each, roughly six more seconds after removal is confirmed.
+An operation that never moved focus returns immediately, and a removal that already landed resolves on its first read.
 An unconfigured home is therefore projected only on a release at or above the 0.8.0 floor, where every workspace-removal primitive preserves focus and that proof stops being load-bearing.
 Below the floor an unconfigured home uses the ordinary flat per-home layout instead and warns once per home per detected release, naming the running release and the upgrade that restores the projection.
 That one-warning-per-release record is a `state/.herdr-presentation-floor-<release>` marker; deleting it only makes the same warning appear again, and an upgrade or downgrade re-announces itself because the release is part of the key.
@@ -136,7 +139,8 @@ That exact-pane close and its focus restore run before the task worktree is retu
 The repositioning move-to-last preserves every surviving workspace's relative order, and removal is confirmed against the exact moved workspace rather than inferred from pane disappearance before an unconfirmed removal makes one verified attempt under the same session lock to roll the doomed workspace back to its exact original position.
 If that rollback cannot restore the verified original order, cleanup warns loudly and leaves the retained records for inspection rather than retrying the shared-layout mutation.
 The pane-death signals are pid-exact: the escalation re-reads the pane's process information and refuses unless the same shell pid still passes the strict bare-idle ownership proof, so an exited and reused pid is never signaled.
-A move-plan ambiguity, unsupported or failed move, or unproved shell falls back to the plain explicit close, and exact tab restoration remains the backstop whenever a surviving tab must be preserved, so degraded behavior is never worse than the pre-mitigation sub-second restore.
+Any ambiguity, unsupported or failed move, or unproved shell falls back to the plain explicit close, and the exact prior-tab restore remains the backstop behind every close.
+An unresolved repositioned close can consume the ten-second removal boundary once for its moved-workspace decision and again in the restore before reporting uncertainty, roughly twenty seconds in the worst unresolved case.
 Ordinary non-projected task removal serializes through the same session lock, applies the same focus-safe plan when its close would empty a non-focused workspace, keeps the legitimate plain close when the target is the active tab, and refuses an unlocked close if the lock cannot be acquired.
 Task cleanup acquires that session lock before the task's isolated copy is returned, so a contended lock refuses up front while the copy, every durable record, and the endpoint are all intact for a plain rerun.
 Forced secondmate cleanup recursively preflights every Herdr child endpoint and acquires every affected named-session lock before mutating any child, then retains each child's durable identity unless that exact pane returns structured not-found after its close.
@@ -202,6 +206,16 @@ A prior label heuristic could adopt a captain-owned workspace named `firstmate` 
 The current structural gate removes label inference from cleanup authority.
 `tests/fm-backend-herdr-prune-safety-e2e.test.sh` reproduces the collision in an isolated named session and proves the adopted pane remains untouched.
 
+## Stale default-workspace reap
+
+Herdr 0.8.2 seeds every fresh session with exactly one workspace labeled `~` before Firstmate ever calls `workspace create` (verified empirically against the real client).
+`fm_backend_herdr_stale_default_workspace_id` identifies that scaffold only when the session has exactly one workspace and its label is that literal sentinel - but label and count alone cannot tell an untouched scaffold from a captain's own real, actively-used workspace that merely still carries the unrenamed default label, so two further guards are required:
+- `HERDR_SESSION` must be explicitly set by the caller. When it is unset, `fm_backend_herdr_session` falls back to herdr's own ambient `default` session - the same session an operator's own interactive herdr usage lives in - and the reap never runs there, regardless of the candidate workspace's shape.
+- The candidate workspace must have zero panes of any kind, checked by listing its panes directly rather than inferred from agent status - a live pane a captain is using manually, or one hosting an idle/finished agent, is still live work and would not be flagged as "working" by herdr's agent tracker. Any pane at all means a captain has actually used the workspace, and it is never reaped.
+
+`fm_backend_herdr_workspace_ensure` reaps it, best-effort, right after creating this home's own workspace.
+A failed reap never fails the spawn.
+
 ## Endpoint metadata
 
 ```text
@@ -219,7 +233,8 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 
 ## Current transport behavior
 
-The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
+The adapter starts and polls a named server before operational workspace, tab, pane, or agent calls.
+Passive supervision observations are the exception; [Launch-argv replay](#launch-argv-replay) owns that no-autostart contract.
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
 When the selected named server is not running, the adapter launches it without inherited Firstmate home and directory overrides, harness identity markers, or the supervision-model override.
@@ -293,6 +308,31 @@ Unlike tmux process-name inspection, native registration can classify Pi without
 The session-start sweep uses this probe.
 Mid-session secondmate agent-process liveness is not implemented because idle secondmates are deliberately exempt from stale-pane escalation and need a separate periodic identity signal.
 
+### Launch-argv replay
+
+Herdr does not replay a worker's launch command, and from 0.8.0 it records none at all.
+A restored pane therefore comes back with no way to reconstruct the flags its agent was started with.
+
+Earlier releases persisted a `launch_argv` field for a pane created through `agent start <name> --cwd <dir> --workspace <id>`, and that record survived a real server restart.
+Protocol 20 removes both halves.
+`agent.start` now takes `name`, `kind`, and `pane_id` and attaches an agent to an existing pane at a shell prompt, so it accepts neither a cwd nor a workspace, and `--kind` is a fixed enum that does not cover every harness Firstmate dispatches.
+Its `argv` is a response field only.
+The persisted pane record carries `cwd` alone, and the schema's only other `argv` belongs to `pane.process_info`, which reads the live process rather than restore state.
+
+The working directory is the one axis Herdr does restore, and it tracks the pane's live cwd rather than freezing the creation value, so a worker that has `cd`ed into its task worktree persists that worktree.
+That makes the recorded cwd correct in the steady state, but it is not a guarantee: it depends on the `cd` having landed, and the workspace's own seeded pane still sits in the project checkout.
+
+Because no supported backend replays a launch, firstmate detects the loss instead of preventing it.
+`bin/fm-spawn.sh` records the resolved command as the task record's `launch_argv=`, and `bin/fm-crew-state.sh` compares it, and the recorded `worktree=`, against what a local endpoint is live running on every state read.
+`bin/fm-launch-drift-lib.sh` owns that verdict policy, including which divergences are severe.
+`fm_backend_herdr_pane_argv` supplies the live side here through `pane.process_info`.
+Herdr alone covers the argv axis because `pane.process_info` returns one atomic argv array.
+Tmux reports argv unknown because it exposes no atomic boundary-preserving argv source.
+The cwd axis covers tmux and Herdr through their passive readers.
+Zellij and cmux's cwd probes are active and remain limited to fm-spawn.sh before a harness launches, while Orca has no cwd reader, so those backends report unknown on the cwd axis.
+These supervision reads never start a Herdr server, revive a pane, or type into it.
+A stopped or unreadable server leaves the affected axis unknown rather than causing a state read to change the workspace.
+
 ## Push events and polling fallback
 
 Protocol 16 can subscribe to `pane.agent_status_changed` over one bounded Unix-socket reader.
@@ -343,6 +383,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Ghost and placeholder recognition uses ANSI de-emphasis when available; an unstyled glyph row carrying trailing non-idle text fails safely to `unknown`.
 - Mid-session secondmate agent-process liveness is not implemented.
 - Only tmux and Herdr can host the away-mode supervisor terminal.
+- No launch command is persisted from 0.8.0, so a restored worker's flags cannot be replayed and are only detected as drift.
 
 ## Regression entry points
 
@@ -355,6 +396,7 @@ tests/fm-backend-herdr-prune-safety-e2e.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh
 tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
+tests/fm-backend-herdr-launch-argv-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh
@@ -365,4 +407,4 @@ tests/fm-afk-pi-herdr-return-e2e.test.sh
 ```
 
 Real Herdr tests use the named lab helper and default-session tripwire.
-[`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) records the active version, CLI, projection, event, and lifecycle evidence without task-specific chronology.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) records the active version, CLI, launch-replay, projection, event, and lifecycle evidence without task-specific chronology.

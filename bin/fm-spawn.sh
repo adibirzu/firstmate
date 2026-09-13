@@ -1105,6 +1105,11 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
+  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+    if ! spawn_fresh_commit_rollback; then
+      status=1
+    fi
+  fi
   # The treehouse lease is durable, so a spawn that fails before publishing
   # state/<id>.meta must return it here: teardown never runs for a task that
   # never existed, so nothing else would ever free that pool slot. The one
@@ -1116,6 +1121,8 @@ spawn_abort_cleanup() {
     if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
       if [ "$herdr_pane_close_refused" = 1 ]; then
         echo "warning: leased worktree $WT was not returned because its herdr pane is still open; close the pane, then run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      elif [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+        echo "warning: leased worktree $WT was not returned because failed-dispatch rollback retained its task record; reconcile the record and endpoint before returning the lease" >&2
       else
         fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
           || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
@@ -1165,11 +1172,6 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
     fm_lock_release "$SPAWN_TASK_LOCK" || true
-  fi
-  if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
-    if ! spawn_fresh_commit_rollback; then
-      status=1
-    fi
   fi
   # An aborted relaunch must not leave the REPLACEMENT's wiring armed: the task
   # keeps running its previous incarnation's record, so a stray hook file or
@@ -4146,6 +4148,50 @@ spawn_record_traceparent() {
   return "$status"
 }
 
+# spawn_record_launch_argv publishes the fully resolved launch command as the
+# task record's launch_argv= line, using the same locked rewrite as
+# spawn_record_traceparent and for the same concurrency reason.
+#
+# It runs late because the command is only final after model, effort, brief, and
+# launch-env substitution. bin/fm-crew-state.sh's launch-drift detector compares
+# this recorded command against what the endpoint is live running, which is the
+# only cover firstmate has for a restored worker that came back without its
+# flags: no supported backend replays a launch command
+# (bin/fm-launch-drift-lib.sh owns that rationale).
+#
+# A command carrying a newline would forge a second key=value line in the
+# record, so it is refused rather than written. That is not reachable from any
+# current launch construction - every substituted value is a shell-quoted path -
+# and a refusal only costs the detector its argv axis, which reports `unknown`.
+spawn_record_launch_argv() {
+  local meta="$STATE/$ID.meta" tmp status=0 acquired=0
+  case "$LAUNCH" in
+    *$'\n'*)
+      echo "warning: resolved launch command contains a newline; not recording launch_argv= for $ID" >&2
+      return 1
+      ;;
+  esac
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+    SPAWN_META_LOCK_HELD=1
+    acquired=1
+  fi
+  tmp="$STATE/.$ID.meta.launch.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "launch_argv"' "$meta" > "$tmp" \
+     || ! printf 'launch_argv=%s\n' "$LAUNCH" >> "$tmp" \
+     || ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  if [ "$acquired" = 1 ]; then
+    fm_lock_release "$SPAWN_META_LOCK" || status=1
+    SPAWN_META_LOCK_HELD=0
+  fi
+  return "$status"
+}
+
 # spawn_write_meta serializes the whole read-modify-write against every other
 # metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,
 # ...), so a Relay reply publishing concurrently between the read and the write
@@ -4183,7 +4229,12 @@ spawn_write_meta_locked() {
   # keep the previous adapter's routing provider: every reuse caller that can
   # prove a correct provider passes it explicitly (fm-runtime-handoff.sh and
   # fm-control.sh), so an unprovable one is dropped instead of left lying.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  # launch_argv= belongs here for the same reason as traceparent=: it is written
+  # late (bin/fm-spawn.sh's spawn_record_launch_argv, once the launch command is
+  # fully resolved), so a relaunch must drop the previous incarnation's command
+  # rather than leave the launch-drift detector comparing the live worker against
+  # a retired run's flags.
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|launch_argv|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then
@@ -4282,11 +4333,7 @@ spawn_write_meta_locked() {
     SPAWN_META_PUBLISH_FAILED=1
     return 1
   fi
-  # Publication transfers worktree ownership to fm-teardown.sh.  Disarm the
-  # spawn-only lease cleanup in this same critical section: an interrupt after
-  # the atomic publish but before the caller regains control must never return
-  # the leased worktree underneath the now-live task record.
-  TREEHOUSE_LEASE_ABORT_CLEANUP=0
+  [ "$BACKLOG_TRANSITION" = 1 ] || TREEHOUSE_LEASE_ABORT_CLEANUP=0
 }
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PUBLISH_FAILED=0
@@ -4347,17 +4394,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-# The task now exists in state/, so fm-teardown.sh owns returning its worktree.
-# Disarm lease-abort and provisional-record rollback before the side-band
-# home-summary refresh: an interrupt during that refresh must not roll the
-# published record back or return a live task's lease.
-TREEHOUSE_LEASE_ABORT_CLEANUP=0
-SPAWN_REFRESH_SAVED_PENDING=$SPAWN_FRESH_COMMIT_PENDING
-SPAWN_FRESH_COMMIT_PENDING=0
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-SPAWN_FRESH_COMMIT_PENDING=$SPAWN_REFRESH_SAVED_PENDING
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
-
+# Without a pending backlog commit the published record is already final and
+# teardown owns its lease, so refresh the side-band home summary now: a launch
+# or readiness failure below keeps this durable endpoint and must leave it
+# visible. A provisional record waits for the post-commit refresh instead,
+# because a failure before that commit rolls it back.
+if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
@@ -4488,6 +4532,11 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
 sleep 0.3
+# Record the resolved command before submitting it: this is the last point where
+# $LAUNCH is final, and a record written here still describes the incarnation the
+# next line starts. A failure to record is not fatal - it costs the launch-drift
+# detector its argv axis, which then reports `unknown` rather than a false alarm.
+spawn_record_launch_argv || true
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
@@ -4644,6 +4693,12 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi
 fi
+if [ "$BACKLOG_TRANSITION" = 1 ] && [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ]; then
+  # A successful final commit transfers the lease to teardown. This must happen
+  # before deferred-signal handling, because that path can exit after a committed
+  # delivery while reporting the interrupt to its caller.
+  TREEHOUSE_LEASE_ABORT_CLEANUP=0
+fi
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
@@ -4666,6 +4721,9 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
