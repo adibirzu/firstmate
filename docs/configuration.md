@@ -446,6 +446,9 @@ Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
 This section is the single owner of the canonical schema and its per-field semantics.
 `AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the subscription-aware profile-array selection judgment boundary.
+When the two axi tools are installed, firstmate routes a task descriptor through `llm-router-axi route` under the `router-dispatch` skill and records outcomes with `llm-router-axi record`; the routing doctrine then lives in the human-editable `~/.config/llm-router-axi/policy.json`, and `usage-axi` becomes the preferred telemetry source behind `bin/fm-dispatch-select.mjs` and `bin/fm-capacity.sh`.
+`bin/fm-router-lib.sh` owns local resolution of both tools and the one-line install hint.
+Each tool's README owns its own flags, lanes, and install steps; this file does not restate them.
 
 ```json
 {

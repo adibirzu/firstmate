@@ -11,7 +11,7 @@ Two general, reusable optional capabilities in FirstMate:
 
 The main owner surfaces are `bin/fm-fleet*.sh`, `bin/fm-account*.sh`,
 `bin/fm-accounts*.sh`, `bin/quota-*`, `scripts/fleet-root-prereq.sh`,
-`.agents/skills/{federation,multi-account}/`, and `tests/federation/*.sh`.
+`.agents/skills/{federation,router-dispatch}/`, and `tests/federation/*.sh`.
 Existing spawn, backend, bootstrap, and configuration paths carry the narrow integration points that make the feature usable from the normal FirstMate flow.
 
 ---
@@ -116,6 +116,8 @@ then sets `umask 002`. Nothing else needs root.
 ---
 
 ## Part B — Per-spawn multi-account
+
+The account-launch procedure is owned by `.agents/skills/router-dispatch/SKILL.md`, which folds it into the dispatch skill.
 
 ### Three isolation methods (verified per CLI — never guessed)
 The matrix below records how each CLI isolates auth, probed from its own
