@@ -566,7 +566,7 @@ test_meta_get_and_backend_of_meta() {
 # when a meta carried no window=. This drives the public function through a real
 # `set -e` child, the caller-visible shape, rather than asserting source bytes.
 test_backend_target_of_meta_set_e_safe() {
-  local dir driver nofield noterminal withfield out
+  local dir driver out
 
   dir="$TMP_ROOT/target-meta-set-e"; mkdir -p "$dir"
   fm_write_meta "$dir/nofield.meta" "backend=tmux" "harness=claude"
