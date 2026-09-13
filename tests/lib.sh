@@ -54,6 +54,15 @@ export FM_GATE_REFUSE_BYPASS=1
 # under the marker. A case that verifies the refusal sets FM_TASK_ID itself.
 unset FM_TASK_ID
 
+# Clear the home identity a live firstmate session exports, so a test file
+# launched directly (not through bin/fm-test-run.sh, which clears the same
+# names per worker) still starts from no home. A script given only
+# FM_STATE_OVERRIDE otherwise resolves FM_HOME from the ambient value, and in a
+# secondmate home its parent-channel publishers append fixture lines to the
+# real parent's status log. A case that needs a home sets these itself.
+unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
+  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034
