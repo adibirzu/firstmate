@@ -315,6 +315,32 @@ fm_backend_tmux_foreground_pids() {  # <target> [tty]
       done
 }
 
+# fm_backend_tmux_task_process_root: the pid of <target>'s pane shell - the
+# root of the task's whole process tree - or a nonzero return when the exact
+# recorded window cannot be confirmed live. Tmux answers an absent target from
+# the client's ACTIVE window rather than failing, so the session's window
+# inventory must name this exact window before its pane pid is trusted;
+# without that check a vanished task window would resolve to whichever window
+# is active now. bin/fm-teardown.sh walks descendants from this root so a
+# harness child that called setsid (an MCP server, a detached poll shell) is
+# still reached even after it left the pane's process group and cwd.
+fm_backend_tmux_task_process_root() {  # <target>
+  local target=$1 session window windows pid
+  case "$target" in
+    *:*:*|'':*|*:'') return 1 ;;
+    *:*) ;;
+    *) return 1 ;;
+  esac
+  session=${target%%:*}
+  window=${target#*:}
+  windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null) || return 1
+  printf '%s\n' "$windows" | grep -Fxq -- "$window" || return 1
+  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  printf '%s\n' "$pid"
+}
+
 fm_backend_tmux_foreground_argv0s() {  # <target> [tty]
   local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
   [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0

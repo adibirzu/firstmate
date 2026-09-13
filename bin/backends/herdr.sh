@@ -2716,6 +2716,28 @@ fm_backend_herdr_current_path() {  # <target>
   printf '%s' "$pane" | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
 
+# fm_backend_herdr_task_process_root: the pane shell pid of <target>, or a
+# nonzero return when it cannot be read. Read passively through
+# target_observe, so a stopped session stays unreadable rather than being
+# revived by a teardown-time read. bin/fm-teardown.sh walks descendants from
+# this root so a harness child that called setsid (an MCP server, a detached
+# poll shell) is still reached even after it left the pane's process group and
+# cwd.
+fm_backend_herdr_task_process_root() {  # <target>
+  fm_backend_herdr_target_observe "$1" || return 1
+  local out pid
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || return 1
+  # The exact pane must answer for itself: an absent or mismatched pane id must
+  # not let a neighboring pane's shell become this task's reaping root.
+  printf '%s' "$out" | jq -e --arg pane "$FM_BACKEND_HERDR_PANE" '
+    .result.type == "pane_process_info"
+    and .result.process_info.pane_id == $pane
+  ' >/dev/null 2>&1 || return 1
+  pid=$(printf '%s' "$out" | jq -er \
+    '.result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || return 1
+  printf '%s\n' "$pid"
+}
+
 # fm_backend_herdr_pane_argv: the live command line of the recorded harness in
 # the pane's foreground process group, or a nonzero return when it cannot be
 # read. This is the only launch evidence Herdr offers. From 0.8.0 it persists

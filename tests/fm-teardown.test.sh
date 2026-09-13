@@ -3713,6 +3713,152 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+# The endpoint process-tree reap (Fix 2b): a harness child that calls setsid
+# leaves both the pane's process group and the worktree, so the cwd scan and
+# the pane close never reach it. The live process tree is rooted at a real
+# "pane shell" whose pid a stubbed tmux reports; the tree must be walked and
+# the escaped child reaped, or teardown must refuse. This is the portable
+# regression: no Herdr or live harness is required.
+test_endpoint_process_tree_reaps_setsid_descendant() {
+  local case_dir rc root_pid survivor_pid survived=0 child_cwd i=0
+  case_dir=$(make_case endpoint-tree-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  cat > "$case_dir/worker-root.sh" <<'SH'
+#!/usr/bin/env bash
+cd "$1" || exit 1
+setsid sh -c 'cd /tmp && printf "%s\n" "$$" > "$1" && exec sleep 300' sh "$2" &
+trap '' TERM HUP
+while true; do sleep 1; done
+SH
+  chmod +x "$case_dir/worker-root.sh"
+  "$case_dir/worker-root.sh" "$case_dir/wt" "$case_dir/setsid.pid" &
+  root_pid=$!
+  disown
+  while [ ! -s "$case_dir/setsid.pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  if [ ! -s "$case_dir/setsid.pid" ]; then
+    kill -KILL "$root_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: setup did not record the setsid child"
+  fi
+  survivor_pid=$(cat "$case_dir/setsid.pid")
+  kill -0 "$survivor_pid" 2>/dev/null || {
+    kill -KILL "$root_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: setsid child did not start"
+  }
+  # Prove the fixture is the intended leak shape only when /proc is readable:
+  # the escaped child's cwd is outside the worktree, so the cwd scan is blind
+  # to it and only the process-tree walk can find it.
+  child_cwd=$(readlink "/proc/$survivor_pid/cwd" 2>/dev/null || true)
+  case "$child_cwd" in
+    ''|"$case_dir/wt"|"$case_dir/wt"/*) ;;
+    *) ;;
+  esac
+  if [ -n "$child_cwd" ] && [ "$child_cwd" = "$case_dir/wt" ]; then
+    kill -KILL "$root_pid" "$survivor_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: fixture child did not leave the worktree"
+  fi
+
+  # Stub tmux as the backend endpoint reader: the recorded window exists and
+  # its pane shell is the real worker-process root.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *"list-windows"*) printf '%s\n' 'fm-task-x1'; exit 0 ;;
+  *"pane_pid"*) printf '%s\n' '$root_pid'; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  if kill -0 "$survivor_pid" 2>/dev/null; then
+    survived=1
+    kill -KILL "$survivor_pid" 2>/dev/null || true
+  fi
+  kill -KILL "$root_pid" 2>/dev/null || true
+  expect_code 0 "$rc" "endpoint-tree-reap: teardown should succeed"
+  [ "$survived" -eq 0 ] || fail "endpoint-tree-reap: a setsid descendant outside the worktree survived teardown"
+  assert_grep "reaped leaked worktree process tree" "$case_dir/stderr" \
+    "endpoint-tree-reap: teardown did not report reaping the endpoint process tree"
+  pass "the endpoint process-tree reap removes a setsid descendant the cwd scan cannot see"
+}
+
+# The endpoint process-tree reap must refuse loudly, never silently leave a
+# leak, when a captured descendant cannot be killed (here: it is not a real
+# process, so no signal can reach it but its identity still matches the
+# fixture). The live root is real so the walk has a tree; an unstoppable fake
+# pid is injected as a recorded root fallback is out of scope - instead the
+# real root ignores every signal, forcing the bounded escalation and the
+# loud refusal.
+test_endpoint_process_tree_refuses_on_unreaped_survivor() {
+  local case_dir rc root_pid i=0
+  case_dir=$(make_case endpoint-tree-refusal)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  # A root that ignores TERM and a KILL it never receives because its pid is
+  # swapped for a live-but-unstoppable one is not expressible in real
+  # processes; instead this case proves the refusal path with an
+  # unkillable-by-TERM root plus a fake ps that keeps reporting a surviving
+  # descendant identity. See test_endpoint_process_tree_reaps_setsid_descendant
+  # for the success path.
+  cat > "$case_dir/worker-root.sh" <<'SH'
+#!/usr/bin/env bash
+cd "$1" || exit 1
+trap '' TERM HUP
+while true; do sleep 1; done
+SH
+  chmod +x "$case_dir/worker-root.sh"
+  "$case_dir/worker-root.sh" "$case_dir/wt" &
+  root_pid=$!
+  disown
+  kill -0 "$root_pid" 2>/dev/null || fail "endpoint-tree-refusal: setup root did not start"
+  while [ ! -d "/proc/$root_pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+
+  # A fake ps reports a phantom descendant of the root whose birth identity
+  # never changes: no signal can kill a nonexistent pid, so the reap must
+  # exhaust its bounded attempts and refuse.
+  cat > "$case_dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -eo ]; then
+  printf ' %s %s S\n' "${FM_FAKE_PHANTOM_PID:?}" "${FM_FAKE_ROOT_PID:?}"
+  printf ' %s %s S\n' "${FM_FAKE_ROOT_PID:?}" 1
+  exit 0
+fi
+if [ "${1:-}" = -p ] && [ "${2:-}" = "${FM_FAKE_PHANTOM_PID:-}" ] \
+   && [ "${3:-}" = -o ] && [ "${4:-}" = lstart= ]; then
+  printf 'Tue Aug  4 10:00:00 2026\n'
+  exit 0
+fi
+exec "$REAL_PS_FOR_TEST" "$@"
+SH
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *"list-windows"*) printf '%s\n' 'fm-task-x1'; exit 0 ;;
+  *"pane_pid"*) printf '%s\n' '$root_pid'; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/ps" "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_FAKE_PHANTOM_PID=99999999 FM_FAKE_ROOT_PID="$root_pid" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  kill -KILL "$root_pid" 2>/dev/null || true
+
+  expect_code 1 "$rc" "endpoint-tree-refusal: teardown should refuse a surviving descendant"
+  assert_grep "REFUSED: leaked worktree process(es)" "$case_dir/stderr" \
+    "endpoint-tree-refusal: teardown did not surface the surviving descendant loudly"
+  assert_present "$case_dir/wt" "endpoint-tree-refusal: teardown removed the worktree despite the leak"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "endpoint-tree-refusal: teardown removed the record despite the leak"
+  pass "the endpoint process-tree reap refuses loudly when a descendant survives"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
@@ -3798,3 +3944,5 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_endpoint_process_tree_reaps_setsid_descendant
+test_endpoint_process_tree_refuses_on_unreaped_survivor

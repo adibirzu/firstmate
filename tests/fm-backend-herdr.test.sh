@@ -3368,6 +3368,33 @@ test_current_path_reads_cwd() {
   pass "fm_backend_herdr_current_path: reads pane foreground_cwd (the live running process), not the frozen creation-time cwd"
 }
 
+test_task_process_root_reads_shell_pid() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/process-root"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4242}}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_task_process_root default:w1:p2' "$ROOT" )
+  [ "$out" = "4242" ] || fail "task_process_root should read process_info.shell_pid, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''process-info'$'\x1f''--pane'$'\x1f''w1:p2' \
+    "task_process_root did not query process-info for the recorded pane"
+  pass "fm_backend_herdr_task_process_root: reads the pane shell pid from process-info"
+}
+
+test_task_process_root_refuses_mismatched_pane() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/process-root-mismatch"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # A different pane answered: it must never become this task's reaping root.
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w9:p9","shell_pid":4242}}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_task_process_root default:w1:p2' "$ROOT" 2>/dev/null )
+  status=$?
+  [ "$status" -ne 0 ] || fail "task_process_root accepted a mismatched pane id"
+  [ -z "$out" ] || fail "task_process_root printed a pid for a mismatched pane id: '$out'"
+  pass "fm_backend_herdr_task_process_root: refuses a process-info answer from another pane"
+}
+
 test_drift_reads_observe_without_server_start() {
   local dir log resp fb out
   dir="$TMP_ROOT/drift-observe"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -5172,6 +5199,8 @@ test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
+test_task_process_root_reads_shell_pid
+test_task_process_root_refuses_mismatched_pane
 test_drift_reads_observe_without_server_start
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
