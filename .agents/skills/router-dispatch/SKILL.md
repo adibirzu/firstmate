@@ -19,7 +19,8 @@ It routes a task descriptor through `llm-router-axi`, folds the per-account laun
 
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
-`bin/fm-dispatch-select.mjs` stays the mechanical owner of arbitrary-profile selection and the depletion classifier.
+`llm-router-axi select` is the mechanical owner of arbitrary-profile selection, `llm-router-axi route chain` owns in-run step-down, and `llm-router-axi classify-evidence` owns the depletion classifier.
+`bin/fm-dispatch-select.mjs` is a thin forwarding shim over those verbs, kept only so existing callers keep their command line.
 `quota-array-dispatch` stays the judgment owner for a matched in-repo profile array.
 
 ## Preferred path: route the descriptor
@@ -53,8 +54,10 @@ llm-router-axi record --provider <usage-axi provider> --outcome ok --task <id>
 ## When the tools are absent
 
 `bin/fm-router-lib.sh` owns tool resolution and the install hint.
-When `llm-router-axi` or `usage-axi` is not on `PATH`, keep using the in-repo path instead of failing closed: resolve a matched `config/crew-dispatch.json` profile array through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs`, and read machine headroom from `bin/fm-capacity.sh`.
-Install either tool with `npm install -g usage-axi llm-router-axi`, or run one off with `npx -y usage-axi` / `npx -y llm-router-axi`.
+Both tools are now required for the dispatch path: `llm-router-axi` owns selection, the step-down chain, the depletion classifier, and the machine-capacity verdict, and there is no in-repo fallback left.
+When either is not on `PATH`, stop and report the missing tool rather than dispatching by hand.
+Both are unpublished on npm, so build and install each from its GitHub main clone: `git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`; `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
+`bin/fm-capacity-lib.sh` declines a spawn rather than running unguarded when the router is absent.
 
 ## Per-account launches
 

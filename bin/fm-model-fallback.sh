@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # fm-model-fallback.sh - the mechanical owner of automatic in-run model
-# fallback on quota depletion. It turns config/crew-dispatch.json's
-# modelFallback chains into real depletion responses instead of prose.
+# fallback on quota depletion. It turns the step-down decision owned by
+# llm-router-axi's policy into a real depletion response instead of prose.
 #
 # Usage:
 #   fm-model-fallback.sh <task-id> plan
 #   fm-model-fallback.sh <task-id> apply
 #
-# `plan` decides only: it verifies fresh depletion evidence, walks the task's
-# configured chain, and prints one `action=` block. `apply` executes that
-# decision through bin/fm-runtime-handoff.sh, which owns the guarded in-place
-# relaunch that preserves the worktree and every landed or unlanded change.
+# `plan` decides only: it verifies fresh depletion evidence, asks
+# `llm-router-axi route chain --harness <h> --model <m>` for the next move,
+# and prints one `action=` block. `apply` executes that decision through
+# bin/fm-runtime-handoff.sh, which owns the guarded in-place relaunch that
+# preserves the worktree and every landed or unlanded change.
 #
 # What apply does, in order:
 #   1. Reads state/<id>.meta for kind=ship|scout, harness=, model=, and the
@@ -26,22 +27,21 @@
 #      waiting out) must never be read as live evidence, so an endpoint
 #      fm-control deliberately stopped is never relaunched from its own
 #      after-the-fact status note. Only what remains is classified through
-#      bin/fm-dispatch-select.mjs classify-evidence, whose subscription
-#      vocabulary is the single owner of depletion signatures. No evidence,
-#      no fallback - a healthy or ambiguous worker is never relaunched by
-#      this script.
-#   3. Walks the harness's modelFallback chain (legacy alias _model_fallback
-#      honored): the entry after the recorded model is next; a model absent
-#      from its chain steps to the chain head; the chain's last entry means
-#      this runtime lane is exhausted unless its configured cycle returns it
-#      to the chain head.
-#   4. When the lane is exhausted and an optional top-level fallbackLanes
-#      array names a later lane, moves there and starts that lane's own
-#      chain head (or its default model when that lane has no chain).
+#      `llm-router-axi classify-evidence`, whose subscription vocabulary is
+#      the single owner of depletion signatures. No evidence, no fallback - a
+#      healthy or ambiguous worker is never relaunched by this script.
+#   3. Asks `llm-router-axi route chain --harness <h> --model <m> --json` for
+#      the next move: the entry after the recorded model is next; a model
+#      absent from its chain steps to the chain head; the chain's last entry
+#      means this runtime lane is exhausted unless the router policy's
+#      modelFallbackCycles returns it to the chain head.
+#   4. When the lane is exhausted and the router policy's fallbackLanes names
+#      a later lane, moves there and starts that lane's own chain head (or
+#      its default model when that lane has no chain).
 #   5. When the depleted harness carries a telemetry-backed routing provider,
-#      records the verified failure through bin/fm-dispatch-select.mjs
-#      record-failure so future dispatches avoid the account during the
-#      cooldown; that bookkeeping failure never blocks the relaunch itself.
+#      records the verified failure through `llm-router-axi record` so future
+#      dispatches avoid the account during the cooldown; that bookkeeping
+#      failure never blocks the relaunch itself.
 #   6. Relaunches in place with --model <next> and a progress note naming the
 #      depletion signature and the automatic step-down. The effort axis is
 #      deliberately reset so the replacement model launches on its own
@@ -80,7 +80,6 @@ if [ -z "${FM_HOME+x}" ] || [ -z "${FM_HOME:-}" ]; then
 fi
 
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
@@ -90,6 +89,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-router-lib.sh
+. "$SCRIPT_DIR/fm-router-lib.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -138,8 +139,7 @@ CURRENT_MODEL=$(fm_meta_get "$META" model)
 STATUS="$STATE/$ID.status"
 [ -f "$STATUS" ] || die "no status log for task $ID at $STATUS; nothing could have reported depletion"
 
-# Telemetry-backed providers whose credit identity quota-axi prices, mirroring
-# PROVIDERS/NATIVE_PROVIDER ownership in fm-dispatch-select.mjs.
+# Telemetry-backed providers whose credit identity the router prices natively.
 native_provider_of() {  # <harness>
   case "$1" in
     claude|codex|grok|cursor|agy) printf '%s\n' "$1" ;;
@@ -147,42 +147,13 @@ native_provider_of() {  # <harness>
   esac
 }
 
-# --- configuration ----------------------------------------------------------
+# --- router resolution ------------------------------------------------------
 
-DISPATCH_CONFIG="$CONFIG/crew-dispatch.json"
-if [ ! -f "$DISPATCH_CONFIG" ]; then
-  die "no crew-dispatch config at $DISPATCH_CONFIG; there is no modelFallback chain to follow"
+command -v jq >/dev/null 2>&1 || die "jq is not installed; refusing to parse the router's step-down decision without it"
+ROUTER=$(fm_router_axi_bin)
+if [ -z "$ROUTER" ]; then
+  die "llm-router-axi is not installed ($(fm_router_axi_install_hint)); the step-down chain is owned by its policy"
 fi
-command -v jq >/dev/null 2>&1 || die "jq is not installed; refusing to read crew-dispatch.json without it"
-command -v node >/dev/null 2>&1 || die "node is not installed; the depletion classifier runs through bin/fm-dispatch-select.mjs"
-if ! jq -e . "$DISPATCH_CONFIG" >/dev/null 2>&1; then
-  die "$DISPATCH_CONFIG is malformed JSON; run bootstrap's CREW_DISPATCH validation and fix the file rather than selecting around it"
-fi
-if ! validation_error=$(node "$SCRIPT_DIR/fm-dispatch-select.mjs" validate-model-fallback --file "$DISPATCH_CONFIG" 2>&1); then
-  validation_error=${validation_error#fm-dispatch-select: }
-  die "$DISPATCH_CONFIG has invalid model fallback configuration: $validation_error"
-fi
-
-chain_of() {  # <harness> -> one model id per line, empty when unconfigured
-  jq -r --arg h "$1" '
-    ((.modelFallback // ._model_fallback // {})[$h] // [])
-    | if type == "array" then .[] else empty end
-  ' "$DISPATCH_CONFIG"
-}
-
-lanes_configured() {  # -> one harness per line, empty when unconfigured
-  jq -r '.fallbackLanes // [] | if type == "array" then .[] else empty end' "$DISPATCH_CONFIG"
-}
-
-lane_cycles() {
-  jq -r '.modelFallbackCycles // [] | if type == "array" then .[] else empty end' "$DISPATCH_CONFIG"
-}
-
-lane_is_cyclic() {
-  lane_cycles | grep -Fx -- "$1" >/dev/null
-}
-
-CHAIN=$(chain_of "$HARNESS")
 
 # --- evidence classification ------------------------------------------------
 
@@ -224,7 +195,7 @@ $EVIDENCE_RAW
 EOF_EVIDENCE
 fi
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
-  | FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" classify-evidence 2>/dev/null \
+  | "$ROUTER" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')
 case "$CLASSIFICATION" in
   classification=depleted*) ;;
@@ -266,8 +237,7 @@ if [ "$VERB" = apply ]; then
   fi
   case "$PROVIDER" in
     claude|codex|grok|cursor|agy)
-      FM_HOME="$FM_HOME" node "$SCRIPT_DIR/fm-dispatch-select.mjs" record-failure \
-        --provider "$PROVIDER" --task "$ID" >/dev/null 2>&1 \
+      "$ROUTER" record --provider "$PROVIDER" --outcome rate_limit --task "$ID" >/dev/null 2>&1 \
         || log "provider=$PROVIDER cooldown was not recorded; continuing with automatic fallback"
       ;;
     *) ;;
@@ -275,66 +245,34 @@ if [ "$VERB" = apply ]; then
 fi
 
 # --- selection --------------------------------------------------------------
-
-NEXT_MODEL=
-FOUND_CURRENT=0
-while IFS= read -r entry; do
-  [ -n "$entry" ] || continue
-  if [ "$FOUND_CURRENT" = 1 ]; then
-    NEXT_MODEL=$entry
-    break
-  fi
-  if [ "$entry" = "$CURRENT_MODEL" ]; then FOUND_CURRENT=1; fi
-done <<EOF_CHAIN
-$CHAIN
-EOF_CHAIN
-# A recorded model outside its chain (launched before the chain existed, or on
-# the harness default) starts from the strongest configured entry; when that
-# head IS the recorded model, the walk above already moved past it.
-if [ "$FOUND_CURRENT" = 0 ]; then
-  NEXT_MODEL=$(printf '%s\n' "$CHAIN" | sed -n '1p')
-  if [ "$NEXT_MODEL" = "$CURRENT_MODEL" ]; then NEXT_MODEL=; fi
-fi
-if [ -z "$NEXT_MODEL" ] && [ "$FOUND_CURRENT" = 1 ] && lane_is_cyclic "$HARNESS"; then
-  NEXT_MODEL=$(printf '%s\n' "$CHAIN" | sed -n '1p')
+#
+# The step-down chain lives in the router policy, not in config/crew-dispatch.json:
+# ask the router for the one next move so this script and any other router caller
+# always agree on lane order, cycles, and exhaustion.
+STEP_ARGS=(route chain --harness "$HARNESS")
+[ -z "$CURRENT_MODEL" ] || STEP_ARGS+=(--model "$CURRENT_MODEL")
+STEP_ARGS+=(--json)
+if ! STEP_JSON=$("$ROUTER" "${STEP_ARGS[@]}" 2>/dev/null) || [ -z "$STEP_JSON" ]; then
+  die "llm-router-axi route chain produced no decision for harness '$HARNESS'; fix the router policy rather than improvising a step-down"
 fi
 
-ACTION=
-NEXT_HARNESS=
-if [ -n "$NEXT_MODEL" ]; then
-  ACTION="harness-step"
-else
-  # This lane is walked out. Move to the next configured lane when one exists;
-  # otherwise automation has done everything it can and says so loudly.
-  PREV_LANE=
-  while IFS= read -r lane; do
-    [ -n "$lane" ] || continue
-    if [ -z "$PREV_LANE" ]; then
-      PREV_LANE=$lane
-      continue
-    fi
-    if [ "$PREV_LANE" = "$HARNESS" ]; then
-      NEXT_HARNESS=$lane
-      break
-    fi
-    PREV_LANE=$lane
-  done <<EOF_LANES
-$(lanes_configured)
-EOF_LANES
-  if [ -n "$NEXT_HARNESS" ]; then
-    ACTION="lane-move"
-    NEXT_MODEL=$(chain_of "$NEXT_HARNESS" | sed -n '1p')
-  else
-    ACTION=exhausted
-  fi
-fi
+ACTION=$(printf '%s' "$STEP_JSON" | jq -r '.action // empty')
+NEXT_MODEL=$(printf '%s' "$STEP_JSON" | jq -r '.toModel // empty')
+NEXT_HARNESS=$(printf '%s' "$STEP_JSON" | jq -r '.toHarness // empty')
+ROUTER_REASON=$(printf '%s' "$STEP_JSON" | jq -r '.reason // empty')
+CHAIN=$(printf '%s' "$STEP_JSON" | jq -r '.chain[]? // empty')
+case "$ACTION" in
+  harness-step|lane-move|exhausted) ;;
+  *) die "llm-router-axi route chain returned an unusable action='$ACTION' for harness '$HARNESS'" ;;
+esac
 
 echo "action=$ACTION"
 echo "task=$ID"
 echo "harness=$HARNESS"
 [ -z "$CURRENT_MODEL" ] || echo "from_model=$CURRENT_MODEL"
 if [ "$ACTION" = exhausted ]; then
-  echo "reason=every model in the '$HARNESS' chain is depleted and no fallbackLanes successor exists"
+  exhausted_reason="every model in the '$HARNESS' chain is depleted and no fallbackLanes successor exists"
+  echo "reason=${ROUTER_REASON:-$exhausted_reason}"
   if [ "$VERB" = apply ]; then
     printf 'blocked: model fallback exhausted for %s (%s); needs a routing decision\n' \
       "$HARNESS" "$(printf '%s' "$CHAIN" | tr '\n' ' ')" >> "$STATUS"
