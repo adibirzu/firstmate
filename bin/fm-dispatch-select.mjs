@@ -26,7 +26,7 @@ import { spawnSync } from 'node:child_process';
 
 const ROUTER = process.env.FM_LLM_ROUTER_AXI || 'llm-router-axi';
 const INSTALL =
-  'npm install -g llm-router-axi   # or run one off: npx -y llm-router-axi';
+  'git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .   # repeat for https://github.com/adibirzu/usage-axi';
 
 const USAGE = `usage: fm-dispatch-select.mjs <select|record-failure|clear|classify-evidence> [flags]
   select             choose one profile through llm-router-axi select

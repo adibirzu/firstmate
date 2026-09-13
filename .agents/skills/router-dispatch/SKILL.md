@@ -55,7 +55,8 @@ llm-router-axi record --provider <usage-axi provider> --outcome ok --task <id>
 
 `bin/fm-router-lib.sh` owns tool resolution and the install hint.
 Both tools are now required for the dispatch path: `llm-router-axi` owns selection, the step-down chain, the depletion classifier, and the machine-capacity verdict, and there is no in-repo fallback left.
-When either is not on `PATH`, stop and report the missing tool rather than dispatching by hand; install from git main while they are unpublished (`npm install -g usage-axi llm-router-axi`, or `npx -y usage-axi` / `npx -y llm-router-axi`).
+When either is not on `PATH`, stop and report the missing tool rather than dispatching by hand.
+Both are unpublished on npm, so build and install each from its GitHub main clone: `git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`; `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
 `bin/fm-capacity-lib.sh` declines a spawn rather than running unguarded when the router is absent.
 
 ## Per-account launches

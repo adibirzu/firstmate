@@ -272,7 +272,8 @@ The raw measurement is also published by `usage-axi machine`.
 The retired local `config/spawn-capacity` file is no longer read; move any limit it carried into the router policy.
 
 The tools must be installed for admission to run: an absent `llm-router-axi` makes the guard decline rather than spawn blind, and the refusal names the missing tool.
-Install both with `npm install -g usage-axi llm-router-axi`, run one off with `npx -y usage-axi` / `npx -y llm-router-axi`, or build either from git main while it is unpublished.
+Both tools are unpublished on npm; build and install each from its GitHub main clone (`git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`).
+`bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
 This posture is primary-authoritative and shared by every home because they all run on one physical machine.
 ## Stow pass horizon (config/stow-pass-horizon)
 

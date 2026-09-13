@@ -41,10 +41,11 @@ test_router_lib_resolves_and_reports_hint() {
   printf '%s\n' "$out" | grep -Fxq "$dir/llm-router-axi" || fail "llm-router-axi did not resolve from PATH: $out"
   printf '%s\n' "$out" | grep -Fxq usage-have || fail "fm_usage_axi_have did not report the resolved tool"
   printf '%s\n' "$out" | grep -Fxq router-have || fail "fm_router_axi_have did not report the resolved tool"
-  printf '%s\n' "$out" | grep -Fq 'npm install -g usage-axi llm-router-axi' || fail "install hint is missing the install command"
+  printf '%s\n' "$out" | grep -Fq 'git clone https://github.com/adibirzu/llm-router-axi' || fail "install hint is missing the git install command"
+  printf '%s\n' "$out" | grep -Fq 'github.com/adibirzu/usage-axi' || fail "install hint is missing the usage-axi clone"
 
   # shellcheck disable=SC2016 # The inner bash, not this test shell, expands $1.
-  out=$(env -u FM_LLM_ROUTER_AXI -u FM_USAGE_AXI PATH="$BASE_PATH" bash -c '. "$1"; fm_usage_axi_bin; fm_usage_axi_have && echo usage-have; fm_router_axi_have && echo router-have' _ "$ROUTER_LIB")
+  out=$(env FM_LLM_ROUTER_AXI="$TMP_ROOT/no-such-router" FM_USAGE_AXI="$TMP_ROOT/no-such-usage" PATH="$BASE_PATH" bash -c '. "$1"; fm_usage_axi_bin; fm_usage_axi_have && echo usage-have; fm_router_axi_have && echo router-have' _ "$ROUTER_LIB")
   printf '%s\n' "$out" | grep -Fxq usage-have && fail "fm_usage_axi_have reported an absent tool"
   printf '%s\n' "$out" | grep -Fxq router-have && fail "fm_router_axi_have reported an absent tool"
   pass "fm-router-lib resolves both tools and reports the install hint"
@@ -93,7 +94,7 @@ test_selector_forwards_to_router() {
 
 test_selector_refuses_without_router() {
   local out rc
-  if out=$(env -u FM_LLM_ROUTER_AXI PATH="$BASE_PATH" "$SELECTOR" select '[{"harness":"claude"}]' 2>&1); then rc=0; else rc=$?; fi
+  if out=$(env FM_LLM_ROUTER_AXI="$TMP_ROOT/no-such-router" PATH="$BASE_PATH" "$SELECTOR" select '[{"harness":"claude"}]' 2>&1); then rc=0; else rc=$?; fi
   [ "$rc" -eq 2 ] || fail "an absent router should exit 2, got rc=$rc: $out"
   assert_contains "$out" "llm-router-axi is not available" "absent-router message"
   assert_contains "$out" "install it with" "absent-router install hint"
