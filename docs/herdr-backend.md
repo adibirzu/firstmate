@@ -79,6 +79,49 @@ Existing task operations use recorded endpoint ids and do not move a live task w
 The per-home workspace is reused while it has task tabs.
 Closing its last tab can remove the workspace, and the next spawn recreates it.
 
+## Session naming
+
+Each new task tab Firstmate creates is labelled with the captain-visible display name `<prefix>-[<host>-]<project>-<task-id>`, composed by `bin/fm-herdr-name-lib.sh` so the fleet is readable on any connected machine.
+The prefix comes from local gitignored `config/herdr-session-prefix` and defaults to `adix`; it is inherited by secondmate homes so one branding prefix names the whole fleet.
+`<host>` is inserted only when the home has an explicit host token: `FM_HERDR_HOST`, or local gitignored `config/herdr-session-host`.
+An unconfigured home therefore renders the plain `<prefix>-<project>-<task-id>`, and a host-configured home renders `<prefix>-<host>-<project>-<task-id>`.
+`config/herdr-session-host` is local and deliberately not inherited, because which machine a home runs on is a property of that machine.
+A remote secondmate's initial launch seeds its own home's `config/herdr-session-host` with the route's registry host token when that file is absent, never clobbering an operator override, so the mate's own tab and every crewmate or scout it later spawns from that home share one host segment.
+`<project>` is the registered project name (`firstmate` for a firstmate-repo task, the secondmate id for a secondmate agent), and `<task-id>` is the task id with one leading `fm-` stripped.
+An adjacent duplicate segment collapses, so a secondmate agent (whose project equals its own id) renders `<prefix>-<id>` rather than repeating itself.
+
+The name is additive display only.
+Identity, endpoint resolution, supervision, teardown, and recovery keep using the recorded `state/<id>.meta` endpoint, so `bin/fm-fleet-view.sh` and `bin/fm-crew-state.sh` are unchanged.
+Only a freshly created tab takes the new name: an adopted endpoint keeps the label it was created with, a legacy `fm-<id>` tab is still matched and used as the husk-replacement alias, and an existing presentation journal reuses the label recorded in it, so no live session is renamed or restarted.
+
+### Colour
+
+Herdr exposes no programmatic per-tab colour: a session cannot set its own tab colour, and colour is a local sidebar-config decision (the 0.9.0 socket API schema carries no colour field on any tab, workspace, or pane parameter or result; verified against the 0.9.0 binary's `herdr api schema --json`).
+What the label display name buys is a stable, greppable match key, and Herdr's own sidebar rule facility colours exactly the Firstmate tabs by it.
+On 0.8.2 the sidebar can only style a token statically, with no conditional rule, so it cannot colour only the Firstmate tabs.
+On 0.9.0 and newer, `[ui.sidebar.agents]` and `[ui.sidebar.spaces]` accept ordered per-token `rules` (`equals`, `contains`, `starts_with`, `gt`, `lt`) whose first match overrides the token style, so `starts_with = "<prefix>-"` paints exactly the Firstmate labels green.
+So Firstmate sets the label, and a home on 0.9.0 or newer that wants its task tabs green adds this to its own `~/.config/herdr/config.toml`, replacing `<prefix>` with the configured `config/herdr-session-prefix` (default `adix`):
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace", { token = "tab", rules = [{ starts_with = "<prefix>-", fg = "#a6e3a1" }] }],
+  ["agent"],
+]
+
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", { token = "workspace", rules = [{ starts_with = "<prefix>-", fg = "#a6e3a1" }] }],
+  ["branch", "git_status"],
+]
+```
+
+Firstmate deliberately does not write this file: the sidebar layout is the operator's own, and rewriting it risks clobbering existing rows.
+
+Full cross-machine listing and shared navigation arrive with `herdr machine` in Herdr 0.9.0, not on the installed 0.8.2 client; upgrading every host is a separate fleet-wide decision rather than something this naming feature bundles.
+Until then, inspect another machine directly: `herdr --remote <ssh-host> workspace list` lists that host's sessions and workspaces, `herdr --remote <ssh-host> session list` lists its named sessions, and `herdr --remote <ssh-host>` attaches to it.
+Running `herdr` after SSH'ing into the host behaves the same way, and a host-configured task's machine is readable from its display name's `<host>` segment.
+
 ## Presentation spaces
 
 Each new crewmate or scout is placed in a disposable one-task workspace by default, on Herdr 0.8.0 and newer.
@@ -113,7 +156,7 @@ The token is visible in the workspace title because Herdr exposes no verified hi
 
 The owning parent is the launcher's own exact workspace, resolved from the same identity the flat path uses, and falls back to a unique home-label lookup only for a Firstmate outside Herdr.
 Projected children are never collapsed back into that parent; it is the placement and ordering reference the projection is bound under.
-The normal `fm-<id>` task tab is created in the exact new workspace returned by Herdr.
+The normal task tab (see [Session naming](#session-naming) for its label) is created in the exact new workspace returned by Herdr.
 Only the exact seeded default tab returned by the same workspace-create response can be pruned.
 Before and after create, prune, order, abort cleanup, and normal cleanup, Firstmate verifies exact workspace, tab, pane, and active-focus ids.
 An ambiguous response grants no mutation or cleanup authority.
@@ -388,6 +431,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 ## Regression entry points
 
 ```sh
+tests/fm-herdr-name-lib.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh

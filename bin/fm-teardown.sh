@@ -125,16 +125,21 @@
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
-#   --legacy-record accepts a task record that predates the spawn_gen field:
-#   teardown then proceeds only when the recorded endpoint is confirmed dead or
-#   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
-#   --force the worktree still passes the ordinary landed-work checks. The
-#   accepted legacy incarnation is stamped into the record before its close is
-#   recorded and named in the teardown line; the flag never relaxes the
-#   unlanded-work refusal, which --force alone can authorize. A legacy- stamp
-#   an abandoned attempt left behind never counts as a published incarnation:
-#   the record still reads as a legacy record, so the endpoint gate runs again
-#   and the retry still needs --legacy-record.
+#   --legacy-record accepts a task record that predates the spawn_gen field and
+#   records no window endpoint at all (a pre-update husk): teardown then
+#   proceeds only when the worktree is clean and landed or already absent, and
+#   without --force the ordinary landed-work checks still apply. A legacy record
+#   that DOES record an endpoint needs no flag at all: both plain and flagged
+#   teardowns accept it once the recovery-grade classifier reads that endpoint
+#   dead or agent-less, and every ambiguous, unreadable, or unverified endpoint
+#   state refuses while the record is intact. The accepted legacy incarnation is
+#   stamped into the record before its close is recorded and named in the
+#   teardown line; the flag never relaxes the unlanded-work refusal, which
+#   --force alone can authorize. A legacy- stamp an abandoned attempt left
+#   behind never counts as a published incarnation: the record still reads as a
+#   legacy record, so the endpoint/worktree gate runs again on the retry.
+#   A pre-spawn_gen husk that reused its pool slot for a later task no longer
+#   pins that slot: the slot-exclusivity scan ignores such a retirable husk.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -210,6 +215,23 @@
 #     roots are unique per task and never
 #     shared, so this can never reach another task's or the primary's
 #     processes. Idempotent: nothing left to find is a silent no-op.
+#   Fix 2b - reap the endpoint's whole worker process TREE. Fix 2 only reaches
+#     processes whose cwd is still inside the worktree or tasktmp; a harness
+#     child that calls setsid (a detached MCP server or poll shell) leaves
+#     both the pane's process group and the task's working directory, so the
+#     cwd scan never sees it and the pane close never signals it, and it
+#     reparents to init and leaks for the life of the host (observed
+#     2026-09-13: idle cursor-agent and claude workers alive hours after their
+#     tasks closed). task_endpoint_capture snapshots every descendant of the
+#     endpoint's validated pane shell, with each process's birth identity,
+#     BEFORE any destructive step; reap_task_endpoint_processes then TERMs
+#     them on up to three bounded passes (stopping early once the tree is
+#     gone), KILLs any survivor whose identity still matches, and refuses the
+#     teardown loudly if one remains. The root is the
+#     pane shell resolved live through the backend, or the pid recorded at
+#     spawn (worker_root_pid=) when the pane can no longer be queried; only a
+#     descendant of this task's own endpoint is ever signalled. Idempotent:
+#     an unresolvable root is a silent no-op.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -248,6 +270,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -422,6 +446,7 @@ TEARDOWN_LEGACY_ACCEPTED=0
 TEARDOWN_LEGACY_ENDPOINT=
 TEARDOWN_LEGACY_RETAINED_STAMP=
 TEARDOWN_LEGACY_PRESTAMP_SIZE=0
+TEARDOWN_ENDPOINT_MISSING=0
 TEARDOWN_BACKLOG_APPLIES=0
 TEARDOWN_BACKLOG_SKIP_REASON=
 if [ "$TEARDOWN_CLEANUP_RECOVERY" != orca ]; then
@@ -439,14 +464,14 @@ fi
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   if ! fm_backlog_meta_spawn_gen "$META" "$STATE"; then
     TEARDOWN_LEGACY_GEN_COUNT=$(LC_ALL=C awk -F= '$1 == "spawn_gen" { count++ } END { print count + 0 }' "$META" 2>/dev/null || printf '0\n')
-    if [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ] && [ "$LEGACY_RECORD_GIVEN" = 1 ]; then
-      # A record that predates the incarnation field: acceptance is gated later,
-      # once the recorded endpoint is known, so its state can be confirmed dead
-      # or agent-less before any cleanup decision is made.
+    if [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ]; then
+      # A record that predates the incarnation field. Its acceptance is gated
+      # later: a recorded endpoint must be confirmed dead or agent-less, and a
+      # record with no window endpoint at all is retirable only with
+      # --legacy-record once its worktree is clean and landed or already gone.
+      # The --legacy-record flag is therefore no longer required just to reach
+      # that gate; it only widens the gate to accept a missing endpoint.
       TEARDOWN_LEGACY_PENDING=1
-    elif [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ]; then
-      echo "error: task $ID's record has no spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
-      exit 1
     else
       echo "error: task $ID's record has an unreadable spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - fix the record, then retry teardown" >&2
       exit 1
@@ -461,10 +486,6 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
         # legacy record it was, and is treated as one: the dead-or-agent-less
         # endpoint gate runs again on the retry instead of being skipped by
         # the abandoned attempt's own stamp.
-        if [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
-          echo "error: task $ID's record carries the legacy incarnation stamp $FM_BACKLOG_META_SPAWN_GEN left by an abandoned --legacy-record teardown, not an incarnation published by a spawn; refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
-          exit 1
-        fi
         TEARDOWN_LEGACY_PENDING=1
         TEARDOWN_LEGACY_RETAINED_STAMP=$FM_BACKLOG_META_SPAWN_GEN
         ;;
@@ -905,7 +926,31 @@ fi
 # This is the first cleanup authorization check. It is metadata-only and must
 # complete before fm-guard, a backend command, file removal, branch deletion,
 # worktree return, registry change, or process termination can run.
-fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+#
+# A legacy record with no window endpoint at all cannot offer the
+# dead-or-agent-less endpoint proof, so a plain teardown refuses and points at
+# --legacy-record. With the flag, identity is still validated exactly (only the
+# missing window is tolerated) and the ordinary landed-work gate below then
+# decides whether the worktree is clean and landed or already gone. An ambiguous
+# (duplicated) window field is never a missing endpoint and stays refused.
+TEARDOWN_WINDOW_COUNT=$(grep -c '^window=' "$META" 2>/dev/null || true)
+TEARDOWN_WINDOW_MISSING=0
+if [ "$TEARDOWN_WINDOW_COUNT" = 0 ]; then
+  TEARDOWN_WINDOW_MISSING=1
+elif [ "$TEARDOWN_WINDOW_COUNT" = 1 ] \
+     && ! fm_backend_meta_exact_value "$META" window >/dev/null 2>&1; then
+  TEARDOWN_WINDOW_MISSING=1
+fi
+if [ "$TEARDOWN_LEGACY_PENDING" = 1 ] && [ "$TEARDOWN_WINDOW_MISSING" = 1 ]; then
+  if [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
+    echo "REFUSED: task $ID's record predates spawn_gen and records no window endpoint; a plain teardown cannot prove its endpoint gone. Pass --legacy-record once its worktree is clean and landed or already gone. Nothing was changed." >&2
+    exit 1
+  fi
+  fm_backend_validate_task_endpoint "$META" "$ID" --allow-missing-window || exit 1
+  TEARDOWN_ENDPOINT_MISSING=1
+else
+  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+fi
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
@@ -948,24 +993,35 @@ fi
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
 
-# A record accepted as a legacy incarnation (no spawn_gen, --legacy-record
-# given) may be torn down only when its recorded endpoint is confidently gone
-# or agent-less; only the recovery-grade classifier's dead and missing license
-# that, and every ambiguous, unreadable, or unverified endpoint state refuses
-# while the record is still intact. Acceptance resolves the incarnation token
-# here; the record itself is stamped only once every landed-work refusal has
-# passed, immediately before the close marker binds to it, so any refusal
-# leaves the record byte-identical.
+# A record accepted as a legacy incarnation (no spawn_gen, or only a
+# teardown-minted legacy- stamp) may be torn down when its recorded endpoint is
+# confidently gone or agent-less, or - with --legacy-record - when it records no
+# window endpoint at all and the ordinary landed-work gate below finds the
+# worktree clean and landed or already gone. Only the recovery-grade
+# classifier's dead and missing license the endpoint branch, and every
+# ambiguous, unreadable, or unverified endpoint state refuses while the record
+# is still intact. Acceptance resolves the incarnation token here; the record
+# itself is stamped only once every landed-work refusal has passed, immediately
+# before the close marker binds to it, so any refusal leaves the record
+# byte-identical.
 if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
-  TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
-  case "$TEARDOWN_LEGACY_ENDPOINT" in
-    dead|missing) ;;
-    *)
-      echo "REFUSED: task $ID's record predates spawn_gen and its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; --legacy-record teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
-      echo "Reconcile the endpoint first (bin/fm-crew-state.sh $ID), or relaunch the task to publish an unambiguous incarnation, then retry teardown." >&2
-      exit 1
-      ;;
-  esac
+  if [ "$TEARDOWN_ENDPOINT_MISSING" = 1 ]; then
+    # No recorded endpoint to classify. The records-lost proof is the
+    # --legacy-record flag plus the landed-work gate below (which prints the
+    # exact unlanded evidence and refuses); there is no agent that could be
+    # bound to an endpoint this record never named.
+    TEARDOWN_LEGACY_ENDPOINT=absent
+  else
+    TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
+    case "$TEARDOWN_LEGACY_ENDPOINT" in
+      dead|missing) ;;
+      *)
+        echo "REFUSED: task $ID's record predates spawn_gen and its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
+        echo "Reconcile the endpoint first (bin/fm-crew-state.sh $ID), or relaunch the task to publish an unambiguous incarnation, then retry teardown." >&2
+        exit 1
+        ;;
+    esac
+  fi
   if [ -n "$TEARDOWN_LEGACY_RETAINED_STAMP" ]; then
     TEARDOWN_META_SPAWN_GEN=$TEARDOWN_LEGACY_RETAINED_STAMP
   else
@@ -1862,30 +1918,34 @@ $out
 EOF
 }
 
+# The single owner is bin/fm-backend.sh's fm_process_birth_identity, which
+# bin/fm-spawn.sh also uses to record the worker process-tree root; both must
+# agree on the token format for the recorded root to be provable at teardown.
 task_process_identity() {  # <pid>
-  local pid=$1 proc_root stat_line starttime value
-  local -a stat_fields
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  if [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
-    read -r -a stat_fields <<< "${stat_line##*)}"
-    [ "${#stat_fields[@]}" -ge 20 ] || return 1
-    starttime=${stat_fields[19]}
-    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
-    printf 'starttime=%s\n' "$starttime"
-    return 0
-  fi
-  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-  value=$(fm_nm_trim "$value")
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf 'lstart=%s\n' "$value"
+  fm_process_birth_identity "$1"
 }
 
 task_process_identity_matches() {  # <pid> <identity>
   local current
   current=$(task_process_identity "$1") || return 1
   [ "$current" = "$2" ]
+}
+
+# Like task_process_identity_matches, but a zombie (Linux stat state Z, or a
+# dead state X) is treated as already gone: it keeps a /proc entry until its
+# parent reaps it, yet it is not a leak. Without this the endpoint-tree reap
+# could force-kill and then falsely REFUSE a teardown over a process that has
+# already exited. Reads the state char directly so it stays portable.
+task_process_live_identity_matches() {  # <pid> <identity>
+  local proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} stat_line fields
+  task_process_identity_matches "$1" "$2" || return 1
+  if [ -r "$proc_root/$1/stat" ]; then
+    stat_line=$(cat "$proc_root/$1/stat" 2>/dev/null) || return 1
+    fields=${stat_line##*)}
+    fields=${fields#"${fields%%[![:space:]]*}"}
+    case "$fields" in Z*|X*) return 1 ;; esac
+  fi
+  return 0
 }
 
 task_pid_list_contains() {  # <pid-list> <pid>
@@ -2055,6 +2115,181 @@ EOF
   return 1
 }
 
+# Every pid descended (transitively, by ppid) from <root>, one per line and
+# excluding <root> itself. One bounded process-table snapshot, then an
+# in-memory closure; bash 3.2 has no associative arrays, so membership is a
+# whitespace-delimited string scan and the closure iterates until no new pid
+# appears. A zombie (stat Z) is skipped: it is already dead and would
+# otherwise look like a survivor its parent has not reaped yet. Nonzero only
+# when the process table cannot be read.
+descendant_pids_of() {  # <root-pid>
+  local root=$1 snapshot pid ppid stat frontier result changed
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  snapshot=$(LC_ALL=C ps -eo pid=,ppid=,stat= 2>/dev/null) || return 1
+  frontier=" $root "
+  result=""
+  changed=1
+  while [ "$changed" -eq 1 ]; do
+    changed=0
+    while read -r pid ppid stat; do
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      case "$ppid" in ''|*[!0-9]*) continue ;; esac
+      case "$stat" in Z*) continue ;; esac
+      case "$frontier" in *" $ppid "*) ;; *) continue ;; esac
+      case "$frontier" in *" $pid "*) continue ;; esac
+      frontier="$frontier$pid "
+      result="$result$pid
+"
+      changed=1
+    done <<EOF
+$snapshot
+EOF
+  done
+  printf '%s' "$result"
+}
+
+# The root pid of this task's worker process tree: the endpoint's pane shell
+# resolved live through the backend, or - when the pane cannot be queried - the
+# pid recorded at spawn, accepted only while its birth identity still matches.
+# Nonzero when neither is provable, which is a silent no-op for the reaper.
+task_endpoint_root_pid() {
+  local root recorded recorded_start
+  if root=$(fm_backend_task_process_root "$BACKEND" "$T" 2>/dev/null); then
+    case "$root" in
+      ''|*[!0-9]*) ;;
+      *) [ "$root" -gt 1 ] && { printf '%s\n' "$root"; return 0; } ;;
+    esac
+  fi
+  recorded=$(meta_value "$META" worker_root_pid)
+  recorded_start=$(meta_value "$META" worker_root_start)
+  case "$recorded" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$recorded_start" ] || return 1
+  task_process_identity_matches "$recorded" "$recorded_start" || return 1
+  printf '%s\n' "$recorded"
+}
+
+# Capture this task's WHOLE worker process tree - every descendant of the
+# endpoint's pane shell, plus the shell itself - with each process's birth
+# identity, BEFORE any destructive step (the focus-preserving projected pane
+# close can kill the shell and reparent a surviving setsid child to init, at
+# which point a live walk can no longer find it). Reads only; never signals.
+# A best-effort no-op when the root is unresolvable. Results live in the
+# TASK_ENDPOINT_* globals consumed by reap_task_endpoint_processes.
+TASK_ENDPOINT_ROOT_CAPTURED=""
+TASK_ENDPOINT_PIDS_CAPTURED=()
+TASK_ENDPOINT_IDS_CAPTURED=()
+task_endpoint_capture() {
+  local root pids pid identity
+  TASK_ENDPOINT_ROOT_CAPTURED=""
+  TASK_ENDPOINT_PIDS_CAPTURED=()
+  TASK_ENDPOINT_IDS_CAPTURED=()
+  root=$(task_endpoint_root_pid) || return 0
+  [ -n "$root" ] || return 0
+  TASK_ENDPOINT_ROOT_CAPTURED=$root
+  pids=$(descendant_pids_of "$root") || return 0
+  pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" != "$$" ] || continue
+    identity=$(task_process_identity "$pid") || continue
+    TASK_ENDPOINT_PIDS_CAPTURED+=("$pid")
+    TASK_ENDPOINT_IDS_CAPTURED+=("$identity")
+  done <<EOF
+$pids
+EOF
+}
+
+# Fix 2b (see script header): reap the endpoint's whole WORKER process tree,
+# not only the processes whose cwd is still inside the worktree. A harness
+# child that calls setsid - a detached MCP server or poll shell - leaves both
+# the pane's process group and the task's working directory, so the cwd scan
+# in reap_task_worktree_processes never sees it and the pane close never
+# signals it; it then reparents to init and leaks for the life of the host
+# (observed 2026-09-13: idle cursor-agent and claude workers alive hours after
+# their tasks closed). This seeds from task_endpoint_capture's pre-destructive
+# snapshot, discovers any further descendant on three bounded passes, TERMs
+# each, then KILLs every captured pid whose birth identity still matches, and
+# finally verifies none survives. Identity matching (never a bare pid) is what
+# keeps a reused pid and a concurrently replaced process safe. Scoping to this
+# task's own validated endpoint pane can never reach another task's or the
+# primary's processes. Best-effort: an unresolvable root is a silent no-op.
+reap_task_endpoint_processes() {  # <label>
+  local label=$1 root pids pid identity i pass max_passes=3 alive
+  local -a tracked_pids tracked_identities survivors
+  tracked_pids=("${TASK_ENDPOINT_PIDS_CAPTURED[@]+"${TASK_ENDPOINT_PIDS_CAPTURED[@]}"}")
+  tracked_identities=("${TASK_ENDPOINT_IDS_CAPTURED[@]+"${TASK_ENDPOINT_IDS_CAPTURED[@]}"}")
+  root=${TASK_ENDPOINT_ROOT_CAPTURED:-}
+  if [ -z "$root" ]; then
+    root=$(task_endpoint_root_pid) || return 0
+  fi
+  [ -n "$root" ] || return 0
+  pass=1
+  while [ "$pass" -le "$max_passes" ]; do
+    pids=$(descendant_pids_of "$root") || return 0
+    pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      [ "$pid" != "$$" ] || continue
+      task_pid_list_contains "$(printf '%s\n' "${tracked_pids[@]+"${tracked_pids[@]}"}")" "$pid" && continue
+      identity=$(task_process_identity "$pid") || continue
+      tracked_pids+=("$pid")
+      tracked_identities+=("$identity")
+    done <<EOF
+$pids
+EOF
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done
+    # Settle only while something is still alive: a tree that is already gone
+    # must not cost the teardown three bounded sleeps every time.
+    alive=0
+    for i in "${!tracked_pids[@]}"; do
+      if task_process_live_identity_matches "${tracked_pids[$i]}" "${tracked_identities[$i]}"; then
+        alive=1
+        break
+      fi
+    done
+    [ "$alive" -eq 1 ] || break
+    sleep 1
+    pass=$((pass + 1))
+  done
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "teardown: force-killing leaked $label process(es) for $ID: ${survivors[*]}" >&2
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    done
+    sleep 1
+  fi
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "REFUSED: leaked $label process(es) for $ID remain after reaping the endpoint process tree: ${survivors[*]}; preserving the worktree for manual inspection or retry." >&2
+    return 1
+  fi
+  if [ "${#tracked_pids[@]}" -gt 0 ]; then
+    echo "teardown: reaped leaked $label process tree for $ID: ${tracked_pids[*]}" >&2
+  fi
+  return 0
+}
+
 require_orca_worktree_path_match() {
   local worktree_id=$1 inspected=$2 resolved inspected_abs resolved_abs
   resolved=$(fm_backend_worktree_path orca "$worktree_id") || {
@@ -2138,6 +2373,33 @@ collect_local_firstmate_states() {
   done
 }
 
+# True when <meta> is a stale pre-incarnation husk that cannot be a live task:
+# it carries no spawn_gen published by a spawn (absent entirely, or only a
+# teardown-minted legacy- stamp) and its recorded endpoint is absent or
+# confidently dead/agent-less. The slot-exclusivity scan ignores such a record
+# so a pre-update husk that reused its pool slot for a later task does not pin
+# that slot forever. A live task always carries a published spawn_gen (or a live
+# endpoint), so it is never skipped.
+teardown_record_is_retirable_legacy_husk() {  # <meta>
+  local meta=$1 count value window backend
+  count=$(LC_ALL=C awk -F= '$1 == "spawn_gen" { count++ } END { print count + 0 }' "$meta" 2>/dev/null) || return 1
+  case "$count" in
+    0) ;;
+    1)
+      value=$(fm_meta_get "$meta" spawn_gen)
+      case "$value" in legacy-*) ;; *) return 1 ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+  window=$(fm_meta_get "$meta" window)
+  [ -n "$window" ] || return 0
+  backend=$(fm_backend_of_meta "$meta")
+  case "$(fm_backend_agent_state "$backend" "$window")" in
+    dead|missing) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_exclusive_worktree_slot_record() {
   local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
   local slot state_dir other other_id field other_path other_slot
@@ -2153,6 +2415,10 @@ require_exclusive_worktree_slot_record() {
         [ -n "$other_path" ] || continue
         other_slot=$(canonical_existing_dir "$other_path") || continue
         [ "$other_slot" = "$slot" ] || continue
+        # A retirable pre-spawn_gen husk is not a live owner of the slot; the
+        # task being torn down proves the slot's work is safe through its own
+        # landed-work gate, so the husk must not pin the slot against it.
+        teardown_record_is_retirable_legacy_husk "$other" && continue
         echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
         echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
         echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
@@ -3267,6 +3533,14 @@ if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
 fi
 
+# Snapshot the worker's whole process tree BEFORE any destructive step below
+# can kill its shell and orphan a setsid child to init. Fix 2b reaps what this
+# captures. Not for kind=secondmate, whose child tree is owned by the dedicated
+# machinery further below.
+if [ "$KIND" != secondmate ]; then
+  task_endpoint_capture
+fi
+
 # A projected pane must close while its session lock is held and before any
 # worktree cleanup can kill its shell.
 # Killing that shell first lets Herdr remove the last pane outside the exact
@@ -3310,6 +3584,7 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
 fi
 
 if [ "$KIND" != secondmate ]; then
+  reap_task_endpoint_processes worktree
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
 
@@ -3510,6 +3785,15 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
+# A completed ship or scout is a task boundary: queue a compact for this home's
+# own long-lived agent, which the watcher delivers at the next idle moment. A
+# secondmate retirement is not an ordinary boundary and is skipped. The marker
+# is durable, so a boundary reached while the agent is busy is not lost.
+if [ "$KIND" != secondmate ] && [ -d "$STATE" ] \
+  && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
 fi
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window $T, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"

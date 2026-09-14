@@ -1615,10 +1615,21 @@ test_completion_refuses_a_legacy_record_without_an_incarnation() {
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship local-only
   meta="$(home_of "$case_dir")/state/$id.meta"
+  # A legacy record with no published incarnation is retirable only when its
+  # endpoint is confidently gone or agent-less. Make that probe unreadable so
+  # the completion must refuse rather than guess the record is safe to close.
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) echo "error connecting to fixture: permission denied" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown accepted a record with no durable incarnation"
-  assert_contains "$out" "record has no spawn_gen" \
+  assert_contains "$out" "not confidently dead or agent-less" \
     "teardown did not explain why the legacy record cannot close automatically"
   assert_present "$meta" "legacy-record refusal removed the task record"
   assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \

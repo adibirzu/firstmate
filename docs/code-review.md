@@ -30,6 +30,27 @@ Stage 2 has two modes:
 - `litellm` - a real LLM pass via `ocr review --provider litellm --model <model>`, scoped to the same OCR-selected diff, through the gateway documented in `LIFEOS/DOCUMENTATION/Services/Gb10Fleet.md`.
   Requires a working LiteLLM virtual key registered on that gateway; see Known limitations below.
 
+### Second-level reviewer order (REVIEW lane)
+
+When Stage 2 escalates in `delegate` mode, a host-agent review is still owed, so the verdict also names the ordered second-level reviewers that review should follow:
+
+1. `grok`
+2. `agy` (`gemini-3.8-flash`)
+3. `cursor` (`auto`)
+
+This is the captain routing doctrine of 2026-09-13: Grok, Gemini, and Cursor are the second-level reviewers.
+Send the review up one level to `claude` only when the reviewer's own verdict states it needs more, never pre-emptively.
+That escalation target is named by `stage2EscalateTo`.
+
+The order is the REVIEW lane owned by `llm-router-axi` - the mechanical owner behind the `router-dispatch` skill and the resolver over `config/crew-dispatch.json`, whose REVIEW rule states the same order.
+Resolution precedence is:
+
+1. an explicit `stage2Reviewers` array in the target repo's `config/code-review` (full override),
+2. the `llm-router-axi` review lane for the resolved `stage2Difficulty`, read from `policy show --json` (the normal path; `hard` selects the escalated group that appends `claude` and `codex`),
+3. the built-in default, which mirrors the REVIEW lane so an offline run without the tool still resolves the same order.
+
+Stage 1 stays the deterministic, zero-LLM-token gate regardless; the reviewer order is resolved only when Stage 2 actually escalates in `delegate` mode, and it never changes Stage 1's or the exit codes' behavior.
+
 ## Usage
 
 ```sh
@@ -59,13 +80,21 @@ bin/fm-review.sh worktree --stage1-only
   "riskPatterns": ["auth/**", "payment/**"],
   "stage2Mode": "delegate",
   "stage2Provider": "litellm",
-  "stage2Model": "anthropic/claude-haiku-4-5"
+  "stage2Model": "anthropic/claude-haiku-4-5",
+  "stage2Difficulty": "medium",
+  "stage2Reviewers": [
+    {"harness": "grok"},
+    {"harness": "agy", "model": "gemini-3.8-flash"},
+    {"harness": "cursor", "model": "auto"}
+  ],
+  "stage2EscalateTo": "claude"
 }
 ```
 
-Built-in defaults when the file is absent: `sizeThreshold` 1000, no risk patterns, `stage2Mode` `delegate`.
+Built-in defaults when the file is absent: `sizeThreshold` 1000, no risk patterns, `stage2Mode` `delegate`, `stage2Difficulty` `medium`, `stage2EscalateTo` `claude`, and a `stage2Reviewers` chain mirroring the REVIEW lane (grok, then agy `gemini-3.8-flash`, then cursor `auto`).
 `riskPatterns` are bash glob patterns matched against each reviewable file's repo-relative path.
-`FM_REVIEW_SIZE_THRESHOLD`, `FM_REVIEW_STAGE1_ONLY`, and `FM_REVIEW_STAGE2_MODE` override the config file for one-off runs.
+`stage2Reviewers` accepts either objects (`{harness, model?, provider?}`) or `"harness"` / `"harness:model"` strings, and when present it is the complete order, replacing both the router lane and the built-in default.
+`FM_REVIEW_SIZE_THRESHOLD`, `FM_REVIEW_STAGE1_ONLY`, `FM_REVIEW_STAGE2_MODE`, and `FM_REVIEW_STAGE2_DIFFICULTY` override the config file for one-off runs.
 
 A secondmate home inherits this repo's own `config/code-review` the same way it inherits every other `config/` file per `AGENTS.md` section 2; a project this wrapper reviews (via `--dir`) reads its own `config/code-review`, not firstmate's.
 
@@ -81,6 +110,36 @@ A secondmate home inherits this repo's own `config/code-review` the same way it 
   Until it is resolved, `stage2Mode: "litellm"` fails Stage 2 with exit `1`; `delegate` (the default) is unaffected since it makes no gateway call.
 - Auto-detected linters are intentionally narrow (firstmate's own `bin/fm-lint.sh`, or a `package.json` `lint` script).
   A repo using another toolchain (`ruff`, `golangci-lint`, etc.) gets Stage 1 file-selection and sizing but no linter findings until it adds a `package.json` lint script or this detection list is extended.
+
+## Direct-PR two-stage attestation
+
+A direct-PR body passes the `Require no-mistakes` compliance check without a no-mistakes pipeline attestation when it carries a valid two-stage attestation, validated by `bin/fm-direct-pr-attestation.sh` (the `.github/workflows/no-mistakes-required.yml` check runs that validator first and only runs the no-mistakes action when it fails).
+The body must contain a `## Code Review (Stage 1)` heading followed by the pasted Stage 1 verdict from `bin/fm-review.sh`, recognizable by its `Stage 1` line, its `Deterministic Review` or `Code Review Verdict` title, and its `Files reviewable` or `Changes:` size line.
+The body must also contain a `## Independent Second-Level Review` heading (the equivalent `## Code Review (Stage 2)` heading is accepted) with a `Reviewer:` line naming the independent lane that performed the second-level review and a `Report:` line giving that review's report path or URL.
+Both fields must be non-empty, non-placeholder (`TODO`, `TBD`, `N/A`, `none`, `placeholder`, `example`, and bracketed fill-ins are rejected), and the report must look like a path or URL (it must contain `/`, `.`, or `://`).
+An empty body, a bare heading with no verdict text, or a placeholder reviewer or report fails validation.
+
+Example:
+
+```md
+## Code Review (Stage 1)
+
+# Code Review Verdict
+
+**Stage 1: Deterministic Review (zero LLM tokens)**
+
+- Files reviewable: 2 / 2
+- Changes: +50 / -5 (55 lines)
+- Linter: ran, 0 finding(s)
+- LLM tokens: 0
+
+No escalation: Stage 1 alone gates this change.
+
+## Independent Second-Level Review
+
+Reviewer: crewmate delegate review (host-agent lane)
+Report: data/<task-id>/report.md
+```
 
 ## See also
 

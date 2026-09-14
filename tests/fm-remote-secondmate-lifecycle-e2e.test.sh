@@ -294,6 +294,18 @@ newest_remote_inbox_corr() {
     | tail -1 | cut -d= -f2-
 }
 
+# No automated nudge may leave an unresolved parent pending-reply expectation for
+# <task-id>: the mate applies the instruction and never posts a correlated report.
+assert_no_open_pending_reply() {
+  local task=$1 what=$2 rec phase
+  for rec in "$PARENT/state/pending-replies"/*; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    [ "$(grep '^task_id=' "$rec" | cut -d= -f2-)" = "$task" ] || continue
+    phase=$(grep '^phase=' "$rec" | cut -d= -f2-)
+    [ "$phase" = resolved ] || fail "$what: $rec ($phase)"
+  done
+}
+
 seed_env() {
   FM_HOME="$TMP_ROOT/seed-parent" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
@@ -727,6 +739,13 @@ assert_grep 'remote_target=fm-remote:' "$PARENT/state/ios.meta" "parent metadata
 assert_grep 'herdr_session=fm-remote' "$REMOTE_HOME/state/parent-route/ios.meta" "remote metadata did not record the pinned Herdr session"
 assert_grep '--session fm-remote' "$HERDR_LOG" "remote launch did not target the fm-remote session"
 assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the interactive default session"
+# The registry host token is seeded into the remote home's own
+# config/herdr-session-host (when absent) and drives the task tab display name
+# adix-<host>-<project>-<task> (project == task id for a secondmate agent, so the
+# duplicate segment collapses).
+assert_grep '--label adix-remote-mac-ios' "$HERDR_LOG" "remote launch did not apply the host-qualified display name to the task tab"
+[ "$(cat "$REMOTE_HOME/config/herdr-session-host" 2>/dev/null)" = "remote-mac" ] \
+  || fail "remote launch did not seed config/herdr-session-host with the registry host token"
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"
@@ -930,14 +949,10 @@ remote_env "$ROOT/bin/fm-bootstrap.sh" > "$TMP_ROOT/config-partial-retry.out" \
 [ "$(cat "$REMOTE_HOME/config/crew-harness")" = grok ] \
   || fail "bootstrap did not apply the remaining inherited file"
 assert_absent "$NUDGE_MARKER" "bootstrap cleared no remote reread marker after convergence"
-PARTIAL_CONFIG_CORR=$(newest_remote_inbox_corr)
-[ -n "$PARTIAL_CONFIG_CORR" ] || fail "bootstrap config reread did not carry a correlation token"
-printf 'done [corr=%s]: converged inherited config re-read\n' "$PARTIAL_CONFIG_CORR" >> "$REMOTE_HOME/state/parent-replies.status"
-remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null \
-  || fail "remote reply source did not capture the converged config acknowledgment"
-PARTIAL_CONFIG_RESULT="$PARENT/state/procevent-inbox/$SID.2.result"
-remote_env "$ROOT/bin/fm-procevent-remote-reply.sh" handle ios 2 "$PARTIAL_CONFIG_RESULT" >/dev/null \
-  || fail "converged remote config acknowledgment was not ingested"
+assert_no_open_pending_reply ios "bootstrap config reread left an unanswered pending-reply record"
+if ! grep -Eq 'delivery=[a-f0-9]{16}' "$REMOTE_HOME/state/parent-route/ios.inbox"/*.msg; then
+  fail "converged remote config reread did not ride the fire-and-forget plane"
+fi
 pass "partial remote inheritance retains reread intent through bootstrap convergence"
 
 rm -f "$TMP_ROOT/inherit.entered" "$TMP_ROOT/inherit.release" "$TMP_ROOT/inherit.payload"
@@ -999,14 +1014,10 @@ remote_env "$ROOT/bin/fm-config-push.sh" > "$TMP_ROOT/config-push-retry.out" \
   || fail "unchanged remote config push did not retry its pending reread"
 assert_absent "$NUDGE_MARKER" "successful remote config reread left its retry marker"
 assert_grep 'config-reread: sent' "$TMP_ROOT/config-push-retry.out" "remote config reread retry was not reported"
-CONFIG_CORR=$(newest_remote_inbox_corr)
-[ -n "$CONFIG_CORR" ] || fail "remote config reread did not carry a correlation token"
-printf 'done [corr=%s]: inherited config re-read\n' "$CONFIG_CORR" >> "$REMOTE_HOME/state/parent-replies.status"
-remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null \
-  || fail "remote reply source did not capture the config reread acknowledgement"
-CONFIG_RESULT="$PARENT/state/procevent-inbox/$SID.3.result"
-remote_env "$ROOT/bin/fm-procevent-remote-reply.sh" handle ios 3 "$CONFIG_RESULT" >/dev/null \
-  || fail "remote config reread acknowledgement was not ingested"
+assert_no_open_pending_reply ios "remote config reread left an unanswered pending-reply record"
+if ! grep -Eq 'delivery=[a-f0-9]{16}' "$REMOTE_HOME/state/parent-route/ios.inbox"/*.msg; then
+  fail "remote config reread retry did not ride the fire-and-forget plane"
+fi
 pass "remote inherited config retains and retries a failed live reread nudge"
 
 resolve_ios_pending() {

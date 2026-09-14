@@ -245,6 +245,98 @@ test_task_marker_refuses_the_primary_checkout() {
   pass "a task marker refuses execution in the primary checkout and leaves worktrees and inspection alone"
 }
 
+# A fixture repo whose only test is one cheap pure-contract-unit script that
+# records that it ran, so a full-suite admission round can be exercised without
+# running the real suite. bin/fm-router-lib.sh ships beside the runner because
+# the suite-start gate resolves the router through it.
+init_suite_admission_fixture() {  # <repo> <ran-marker>
+  local repo=$1 ran=$2
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-router-lib.sh" "$repo/bin/fm-router-lib.sh"
+  chmod +x "$repo/bin/fm-test-run.sh"
+  cat > "$repo/tests/fm-brief.test.sh" <<PROBE
+#!/usr/bin/env bash
+echo "ok - fixture suite"
+: >"$ran"
+PROBE
+  chmod +x "$repo/tests/fm-brief.test.sh"
+}
+
+# The one-suite-at-a-time rule serializes suite STARTS, not agent spawns. The
+# runner asks the purpose-scoped `--for suite` verdict before it starts a
+# --lane/--family/--all suite, so a second full suite cannot begin; spawn
+# admission keeps asking the bare verdict (tests/fm-spawn-capacity.test.sh pins
+# that side).
+test_suite_start_refuses_while_the_slot_is_occupied() {
+  local tmp repo ran router log out rc calls
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-suite-slot.XXXXXX")
+  repo="$tmp/repo"
+  ran="$tmp/ran"
+  log="$tmp/decided"
+  init_suite_admission_fixture "$repo" "$ran"
+
+  # A router that records the purpose it was asked for and refuses `suite`.
+  router="$tmp/llm-router-axi"
+  cat > "$router" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_SUITE_ADMISSION_LOG"
+case "$*" in
+  *"--for suite"*) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$router"
+
+  # Occupied slot: refuse before any suite work runs.
+  set +e
+  out=$(cd "$repo" && \
+    FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$router" \
+    FM_SUITE_ADMISSION_LOG="$log" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a suite start on an occupied slot must refuse, rc=$rc: $out"; }
+  assert_contains "$out" "one-suite-at-a-time slot" "the refusal names the occupied suite slot"
+  assert_not_contains "$out" "FM_TEST_BEGIN" "the refusal must happen before any suite runs"
+  assert_absent "$ran" "the refused run still executed a suite"
+  calls=$(cat "$log" 2>/dev/null || true)
+  assert_contains "$calls" "capacity --for suite" "the runner asked the purpose-scoped suite verdict"
+
+  # Free slot: the same selection runs.
+  cat > "$router" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_SUITE_ADMISSION_LOG"
+exit 0
+SH
+  chmod +x "$router"
+  : >"$log"
+  set +e
+  out=$(cd "$repo" && \
+    FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$router" \
+    FM_SUITE_ADMISSION_LOG="$log" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "the same suite must start on a free slot, rc=$rc: $out"; }
+  assert_contains "$out" "FM_TEST_BEGIN" "an admitted suite must begin"
+  assert_present "$ran" "the admitted suite did not execute its script"
+
+  # An unresolvable router refuses rather than running the suite unguarded.
+  rm -f "$ran"
+  set +e
+  out=$(cd "$repo" && FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$tmp/absent-router" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "an absent router must refuse the suite start, rc=$rc"; }
+  assert_contains "$out" "not installed" "the refusal names the missing router"
+  assert_absent "$ran" "the unguarded run still executed a suite"
+
+  rm -rf "$tmp"
+  pass "a full-suite start is gated on the one-suite-at-a-time slot and refuses before any work"
+}
+
 test_changed_runner_surfaces_select_their_family() {
   local tmp repo listed
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-owner-scope.XXXXXX")
@@ -1630,6 +1722,7 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_task_marker_refuses_the_primary_checkout
+test_suite_start_refuses_while_the_slot_is_occupied
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure

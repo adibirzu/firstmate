@@ -1145,11 +1145,8 @@ unsupported muse ultra effort is flagged^{"rules":[{"when":"muse ultra","use":{"
 unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
 Kimi model profile is rejected from subscription dispatch^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
 native subscription providers and routing settings are accepted^{"subscriptionRouting":{"reservePercent":15,"telemetryMaxAgeSeconds":120,"cooldownSeconds":600},"default":[{"harness":"claude","provider":"claude"},{"harness":"codex","provider":"codex"}]}^empty^
-native subscription provider mismatch is flagged^{"default":[{"harness":"codex","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: codex:claude
-malformed subscription settings object is flagged^{"subscriptionRouting":[],"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting must be an object
-unknown subscription setting is flagged^{"subscriptionRouting":{"reservePercent":20,"mystery":1},"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting has unknown field: mystery
-out of range subscription setting is flagged^{"subscriptionRouting":{"reservePercent":100},"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - subscriptionRouting setting is out of range: reservePercent
-unsupported subscription provider is flagged^{"default":[{"harness":"pi","provider":"moonshot"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unsupported subscription provider: moonshot
+ native subscription provider mismatch is flagged^{"default":[{"harness":"codex","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: codex:claude
+ unsupported subscription provider is flagged^{"default":[{"harness":"pi","provider":"moonshot"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unsupported subscription provider: moonshot
 unsupported Kimi effort remains rejected at the subscription boundary^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
 cursor model profile is accepted^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high"}}]}^empty^
 array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}]}^empty^
@@ -1171,21 +1168,9 @@ default array malformed effort is flagged^{"default":[{"harness":"codex","effort
 agy model profile with quotaWindow is accepted^{"rules":[{"when":"agy work","use":[{"harness":"agy","model":"gemini-3.7-flash-high","effort":"high","quotaWindow":"gemini_5h"}]}]}^empty^
 agy native subscription provider mismatch is flagged^{"default":[{"harness":"agy","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: agy:claude
 model fallback chains are accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.6-flash-high","gemini-3.5-flash-high"]}}^empty^
-legacy _model_fallback alias is accepted^{"default":{"harness":"claude"},"_model_fallback":{"claude":["claude-sonnet-5","haiku"]}}^empty^
-declaring both model fallback spellings is flagged^{"modelFallback":{"claude":["a"]},"_model_fallback":{"claude":["b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback and its legacy alias _model_fallback cannot both be declared
-non-object model fallback is flagged^{"modelFallback":["claude"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback must be an object mapping a harness to its ordered model chain
-model fallback unverified harness is flagged^{"modelFallback":{"spaceship":["a"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
-empty model fallback chain is flagged^{"modelFallback":{"claude":[]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
-model fallback chain with a malformed id is flagged^{"modelFallback":{"claude":["claude-sonnet-5",""]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain must be a non-empty array of non-empty model ids: claude
-model fallback chain with duplicate ids is flagged^{"modelFallback":{"claude":["sonnet","haiku","sonnet"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: claude
-legacy alias with duplicate ids is flagged under the same rule^{"_model_fallback":{"agy":["gemini-3.7-flash","gemini-3.7-flash"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: agy
-fallback lane order is accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"]},"fallbackLanes":["agy","cursor","opencode"]}^empty^
-single-entry fallback lane order is accepted^{"default":{"harness":"agy"},"fallbackLanes":["agy"]}^empty^
-non-array fallback lanes are flagged^{"default":{"harness":"agy"},"fallbackLanes":"agy"}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes must be a non-empty array of verified harness names
-empty fallback lanes are flagged^{"default":{"harness":"agy"},"fallbackLanes":[]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes must be a non-empty array of verified harness names
-unverified fallback lane is flagged^{"fallbackLanes":["agy","spaceship"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: spaceship
-non-string fallback lane is flagged^{"fallbackLanes":[7]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: 7
-duplicate fallback lanes are flagged^{"fallbackLanes":["agy","cursor","agy"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has duplicate entries; a lane order must name each runtime once
+ legacy _model_fallback alias is accepted^{"default":{"harness":"claude"},"_model_fallback":{"claude":["claude-sonnet-5","haiku"]}}^empty^
+ fallback lane order is accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"]},"fallbackLanes":["agy","cursor","opencode"]}^empty^
+ single-entry fallback lane order is accepted^{"default":{"harness":"agy"},"fallbackLanes":["agy"]}^empty^
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }

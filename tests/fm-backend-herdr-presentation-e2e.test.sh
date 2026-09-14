@@ -164,15 +164,20 @@ if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
   esac
 fi
 if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
+  # fm-spawn labels each new task tab <prefix>-[<host>-]<project>-<task-id>, so
+  # match the display name by its task-id suffix rather than the legacy fm-<id> form.
   case "$label" in
-    fm-active-seeded)
+    *-active-seeded)
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/task-pane"
       printf '%s\n' task-created > "$ACTIVE_SEEDED_CONTROL/stage"
       ;;
-    fm-abort-a|fm-abort-b)
-      task=${label#fm-}
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
+    *-abort-a)
+      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-a"
+      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane"
+      ;;
+    *-abort-b)
+      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-b"
+      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane"
       ;;
   esac
 fi
@@ -477,6 +482,12 @@ finish_concurrent_teardown() {  # <id> <status> <stdout> <stderr>
     || fail "projected teardown $id retry failed after presentation cleanup completed: $(cat "$err")"
 }
 
+# normalize_meta erases every field that legitimately differs between two
+# spawns of the same task: the Herdr container IDs that name the endpoint, the
+# fresh per-spawn incarnation marker, and the live pane shell process identity
+# that spawn records as the teardown worker-process root (worker_root_pid/start
+# are birth-bound, so they change every launch exactly like spawn_gen). Every
+# other metadata byte must match, which is what the comparison below proves.
 normalize_meta() {  # <meta>
   sed -E \
     -e 's|^window=.*$|window=<herdr-container-id>|' \
@@ -484,6 +495,8 @@ normalize_meta() {  # <meta>
     -e 's|^herdr_tab_id=.*$|herdr_tab_id=<herdr-container-id>|' \
     -e 's|^herdr_pane_id=.*$|herdr_pane_id=<herdr-container-id>|' \
     -e 's|^spawn_gen=.*$|spawn_gen=<spawn-incarnation>|' \
+    -e 's|^worker_root_pid=.*$|worker_root_pid=<worker-process-root>|' \
+    -e 's|^worker_root_start=.*$|worker_root_start=<worker-process-birth>|' \
     "$1"
 }
 
@@ -683,8 +696,8 @@ PROJECTED_PANES=$(lab pane list --workspace "$PROJECTED_WSID")
 [ "$(printf '%s' "$PROJECTED_PANES" | jq -r '.result.panes | length')" = 1 ] \
   || fail "projected workspace did not contain exactly one task pane"
 printf '%s' "$PROJECTED_TABS" | jq -e --arg tab "$PROJECTED_TAB" \
-  '.result.tabs[0].tab_id == $tab and .result.tabs[0].label == "fm-shape"' >/dev/null 2>&1 \
-  || fail "projected workspace's only tab was not the normal fm-shape task tab"
+  '.result.tabs[0].tab_id == $tab and (.result.tabs[0].label | endswith("-shape"))' >/dev/null 2>&1 \
+  || fail "projected workspace's only tab was not the task's <prefix>-[<host>-]<project>-<task-id> display-name tab"
 printf '%s' "$PROJECTED_PANES" | jq -e --arg pane "$PROJECTED_PANE" \
   '.result.panes[0].pane_id == $pane' >/dev/null 2>&1 \
   || fail "projected workspace's only pane was not the exact recorded task pane"
@@ -934,7 +947,7 @@ teardown_task shape "$HOME_DIR" > "$TMP_ROOT/on-teardown.out" 2> "$TMP_ROOT/on-t
   || fail "projected teardown failed: $(cat "$TMP_ROOT/on-teardown.err")"
 assert_focus_is "$CAPTAIN_FOCUS" "projected teardown"
 assert_cleanup_focus_preserved "$SHAPE_CLEANUP_AUDIT_START" "$PROJECTED_PANE" "$CAPTAIN_FOCUS"
-pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs and spawn incarnation"
+pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs, spawn incarnation, and the per-spawn worker process root"
 if lab workspace get "$PROJECTED_WSID" >/dev/null 2>&1; then
   fail "closing the exact projected task pane did not remove its last-tab workspace"
 fi

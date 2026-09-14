@@ -92,6 +92,21 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      # Model the pane's real shell EXECUTING a typed `cd`. The relaunch shell
+      # reset (bin/fm-backend.sh's fm_backend_reset_shell) `cd`s the bare shell
+      # to a reset directory and proves the move through pane_current_path; a
+      # double that pinned cwd here would model a shell that never runs what it
+      # is sent, so the reset would refuse even on a healthy shell. This mirrors
+      # tests/fm-control-relaunch.test.sh's stub for the same reason.
+      case "$payload" in
+        'cd '*)
+          cd_dir=${payload#cd }
+          case "$cd_dir" in
+            \'*\') cd_dir=${cd_dir#\'}; cd_dir=${cd_dir%\'} ;;
+          esac
+          printf '%s' "$cd_dir" > "$D/cwd"
+          ;;
+      esac
     fi
     exit 0 ;;
   display-message)
@@ -287,7 +302,7 @@ test_persist_precedes_restart() {
 
   expect_code 0 "$rc" "a confirmed persist should restart the mate"$'\n'"$out"
   assert_contains "$out" "restarted: sm1 (claude)" "the mate should be restarted on its pinned runtime"
-  assert_contains "$out" "summary: 1 of 1 restarted, 0 nudged, 0 unreached" "the summary should report the reload"
+  assert_contains "$out" "summary: 1 of 1 restarted, 0 nudged, 0 refused, 0 unreached" "the summary should report the reload"
   # The pane transcript orders the two phases: the instruction doorbell first,
   # the harness exit command only after it.
   doorbell_line=$(grep -n '^: Firstmate instruction waiting: ' "$dir/fake/literal" | head -1 | cut -d: -f1)
@@ -389,7 +404,7 @@ test_unknown_mate_is_accounted_for() {
   assert_contains "$out" "restarted: sm1" "the known mate should still be restarted"
   assert_contains "$out" "ghost:" "the unknown mate must be accounted for by name"
   assert_contains "$out" "no durable record" "the unknown mate's reason must be concrete"
-  assert_contains "$out" "summary: 1 of 2 restarted, 0 nudged, 1 unreached" "the summary must count both mates"
+  assert_contains "$out" "summary: 1 of 2 restarted, 0 nudged, 0 refused, 1 unreached" "the summary must count both mates"
   pass "T4 every named mate is accounted for, including one this home does not know"
 }
 
@@ -415,6 +430,50 @@ test_refused_restart_falls_back_without_claiming_a_reload() {
     || fail "a refusal before the stop should leave the running agent exactly as it was"
   assert_no_grep '^/exit$' "$dir/fake/literal" "a pre-stop refusal must not have stopped the agent"
   pass "T5 a refused restart leaves the mate running and reports an unknown outcome"
+}
+
+# --- T5b: a capacity refusal leaves the mate alive and reports the refusal ----
+test_capacity_refusal_leaves_agent_alive() {
+  local dir out rc before
+  dir=$(new_case capacity-refused)
+  add_local_mate "$dir" sm1
+  arm_answer "$dir" sm1
+  # Force the machine-capacity guard to refuse before the relaunch can stop
+  # anything. The guard is consulted by fm-control.sh before it stops the agent.
+  cat > "$dir/fakebin/llm-router-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  capacity)
+    if [ "${2:-}" = "--json" ]; then
+      echo '{"ok":false,"reasons":["simulated agent ceiling"]}'
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$dir/fakebin/llm-router-axi"
+  export FM_LLM_ROUTER_AXI="$dir/fakebin/llm-router-axi"
+  before=$(cat "$dir/fake/command")
+
+  out=$(run_restart "$dir" sm1); rc=$?
+  unset FM_LLM_ROUTER_AXI
+
+  expect_code 3 "$rc" "a capacity refusal must not report a reload"$'\n'"$out"
+  assert_contains "$out" "refused: sm1:" "a capacity refusal must be reported as refused"
+  assert_contains "$out" "machine capacity declines" "the refusal must carry the guard's reason"
+  assert_contains "$out" "before the agent was stopped" "the refusal must name that the agent is still running"
+  assert_not_contains "$out" "unreached: sm1" "a capacity refusal must not be reported as unreached"
+  assert_not_contains "$out" "nudged: sm1" "a capacity refusal must not claim the old agent was nudged"
+  assert_not_contains "$out" "restarted: sm1" "a capacity refusal must not be reported as restarted"
+  [ "$(cat "$dir/fake/command")" = "$before" ] \
+    || fail "a capacity refusal should leave the running agent exactly as it was"
+  assert_no_grep '^/exit$' "$dir/fake/literal" "a capacity refusal must not have stopped the agent"
+  assert_contains "$out" "summary: 0 of 1 restarted, 0 nudged, 1 refused, 0 unreached" \
+    "the summary must count the refusal separately"
+  pass "T5b a capacity refusal leaves the mate alive and reports the refusal"
 }
 
 # --- T6: a remote mate restarts over the fm-on hop, on the parent's pin -------
@@ -644,7 +703,7 @@ test_post_stop_failure_is_reported_unreached() {
   assert_contains "$out" "unreached: sm1:" "a stopped mate must be reported as unreached"
   assert_contains "$out" "restart outcome is unknown" "the report must not attribute the failed lifecycle operation"
   assert_not_contains "$out" "nudged: sm1" "a durable enqueue must not masquerade as a running mate's nudge"
-  assert_contains "$out" "summary: 0 of 1 restarted, 0 nudged, 1 unreached" \
+  assert_contains "$out" "summary: 0 of 1 restarted, 0 nudged, 0 refused, 1 unreached" \
     "the summary must not claim that a stopped mate remains on older instructions with a message"
   pass "T11 post-stop restart failure is never misreported as a nudge"
 }
@@ -666,7 +725,7 @@ test_relaunches_do_not_block_persist_polling() {
   expect_code 0 "$rc" "both confirmed mates should restart independently"$'\n'"$out"
   assert_present "$dir/fake/local-relaunch-during-remote" \
     "the slow first relaunch blocked lifecycle progress for the second mate"
-  assert_contains "$out" "summary: 2 of 2 restarted, 0 nudged, 0 unreached" \
+  assert_contains "$out" "summary: 2 of 2 restarted, 0 nudged, 0 refused, 0 unreached" \
     "parallel relaunches were not both accounted for"
   assert_grep 'fm-remote-secondmate-control.sh relaunch sm1 claude default default' "$dir/ssh.log" \
     "an absent remote model and effort pin were not expressed as explicit defaults"
@@ -710,7 +769,7 @@ test_unpublished_worker_result_is_accounted_for() {
   [ "$(cat "$rc_file")" = 3 ] || fail "an unpublished worker result did not fail as accounted"
   assert_contains "$(cat "$out")" "restart worker exited before publishing an outcome" \
     "the missing worker result was not reported"
-  assert_contains "$(cat "$out")" "summary: 0 of 1 restarted, 0 nudged, 1 unreached" \
+  assert_contains "$(cat "$out")" "summary: 0 of 1 restarted, 0 nudged, 0 refused, 1 unreached" \
     "the missing worker result was not included in the summary"
   pass "T13 a dead restart worker cannot hang the parent"
 }
@@ -780,7 +839,7 @@ test_already_current_mate_restarts_end_to_end() {
 
   expect_code 0 "$rc" "the mate named by the update pass did not restart"$'\n'"$out"
   assert_contains "$out" "restarted: sm1" "an already-current mate must actually be replaced"
-  assert_contains "$out" "summary: 1 of 1 restarted, 0 nudged, 0 unreached" \
+  assert_contains "$out" "summary: 1 of 1 restarted, 0 nudged, 0 refused, 0 unreached" \
     "the pass must report the reload it performed"
   # Persist strictly before replace, read off the pane transcript.
   doorbell_line=$(grep -n '^: Firstmate instruction waiting: ' "$dir/fake/literal" | head -1 | cut -d: -f1)
@@ -839,6 +898,7 @@ test_answer_between_resolution_and_timeout_wins
 test_unprovable_runtime_falls_back
 test_unknown_mate_is_accounted_for
 test_refused_restart_falls_back_without_claiming_a_reload
+test_capacity_refusal_leaves_agent_alive
 test_local_restart_uses_the_home_pin_and_reports_what_ran
 test_native_ultra_restart_keeps_local_and_remote_profiles
 test_remote_mate_restarts_over_the_transport_hop

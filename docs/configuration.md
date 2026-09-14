@@ -168,6 +168,7 @@ Legacy tmux metadata remains cleanup-compatible when its exact window name is `f
 `FM_HOME` determines Herdr's home label: the primary home uses `firstmate`, and a secondmate home marked by `.fm-secondmate-home` uses `2ndmate-<secondmate-id>`.
 [`herdr-backend.md`](herdr-backend.md#watching-and-task-containers) owns launcher-bound workspace placement, the label-only fallback, collision handling, and recovery behavior.
 The local `config/herdr-presentation-spaces` file instead opts a home out of, or explicitly in to, Herdr's default-on disposable single-task visual projection; [Presentation spaces](herdr-backend.md#presentation-spaces) owns its accepted values, default, Herdr version floor, migration, behavior, safety limits, recovery contract, and narrow locked session-start cleanup of exact restored idle-shell children.
+Each new Herdr task tab is labelled with the captain-visible display name `<prefix>-[<host>-]<project>-<task-id>`; the local, gitignored `config/herdr-session-prefix` sets the prefix (default `adix`, inherited by secondmate homes), and the optional local, gitignored `config/herdr-session-host` adds a host segment only when set, deliberately not inherited because the host is a property of the machine ([Session naming](herdr-backend.md#session-naming) owns the contract).
 The setting is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 For normal herdr operations, `HERDR_SESSION` selects the named session, but destructive test cleanup must not rely on `HERDR_SESSION` alone.
 Use the explicit guarded cleanup path described in [`docs/herdr-backend.md`](herdr-backend.md) instead of `herdr server stop`.
@@ -256,12 +257,40 @@ Use `bin/fm-startup-memory-budget.sh read` to validate and print the effective v
 The stable local estimate is `ceil(UTF-8 bytes / 3)` per file, a conservative portable approximation rather than a provider-exact tokenizer.
 An inherited `data/captain-shared.md` counts in a secondmate's total but remains primary-owned and read-only there.
 The internal [`/stow` skill](../.agents/skills/stow/SKILL.md) owns curation and its automatic secondmate cascade, which accounts every home against this same per-home allowance separately rather than against a fleet total.
+The session-start digest enforces the allowance: when `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md` together exceed it, `data/learnings.md` is truncated to fit with an explicit pointer to the full file, while the two captain preference files always print in full.
 The helper's header owns exact parsing, publication, and report output mechanics.
 
-## Machine capacity (config/spawn-capacity)
+## Context hygiene (config/context-hygiene / config/context-hygiene-idle-seconds)
+
+A home's own primary or secondmate agent is long-lived: every supervision wake is another full-context turn, so an agent that never compacts or clears can accumulate a very large context and spend most of its allowance re-reading it.
+`config/context-hygiene` is an optional local, gitignored switch; the literal `off` disables the whole feature for that home, and an absent file or any other value leaves it on.
+When it is on, the home's own agent receives its harness's context command at two boundaries only, never mid-task and never in a worker or crewmate pane: a durable compact request at a task's merged or torn-down outcome, and a clear once the home has been fully idle for `config/context-hygiene-idle-seconds` (default `900`) continuous seconds with zero in-flight tasks, an empty wake queue, and no pending captain reply.
+Durable state on disk (backlog, status, task records) is authoritative, so a clear is a non-event: the next session-start digest re-seeds everything the agent needs.
+Delivery goes only into a pane proven idle at an empty prompt, so a mid-turn agent is never typed into, and a refused compact stays pending for a later cycle.
+Only a harness with a firstmate-verified context command is ever sent one (Claude and Pi today); every other harness is sent nothing rather than a guessed command.
+Away mode's daemon owns the pane, so delivery pauses while `state/.afk` exists.
+Both files are home-local and not inherited by secondmate homes, which apply the same defaults unless they set their own.
+`bin/fm-context-hygiene-lib.sh`'s header owns the command table, the compact marker, and the idle-window contract, while `bin/fm-watch.sh` owns delivery.
+
+## Wake coalescing (config/wake-coalesce-seconds)
+
+`config/wake-coalesce-seconds` is an optional local, gitignored window, default `20`, during which status and turn-end signals that land together are batched into one supervision wake and one handling turn instead of one wake per signal.
+It sets the watcher's signal-grace linger, so a crew's final status write and the same turn's turn-end hook become one wake, and a file seen by the post-grace re-scan is enqueued once with its latest signature.
+A value that is absent, non-numeric, or zero falls back to the default, and an explicit `FM_SIGNAL_GRACE` environment value still wins.
+The setting is home-local and not inherited; `bin/fm-watch.sh` owns the coalescing and `bin/fm-context-hygiene-lib.sh` owns the parse.
+
+## Idle heartbeat backoff (config/heartbeat-idle-seconds)
+
+`config/heartbeat-idle-seconds` is an optional local, gitignored cap, default `3600`, on the watcher's heartbeat backoff while nothing is in flight fleet-wide.
+The base heartbeat interval doubles on each consecutive no-change heartbeat up to this cap; the moment any task is in flight the interval returns to its base cadence and the backoff resets, so a new spawn is never hidden behind an idle-fleet backoff.
+A value that is absent, non-numeric, or zero falls back to the default, and an explicit `FM_HEARTBEAT_MAX` environment value still wins.
+The setting is home-local and not inherited; `bin/fm-watch.sh`'s `heartbeat_interval` owns the doubling and the reset, and `bin/fm-context-hygiene-lib.sh` owns the parse.
+
+## Machine capacity (llm-router-axi policy)
 
 Every spawn - crewmate, scout, and secondmate, in every home - is admitted only when the machine still has room for another agent.
-`bin/fm-spawn.sh` consults the check before it creates anything, and a refusal prints each signal with the value it measured and the value it wanted.
+`bin/fm-spawn.sh` calls `bin/fm-capacity-lib.sh`, a thin adapter over `llm-router-axi capacity`, before it creates anything, and a refusal prints each signal the router measured against the value it wanted.
+A relaunch (`bin/fm-control.sh relaunch`, driven by `bin/fm-secondmate-restart.sh`) consults the same guard before stopping the running agent, so a capacity refusal leaves the existing agent alive instead of stranding a bare shell after the stop.
 Run `bin/fm-capacity.sh` at any time to see the same reading without attempting a spawn, or `bin/fm-capacity.sh check` for a script-friendly exit status.
 
 The check declines new work and nothing else.
@@ -269,31 +298,21 @@ It never stops, reaps, or deprioritizes an agent that is already running, becaus
 Restoring headroom on a machine that is already saturated is the operator's decision, not this check's.
 
 Memory is the binding signal, not CPU.
-On the machine this was built against, saturation looked like 155 MB unused of 24 GB with 20 GB of swap consumed after 25.7 million swapouts, while CPU usage was about 4.6 of 10 cores and no agent appeared among the top consumers at all.
-The 1m load average of 299 measured processes frozen on paging rather than work queued for CPU, so load average is reported as corroborating context and never refuses unless the operator asks it to.
-The fleet's own footprint is measured over whole process trees rather than counted, because a paused agent keeps every page it allocated - which is why pausing whole domains during that incident did not drain the machine.
-That footprint is read machine-wide rather than per home: every verified harness process tree counts, including agents in other firstmate homes and your own interactive agent session, because they all hold the same physical memory.
+The binding resources for spawn admission are free memory, swap in use, kernel memory pressure, worker-root agent count, and load per core; `llm-router-axi` measures them and compares each against its own threshold.
+The one-suite-at-a-time slot is separate: spawn admission treats it as context and never refuses a spawn on it, while a full-suite start asks `llm-router-axi capacity --for suite` and refuses while another suite holds the slot.
+`bin/fm-test-run.sh` owns that suite-start gate for its `--lane`, `--family`, and `--all` modes, before it runs any suite work; targeted script and `--changed` runs are unchanged.
+Load average is corroborating context and is a limit only when the operator sets `maxLoadPerCore`.
 
-Settings live in the local gitignored `config/spawn-capacity`, one `key = value` per line, with `#` comments and blank lines allowed.
-An absent file means the defaults below.
-A malformed file refuses with the parse error rather than reverting to defaults, because a mistyped limit that silently reads as the default is indistinguishable from no limit at all.
+The gauges and their thresholds are owned by `llm-router-axi`, not by this repo: its README and policy schema define every gauge, and `~/.config/llm-router-axi/policy.json` carries `memoryFreeReservePercent`, `memoryPressureMax`, `maxSwapUsedPercent`, `agentCeiling`, `maxLoadPerCore`, and `oneSuiteAtATime`.
+The raw measurement is also published by `usage-axi machine`.
+`bin/fm-capacity-lib.sh`'s header owns the spawn-admission wrapper and `bin/fm-router-lib.sh` owns tool resolution and the one-line install hint; neither restates a threshold.
+The retired local `config/spawn-capacity` file is no longer read; move any limit it carried into the router policy.
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `mode` | `enforce` | `off` disables the check entirely |
-| `min_free_memory_mb` | `1024` | memory a new agent must be able to claim without forcing the machine to reclaim or page |
-| `max_swap_used_pct` | `50` | share of configured swap already in use; `off` to skip |
-| `max_memory_pressure` | `normal` | worst kernel memory-pressure verdict still admitted: `normal`, `warn`, or `ignore` |
-| `max_fleet_memory_pct` | `40` | share of installed memory the fleet's own process trees may hold, leaving the majority of the machine to its operator; `off` to skip |
-| `load_per_core_max` | `off` | 1m load average per logical core, off by default because load also rises on paging stalls; set a positive decimal to make it a limit |
-| `on_unknown` | `refuse` | what to do when a signal cannot be read at all |
-
-A signal that cannot be read is reported as an explicit unknown and never passes silently.
-By default an unreadable signal refuses, because the check could not prove there is headroom and the operator keeping his machine outranks fleet throughput; set `on_unknown = allow` on a platform where a signal is genuinely unavailable.
-A machine with no swap configured is a real answer rather than an unknown, and is admitted on that signal.
-
-This setting is primary-authoritative and is propagated to every registered secondmate home through the inherited-local-material contract in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), because every home shares one physical machine and its admission limits must be one setting rather than a per-home guess.
-`bin/fm-capacity-lib.sh`'s header owns the exact probe, parsing, and decision mechanics, including the per-signal measurement overrides used for tests and diagnosis.
+The tools must be installed for admission to run: an absent `llm-router-axi` makes the guard decline rather than spawn blind, and the refusal names the missing tool.
+Both tools are unpublished on npm; build and install each from its GitHub main clone (`git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`).
+`bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
+The behavior lanes do not float on main: `bin/fm-install-router-axi-tools.sh` is the single owner of the pinned CI and local lane install, building both tools at verified commits into `~/.local` (the location a spawn's sanitized remote-job PATH resolves) and exposing a cache key for the CI build cache, while `bin/fm-test-run.sh` runs it as its `--lane`, `--family`, and `--all` preflight.
+This posture is primary-authoritative and shared by every home because they all run on one physical machine.
 ## Stow pass horizon (config/stow-pass-horizon)
 
 `config/stow-pass-horizon` is an optional local, gitignored presence flag that opts this home in to the pass-count decay horizon in the internal [`/stow` skill](../.agents/skills/stow/SKILL.md).
@@ -358,6 +377,7 @@ On Zellij, cmux, and Orca a typed-plane Cursor send (a harness-native invocation
 muse is verified for crewmate and scout launches ONLY, and `fm-spawn.sh` refuses it for a secondmate, because muse ships no usable hook surface for a primary session's turn-end supervision; [`docs/verification/muse.md`](verification/muse.md) owns that evidence.
 muse also needs a worker-reachable credential before spawning, and the portable fleet path is the `<config>/muse/auth.json` credential stored by `muse login`, because a caller-only `META_API_KEY` does not cross a long-lived backend daemon.
 gemini is likewise refused for secondmates because it has no primary supervision protocol; [its adapter reference](../.agents/skills/harness-adapters/references/harness/gemini.md) owns the credential precondition, canonical-launch wiring, and raw-launch limitations.
+`bin/fm-spawn.sh` also refuses a gemini dispatch outright, for any kind, when the `gemini` executable PATH resolves is not genuine gemini-cli - for example a personal compatibility shim shadowing it ahead of the real install with a different harness - because none of this template's gemini-cli-specific env (`GEMINI_CLI_TRUST_WORKSPACE`, `GEMINI_CLI_SYSTEM_SETTINGS_PATH`) would reach whatever such a shim actually execs; `gemini_binary_is_genuine` in `bin/fm-spawn.sh` owns that check.
 rovo is likewise verified for crewmate and scout launches ONLY, refused for a secondmate for the same reason - no turn-end hook and no primary supervision protocol; [`docs/verification/rovo.md`](verification/rovo.md) owns that evidence, including the OAuth token's silent background refresh from a stored refresh token and both tmux and herdr pane liveness (herdr placement is verified live, with a Herdr-side agent-detection gap left open for recovery classification).
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter evidence - each harness's busy-state source, interrupt and exit behavior, skill-invocation syntax, and per-harness quirks - lives in the skill tree rooted at [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
@@ -444,37 +464,29 @@ Every claude launch's inline `--settings` JSON also carries `"attribution":{"com
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
-Scripts do not match those rules; firstmate chooses the best matching rule with judgment, filters an array to comparable task-fit and reasoning-class candidates, resolves that set through `bin/fm-dispatch-select.mjs` under the `quota-array-dispatch` contract, and passes the selected concrete `--harness`, `--provider`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+Scripts do not match those rules; firstmate chooses the best matching rule with judgment, filters an array to comparable task-fit and reasoning-class candidates, resolves that set through `llm-router-axi select`, and passes the selected concrete `--harness`, `--provider`, `--model`, and `--effort` flags to `fm-spawn.sh`.
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
 This section is the single owner of the canonical schema and its per-field semantics.
-`AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the subscription-aware profile-array selection judgment boundary.
+`AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `router-dispatch` owns the dispatch judgment boundary.
+The reserve, cooldown, telemetry age, in-run step-down chain, and machine-capacity thresholds now live in the human-editable `~/.config/llm-router-axi/policy.json`, not in this file; `llm-router-axi`'s README and policy schema own them and this file does not restate them.
+`bin/fm-router-lib.sh` owns local resolution of both axi tools and the one-line install hint.
 
 ```json
 {
-  "subscriptionRouting": {
-    "reservePercent": 20,
-    "telemetryMaxAgeSeconds": 300,
-    "cooldownSeconds": 1800
-  },
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "provider": "<claude|codex|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "quotaWindow": "<optional quota-axi windows[].id>" }
+        { "harness": "<adapter>", "provider": "<claude|codex|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "quotaWindow": "<optional quota pool id>" }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
   "default": [
-    { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>", "quotaWindow": "<optional quota window id>" }
-  ],
-  "modelFallback": {
-    "<adapter>": ["<strongest model id>", "<next model id>", "<weakest model id>"]
-  },
-  "modelFallbackCycles": ["<adapter>"],
-  "fallbackLanes": ["<adapter>", "<adapter>"]
+    { "harness": "<adapter>", "provider": "<optional provider>", "model": "<optional model>", "effort": "<optional effort>", "quotaWindow": "<optional quota pool id>" }
+  ]
 }
 ```
 
@@ -485,51 +497,30 @@ Profile `provider`, `model`, `effort`, and `quotaWindow` fields and rule `why` a
 `ultra` is native-only: the model-aware validation contract and launch mapping are owned by `bin/fm-harness.sh validate-native-effort` and `bin/fm-spawn.sh` respectively.
 An omitted model or effort means the selected harness uses its own default for that axis.
 OpenRouter Auto Router is requested as the model id `openrouter/auto` on a harness that forwards `--model`, typically opencode; LiteLLM catalogs may expose the same router as `or-auto`.
-`quotaWindow` names the one `windows[].id` in that provider's `quota-axi --json` telemetry that this route actually draws on, so a provider whose pools are billed separately is priced on the pool it uses instead of on its worst pool.
-Declaring it is the only way to price a candidate on a single window; no mapping from model name to pool is inferred, because a declaration in config is checkable and correctable while an inferred one silently rots.
-An omitted `quotaWindow` keeps the conservative provider-wide minimum, and a declared window that the live telemetry does not carry makes that candidate ineligible rather than falling back to a rosier figure.
-Read the current window ids from `quota-axi --json`, and the current model ids from `bin/fm-model-refresh.sh`, before writing either field.
-Native `claude`, `codex`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for `claude`, `codex`, `grok`, `cursor`, and `agy` a provider that is present must match the harness.
+`quotaWindow` names the one pool this route actually draws on so a provider whose pools are billed separately is priced on the pool it uses instead of on its worst pool; `llm-router-axi` owns how a pool name maps to the live windows.
+Read the current model ids from `bin/fm-model-refresh.sh` before writing either field.
+Native `claude`, `codex`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for those harnesses a provider that is present must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
-Every profile array is an implicit subscription-aware choice resolved through `quota-array-dispatch` and `bin/fm-dispatch-select.mjs` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
+Every profile array is an implicit subscription-aware choice resolved through `llm-router-axi select` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
 If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
 Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
-When the file exists, bootstrap validates it with `jq`.
+When the file exists, bootstrap validates its rules and profiles with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, an invalid subscription setting, a malformed or duplicate-valued model fallback chain or cycle, a malformed `fallbackLanes` order, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
-`subscriptionRouting` is optional, and every field in it is optional.
-`reservePercent` is an integer from 0 through 99 and defaults to 20; metered headroom must remain strictly above it.
-`telemetryMaxAgeSeconds` is an integer from 1 through 3600 and defaults to 300.
-`cooldownSeconds` is an integer from 60 through 86400 and defaults to 1800.
-Unknown fields fail bootstrap validation instead of being ignored.
-
-Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry with a usable percentage above the reserve.
-The selector ranks remaining eligible candidates by a known `spendPriority` scalar when quota-axi publishes one, then persists rotation and cooldown in private `state/.dispatch-routing.json` through a serialized atomic update.
-Verified rate-limit or quota-exhaustion evidence from a task carrying recorded routing-provider metadata can be recorded with `bin/fm-dispatch-select.mjs record-failure`; exact flags, evidence checks, exit codes, and clear behavior are owned by the script's help.
-
-`modelFallback` is an optional top-level object mapping each harness name to its own ordered model chain, strongest entry first.
-`_model_fallback` is accepted as a legacy alias for the same object; a file declaring both is invalid, because two chains for one harness cannot both be authoritative.
-Every key must be a harness verified for dispatch under the same rule as a profile `harness`, every value must be a non-empty array of non-empty model-id strings, and no model id may repeat inside one chain, because a duplicate would make the step-down order ambiguous; violations are reported as `CREW_DISPATCH` diagnostics rather than silently ignored.
-`modelFallbackCycles` is an optional, duplicate-free list of verified harnesses whose configured chain has at least two entries; after its tail depletes, that lane returns to its chain head instead of becoming exhausted.
-Read the current model ids from `bin/fm-model-refresh.sh` before writing a chain, because an id the harness does not accept fails at launch instead of being repriced.
-The chain is never consulted at selection time, so it neither overrides a profile `model` nor re-opens the strongest-reasoning-class rule that governs the initial dispatch; it acts only after dispatch, on depletion.
-
 Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
 At the supervision status-event boundary, `bin/fm-watch.sh` invokes `apply` automatically for ship and scout tasks; without fresh classified depletion evidence, `apply` refuses and does not relaunch the worker.
-Its depletion detector is `bin/fm-dispatch-select.mjs classify-evidence`, which exposes the same single subscription-vocabulary regex that `record-failure` verifies with - framed 429, explicit rate limit, `RESOURCE_EXHAUSTED`, or named quota/credit/balance/spending-limit exhaustion - while context-window ceilings, tool-output limits, plain authorization errors, and unframed codes classify as ordinary working states and trigger nothing.
-`apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs, and it refuses rather than relaunching when there is no fresh depleted classification.
-Selection walks the recorded harness's chain: the entry after the recorded model is next, a model absent from its chain (a default-model launch, or a task older than the chain) starts at the chain head, and the chain's last entry means this runtime lane is walked out unless `modelFallbackCycles` names that harness, in which case it returns to its chain head.
-On exhaustion, the optional top-level `fallbackLanes` array decides what happens: it is a non-empty, duplicate-free list of verified harnesses naming the lane order, and the task moves to the lane after its own, starting that lane's chain head, or launching on that lane's own default model when the successor has no configured chain.
-A task whose final non-cyclic lane's chain is exhausted, or whose harness appears in no lane order, gets an explicit `blocked:` status event for a routing decision - automation says loudly that it has run out of automatic moves rather than wrapping around to a model already known to be depleted.
-`apply` executes every move through `bin/fm-runtime-handoff.sh`, which preserves the worktree, branch, commits, and uncommitted changes in place; the effort axis is deliberately not carried over, so the replacement model launches on its own default effort instead of inheriting an axis tuned for the depleted model, and the routing provider is re-declared only where provable (the target's native provider, or the recorded one when the adapter is unchanged).
-Auto-step-down is standing policy (2026-08-24): availability beats escalation, so when the depleted model IS the strongest available class the fallback still proceeds automatically - routine depletion never parks on the captain and never stops the fleet - and the downgrade is made visible rather than silent through a progress note naming both models plus the matched signature, a `working:` status line recording the switch, and stderr confirmation.
-When the depleted harness carries a telemetry-backed routing provider, `apply` also records the verified failure through `record-failure`, so future dispatches avoid that account for the cooldown while this task steps down within its lane; that bookkeeping failing never blocks the relaunch itself.
+Its depletion detector is `llm-router-axi classify-evidence`, the single owner of the subscription-exhaustion vocabulary.
+Its step-down chain is `llm-router-axi route chain`, which walks the router policy's `modelFallback`, `modelFallbackCycles`, and `fallbackLanes`; `bin/fm-model-fallback.sh` executes the returned move through `bin/fm-runtime-handoff.sh`, which preserves the worktree, branch, commits, and uncommitted changes in place.
+`apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs.
+Before classification, `apply` drops every line whose leading verb is the declared-pause verb (`bin/fm-classify-lib.sh`'s `status_is_paused`), so depletion words inside firstmate's own after-the-fact `paused:` bookkeeping never relaunch an endpoint stopped on purpose.
+Auto-step-down is standing policy (2026-08-24): availability beats escalation, so depletion never parks on the captain and never stops the fleet, and the downgrade is made visible through a progress note, a `working:` status line, and stderr.
+When the depleted harness carries a telemetry-backed routing provider, `apply` records the verified failure through `llm-router-axi record`, so future dispatches avoid that account for the cooldown while this task steps down within its lane; that bookkeeping failing never blocks the relaunch itself.
 
 ## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 
@@ -1048,12 +1039,12 @@ FM_HOME_SUMMARY_ERROR_LOG_MAX_BYTES=65536   # approximate size cap for state/.ho
 FM_HOME_SUMMARY_FAILURE_REPORT=2   # recorded publication failures since the ledger's own last publication before session start reports a HOME_SUMMARY line; invalid or zero values use 2
 FM_SNAPSHOT_CREW_STATE_TIMEOUT=10   # seconds bounding each local per-task current-state read inside bin/fm-fleet-snapshot.sh; remote endpoint liveness is not probed on the snapshot path
 FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=8   # maximum local tasks whose current-state and endpoint observations are collected concurrently during snapshot composition
-FM_SNAPSHOT_BUDGET=5                # one total seconds budget for all concurrent remote home-ledger reads
+FM_SNAPSHOT_SECONDMATE_TIMEOUT=45   # seconds bounding each registered remote home's ledger read inside bin/fm-fleet-snapshot.sh; because every sampled home is read concurrently, one deadline is also the whole-collection deadline, and 45 matches the default SSH dead-peer window in bin/fm-on.sh (FM_SSH_ALIVE_INTERVAL 15 x FM_SSH_ALIVE_COUNT_MAX 3); a home whose read consumes it with no valid cached copy is reported timed_out, never unknown. FM_SNAPSHOT_BUDGET is accepted as a legacy alias for this bound when it is unset
 FM_SNAPSHOT_CACHE_DIR=$FM_HOME/state/secondmate-summary-cache   # private parent-side cache of successfully fetched remote home ledgers
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=14  # floored elapsed-day threshold at which an undated captain hold (no hold-until; age from its UTC hold-set timestamp, falling back to since for legacy unstamped holds) is projected as a Charted Next gate instead of a live Captain's Call; 0 applies once the computed age is non-negative
 FM_RECONCILE_REQUEST_MAX_BYTES=1048576   # maximum captured Bearings or fleet snapshot accepted for durable reconcile-notify request publication
-FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
-FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
+FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle, and the interval doubles per consecutive idle heartbeat
+FM_HEARTBEAT_MAX=3600   # heartbeat backoff cap while nothing is in flight; set by config/heartbeat-idle-seconds
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
@@ -1067,6 +1058,17 @@ FM_TOOL_UPDATE_INTERVAL=900   # seconds between watched-tool probe sweeps; 0 pro
 FM_TOOL_UPDATE_PROBE_SECS=5   # 1..30 seconds allowed for one version or git probe
 FM_TOOL_UPDATE_BUDGET_SECS=20   # 1..120 seconds allowed for a whole watched-tool sweep; cut to fit FM_CHECK_TIMEOUT, and the cut is reported
 FM_TOOL_UPDATE_NOW=     # test override for the watched-tool sweep clock; the sweep budget still uses real time
+FM_STATION_TIMEOUT=8    # 1..60 seconds allowed per station read inside bin/fm-station-idle.sh
+FM_STATION_BUDGET=20    # 1..120 seconds allowed for a whole station probe; cut to fit FM_CHECK_TIMEOUT
+FM_STATION_ENDPOINT_LIMIT=20   # most task endpoint records proven per home during a probe
+FM_STATION_IDLE_WINDOW=300     # continuous idle seconds required before a station-idle line is reported; 0 disables the window
+FM_STATION_LOCAL_NAMES='local mini'   # station names bin/fm-station-idle.sh treats as the local host
+FM_STATION_SSH=ssh      # ssh executable for a remote station's bounded reads
+FM_STATION_HERDR=herdr  # herdr executable for a station's bounded reads
+FM_STATION_TASKS_AXI=tasks-axi   # tasks-axi executable for a station's bounded reads
+FM_STATION_CREW_STATE=bin/fm-crew-state.sh   # fm-crew-state.sh path override, mainly for tests
+FM_STATION_JQ=jq        # jq executable for parsing a remote station's captured output
+FM_STATION_NOW=         # test override for the idle-window clock
 FM_PROCEVENT_MAX_OUTPUT_BYTES=1048576   # bound on one captured process-to-event result
 FM_PROCEVENT_CLAIM_ROOT=                # machine-wide source claim root; default $XDG_STATE_HOME/firstmate/procevent-claims
 FM_PROCEVENT_OWNER_LEASE_SECONDS=600    # how long a source runner keeps going with no activity in its owning home; 1..86400
@@ -1112,11 +1114,11 @@ FM_WATCH_REARM_RETRY_LIMIT=5   # Pi/OpenCode adapter launch-failure retries befo
 FM_WATCH_CYCLE_LOG_MAX_BYTES=262144   # size cap for the arm-owned watcher lifecycle ledger
 FM_WATCH_CYCLE_LOG_KEEP_LINES=1000   # newest complete lifecycle rows considered when the ledger is capped
 FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE if set, else the poll-derived grace (docs/turnend-guard.md "Guard grace and the poll cadence"); seconds a live watcher lock may have a stale beacon before re-arm errors
-FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
+FM_SIGNAL_GRACE=20      # seconds to coalesce nearby status and turn-end signals into one wake; set by config/wake-coalesce-seconds
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked
-FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats
+FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, which a declared wait enters immediately regardless of agent liveness
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age without a completed turn or explicit native-harness progress (bin/fm-watch.sh owns marker selection), before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait or attended verified captain-held transfer takes the FM_PAUSE_RESURFACE_SECS recheck below instead
 FM_PAUSE_RESURFACE_SECS=14400      # four hours between bounded rechecks of a declared external wait or verified captain-held transfer, and between repeated new-hash stale alarms for an ordinary crew task with an open backlog captain call; a structured until time can make an external-wait recheck occur sooner but cannot extend this bound; this includes a live idle pane after its first inconclusive stale wake and a live busy pane past FM_BUSY_TURN_MAX_SECS, while the away-mode daemon uses the same setting and ages its window against the crew's own latest status line rather than pane busy state; a captain-held transfer is never rechecked while the away-posture record exists
 FM_SECONDMATE_WAKE_STALL_SECS=180  # minimum interval with no change of the oldest actionable foreign wake-queue row (it advances as the mate drains, and a queue reprovisioned under the same task id starts a fresh interval at whatever sequence it restarts) before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification for that no-progress episode; a mate that is provably inside an active turn (an exact busy verdict, bounded by the same FM_BUSY_TURN_MAX_SECS above) never escalates whatever this interval says, declared external-wait pause rows are excluded, and zero or invalid values use 180

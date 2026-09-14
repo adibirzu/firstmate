@@ -16,6 +16,10 @@
 # read fails, gh-axi's own view still proves a landed merge, and every outcome
 # it cannot prove refuses, reporting the single failed read when gh is absent
 # and naming both failed reads when gh is present and its own read failed.
+# A non-zero merge command is recovered as landed only when a best-effort live
+# read before it showed merged=false and the authoritative read after it shows
+# merged=true; the command diagnostic stays visible as a notice, and an unknown
+# or already-merged pre-state keeps the non-zero status fail-closed.
 # If the pull request remains open and the base branch has an effective
 # merge_queue rule, the refusal names the queue's configured merge method and
 # the exact -- --auto --<method> retry flags, unless the caller already passed
@@ -77,6 +81,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -84,6 +90,15 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
 . "$SCRIPT_DIR/fm-merge-outcome-lib.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
+# Role partition: merging is MAIN-owned; the Pi supervision branch reports the
+# green PR and never merges (contract: bin/fm-lease-lib.sh; no-op in homes
+# without a branch actor). This precedes reading the task record, because the
+# wrong actor is refused for its role whatever that record says.
+# shellcheck source=bin/fm-lease-lib.sh
+. "$SCRIPT_DIR/fm-lease-lib.sh"
+fm_lease_forbid_branch "PR merge (fm-pr-merge)"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -199,13 +214,6 @@ META="$STATE/$ID.meta"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# Role partition: merging is MAIN-owned; the Pi supervision branch reports the
-# green PR and never merges (contract: bin/fm-lease-lib.sh; no-op in homes
-# without a branch actor). This precedes reading the task record, because the
-# wrong actor is refused for its role whatever that record says.
-# shellcheck source=bin/fm-lease-lib.sh
-. "$SCRIPT_DIR/fm-lease-lib.sh"
-fm_lease_forbid_branch "PR merge (fm-pr-merge)"
 
 if [ ! -f "$META" ] || [ -L "$META" ]; then
   echo "error: task metadata is unavailable" >&2
@@ -581,6 +589,24 @@ $output
 OUTPUT
 }
 
+# A non-zero merge command normally remains a refusal. The one terminal state
+# that outranks that command status is a live read-back proving the PR landed:
+# the forge can complete the merge and then fail while rendering its own
+# post-merge response. Keep that diagnostic visible, but do not turn an already
+# proved landed outcome back into a failed merge.
+github_report_recovered_landed_output() {
+  local output=$1 status=$2 line
+  printf 'notice: the GitHub merge command exited %s, but live read-back proved %s landed\n' \
+    "$status" "$URL" >&2
+  [ -n "$output" ] || return 0
+  echo "notice: the command's output follows as diagnostics:" >&2
+  while IFS= read -r line; do
+    printf 'notice: > %s\n' "$line" >&2
+  done <<OUTPUT
+$output
+OUTPUT
+}
+
 github_state_is_open() {
   case "$FM_PR_GITHUB_STATE" in
     [oO][pP][eE][nN]) return 0 ;;
@@ -686,6 +712,8 @@ record_pr_metadata || exit 1
 case "$PROVIDER" in
   github)
     merge_output=
+    github_premerge_merged=unknown
+    github_outcome_already_read=false
     merge_args=()
     if ! caller_has_merge_method "$@"; then
       merge_args=(--squash)
@@ -695,26 +723,37 @@ case "$PROVIDER" in
     fi
     FM_PR_GITHUB_CALLER_METHOD=$(caller_merge_method "$@")
     require_released_captain_hold || exit 1
-    merge_status=0
-    merge_output=$(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
-      "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
-    fm_lock_release "$MERGE_CONTROL_LOCK" || true
-    MERGE_CONTROL_LOCK=
-    if [ "$merge_status" -eq 0 ]; then
+    # A failed command can be recovered as a landed success only when two live
+    # reads prove the transition happened across this attempt. The preliminary
+    # read is deliberately best-effort: losing it must not add a new merge
+    # prerequisite, but it leaves recovery fail-closed instead of treating a PR
+    # that was already merged as evidence that this failed command succeeded.
+    if github_read_outcome >/dev/null 2>&1; then
+      github_premerge_merged=$FM_PR_GITHUB_MERGED
+    fi
+    if merge_output=$(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+      "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1); then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
     else
-      [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
+      merge_status=$?
       if github_read_outcome; then
-        if [ "$FM_PR_GITHUB_MERGED" != true ] && [ "$FM_PR_GITHUB_QUEUED" != true ]; then
+        if [ "$github_premerge_merged" = false ] && [ "$FM_PR_GITHUB_MERGED" = true ]; then
+          github_outcome_already_read=true
+          github_report_recovered_landed_output "$merge_output" "$merge_status"
+        elif [ "$FM_PR_GITHUB_QUEUED" != true ] && [ "$FM_PR_GITHUB_MERGED" != true ]; then
+          [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
           github_report_unmerged_outcome
         else
+          [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
         fi
+      else
+        [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
       fi
-      exit "$merge_status"
+      [ "$github_outcome_already_read" = true ] || exit "$merge_status"
     fi
-    if ! github_read_outcome; then
+    if [ "$github_outcome_already_read" != true ] && ! github_read_outcome; then
       github_report_forge_output "$merge_output"
       exit 1
     fi
@@ -769,3 +808,10 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+# A merged task is a task boundary: queue a compact for this home's own
+# long-lived agent, which the watcher delivers at the next idle moment. Durable,
+# so a boundary reached while the agent is busy is not lost.
+if [ -d "$STATE" ] && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
+fi

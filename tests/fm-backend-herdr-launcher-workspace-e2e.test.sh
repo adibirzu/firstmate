@@ -363,8 +363,8 @@ spawn_from_launcher "" "$PRIMARY_HOME" dupD "$PROJ" --mode no-mistakes --yolo of
 assert_contains_local "$(cat "$SPAWN_ERR")" "labeled 'firstmate'" \
   "the refusal did not name the duplicated home label"
 [ ! -e "$PRIMARY_HOME/state/dupD.meta" ] || fail "a refused spawn must not publish task metadata"
-DUP_TABS=$(lab tab list --workspace "$WS_PRIMARY" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD")] | length')
-DUP_TABS2=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD")] | length')
+DUP_TABS=$(lab tab list --workspace "$WS_PRIMARY" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD" or (.label | endswith("-dupD")))] | length')
+DUP_TABS2=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD" or (.label | endswith("-dupD")))] | length')
 [ "$DUP_TABS" = 0 ] && [ "$DUP_TABS2" = 0 ] || fail "a refused spawn created a worker endpoint anyway"
 pass "real herdr E2E: an ambiguous home label with no launcher identity refuses before any worker endpoint exists"
 
@@ -387,7 +387,7 @@ spawn_from_launcher "$STALE_PANE" "$PRIMARY_HOME" staleF "$PROJ" --mode no-mista
 assert_contains_local "$(cat "$SPAWN_ERR")" "$STALE_PANE" \
   "the stale-identity refusal did not name the launcher pane it could not resolve"
 [ ! -e "$PRIMARY_HOME/state/staleF.meta" ] || fail "a refused spawn must not publish task metadata"
-STALE_TABS=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-staleF")] | length')
+STALE_TABS=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-staleF" or (.label | endswith("-staleF")))] | length')
 [ "$STALE_TABS" = 0 ] || fail "a refused spawn created a worker endpoint anyway"
 pass "real herdr E2E: a launcher pane that no longer exists refuses before any worker endpoint exists"
 

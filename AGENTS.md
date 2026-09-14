@@ -78,9 +78,14 @@ config/startup-memory-budget     primary-authoritative per-home startup-memory b
 config/berths   optional presence flag enabling per-project session berths, so one home can run one concurrent session per project; LOCAL, gitignored; see docs/configuration.md "Session berths" and bin/fm-berth.sh --help
 config/stow-pass-horizon  optional presence flag opting this home in to /stow's default-off pass-count decay horizon; LOCAL, gitignored, and not inherited; see docs/configuration.md "Stow pass horizon"
 config/herdr-presentation-spaces  optional "off" opt-out from, or "on" opt-in to, Herdr's default-on disposable single-task visual projection, which is unconfigured-default-on only at or above a Herdr version floor; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Presentation spaces"
+config/herdr-session-prefix  optional prefix for the <prefix>-[<host>-]<project>-<task-id> Herdr task-tab display name, defaulting to `adix`; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Session naming"
+config/herdr-session-host  optional host token appended to the Herdr task-tab display name after the prefix, which is omitted entirely when unset; LOCAL, gitignored, deliberately not inherited; see docs/herdr-backend.md "Session naming"
 config/trace-context  optional presence flag enabling default-off native W3C trace-context propagation to spawned agents; LOCAL, gitignored; inherited by secondmate homes; see docs/configuration.md "Trace context propagation" and docs/trace-context.md
-config/spawn-capacity  optional machine-capacity limits every spawn is admitted against; LOCAL, gitignored; primary-authoritative and inherited by secondmate homes because every home shares one physical machine; see docs/configuration.md "Machine capacity (config/spawn-capacity)"
 config/turnend-churn-absorb  optional presence flag opting this home into the default-off absorb of bare turn-end wakes on pane churn; LOCAL, gitignored, and not inherited; see docs/configuration.md "Turn-end pane-churn absorb"
+config/context-hygiene  optional switch disabling this home's own-agent context hygiene entirely when the literal value is "off"; LOCAL, gitignored, and not inherited; see docs/configuration.md "Context hygiene"
+config/context-hygiene-idle-seconds  continuous full-idle seconds before this home's own agent is sent its harness clear command, default 900; LOCAL, gitignored, and not inherited; see docs/configuration.md "Context hygiene"
+config/wake-coalesce-seconds  window batching status and turn-end signals into one supervision wake, default 20; LOCAL, gitignored, and not inherited; see docs/configuration.md "Wake coalescing"
+config/heartbeat-idle-seconds  idle-fleet heartbeat backoff cap, default 3600; LOCAL, gitignored, and not inherited; see docs/configuration.md "Idle heartbeat backoff"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
@@ -124,6 +129,7 @@ state/               runtime records and signals; gitignored
   x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   berths/<slug>/     one berthed project's own state slice (its lock, wake queue, and task records); present only when this home opted into berths
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll
+  station-idle-<station>.check.sh  generated per-station idle-window poll shim and its .check-trust binding; present only after bin/fm-station-idle.sh arm <station>; its dedupe record .station-idle-<station> is what keeps a proven idle window from being reported on every poll (docs/remote-secondmates.md "Idle-window update gate")
   mail.check.sh      generated received-mail poll shim and its .check-trust binding; present only after bin/fm-mail-check.sh arm; report record .mail-check (mail schema: docs/configuration.md "Mail plane")
   .mail-seen .mail-woken .mail-retry .mail-retry-pos .mail-turn .mail-seen.lock  mail-plane poll cursor, emission journal, transient-fetch retry set, retry-scan position, contended-slot turn flag, and overlapping-poll lock; written only by bin/fm-mail.sh (mail schema: docs/configuration.md "Mail plane")
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
@@ -214,19 +220,21 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, `cursor`, and `omp`, plus `muse`, `gemini`, `agy`, `cline`, `copilot`, and `rovo` for crewmate and scout launches only; never dispatch on an unverified adapter, and never select one of those six for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
+The same doctrine gates gemini specifically at launch time: `bin/fm-spawn.sh`'s `gemini_binary_is_genuine` guard refuses loudly, naming the resolved path, when the `gemini` executable on PATH is not genuine gemini-cli - for example a personal PATH shim shadowing it with a different harness - rather than silently launching whatever it actually is with none of gemini's launch wiring applied (`.agents/skills/harness-adapters/references/harness/gemini.md` owns the verified gemini-cli facts this guard protects).
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
-Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to the subscription-aware selector owned by `quota-array-dispatch` and `bin/fm-dispatch-select.mjs`.
+`bin/fm-router-lib.sh` owns usage-axi and llm-router-axi resolution, and `router-dispatch` owns the tool-based path.
+Route the task descriptor through `llm-router-axi route --flags` (its telemetry is `usage-axi`) and record outcomes with `llm-router-axi record`; the tool is required for the dispatch path, so a missing install is a blocker rather than a reason to hand-select.
+Firstmate alone resolves a matched profile array: establish comparable fit, reasoning class, model support, and provider identity, then pass those candidates to `llm-router-axi select` under the `router-dispatch` judgment boundary.
 Account for every candidate; unresolved identity is a configuration error, while stale or unavailable capacity evidence makes only that provider ineligible and permits inspectable failover to another eligible candidate.
 The selector applies fail-closed capacity (fresh telemetry, reserve, cooldown, and declared `quotaWindow`) and ranks remaining eligible candidates by `spendPriority` when quota-axi publishes a known scalar, otherwise by persisted least-recent use.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
 When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report the tight choice if that class cannot proceed.
 Never bypass the configured reserve or evidence-backed cooldown; if no comparable candidate remains eligible, stop the dispatch.
 Kimi 0.29.1 remains outside automatic subscription dispatch because its guarded Herdr lifecycle exit was not deterministic after interrupt.
-`quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends a route, and no stale telemetry is dispatch capacity.
-Load `quota-array-dispatch` before choosing among a matched profile array; that skill owns the selection judgment boundary.
+`usage-axi` and `quota-axi` remain data-only: they publish `spendPriority` as a comparable scalar and never recommend a route, and no stale telemetry is dispatch capacity.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 
@@ -234,7 +242,7 @@ Do not add model-specific versions of that policy.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
 When a live ship or scout is blocked by quota exhaustion or a harness limit, relaunch it in place with `bin/fm-runtime-handoff.sh <task-id> --harness <name>`, which preserves the worktree, lease, PR metadata, and work in progress.
-When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns chain order and lane moves from `config/crew-dispatch.json` (`modelFallback`, `fallbackLanes`), `bin/fm-dispatch-select.mjs classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
+When a worker's model depletes mid-run, the watcher applies `bin/fm-model-fallback.sh <task-id> apply` at the status-event boundary instead of parking or escalating; that script owns the in-place relaunch and reads chain order and lane moves from `llm-router-axi route chain`, `llm-router-axi classify-evidence` owns the depletion classifier, and the fallback script records a blocked routing decision only once every automatic move is spent.
 Every automatic switch must be visible in status reporting; fallback walks the configured chain after dispatch and never replaces the strongest-reasoning-class rule that governs selection.
 
 ## 5. Recovery
@@ -325,7 +333,7 @@ Fill the task subsections according to section 11.
 
 Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in section 4.
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
-Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `docs/configuration.md` "Machine capacity (config/spawn-capacity)" owns that contract.
+Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `llm-router-axi` owns the gauges and thresholds and `docs/configuration.md` "Machine capacity (llm-router-axi policy)" owns that contract.
 A capacity refusal is a stop-and-report result: relay the measured numbers to the captain and never loosen or disable those limits without the captain's explicit word, and never restore headroom by stopping live work, which hard rule 3 forbids.
 When the configured tasks-axi backlog gate applies, the spawn itself moves the work item to In flight and refuses rather than dispatching work this home has no item for, so recording the dispatch is never a separate step to remember; a manual-backend home retains the hand-editing contract in `docs/configuration.md`.
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
@@ -570,7 +578,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `NETWORK_CHECKS:`, `HOME_SUMMARY:`, `BACKLOG_RECONCILE:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`), or when `BOOTSTRAP_INFO:` says an interrupted backlog cleanup may have left an endpoint or local copy; silence and other `BOOTSTRAP_INFO:` facts need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding.
-- `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array through the subscription-aware selector.
+- `quota-array-dispatch` - load `router-dispatch` (quota-array-dispatch is a one-release pointer).
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `project-management` - load before adding, creating, removing, or initializing a project.
@@ -585,7 +593,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 - `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
 - `graphify-orientation` - load before broadly exploring unfamiliar code, discovering relevant files, mapping ownership, or tracing cross-file relationships.
-- `multi-account` - load before launching a crewmate under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`) or selecting an account by quota headroom.
+- `router-dispatch` - load before choosing a worker or reviewer runtime by task descriptor, before resolving a subscription-aware profile array, or before launching under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`).
 
 ## 14. Relay
 

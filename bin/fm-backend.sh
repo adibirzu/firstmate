@@ -87,6 +87,33 @@ fm_backend_is_known() {  # <name>
   fm_backend_list_contains "$FM_BACKEND_KNOWN" "$1"
 }
 
+# fm_process_birth_identity: a portable per-process birth token, stable across
+# an exec and unique against pid reuse. Uses /proc's starttime field when
+# readable (Linux) and ps -o lstart= otherwise (macOS), so bin/fm-spawn.sh can
+# record a worker process-tree root and bin/fm-teardown.sh can later prove the
+# same process before it is ever signalled. FM_PROC_ROOT_OVERRIDE redirects the
+# /proc read for tests. Nonzero when the process is gone or the token cannot be
+# read.
+fm_process_birth_identity() {  # <pid>
+  local pid=$1 proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} stat_line starttime value
+  local -a stat_fields
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -r "$proc_root/$pid/stat" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 20 ] || return 1
+    starttime=${stat_fields[19]}
+    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
+    printf 'starttime=%s\n' "$starttime"
+    return 0
+  fi
+  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  [ -n "$value" ] || return 1
+  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  printf 'lstart=%s\n' "$value"
+}
+
 # fm_backend_detect: detect the runtime firstmate itself is CURRENTLY executing
 # inside, from verified environment markers (mirrors bin/fm-harness.sh's
 # env-marker detection layer for harnesses). Prints the detected backend name
@@ -383,15 +410,26 @@ fm_backend_of_meta() {  # <meta-file>
   printf '%s' "${v:-tmux}"
 }
 
+# fm_backend_target_of_meta: the endpoint target recorded in <meta-file> - the
+# Orca `terminal=` when backend=orca, otherwise `window=` - or empty when
+# neither is recorded. Always returns 0: callers assign it through command
+# substitution under `set -e` (bin/fm-spawn.sh, bin/fm-control.sh, ...), so an
+# absent field must read as a clean empty target rather than a nonzero status
+# that silently kills the caller.
 fm_backend_target_of_meta() {  # <meta-file>
   local meta=$1 backend terminal window
   backend=$(fm_backend_of_meta "$meta")
   if [ "$backend" = orca ]; then
     terminal=$(fm_meta_get "$meta" terminal)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
+    if [ -n "$terminal" ]; then
+      printf '%s' "$terminal"
+      return 0
+    fi
   fi
   window=$(fm_meta_get "$meta" window)
-  [ -n "$window" ] && printf '%s' "$window"
+  if [ -n "$window" ]; then
+    printf '%s' "$window"
+  fi
 }
 
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely
@@ -402,6 +440,10 @@ fm_backend_target_of_meta() {  # <meta-file>
 # valid only when their window name itself is exactly fm-<task-id>.
 # On success, sets FM_BACKEND_VALIDATED_BACKEND and
 # FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
+# The optional --allow-missing-window relaxation is for fm-teardown's legacy
+# pre-spawn_gen husks only: identity fields (worktree, project, backend, task
+# binding) are still validated exactly, FM_BACKEND_VALIDATED_TARGET is left
+# empty, and the caller must supply the separate retirability proof.
 fm_backend_meta_exact_value() {  # <meta-file> <key>
   local meta=$1 key=$2 count value
   count=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
@@ -417,9 +459,9 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
-fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
-  local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface
+fm_backend_validate_task_endpoint() {  # <meta-file> <task-id> [--allow-missing-window]
+  local meta=$1 id=$2 allow_missing_window=${3:-} backend_count backend window worktree project binding_count binding
+  local window_count session pane recorded_session workspace tab terminal worktree_id surface
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -430,10 +472,24 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task endpoint identity has an invalid task id; preserving task state." >&2
     return 1
   esac
-  window=$(fm_backend_meta_exact_value "$meta" window) || {
+  # A window endpoint is the ordinary requirement. --allow-missing-window is the
+  # one caller-authorized relaxation, used only by fm-teardown's legacy-record
+  # path for a record that predates both spawn_gen and any window: the identity
+  # fields below are still validated exactly, and the caller owns the separate
+  # proof that the record's worktree is clean and landed or already gone.
+  window_count=$(grep -c '^window=' "$meta" 2>/dev/null || true)
+  case "$window_count" in
+    0) window= ;;
+    1) window=$(fm_backend_meta_exact_value "$meta" window) || window= ;;
+    *)
+      echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
+      return 1
+      ;;
+  esac
+  if [ -z "$window" ] && [ "$allow_missing_window" != --allow-missing-window ]; then
     echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
     return 1
-  }
+  fi
   worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
     return 1
@@ -473,6 +529,16 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   if [ -n "$binding" ] && [ "$binding" != "$id" ]; then
     echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
     return 1
+  fi
+  if [ -z "$window" ]; then
+    # The caller authorized a missing window, and every identity field above is
+    # valid. There is no endpoint target to hand back; the caller decides
+    # whether the record is retirable from its own worktree evidence.
+    # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+    FM_BACKEND_VALIDATED_BACKEND=$backend
+    # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+    FM_BACKEND_VALIDATED_TARGET=
+    return 0
   fi
 
   case "$backend" in
@@ -828,6 +894,38 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
   esac
 }
 
+# fm_backend_shell_quote: single-quote <string> for a shell command line, the
+# way a launch command needs its paths quoted. Shared by the adapters' shell
+# reset primitive so the quoting cannot drift between backends.
+fm_backend_shell_quote() {  # <string>
+  local s=$1
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+# fm_backend_reset_shell: return a pane whose agent has exited (leaving a bare
+# shell) to a fresh, empty input state so a launch command typed next cannot be
+# swallowed. An exited agent can leave the shell mid-continuation (a `quote>`,
+# `dquote>`, or heredoc prompt) or holding a half-typed line, and anything typed
+# into that construct is appended to it instead of executing. The adapter clears
+# the line/continuation with the shell's own keys and PROVES the shell executes
+# commands again by `cd`-ing into <reset-dir> and confirming the pane's cwd
+# moved there; a backend with no verified reset primitive refuses by name rather
+# than letting the launch command be consumed. Prints nothing; returns 0 only
+# when the reset is proven.
+fm_backend_reset_shell() {  # <backend> <target> <reset-dir> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_reset_shell "$@" ;;
+    herdr) fm_backend_herdr_reset_shell "$@" ;;
+    *)
+      echo "error: backend '$backend' has no verified bare-shell reset primitive, so an inherited continuation prompt could swallow the launch command; refusing to launch into it" >&2
+      return 1
+      ;;
+  esac
+}
+
 # fm_backend_busy_state: semantic busy/idle/unknown for backends that expose
 # native agent-state (herdr-addendum "busy state" row - the first backend
 # where this gets real semantics beyond pane-regex). Backends with no such
@@ -851,6 +949,23 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
   case "$backend" in
     tmux) fm_backend_tmux_bound_current_path "$target" ;;
     herdr) fm_backend_herdr_current_path "$target" ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_task_process_root: the pid of the endpoint's process-tree root
+# (its pane shell), or a nonzero return when this backend cannot answer.
+# bin/fm-teardown.sh walks descendants from this root to reach a worker child
+# that called setsid and so left the pane's process group and working
+# directory; a backend with no process-model reader (zellij, orca, cmux)
+# returns nonzero and teardown falls back to its working-directory scan.
+fm_backend_task_process_root() {  # <backend> <target>
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_task_process_root "$@" ;;
+    herdr) fm_backend_herdr_task_process_root "$@" ;;
     *) return 1 ;;
   esac
 }

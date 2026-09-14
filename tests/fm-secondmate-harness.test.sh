@@ -15,11 +15,12 @@
 #   B) Inheritance. The primary pushes a declared, extensible set of LOCAL
 #      (gitignored) config items - config/crew-dispatch.json, config/crew-harness,
 #      config/backlog-backend, config/backend, config/herdr-presentation-spaces,
-#      config/startup-memory-budget, and config/trace-context -
+#      config/herdr-session-prefix, config/startup-memory-budget, and
+#      config/trace-context -
 #      down into each secondmate home's config/, so the secondmate's OWN crewmates,
 #      dispatch profiles, backlog backend, runtime-backend default, Herdr
-#      presentation choice, startup-memory budget, and trace context inherit the
-#      primary's settings. For config/herdr-presentation-spaces, an absent
+#      presentation choice, Herdr label prefix, startup-memory budget, and trace
+#      context inherit the primary's settings. For config/herdr-presentation-spaces, an absent
 #      primary file and an absent destination file both mean the same
 #      unconfigured default, so the generic absence mirror converges that item
 #      without deciding its release-dependent floor.
@@ -49,6 +50,8 @@ set -u
 . "$ROOT/bin/fm-ff-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-pending-reply-lib.sh
+. "$ROOT/bin/fm-pending-reply-lib.sh"
 
 # The harness-detection cases below fake `ps` so process ancestry is fully
 # controlled, but bin/fm-harness.sh checks verified ENV markers before ancestry.
@@ -291,6 +294,7 @@ test_propagate_lib() {
   printf 'codex\n' > "$src/crew-harness"
   printf 'manual\n' > "$src/backlog-backend"
   printf 'tmux\n' > "$src/backend"
+  printf 'adix\n' > "$src/herdr-session-prefix"
   : > "$src/herdr-presentation-spaces"
   : > "$src/trace-context"
   stdout="$d/clean-copy.out"
@@ -302,6 +306,7 @@ test_propagate_lib() {
   [ "$(cat "$dest/crew-harness")" = codex ] || fail "crew-harness not propagated"
   [ "$(cat "$dest/backlog-backend")" = manual ] || fail "backlog-backend not propagated"
   [ "$(cat "$dest/backend")" = tmux ] || fail "backend not propagated"
+  [ "$(cat "$dest/herdr-session-prefix")" = adix ] || fail "herdr-session-prefix not propagated"
   [ -f "$dest/herdr-presentation-spaces" ] || fail "herdr-presentation-spaces not propagated"
   printf 'herdr\n' > "$dest/backend"
   propagate_inheritable_config "$src" "$dest"
@@ -343,13 +348,14 @@ test_propagate_lib() {
   # 4. removing the source mirrors absence downstream (primary-authoritative)
   printf 'herdr\n' > "$dest/backend"
   rm -f "$src/crew-dispatch.json" "$src/crew-harness" "$src/backlog-backend" \
-    "$src/backend" "$src/herdr-presentation-spaces" "$src/trace-context"
+    "$src/backend" "$src/herdr-presentation-spaces" "$src/herdr-session-prefix" "$src/trace-context"
   propagate_inheritable_config "$src" "$dest"
   [ -e "$dest/crew-dispatch.json" ] && fail "dispatch profile absence not mirrored downstream"
   [ -e "$dest/crew-harness" ] && fail "absence not mirrored downstream"
   [ -e "$dest/backlog-backend" ] && fail "backlog-backend absence not mirrored downstream"
   [ -e "$dest/backend" ] && fail "backend absence not mirrored downstream"
   [ -e "$dest/herdr-presentation-spaces" ] && fail "herdr-presentation-spaces absence not mirrored downstream"
+  [ -e "$dest/herdr-session-prefix" ] && fail "herdr-session-prefix absence not mirrored downstream"
   [ -e "$dest/trace-context" ] && fail "trace-context absence not mirrored downstream"
 
   rm -f "$dest/crew-harness"
@@ -1243,6 +1249,18 @@ assert_no_reread_pending() {
   done
 }
 
+# No automated nudge may leave an unresolved parent pending-reply expectation.
+assert_no_pending_replies() {
+  local home=$1 dir rec phase
+  dir="$home/state/pending-replies"
+  [ -d "$dir" ] || return 0
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    phase=$(fm_pending_reply_get "$rec" phase)
+    [ "$phase" = resolved ] || fail "unresolved pending-reply record left by an automated nudge: $rec ($phase)"
+  done
+}
+
 assert_no_reread_retry_stages() {
   local home=$1 id=$2 retry_dir path
   retry_dir="$home/state/.fm-inherited-config-reread-retry/$id"
@@ -1818,6 +1836,78 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
   assert_not_contains "$(inbox_stream "$w/home/state" alpha)" "Default worker" "sent message must not summarize"
   assert_not_contains "$(cat "$log")" '"harness": "grok"' "the typed doorbell must not inline multiline JSON"
   pass "B15 config reread is per-home, exact-byte, ordered, and pointer-only"
+}
+
+# Regression (captain direction 2026-09-13): the automated config-reread nudge
+# is one-way. It must not create a reply-bearing parent expectation, because the
+# mate applies the config and never posts a correlated report, leaving an open
+# pending-reply escalation nobody answers. The per-instruction delivery id keeps
+# an uncertain retry idempotent, and the pending/retry staging still surfaces a
+# genuinely undeliverable nudge.
+test_config_reread_nudge_leaves_no_pending_reply() {
+  local w head log out status open_count err first_instr second_instr first_delivery second_delivery
+  w=$(new_world config-reread-no-pending)
+  head=$(git -C "$w/main" rev-parse HEAD)
+  add_sm_worktree "$w" sm "$head"
+  mkdir -p "$w/sm/config" "$w/sm/state"
+  printf 'old\n' > "$w/sm/config/crew-harness"
+  printf 'codex\n' > "$w/home/config/crew-harness"
+
+  log="$w/config-reread-no-pending.tmux.log"
+  out=$(run_config_push "$w" "$log" 2>/dev/null); status=$?
+  expect_code 0 "$status" "config push with a nudge should succeed"
+  assert_contains "$out" "config-reread: sent" "config push should send the reread nudge"
+  # The nudge still reaches the mate as a durable marked inbox record, but it is
+  # a fire-and-forget delivery (an idempotent delivery token, no correlation)
+  # rather than a reply-bearing request, so no parent expectation is created.
+  if ! inbox_stream "$w/home/state" sm | grep -Eq 'delivery=[a-f0-9]{16}'; then
+    fail "reread nudge must ride the fire-and-forget delivery plane"
+  fi
+  assert_not_contains "$(inbox_stream "$w/home/state" sm)" "corr=" \
+    "reread nudge must not carry a pending-reply correlation token"
+  first_instr=$(reread_instruction_path "$w/sm") || fail "reread instruction missing"
+
+  assert_no_pending_replies "$w/home"
+  open_count=$(fm_pending_reply_task_has_open "$w/home/state" sm && printf 'open' || printf 'none')
+  [ "$open_count" = none ] || fail "delivered reread nudge left an open pending-reply record"
+
+  # A second DISTINCT config change must notify again. Moving the first record
+  # into handled/ models the mate acknowledging it; a delivery id that did not
+  # change with the instruction would let the second send dedupe onto that
+  # acknowledged record, reporting success while the mate is never notified.
+  mkdir -p "$w/home/state/sm.inbox/handled"
+  mv "$w/home/state/sm.inbox/001.msg" "$w/home/state/sm.inbox/handled/001.msg"
+  printf 'pi\n' > "$w/home/config/crew-harness"
+  out=$(run_config_push "$w" "$log" 2>/dev/null); status=$?
+  expect_code 0 "$status" "a second config push with a nudge should succeed"
+  assert_contains "$out" "config-reread: sent" "second config push should send a fresh reread nudge"
+  second_instr=$(reread_instruction_path "$w/sm") || fail "second reread instruction missing"
+  [ "$second_instr" != "$first_instr" ] || fail "the second push did not publish a new instruction"
+  [ -f "$w/home/state/sm.inbox/002.msg" ] \
+    || fail "a second distinct reread nudge must create a new live inbox record"
+  first_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm.inbox/handled/001.msg" | head -1)
+  second_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm.inbox/002.msg" | head -1)
+  [ -n "$first_delivery" ] || fail "first reread nudge carried no delivery id"
+  [ -n "$second_delivery" ] || fail "second reread nudge carried no delivery id"
+  [ "$first_delivery" != "$second_delivery" ] \
+    || fail "a distinct reread instruction must derive a distinct delivery id"
+  assert_no_pending_replies "$w/home"
+
+  # A genuinely undeliverable nudge must still surface and stay retryable. On the
+  # inbox plane the real local failure is an unwritable steer record.
+  rm -rf "$w/home/state/sm.inbox"
+  : > "$w/home/state/sm.inbox"
+  printf 'grok\n' > "$w/home/config/crew-harness"
+  err="$w/config-reread-no-pending-fail.err"
+  out=$(PATH="$(make_fake_toolchain "$w"):$BASE_PATH" \
+    FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-config-push.sh" 2>"$err"); status=$?
+  expect_code 1 "$status" "an undeliverable reread nudge must fail loudly"
+  assert_contains "$out" "CONFIG_REREAD: secondmate" "undeliverable nudge diagnostic missing"
+  assert_present "$(reread_pending_path "$w/sm")" \
+    "undeliverable reread nudge did not record a retry marker"
+  assert_no_pending_replies "$w/home"
+  pass "B15a automated config reread leaves no open pending-reply escalation and still reports failure"
 }
 
 test_config_reread_isolation_and_absent_and_send_failure() {
@@ -2600,6 +2690,7 @@ test_config_push_reports_skips_dirty_and_invalid_home
 test_config_push_exits_nonzero_on_copy_error
 test_config_push_rereads_after_partial_propagation
 test_config_reread_per_home_changed_sets_and_exact_bytes
+test_config_reread_nudge_leaves_no_pending_reply
 test_config_reread_isolation_and_absent_and_send_failure
 test_config_reread_publication_failure_retries_exact_generation
 test_config_reread_write_failure_retains_exact_retry_generation

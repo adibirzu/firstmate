@@ -174,6 +174,33 @@ fm_backend_tmux_send_literal() {  # <target> <text>
   tmux send-keys -t "$1" -l "$2"
 }
 
+# fm_backend_tmux_reset_shell: clear a bare tmux pane's shell input state and
+# PROVE it. C-c (the shell's interrupt) aborts any continuation prompt or
+# half-typed line, and C-u drops a remaining line. The shell must then execute a
+# plain `cd <reset-dir>`, which is observable as the pane's cwd: a shell still
+# stuck in a continuation swallows the cd and the cwd never moves, so this
+# returns nonzero rather than letting a launch command be swallowed the same
+# way. The dead-shell reasoning that says a `dead` pane is a bare shell lives in
+# bin/fm-composer-lib.sh and bin/fm-backend.sh; this primitive does not
+# re-derive it.
+fm_backend_tmux_reset_shell() {  # <target> <reset-dir>
+  local target=$1 dir=$2 expected raw observed i=0
+  tmux send-keys -t "$target" C-c 2>/dev/null || return 1
+  tmux send-keys -t "$target" C-u 2>/dev/null || return 1
+  tmux send-keys -t "$target" "cd $(fm_backend_shell_quote "$dir")" Enter 2>/dev/null || return 1
+  expected=$(cd "$dir" 2>/dev/null && pwd -P) || expected=$dir
+  while [ "$i" -lt 40 ]; do
+    raw=$(fm_backend_tmux_current_path "$target" 2>/dev/null || true)
+    if [ -n "$raw" ]; then
+      observed=$(cd "$raw" 2>/dev/null && pwd -P) || observed=$raw
+      [ "$observed" = "$expected" ] && return 0
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # fm_backend_tmux_kill: remove one explicitly named task window, best-effort.
 # Empty, omitted, and malformed targets return nonzero before invoking tmux so
 # tmux can never interpret an empty target as the caller's current window.
@@ -313,6 +340,32 @@ fm_backend_tmux_foreground_pids() {  # <target> [tty]
         [ "$pgid" = "$tpgid" ] || continue
         printf '%s\n' "$pid"
       done
+}
+
+# fm_backend_tmux_task_process_root: the pid of <target>'s pane shell - the
+# root of the task's whole process tree - or a nonzero return when the exact
+# recorded window cannot be confirmed live. Tmux answers an absent target from
+# the client's ACTIVE window rather than failing, so the session's window
+# inventory must name this exact window before its pane pid is trusted;
+# without that check a vanished task window would resolve to whichever window
+# is active now. bin/fm-teardown.sh walks descendants from this root so a
+# harness child that called setsid (an MCP server, a detached poll shell) is
+# still reached even after it left the pane's process group and cwd.
+fm_backend_tmux_task_process_root() {  # <target>
+  local target=$1 session window windows pid
+  case "$target" in
+    *:*:*|'':*|*:'') return 1 ;;
+    *:*) ;;
+    *) return 1 ;;
+  esac
+  session=${target%%:*}
+  window=${target#*:}
+  windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null) || return 1
+  printf '%s\n' "$windows" | grep -Fxq -- "$window" || return 1
+  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  printf '%s\n' "$pid"
 }
 
 fm_backend_tmux_foreground_argv0s() {  # <target> [tty]

@@ -60,9 +60,9 @@
 #   FM_SECONDMATE_PERSIST_WAIT  seconds to wait for one mate's persist answer (900)
 #   FM_SECONDMATE_PERSIST_POLL  seconds between checks of that answer (5)
 #
-# Exit status: 0 every named mate restarted; 3 at least one was nudged or left
-# unreached and every mate was still accounted for; 1 the input itself is
-# unusable; 2 invalid use.
+# Exit status: 0 every named mate restarted; 3 at least one was nudged,
+# refused, or left unreached and every mate was still accounted for; 1 the
+# input itself is unusable; 2 invalid use.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -130,7 +130,13 @@ RESTART_RESULT=()
 
 restarted_count=0
 nudged_count=0
+refused_count=0
 unreached_count=0
+
+# One nonce per restart pass, so each fallback re-read nudge derives a distinct
+# fire-and-forget delivery id. Two distinct update passes must not dedupe the
+# second nudge onto the first, which the mate may already have acknowledged.
+NUDGE_RUN_NONCE="${BASHPID:-$$}.$(date +%s).$RANDOM"
 
 # The first line of a command's output that carries anything, flattened to one
 # readable line with its "error: " prefix dropped. A refusal's own words are the
@@ -142,9 +148,14 @@ first_reported_line() {  # <text>
 # Send the ordinary re-read steer to a mate this pass will not restart, and say
 # plainly which it was. A nudge is a partial reload and is never reported as more.
 fall_back_to_nudge() {  # <id> <reason>
-  local id=$1 reason=$2 out
+  local id=$1 reason=$2 out delivery_id
+  if ! delivery_id=$(fm_secondmate_nudge_delivery_id "$id" "$NUDGE_RUN_NONCE"); then
+    unreached_count=$((unreached_count + 1))
+    printf 'unreached: %s: %s; a delivery id could not be derived\n' "$id" "$reason"
+    return
+  fi
   if out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-send.sh" "$id" "$FM_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+    "$SCRIPT_DIR/fm-send.sh" "$id" --fire-and-forget "$delivery_id" "$FM_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
     nudged_count=$((nudged_count + 1))
     printf 'nudged: %s: %s\n' "$id" "$reason"
   else
@@ -157,6 +168,11 @@ fall_back_to_nudge() {  # <id> <reason>
 report_unreached() {  # <id> <reason>
   unreached_count=$((unreached_count + 1))
   printf 'unreached: %s: %s\n' "$1" "$2"
+}
+
+report_refused() {  # <id> <reason>
+  refused_count=$((refused_count + 1))
+  printf 'refused: %s: %s\n' "$1" "$2"
 }
 
 restart_mate() {  # <array-index>
@@ -180,6 +196,12 @@ restart_mate() {  # <array-index>
     else
       printf 'restarted: %s (%s)\n' "$id" "$ran_on"
     fi
+    return
+  fi
+
+  if printf '%s\n' "$restart_out" | grep -q 'machine capacity declines'; then
+    restart_reason=$(first_reported_line "$restart_out")
+    report_refused "$id" "the relaunch was refused before the agent was stopped: $restart_reason"
     return
   fi
 
@@ -232,6 +254,7 @@ harvest_restarts() {
     case "$out" in
       restarted:*) restarted_count=$((restarted_count + 1)) ;;
       nudged:*) nudged_count=$((nudged_count + 1)) ;;
+      refused:*) refused_count=$((refused_count + 1)) ;;
       *) unreached_count=$((unreached_count + 1)) ;;
     esac
     PLAN[i]="done"
@@ -371,7 +394,7 @@ done
 
 # --- summary ---------------------------------------------------------------
 
-printf 'summary: %d of %d restarted, %d nudged, %d unreached\n' \
-  "$restarted_count" "${#IDS[@]}" "$nudged_count" "$unreached_count"
-[ "$((nudged_count + unreached_count))" -eq 0 ] || exit 3
+printf 'summary: %d of %d restarted, %d nudged, %d refused, %d unreached\n' \
+  "$restarted_count" "${#IDS[@]}" "$nudged_count" "$refused_count" "$unreached_count"
+[ "$((nudged_count + refused_count + unreached_count))" -eq 0 ] || exit 3
 exit 0

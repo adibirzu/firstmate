@@ -900,6 +900,36 @@ test_ship_and_scout_carry_graph_first_instruction() {
   pass "fm-brief.sh: ship and scout briefs carry the fail-soft graph-first instruction"
 }
 
+# The worktree-isolation assertion must name the exact assigned worktree through
+# the {WORKTREE} placeholder bin/fm-spawn.sh substitutes, and must run the check
+# that enforces it, so a worker misdirected into a firstmate home or the primary
+# checkout stops at its first command. Both ship and scout carry it.
+test_isolation_assertion_names_the_assigned_worktree() {
+  local home id brief kind count
+  home="$TMP_ROOT/isolation-assert-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-isolation-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "Your assigned worktree is {WORKTREE}." "$brief" \
+      "$kind brief did not name the assigned worktree"
+    assert_grep 'fm-worker-isolation-check.sh" {WORKTREE}`' "$brief" \
+      "$kind brief did not run the isolation check against the assigned worktree"
+    assert_grep "when your shell is not exactly that worktree or when it is a firstmate home or a primary checkout" "$brief" \
+      "$kind brief did not explain what the isolation check rejects"
+    count=$(grep -c -F '{WORKTREE}' "$brief")
+    [ "$count" = 2 ] \
+      || fail "$kind brief must carry exactly two {WORKTREE} usages, found $count"
+  done
+  pass "fm-brief.sh: ship and scout name the assigned worktree and enforce it"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -976,4 +1006,5 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
 test_instruction_inbox_contract_is_delivered_once_per_brief
 test_ship_and_scout_carry_graph_first_instruction
+test_isolation_assertion_names_the_assigned_worktree
 test_scout_and_secondmate_scaffold

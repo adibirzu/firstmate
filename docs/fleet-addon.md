@@ -11,7 +11,7 @@ Two general, reusable optional capabilities in FirstMate:
 
 The main owner surfaces are `bin/fm-fleet*.sh`, `bin/fm-account*.sh`,
 `bin/fm-accounts*.sh`, `bin/quota-*`, `scripts/fleet-root-prereq.sh`,
-`.agents/skills/{federation,multi-account}/`, and `tests/federation/*.sh`.
+`.agents/skills/{federation,router-dispatch}/`, and `tests/federation/*.sh`.
 Existing spawn, backend, bootstrap, and configuration paths carry the narrow integration points that make the feature usable from the normal FirstMate flow.
 
 ---
@@ -99,7 +99,7 @@ harness, model, or effort for dispatch, and `fm-fleet.sh pick` must never be
 wired into `fm-spawn` or any other dispatch path — that is exactly the routing
 wrapper / producer-side route recommendation the dispatch owner forbids.
 Dispatch selection from these same signals is owned by
-[`AGENTS.md`](../AGENTS.md) section 4 and the `quota-array-dispatch` skill it
+[`AGENTS.md`](../AGENTS.md) section 4 and the `router-dispatch` skill it
 names; this add-on only reads and renders what `quota-axi` reports.
 
 ### Cross-uid safety (non-negotiable)
@@ -116,6 +116,8 @@ then sets `umask 002`. Nothing else needs root.
 ---
 
 ## Part B — Per-spawn multi-account
+
+The account-launch procedure is owned by `.agents/skills/router-dispatch/SKILL.md`, which folds it into the dispatch skill.
 
 ### Three isolation methods (verified per CLI — never guessed)
 The matrix below records how each CLI isolates auth, probed from its own

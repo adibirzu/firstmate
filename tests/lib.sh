@@ -63,6 +63,12 @@ unset FM_TASK_ID
 unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
   FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME
 
+# Clear agy's own load-bearing detection marker (bin/fm-harness.sh,
+# .agents/skills/harness-adapters/references/harness/agy.md) so a value leaked
+# from the invoking shell cannot pollute a harness-detection test. Same class
+# as FM_TASK_ID above; a case that verifies agy detection sets it itself.
+unset ANTIGRAVITY_AGENT
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

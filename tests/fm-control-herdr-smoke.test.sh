@@ -189,6 +189,28 @@ awk -F= '$1 == "harness" {$0="harness=claude"} {print}' "$HOME_DIR/state/hsmoke.
   > "$HOME_DIR/state/hsmoke.meta.tmp"
 mv "$HOME_DIR/state/hsmoke.meta.tmp" "$HOME_DIR/state/hsmoke.meta"
 pass "real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint"
+# A bare shell in a continuation must be reset before a launch can rely on it.
+# An exited agent can leave its shell mid-heredoc/`quote>`, and the launch
+# command typed next would be swallowed; the reset clears it and proves the
+# shell executes commands by moving its cwd.
+RESET_DIR="$SCRATCH/shell-reset"
+mkdir -p "$RESET_DIR"
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cat <<'FMEOF'" \
+  || fail "could not type the heredoc opener into the herdr pane"
+sleep 1
+STATE=$(fm_backend_agent_state herdr "$SESSION:$PANE_ID")
+[ "$STATE" = dead ] || fail "a bare herdr shell in a continuation should classify dead, got '$STATE'"
+if ! fm_backend_reset_shell herdr "$SESSION:$PANE_ID" "$RESET_DIR"; then
+  fail "the herdr shell reset did not clear the pane's continuation"
+fi
+RESET_EXPECTED=$(cd "$RESET_DIR" && pwd -P)
+RESET_OBSERVED=$(fm_backend_herdr_current_path "$SESSION:$PANE_ID" 2>/dev/null || true)
+[ -n "$RESET_OBSERVED" ] \
+  && RESET_OBSERVED=$(cd "$RESET_OBSERVED" 2>/dev/null && pwd -P) \
+  || RESET_OBSERVED=
+[ "$RESET_OBSERVED" = "$RESET_EXPECTED" ] \
+  || fail "the herdr shell reset did not move the pane cwd to '$RESET_EXPECTED' (got '$RESET_OBSERVED')"
+pass "real herdr: the shell reset clears an inherited continuation and proves the cwd"
 
 if OUT=$(run_control hsmoke interrupt 2>&1); then
   fail "interrupt should refuse when herdr reports no agent on the pane: $OUT"
