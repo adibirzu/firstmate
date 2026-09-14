@@ -268,6 +268,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -3778,6 +3780,15 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
+# A completed ship or scout is a task boundary: queue a compact for this home's
+# own long-lived agent, which the watcher delivers at the next idle moment. A
+# secondmate retirement is not an ordinary boundary and is skipped. The marker
+# is durable, so a boundary reached while the agent is busy is not lost.
+if [ "$KIND" != secondmate ] && [ -d "$STATE" ] \
+  && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
 fi
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window $T, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"
