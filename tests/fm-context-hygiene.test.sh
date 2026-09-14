@@ -110,6 +110,10 @@ test_off_switch_and_seconds() {
   [ "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds 900)" = 45 ] || fail "a valid idle seconds value was ignored"
   printf '0\n' > "$CONFIG/context-hygiene-idle-seconds"
   [ "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds 900)" = 900 ] || fail "a zero idle window must fall back to the default"
+  printf '00\n' > "$CONFIG/context-hygiene-idle-seconds"
+  [ "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds 900)" = 900 ] || fail "a leading-zero zero must fall back to the default"
+  printf '08\n' > "$CONFIG/context-hygiene-idle-seconds"
+  [ "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds 900)" = 900 ] || fail "an octal-looking value must fall back to the default"
   printf 'soon\n' > "$CONFIG/context-hygiene-idle-seconds"
   [ "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds 900)" = 900 ] || fail "a malformed idle value must fall back to the default"
   pass "config/context-hygiene is off only for the literal off and malformed seconds fall back"
@@ -213,6 +217,13 @@ test_tick_compact_at_boundary() {
   [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a refused compact must keep the durable marker"
   COMPOSER_STATE=empty
 
+  # A composer that is not affirmatively empty (unknown/unreadable) is refused.
+  COMPOSER_STATE=unknown
+  context_hygiene_tick
+  [ -s "$SENT" ] && fail "an unproven composer must not be typed into"
+  [ -f "$STATE_DIR/.context-compact-pending" ] || fail "an unproven-composer refusal must keep the marker"
+  COMPOSER_STATE=empty
+
   # A busy pane also defers.
   BUSY_STATE=busy
   context_hygiene_tick
@@ -227,6 +238,20 @@ test_tick_compact_at_boundary() {
   context_hygiene_tick
   [ -s "$SENT" ] && fail "codex must not be sent a guessed compact command"
   [ ! -e "$STATE_DIR/.context-compact-pending" ] || fail "an unsupported harness must drop the compact marker"
+
+  # An unproven harness must not pin a marker forever and starve idle clear.
+  : > "$SENT"
+  export FM_CONTEXT_HYGIENE_HARNESS=unknown
+  _context_hygiene_harness=""
+  fm_context_hygiene_mark_compact "$STATE_DIR" "Focus again"
+  context_hygiene_tick
+  [ ! -e "$STATE_DIR/.context-compact-pending" ] || fail "an unproven harness pinned the compact marker"
+  export FM_CONTEXT_HYGIENE_HARNESS=claude
+  _context_hygiene_harness=""
+  printf '%s\n' "$(( $(date +%s) - 901 ))" > "$STATE_DIR/.context-hygiene-idle-since"
+  context_hygiene_tick
+  [ "$(cat "$SENT" 2>/dev/null)" = "/clear" ] \
+    || fail "a dropped marker must not starve the idle clear (sent: $(cat "$SENT" 2>/dev/null))"
   pass "the watcher delivers compact at a boundary only into an idle pane, and keeps a refused marker"
 }
 
@@ -253,6 +278,20 @@ test_tick_clear_on_idle() {
   [ -s "$SENT" ] && fail "config/context-hygiene=off must disable delivery"
   [ -f "$STATE_DIR/.context-compact-pending" ] || fail "the off switch must not consume the marker"
   pass "the watcher clears an idle home and config/context-hygiene=off disables delivery"
+}
+
+test_afk_pauses_delivery() {
+  reset_case
+  export FM_CONTEXT_HYGIENE_HARNESS=claude
+  _context_hygiene_harness=""
+  : > "$STATE_DIR/.afk"
+  fm_context_hygiene_mark_compact "$STATE_DIR" "Focus while away"
+  printf '%s\n' "$(( $(date +%s) - 901 ))" > "$STATE_DIR/.context-hygiene-idle-since"
+  context_hygiene_tick
+  [ -s "$SENT" ] && fail "away mode's daemon owns the pane, so delivery must pause: $(cat "$SENT")"
+  [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a paused away-mode compact must keep its marker"
+  rm -f "$STATE_DIR/.afk"
+  pass "context-hygiene delivery pauses while away mode owns the home's pane"
 }
 
 # --- adaptive heartbeat ------------------------------------------------------
@@ -351,6 +390,7 @@ test_marker_focus_and_in_flight
 test_idle_ready_window
 test_tick_compact_at_boundary
 test_tick_clear_on_idle
+test_afk_pauses_delivery
 test_heartbeat_interval
 test_coalesce_signal_rows
 test_secondmate_healthy_idle

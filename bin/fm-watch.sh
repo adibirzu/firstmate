@@ -805,7 +805,8 @@ EOF
     # pane falls through to the escalation below.
     mate_window=$(fm_backend_target_of_meta "$meta")
     if secondmate_healthy_idle "$task" "$meta"; then
-      [ "$episode_alerted" -eq 0 ] || rm -f "$marker" || return 1
+      # No active episode (the guard above already continued when one was
+      # alerted), so there is nothing to clear: just decline this escalation.
       continue
     fi
     ! secondmate_in_active_turn "$task" "$mate_window" || continue
@@ -1698,6 +1699,11 @@ context_hygiene_harness() {
 # Type <command> into this home's own supervising pane, but only when the pane
 # exists and is affirmatively idle at an empty composer. 0 only on a confirmed
 # submit, so the caller keeps the compact marker pending on any refusal.
+# The composer proof is the load-bearing guard: fm_backend_composer_state only
+# returns `empty` for a positively identified empty composer (never for a bare
+# dead shell or an unreadable pane), so an `unknown` busy verdict alongside a
+# proven-empty composer is still safe to type into - the same boundary the
+# away-mode daemon's inject_msg applies.
 context_hygiene_inject() {  # <command>
   local command=$1 target backend composer verdict
   target=$(discover_supervisor_target) || return 1
@@ -1718,21 +1724,26 @@ context_hygiene_tick() {
   afk_present && return 0
 
   marker=$(fm_context_hygiene_marker_path "$STATE")
+  command=
   if [ -f "$marker" ] && [ ! -L "$marker" ]; then
     harness=$(context_hygiene_harness)
-    case "$harness" in ''|unknown) return 0 ;; esac
-    command=$(fm_context_hygiene_compact_command "$harness" "$(cat "$marker" 2>/dev/null || true)")
-    if [ -z "$command" ]; then
-      # This harness has no verified compact command; drop the marker rather
-      # than retry it forever.
-      fm_context_hygiene_clear_marker "$STATE"
+    if [ -n "$harness" ] && [ "$harness" != unknown ]; then
+      command=$(fm_context_hygiene_compact_command "$harness" "$(cat "$marker" 2>/dev/null || true)")
+      if [ -n "$command" ] && context_hygiene_inject "$command"; then
+        fm_context_hygiene_clear_marker "$STATE"
+        triage_log "context hygiene: sent compact after a task boundary"
+        return 0
+      fi
+    fi
+    # The compact did not go out this cycle. Keep the durable marker only while
+    # a verified compact command actually exists (the pane was busy or its state
+    # unreadable, so retry); a harness with no verified compact command (or an
+    # unproven one) drops it so a pending marker can never pin the marker
+    # forever and starve the idle-clear path below.
+    if [ -n "$command" ]; then
       return 0
     fi
-    if context_hygiene_inject "$command"; then
-      fm_context_hygiene_clear_marker "$STATE"
-      triage_log "context hygiene: sent compact after a task boundary"
-    fi
-    return 0
+    fm_context_hygiene_clear_marker "$STATE"
   fi
 
   # Clear is the only remaining path, and only an idle home is a candidate. Test

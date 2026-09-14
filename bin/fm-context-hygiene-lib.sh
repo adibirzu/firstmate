@@ -69,13 +69,14 @@ fm_context_hygiene_disabled() {
 
 # fm_context_hygiene_seconds <config-dir> <file> <default>
 # Print a positive base-10 integer from the named config file, or the default
-# when the file is absent, empty, or malformed. A malformed value never becomes
-# a zero-second timer that would fire every poll.
+# when the file is absent, empty, or malformed. Leading-zero forms (00, 08) are
+# rejected too: an 08 would later trip an octal arithmetic error, and 00 is not a
+# usable timer. A malformed value never becomes a zero-second timer.
 fm_context_hygiene_seconds() {
   local dir=$1 name=$2 default=$3 value
   value=$(fm_context_hygiene_setting "$dir" "$name")
   case "$value" in
-    ''|*[!0-9]*|0) printf '%s\n' "$default" ;;
+    ''|*[!0-9]*|0*) printf '%s\n' "$default" ;;
     *) printf '%s\n' "$value" ;;
   esac
 }
