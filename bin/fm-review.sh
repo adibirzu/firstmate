@@ -34,11 +34,27 @@
 #     "riskPatterns": ["auth/**"],    // glob patterns (matched with bash extglob) that force Stage 2
 #     "stage2Mode": "delegate",       // "delegate" (no LLM) or "litellm" (real LLM call)
 #     "stage2Provider": "litellm",    // passed to `ocr review --provider`  (litellm mode only)
-#     "stage2Model": "auto-code"      // passed to `ocr review --model`     (litellm mode only)
+#     "stage2Model": "auto-code",     // passed to `ocr review --model`     (litellm mode only)
+#     "stage2Difficulty": "medium",   // REVIEW lane difficulty when resolving reviewer order
+#     "stage2Reviewers": [            // ordered second-level reviewers; default mirrors the REVIEW lane
+#       {"harness": "grok"},
+#       {"harness": "agy", "model": "gemini-3.8-flash"},
+#       {"harness": "cursor", "model": "auto"}
+#     ],
+#     "stage2EscalateTo": "claude"    // named target reached only on the reviewer's own "needs more" verdict
 #   }
 #
+# The second-level reviewer order is the REVIEW lane owned by llm-router-axi
+# (the mechanical owner behind the router-dispatch skill and the resolver over
+# config/crew-dispatch.json). An explicit config/code-review stage2Reviewers
+# array overrides it; otherwise this wrapper reads the lane's ordered candidate
+# group from `llm-router-axi policy show --json`; otherwise the built-in default
+# below mirrors that same REVIEW lane so an offline run still resolves the order
+# without inventing a second policy.
+#
 # Env overrides (take precedence over config/code-review, for quick local testing):
-#   FM_REVIEW_SIZE_THRESHOLD, FM_REVIEW_STAGE1_ONLY, FM_REVIEW_STAGE2_MODE
+#   FM_REVIEW_SIZE_THRESHOLD, FM_REVIEW_STAGE1_ONLY, FM_REVIEW_STAGE2_MODE,
+#   FM_REVIEW_STAGE2_DIFFICULTY
 #
 # Exit codes:
 #   0  Stage 1 clean, no escalation
@@ -50,6 +66,10 @@
 # Requires: ocr, jq. `gh` (via gh-axi) only for `pr` mode.
 
 set -euo pipefail
+
+# Where this wrapper's own sibling helpers live (bin/fm-router-lib.sh), separate
+# from --dir, which names the repo being reviewed.
+REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -159,6 +179,75 @@ if [[ -z "$FROM" ]]; then
   FROM="$(git -C "$DIR" merge-base HEAD origin/main 2>/dev/null || git -C "$DIR" merge-base HEAD main 2>/dev/null || echo main)"
 fi
 
+# --- Stage 2 reviewer order (REVIEW lane): constants and resolver ---
+#
+# Built-in default mirrors the REVIEW lane (grok -> agy gemini-3.8-flash ->
+# cursor auto) so an offline run without llm-router-axi still resolves the same
+# order; when the router is present its lane is authoritative.
+DEFAULT_STAGE2_DIFFICULTY="medium"
+DEFAULT_STAGE2_ESCALATE_TO="claude"
+DEFAULT_STAGE2_REVIEWERS='[{"harness":"grok","provider":"grok"},{"harness":"agy","model":"gemini-3.8-flash","provider":"agy"},{"harness":"cursor","model":"auto","provider":"cursor"}]'
+STAGE2_REVIEWERS_SOURCE=""
+
+# resolve_stage2_reviewers: print "<source>\t<reviewer-json-array>".
+# Precedence: explicit config/code-review override, then the llm-router-axi
+# review lane (the mechanical owner behind router-dispatch), then the built-in
+# default mirror. The source travels back with the JSON because a command
+# substitution runs this in a subshell, so a global assignment here would not
+# survive to the caller.
+resolve_stage2_reviewers() {
+  local lib="$REVIEW_SCRIPT_DIR/fm-router-lib.sh" router="" policy="" group="" candidates=""
+  if [[ -n "$STAGE2_REVIEWERS_JSON" ]]; then
+    printf 'config/code-review\t%s\n' "$STAGE2_REVIEWERS_JSON"
+    return 0
+  fi
+  if [[ -f "$lib" ]]; then
+    # shellcheck source=bin/fm-router-lib.sh
+    . "$lib"
+    router="$(fm_router_axi_bin)"
+    if [[ -n "$router" ]]; then
+      policy="$("$router" policy show --json 2>/dev/null)" || policy=""
+    fi
+    if [[ -n "$policy" ]]; then
+      group="$(printf '%s' "$policy" | jq -r --arg d "$STAGE2_DIFFICULTY" '.kinds.review[$d].candidates[0] // empty' 2>/dev/null)" || group=""
+      if [[ -n "$group" ]]; then
+        candidates="$(printf '%s' "$policy" | jq -c --arg g "$group" '.candidateGroups[$g] // empty' 2>/dev/null)" || candidates=""
+        if [[ -n "$candidates" && "$candidates" != "null" ]]; then
+          printf 'llm-router-axi policy (%s)\t%s\n' "$group" "$candidates"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  printf 'built-in default (REVIEW lane mirror)\t%s\n' "$DEFAULT_STAGE2_REVIEWERS"
+}
+
+# stage2_default_model <harness>: the model token the REVIEW lane uses when the
+# lane names none (harness-default), so the printed order stays recognizable.
+stage2_default_model() {
+  case "$1" in
+    agy) printf 'gemini-3.8-flash' ;;
+    cursor) printf 'auto' ;;
+    *) printf '' ;;
+  esac
+}
+
+# format_stage2_reviewers <json-array>: one "harness (model)" line per reviewer.
+format_stage2_reviewers() {
+  local harness model
+  while IFS=$'\t' read -r harness model; do
+    [[ -n "$harness" ]] || continue
+    if [[ -z "$model" || "$model" == "null" || "$model" == "harness-default" ]]; then
+      model="$(stage2_default_model "$harness")"
+    fi
+    if [[ -n "$model" ]]; then
+      printf '%s (%s)\n' "$harness" "$model"
+    else
+      printf '%s\n' "$harness"
+    fi
+  done < <(printf '%s' "$1" | jq -r '.[] | "\(.harness)\t\(.model // "")"' 2>/dev/null || true)
+}
+
 # --- Load config/code-review (repo-root JSON, all keys optional) ---
 
 CONFIG_FILE="$DIR/config/code-review"
@@ -166,6 +255,9 @@ SIZE_THRESHOLD="${FM_REVIEW_SIZE_THRESHOLD:-}"
 STAGE2_MODE="${FM_REVIEW_STAGE2_MODE:-}"
 STAGE2_PROVIDER=""
 STAGE2_MODEL=""
+STAGE2_DIFFICULTY="${FM_REVIEW_STAGE2_DIFFICULTY:-}"
+STAGE2_REVIEWERS_JSON=""
+STAGE2_ESCALATE_TO=""
 RISK_PATTERNS=()
 
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -173,6 +265,16 @@ if [[ -f "$CONFIG_FILE" ]]; then
   [[ -n "$STAGE2_MODE" ]] || STAGE2_MODE="$(jq -r '.stage2Mode // empty' "$CONFIG_FILE")"
   STAGE2_PROVIDER="$(jq -r '.stage2Provider // empty' "$CONFIG_FILE")"
   STAGE2_MODEL="$(jq -r '.stage2Model // empty' "$CONFIG_FILE")"
+  [[ -n "$STAGE2_DIFFICULTY" ]] || STAGE2_DIFFICULTY="$(jq -r '.stage2Difficulty // empty' "$CONFIG_FILE")"
+  STAGE2_ESCALATE_TO="$(jq -r '.stage2EscalateTo // empty' "$CONFIG_FILE")"
+  # Accept either an array of "harness" / "harness:model" strings or objects.
+  STAGE2_REVIEWERS_JSON="$(jq -c '
+    (.stage2Reviewers // empty)
+    | if type == "array" then
+        [ .[] | if type == "string"
+                then (split(":") | {harness: .[0], model: (.[1] // "")})
+                else . end ]
+      else empty end' "$CONFIG_FILE")"
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] && RISK_PATTERNS+=("$pattern")
   done < <(jq -r '.riskPatterns[]? // empty' "$CONFIG_FILE")
@@ -180,6 +282,8 @@ fi
 
 SIZE_THRESHOLD="${SIZE_THRESHOLD:-1000}"
 STAGE2_MODE="${STAGE2_MODE:-delegate}"
+STAGE2_DIFFICULTY="${STAGE2_DIFFICULTY:-$DEFAULT_STAGE2_DIFFICULTY}"
+STAGE2_ESCALATE_TO="${STAGE2_ESCALATE_TO:-$DEFAULT_STAGE2_ESCALATE_TO}"
 
 # --- Stage 1: deterministic review (zero LLM tokens) ---
 
@@ -292,6 +396,16 @@ if [[ "$escalate" == "true" ]]; then
   fi
 fi
 
+# Reviewer order is only resolved when a host-agent review is owed (delegate
+# mode); the litellm path already names its own provider/model.
+stage2_reviewers_json="[]"
+if [[ "$stage2_ran" == "true" && "$stage2_mode_used" != "litellm" ]]; then
+  resolved="$(resolve_stage2_reviewers)"
+  STAGE2_REVIEWERS_SOURCE="${resolved%%$'\t'*}"
+  stage2_reviewers_json="${resolved#*$'\t'}"
+  [[ -n "$stage2_reviewers_json" ]] || stage2_reviewers_json="[]"
+fi
+
 # --- Render verdict ---
 
 if [[ "$FORMAT" == "json" ]]; then
@@ -305,6 +419,9 @@ if [[ "$FORMAT" == "json" ]]; then
     --arg stage2_ran "$stage2_ran" \
     --arg stage2_mode "$stage2_mode_used" \
     --arg stage2_output "$stage2_output" \
+    --argjson stage2_reviewers "$stage2_reviewers_json" \
+    --arg stage2_reviewers_source "${STAGE2_REVIEWERS_SOURCE:-}" \
+    --arg stage2_escalate_to "${STAGE2_ESCALATE_TO:-}" \
     --arg stage2_failed "$( [[ $stage2_exit -ne 0 ]] && echo true || echo false )" \
     '{
       stage1: {
@@ -318,7 +435,10 @@ if [[ "$FORMAT" == "json" ]]; then
         ran: ($stage2_ran == "true"),
         mode: $stage2_mode,
         failed: ($stage2_failed == "true"),
-        output: $stage2_output
+        output: $stage2_output,
+        reviewers: $stage2_reviewers,
+        reviewers_source: $stage2_reviewers_source,
+        escalate_to: $stage2_escalate_to
       }
     }')"
 else
@@ -350,6 +470,13 @@ Mode: \`$stage2_mode_used\`
       result+="No LLM call made. The host agent must review the selected files against the rules below before this PR is ready.
 
 $(echo "$stage2_output" | jq -r '.groups[]? | "### " + (.files | join(", ")) + "\n\n" + .rule' 2>/dev/null || echo "$stage2_output")"
+      result+="
+
+**Second-level reviewers** (order resolved from ${STAGE2_REVIEWERS_SOURCE:-the configured order})
+
+$(format_stage2_reviewers "$stage2_reviewers_json" | sed 's/^/- /')
+
+Escalate to \`${STAGE2_ESCALATE_TO:-claude}\` only when the reviewer's own verdict states it needs more."
     fi
   else
     result+="
