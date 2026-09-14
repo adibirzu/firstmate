@@ -887,6 +887,50 @@ test_create_task_refuses_when_preexisting_husk_tab_remains() {
   pass "fm_backend_herdr_create_task: refuses success when a preexisting husk tab remains after replacement"
 }
 
+test_create_task_alias_replaces_legacy_label_husk() {
+  local dir log resp fb out tab pane
+  dir="$TMP_ROOT/husk-alias"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # A task tab created before the display-name change carries the legacy
+  # `fm-<id>` label; the respawn passes that label as the 5th (alias) argument
+  # so the stale husk is replaced rather than duplicated beside.
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task1","workspace_id":"w1"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/2.out"
+  printf '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}\n' > "$resp/3.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/4.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-mini-firstmate-task1","workspace_id":"w1"}]}}\n' > "$resp/6.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mini-firstmate-task1 /tmp/proj "" fm-task1' "$ROOT" ) \
+    || fail "create_task should replace a legacy fm-<id> husk when given the alias label"
+  read -r tab pane <<EOF
+$out
+EOF
+  if [ "$tab" != "w1:t3" ] || [ "$pane" != "w1:p3" ]; then
+    fail "create_task should echo the NEW tab/pane ids, got '$out'"
+  fi
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''fm-mini-firstmate-task1' \
+    "create_task must create the tab under the NEW display label"
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''close'$'\x1f''w1:t2' "create_task did not close the legacy fm-<id> husk"
+  pass "fm_backend_herdr_create_task: replaces a legacy fm-<id> husk while creating the tab under the new display label"
+}
+
+test_create_task_alias_live_tab_refuses() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/husk-alias-live"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task2","workspace_id":"w1"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/2.out"
+  printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/3.out"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mini-firstmate-task2 /tmp/proj "" fm-task2' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task must refuse when a legacy-labelled tab still hosts a live agent"
+  assert_contains "$out" "already exists" "create_task did not report the live legacy label"
+  assert_not_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create' "create_task must not create a duplicate beside a live legacy tab"
+  pass "fm_backend_herdr_create_task: a live legacy fm-<id> tab still refuses exactly as a live same-label tab does"
+}
+
 test_create_task_refuses_when_agent_state_ambiguous() {
   # An unexpected error code from agent get (neither agent_not_found nor a
   # successful read) must not be misread as a husk - fail-safe toward
@@ -1410,6 +1454,32 @@ test_projection_journal_v2_binds_and_advances_exact_endpoint() {
     fail "duplicate version 2 journal fields must be ambiguous"
   fi
   pass "herdr presentation journal: version 2 binds exact home/endpoint/parent identities and advances atomically"
+}
+
+test_projection_journal_v2_accepts_display_name_task_label() {
+  local dir state home out token
+  dir="$TMP_ROOT/projection-journal-name"; state="$dir/state"; home="$dir/home"
+  mkdir -p "$state" "$home"
+  out=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
+    token=$(fm_backend_herdr_projection_journal_create "$1" fm-nm-r1) || exit 1
+    journal="$1/fm-nm-r1.herdr-presentation"
+    home=$(fm_backend_herdr_projection_home_identity "$2") || exit 1
+    label=$(fm_backend_herdr_projection_workspace_label fm-nm-r1 "$token")
+    fm_backend_herdr_projection_journal_bind \
+      "$journal" fm-nm-r1 "$home" lab-session w2 w2:t2 w2:p2 w1 firstmate "$label" fm-mini-firstmate-nm-r1 || exit 1
+    fm_backend_herdr_projection_journal_snapshot "$journal" fm-nm-r1 || exit 1
+    printf "%s\n" "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL"
+  ' "$ROOT" "$state" "$home") || fail "a v2 journal carrying the new display-name task label must validate"
+  [ "$out" = "fm-mini-firstmate-nm-r1" ] || fail "journal task label round-trip mismatch: $out"
+  # A foreign task label (not this id's legacy or display form) is still rejected.
+  token=$(sed -n 's/^projection_id=//p' "$state/fm-nm-r1.herdr-presentation")
+  { grep -v '^task_label=' "$state/fm-nm-r1.herdr-presentation"; printf 'task_label=fm-some-other-task\n'; } > "$state/foreign.herdr-presentation"
+  if bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_journal_snapshot "$1" fm-nm-r1' \
+    "$ROOT" "$state/foreign.herdr-presentation"; then
+    fail "a foreign task label must be rejected"
+  fi
+  pass "herdr presentation journal: accepts the display-name task label and rejects a foreign one"
 }
 
 test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane() {
@@ -5094,6 +5164,8 @@ test_create_task_closes_and_replaces_no_agent_husk
 test_create_task_closes_all_duplicate_husks_after_replacement
 test_create_task_refuses_when_preexisting_husk_tab_remains
 test_create_task_refuses_when_agent_state_ambiguous
+test_create_task_alias_replaces_legacy_label_husk
+test_create_task_alias_live_tab_refuses
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
@@ -5111,6 +5183,7 @@ test_release_floor_verdict_survives_losing_either_signal
 test_presentation_preference_reports_three_distinct_states
 test_projection_journal_is_atomic_and_uses_128_bit_token
 test_projection_journal_v2_binds_and_advances_exact_endpoint
+test_projection_journal_v2_accepts_display_name_task_label
 test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane
 test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_focus_snapshot_requires_exact_workspace_and_tab

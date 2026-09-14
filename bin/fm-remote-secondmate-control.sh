@@ -2,7 +2,7 @@
 # Host-local lifecycle control for the remote secondmate home selected by fm-on.
 #
 # Usage:
-#   fm-remote-secondmate-control.sh launch <id> <harness> <model|-> <effort|-> herdr [traceparent]
+#   fm-remote-secondmate-control.sh launch <id> <harness> <model|-> <effort|-> herdr [traceparent] [--herdr-host <token>]
 #   fm-remote-secondmate-control.sh relaunch <id> <harness> <model|default|-> <effort|default|->
 #   fm-remote-secondmate-control.sh state <id>
 #   fm-remote-secondmate-control.sh route <id>
@@ -152,7 +152,35 @@ cmd_route() {
 }
 
 cmd_launch() {
-  local id=$1 harness=$2 model=$3 effort=$4 selected_backend=$5 traceparent=${6:-}
+  local id harness model effort selected_backend traceparent herdr_host=
+  local -a rest=()
+  # An optional --herdr-host <token> (or --herdr-host=<token>) lets the parent
+  # hand this host the registry host token for the secondmate's Herdr task tab
+  # display name (fm-<host>-<project>-<task-id>, bin/fm-herdr-name-lib.sh).
+  # Without it the remote spawn falls back to this host's own short hostname.
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --herdr-host)
+        [ "$#" -ge 2 ] || die "--herdr-host requires a value"
+        herdr_host=$2
+        shift 2
+        ;;
+      --herdr-host=*)
+        herdr_host=${1#--herdr-host=}
+        shift
+        ;;
+      *)
+        rest+=("$1")
+        shift
+        ;;
+    esac
+  done
+  id=${rest[0]:-}
+  harness=${rest[1]:-}
+  model=${rest[2]:-}
+  effort=${rest[3]:-}
+  selected_backend=${rest[4]:-}
+  traceparent=${rest[5]:-}
   local current meta out herdr_session
 
   validate_id "$id"
@@ -195,7 +223,7 @@ cmd_launch() {
   if ! out=$(HERDR_SESSION="$REMOTE_HERDR_SESSION" FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
     FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_SKIP_SECONDMATE_INHERIT=1 \
-    FM_SKIP_SECONDMATE_SYNC=1 \
+    FM_SKIP_SECONDMATE_SYNC=1 FM_HERDR_HOST="$herdr_host" \
     "$SCRIPT_DIR/fm-spawn.sh" "${ARGS[@]}" 2>&1); then
     [ -z "$out" ] || printf '%s\n' "$out" >&2
     die "remote host-local secondmate launch failed"
@@ -414,7 +442,7 @@ cmd_retire() {
 }
 
 case "${1:-}" in
-  launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage; cmd_launch "$@" ;;
+  launch) shift; [ "$#" -ge 5 ] || usage; cmd_launch "$@" ;;
   relaunch) shift; [ "$#" -eq 4 ] || usage; cmd_relaunch "$@" ;;
   state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; validate_home "$1"; state_value "$1" ;;
   route) shift; [ "$#" -eq 1 ] || usage; cmd_route "$1" ;;

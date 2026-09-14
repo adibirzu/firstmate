@@ -69,6 +69,23 @@ Existing task operations use recorded endpoint ids and do not move a live task w
 The per-home workspace is reused while it has task tabs.
 Closing its last tab can remove the workspace, and the next spawn recreates it.
 
+## Session naming
+
+Each new task tab Firstmate creates is labelled with the captain-visible display name `fm-<host>-<project>-<task-id>`, composed by `bin/fm-herdr-name-lib.sh` so the fleet is readable on any connected machine.
+`<host>` is a short machine token, `<project>` is the registered project name (`firstmate` for a firstmate-repo task, the secondmate id for a secondmate agent), and `<task-id>` is the task id with one leading `fm-` stripped.
+An adjacent duplicate segment collapses, so a secondmate agent (whose project equals its own id) renders `fm-<host>-<id>` rather than repeating itself.
+The host token resolves from `FM_HERDR_HOST`, then local gitignored `config/herdr-session-host`, then the machine's short hostname.
+`config/herdr-session-host` is local and deliberately not inherited by secondmate homes, because which machine a home runs on is a property of that machine; the remote-secondmate launch path passes the route's registry host token explicitly, so a remote secondmate's tab names its real host.
+An unsupported or missing host source degrades to the machine hostname, never to a failed spawn: a purely cosmetic name never blocks work.
+
+The name is additive display only.
+Identity, endpoint resolution, supervision, teardown, and recovery keep using the recorded `state/<id>.meta` endpoint, so `bin/fm-fleet-view.sh` and `bin/fm-crew-state.sh` are unchanged.
+Only a freshly created tab takes the new name: an adopted endpoint keeps the label it was created with, a legacy `fm-<id>` tab is still matched and used as the husk-replacement alias, and an existing presentation journal reuses the label recorded in it, so no live session is renamed or restarted.
+
+Herdr 0.8.2, the installed client, has no `herdr machine` command; full cross-machine listing and shared navigation arrive in Herdr 0.9.0, and upgrading every host is a separate fleet-wide decision rather than something this naming feature bundles.
+Until then, inspect another machine directly: `herdr --remote <ssh-host> workspace list` lists that host's sessions and workspaces, `herdr --remote <ssh-host> session list` lists its named sessions, and `herdr --remote <ssh-host>` attaches to it.
+Running `herdr` after SSH'ing into the host behaves the same way, and a task's own machine is always readable from its display name's `<host>` segment.
+
 ## Presentation spaces
 
 Each new crewmate or scout is placed in a disposable one-task workspace by default, on Herdr 0.8.0 and newer.
@@ -373,6 +390,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 ## Regression entry points
 
 ```sh
+tests/fm-herdr-name-lib.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh

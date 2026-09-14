@@ -734,6 +734,10 @@ assert_grep 'remote_target=fm-remote:' "$PARENT/state/ios.meta" "parent metadata
 assert_grep 'herdr_session=fm-remote' "$REMOTE_HOME/state/parent-route/ios.meta" "remote metadata did not record the pinned Herdr session"
 assert_grep '--session fm-remote' "$HERDR_LOG" "remote launch did not target the fm-remote session"
 assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the interactive default session"
+# The registry host token reaches the remote launch, so the secondmate's own
+# tab carries the captain-visible display name fm-<host>-<project>-<task-id>
+# (project == task id for a secondmate agent, so the duplicate segment collapses).
+assert_grep '--label fm-remote-mac-ios' "$HERDR_LOG" "remote launch did not apply the host-qualified display name to the task tab"
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"
