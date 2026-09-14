@@ -810,6 +810,11 @@ test_local_only_merged_to_local_main_allows() {
 
   expect_code 0 "$rc" "merged-main: teardown should succeed when work is merged into local main"
   ! grep -q REFUSED "$case_dir/stderr" || fail "merged-main: teardown printed a REFUSED line"
+  # A completed task is a context-hygiene boundary: the durable compact marker
+  # must be queued for the watcher to deliver at the home agent's next idle
+  # moment.
+  [ -f "$case_dir/state/.context-compact-pending" ] \
+    || fail "merged-main: teardown did not queue a context compact at the task boundary"
   pass "local-only worktree with work merged into local main is torn down (no regression)"
 }
 
