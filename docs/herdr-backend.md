@@ -413,6 +413,23 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Only tmux and Herdr can host the away-mode supervisor terminal.
 - No launch command is persisted from 0.8.0, so a restored worker's flags cannot be replayed and are only detected as drift.
 
+## Fleet live view
+
+`bin/fm-fleet-live.sh` surfaces the human fleet view as a live Herdr tab in a named session.
+It ensures one dedicated workspace and tab labeled `<prefix>-fleet-view` (the prefix from [Session naming](#session-naming)) and runs `bin/fm-fleet-view.sh` in that tab's pane, so the local home and every local or remote secondmate home plus their child agents are readable in the current session.
+The view itself is a pure renderer over `fm-fleet-snapshot.sh --json` and the `fm-secondmate-home-summary.v1` contract; it never computes a summary and never invents a second state source.
+Missing data renders `-` (not carried) or `unknown` (not known), never a blank cell, and branch and production are never inferred from a branch.
+
+Verbs are `open`, `refresh`, `close`, and `status`.
+`open` is idempotent: it refreshes a live recorded tab in place, replaces a stale record or a pane-less husk, and prunes only the exact seeded tab returned by its own `workspace create`.
+`close` closes only the exact recorded tab and clears the record; it never closes a workspace or touches a label it did not record.
+Session targeting is always explicit: `--session`, then `FM_FLEET_VIEW_SESSION`, then local gitignored `config/fleet-view-session`, then the real `default` session.
+The surface never calls a server-global or session-lifecycle operation.
+
+Regeneration rides work already happening rather than a new daemon: firstmate re-runs `open` (or `refresh`) on its supervision heartbeat and after each task completion, matching the held fleet-view decision.
+There is no watcher, poll loop, or background process; `refresh` is a single explicit re-render.
+Production and convergence stay display-only, and an optional release manifest is consumed through the documented, schema-agnostic seam described in `bin/fm-fleet-view.sh`'s header.
+
 ## Regression entry points
 
 ```sh
@@ -432,6 +449,9 @@ tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
 tests/fm-afk-inject-herdr-e2e.test.sh
 tests/fm-afk-pi-herdr-return-e2e.test.sh
+tests/fm-fleet-snapshot-view.test.sh
+tests/fm-fleet-live.test.sh
+tests/fm-fleet-live-herdr-smoke.test.sh
 ```
 
 Real Herdr tests use the named lab helper and default-session tripwire.
