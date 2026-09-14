@@ -2516,7 +2516,7 @@ test_live_paused_until_controls_recheck_time() {
   future=$(iso_utc_at "$(( $(date +%s) + 7200 ))")
   printf 'paused: rate limit until %s\n' "$future" > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_marker_key "$window")
   printf 'parked, elapsed 1s' > "$capture_file"
   printf '%s' "$(hash_text 'parked, elapsed 1s')" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -3326,7 +3326,7 @@ test_busy_pane_native_progress_resets_age() {
   record_pi_busy "$state" busy-reset
   printf 'working: setup complete\n' > "$state/busy-reset.status"
   sig=$(seen_sig "$state/busy-reset.status"); printf '%s' "$sig" > "$state/.seen-busy-reset_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_marker_key "$window")
   pane_hash=$(hash_text "Working...")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -4636,7 +4636,7 @@ test_captain_held_never_rechecked_while_away_record_exists() {
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
   else touch -m -d "@$back" "$statusf"; fi
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-secondmate-hold_status"
-  key=$(printf '%s' "$window" | tr '.:/' '___')
+  key=$(watch_marker_key "$window")
   pane_hash=$(hash_text "idle awaiting the captain")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -4680,7 +4680,7 @@ test_live_captain_held_first_sight_silenced_by_away_record() {
   printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held-live.meta"
   printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-live_status"
-  key=$(printf '%s' "$window" | tr '.:/' '___')
+  key=$(watch_marker_key "$window")
   write_away_record "$state"
   # A LIVE agent at the gate: without the record pause_state_class answers none
   # and the first sight surfaces (test_exited_declared_pause_is_bounded_but_live_gate_surfaces).
@@ -4725,7 +4725,7 @@ test_afk_one_shot_never_hands_off_captain_held_under_away_record() {
   printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/held-afk.meta"
   printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-afk_status"
-  key=$(printf '%s' "$window" | tr '.:/' '___')
+  key=$(watch_marker_key "$window")
   date '+%s' > "$state/.afk"
   write_away_record "$state"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
@@ -4791,7 +4791,7 @@ paused_until_fixture() {  # <name> <until-epoch> <status-age-secs>
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
   else touch -m -d "@$back" "$statusf"; fi
   printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-until_status"
-  key=$(printf '%s' "$window" | tr '.:/' '___')
+  key=$(watch_marker_key "$window")
   printf '%s' "$(hash_text 'idle, waiting for the reset')" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
   printf '%s\n' "$dir"
