@@ -82,6 +82,36 @@ A secondmate home inherits this repo's own `config/code-review` the same way it 
 - Auto-detected linters are intentionally narrow (firstmate's own `bin/fm-lint.sh`, or a `package.json` `lint` script).
   A repo using another toolchain (`ruff`, `golangci-lint`, etc.) gets Stage 1 file-selection and sizing but no linter findings until it adds a `package.json` lint script or this detection list is extended.
 
+## Direct-PR two-stage attestation
+
+A direct-PR body passes the `Require no-mistakes` compliance check without a no-mistakes pipeline attestation when it carries a valid two-stage attestation, validated by `bin/fm-direct-pr-attestation.sh` (the `.github/workflows/no-mistakes-required.yml` check runs that validator first and only runs the no-mistakes action when it fails).
+The body must contain a `## Code Review (Stage 1)` heading followed by the pasted Stage 1 verdict from `bin/fm-review.sh`, recognizable by its `Stage 1` line, its `Deterministic Review` or `Code Review Verdict` title, and its `Files reviewable` or `Changes:` size line.
+The body must also contain a `## Independent Second-Level Review` heading (the equivalent `## Code Review (Stage 2)` heading is accepted) with a `Reviewer:` line naming the independent lane that performed the second-level review and a `Report:` line giving that review's report path or URL.
+Both fields must be non-empty, non-placeholder (`TODO`, `TBD`, `N/A`, `none`, `placeholder`, `example`, and bracketed fill-ins are rejected), and the report must look like a path or URL (it must contain `/`, `.`, or `://`).
+An empty body, a bare heading with no verdict text, or a placeholder reviewer or report fails validation.
+
+Example:
+
+```md
+## Code Review (Stage 1)
+
+# Code Review Verdict
+
+**Stage 1: Deterministic Review (zero LLM tokens)**
+
+- Files reviewable: 2 / 2
+- Changes: +50 / -5 (55 lines)
+- Linter: ran, 0 finding(s)
+- LLM tokens: 0
+
+No escalation: Stage 1 alone gates this change.
+
+## Independent Second-Level Review
+
+Reviewer: crewmate delegate review (host-agent lane)
+Report: data/<task-id>/report.md
+```
+
 ## See also
 
 - `bin/fm-review.sh` - wrapper implementation and `--help`.
