@@ -51,6 +51,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+
 # --- Argument parsing ---
 
 MODE=""
@@ -133,7 +137,17 @@ if [[ "$MODE" == "pr" ]]; then
     echo "error: 'pr' mode requires 'gh' on PATH" >&2
     exit 1
   fi
-  BASE_REF="$(gh pr view "$PR_URL" --json baseRefName -q .baseRefName 2>/dev/null)" || {
+  # Pin the read to an explicit repository: the PR URL's own GitHub slug when
+  # it is canonical, otherwise this checkout's origin remote. Relying on gh's
+  # default repository is what lets a fork checkout read the parent's PR.
+  REPO_SLUG="$(fm_pr_github_repo_slug "$PR_URL" 2>/dev/null)" \
+    || REPO_SLUG="$(fm_pr_github_repo_from_checkout "$DIR" 2>/dev/null)" \
+    || REPO_SLUG=""
+  if [[ -z "$REPO_SLUG" ]]; then
+    echo "error: could not resolve a GitHub repository for $PR_URL" >&2
+    exit 1
+  fi
+  BASE_REF="$(gh pr view "$PR_URL" --repo "$REPO_SLUG" --json baseRefName -q .baseRefName 2>/dev/null)" || {
     echo "error: could not resolve base ref for $PR_URL via gh" >&2
     exit 1
   }

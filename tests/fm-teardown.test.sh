@@ -234,6 +234,17 @@ add_fork_with_pushed_branch() {
   git -C "$case_dir/project" fetch -q fork
 }
 
+# Declare the project's origin as a GitHub repository while keeping every git
+# transport local: firstmate scopes a PR read to the declared remote.origin.url,
+# and the url.<base>.insteadOf rewrite keeps fetch and push on the fixture's
+# local bare repo, so branch-based PR discovery runs without network. Args: case_dir
+use_github_origin() {
+  local case_dir=$1
+  git -C "$case_dir/project" config "url.$case_dir/origin.git.insteadOf" \
+    "https://github.com/example/repo.git"
+  git -C "$case_dir/project" remote set-url origin "https://github.com/example/repo.git"
+}
+
 # Commit a real file change on the worktree's task branch (unlike wt_commit, which
 # makes an empty commit). A non-empty tree is what the content-in-default check
 # inspects. Args: case_dir file content [message]
@@ -910,6 +921,10 @@ test_no_pr_recorded_discovers_merged_pr_by_branch_allows() {
   local case_dir rc local_head pr_head
   case_dir=$(make_case no-pr-branch-discovery)
   write_meta "$case_dir" no-mistakes ship
+  # A real firstmate checkout carries a GitHub origin; declare one here so the
+  # branch-based PR lookup addresses the fork explicitly rather than the CLI's
+  # default repository. Transport stays local through the insteadOf rewrite.
+  use_github_origin "$case_dir"
   # Reproduces the real false-refusal report exactly, with NO pr=/pr_head=
   # recorded in meta at all (fm-pr-check.sh was never run, e.g. a yolo merge on
   # a repo with no PR CI so the "checks green" trigger that fires it never

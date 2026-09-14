@@ -419,6 +419,9 @@ $GRAPH_FIRST_SECTION
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Never let a gh or gh-axi PR command fall back to its default repository: pass
+   \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
+   so a fork checkout can never resolve a bare number against the upstream parent's PR.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -509,6 +512,9 @@ $GRAPH_FIRST_SECTION
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Never let a gh or gh-axi PR command fall back to its default repository: pass
+   \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
+   so a fork checkout can never resolve a bare number against the upstream parent's PR.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
