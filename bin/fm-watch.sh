@@ -170,15 +170,34 @@ fi
 # turn-ended signature, annotation staleness checks, and guarded bookkeeping writes.
 
 POLL=${FM_POLL:-15}                   # seconds between cycles
-# The liveness beacon is touched once per cycle, immediately before the
-# terminal wait below (event_wait_or_sleep) as well as at the top of the next
-# one, so a healthy cycle's beacon can legitimately age up to POLL seconds
-# between touches. fm_poll_derived_grace (bin/fm-wake-lib.sh, already sourced
-# transitively above) is the single owner of the max(300, poll+60)
+# The liveness beacon is touched at the top of every cycle, beaten again at the
+# stage boundaries inside a cycle (see beat_watcher_clock), and touched
+# immediately before the terminal wait below (event_wait_or_sleep) as well as at
+# the top of the next cycle, so a healthy cycle's beacon ages only as far as the
+# slowest single bounded stage between two beats, never as far as the whole
+# cycle's fleet-wide work. fm_poll_derived_grace (bin/fm-wake-lib.sh, already
+# sourced transitively above) is the single owner of the max(300, poll+60)
 # derivation - see docs/turnend-guard.md "Guard grace and the poll cadence".
 # This recomputes the library default above now that the real configured
 # POLL is known.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$POLL")}}
+case "$WATCHER_STALE_GRACE" in
+  ''|*[!0-9]*|0) WATCHER_STALE_GRACE=$(fm_poll_derived_grace "$POLL") ;;
+esac
+# Sub-cadence for the in-cycle beats: a boundary beat re-touches the beacon only
+# once it has aged this far, so a busy cycle does not churn the mtime on every
+# window while the gap between touches stays a small fraction of the stale
+# grace. Clamped to a third of the resolved grace (floor 1s) so beats always
+# land with margin; a watcher wedged inside one stage cannot beat and still
+# crosses grace, so the stale verdict keeps its meaning.
+WATCHER_BEAT_SUBCADENCE=${FM_WATCHER_BEAT_SUBCADENCE:-60}
+case "$WATCHER_BEAT_SUBCADENCE" in
+  ''|*[!0-9]*|0) WATCHER_BEAT_SUBCADENCE=60 ;;
+esac
+_beat_subcadence_cap=$(( WATCHER_STALE_GRACE / 3 ))
+[ "$_beat_subcadence_cap" -ge 1 ] || _beat_subcadence_cap=1
+[ "$WATCHER_BEAT_SUBCADENCE" -le "$_beat_subcadence_cap" ] \
+  || WATCHER_BEAT_SUBCADENCE=$_beat_subcadence_cap
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
@@ -1604,6 +1623,21 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
 
+# beat_watcher_clock: advance the liveness beacon at a stage boundary WITHIN a
+# poll cycle, gated by WATCHER_BEAT_SUBCADENCE so a busy cycle does not churn
+# the mtime on every window. Only the watcher's own loop calls this, and only
+# where a stage actually returned, so the beacon keeps meaning "this loop is
+# getting through its work" rather than "some helper is alive": a watcher wedged
+# inside one probe reaches no further boundary and still crosses the stale grace.
+# docs/turnend-guard.md "Guard grace and the poll cadence" owns the beacon
+# contract; the per-probe bounds that keep any single stage shorter than the
+# grace are owned by their call sites (bin/fm-timeout-lib.sh supplies them).
+beat_watcher_clock() {
+  [ "$(age_of "$STATE/.last-watcher-beat")" -ge "$WATCHER_BEAT_SUBCADENCE" ] \
+    && touch "$STATE/.last-watcher-beat"
+  return 0
+}
+
 if ! fm_lock_try_acquire "$WATCH_LOCK"; then
   BEAT="$STATE/.last-watcher-beat"
   if [ -n "${FM_LOCK_HELD_PID:-}" ]; then
@@ -1785,6 +1819,8 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
+  # The in-cycle beat_watcher_clock calls below keep the age between this touch
+  # and the next bounded by the slowest single stage, not by the whole cycle.
   touch "$STATE/.last-watcher-beat"
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
@@ -1802,7 +1838,12 @@ while :; do
   # parent reports, observe backend busy/idle turn completion, send one recovery
   # repost after grace, and escalate once if the recovery turn is also missed.
   # No conversation scraping; unresolved records are never silently expired.
-  fm_pending_reply_tick "$STATE" || true
+  # Remote homes are read over SSH here, each observe bounded by
+  # FM_PENDING_REPLY_OBSERVE_TIMEOUT so one hung home costs only its own probe,
+  # and the in-tick beat callback keeps many bounded probes from accumulating
+  # past the grace between two stage boundaries.
+  fm_pending_reply_tick "$STATE" beat_watcher_clock || true
+  beat_watcher_clock
 
   # A live secondmate endpoint does not prove that its own wake loop is alive.
   # Observe the foreign queue before the rest of this cycle so an aged row wakes
@@ -1811,6 +1852,7 @@ while :; do
     echo "watcher: secondmate wake-loop observation failed" >&2
     exit 1
   }
+  beat_watcher_clock
 
   # Process-to-event liveness repair. This never discovers a result by polling:
   # each registered source has its own child blocking on that source, and this
@@ -1839,6 +1881,7 @@ while :; do
   else
     triage_log "inactive-outcome reconciliation unavailable"
   fi
+  beat_watcher_clock
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
@@ -1850,6 +1893,9 @@ while :; do
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
     rejected_checks=
     for c in "$STATE"/*.check.sh; do
+      # Beat between checks: each one is already bounded by CHECK_TIMEOUT, so
+      # the sweep's beacon gap is one check, never the whole sweep.
+      beat_watcher_clock
       [ -e "$c" ] || continue
       is_pr_poll=0
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
@@ -2052,6 +2098,8 @@ EOF
   # remembers the hash already classified, or the declaration a busy pane's
   # crossed turn bound already handed to the away-mode daemon).
   while IFS= read -r w; do
+    # Beat per window so a large local fleet's captures cannot gap the beacon.
+    beat_watcher_clock
     kind=$(window_kind "$w")
     task=$(window_to_task "$w" "$STATE")
     # Steering-inbox loss detection runs before the secondmate stale
@@ -2298,5 +2346,6 @@ EOF
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
+  beat_watcher_clock
   event_wait_or_sleep
 done

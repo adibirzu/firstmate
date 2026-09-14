@@ -81,6 +81,16 @@
 #
 # Tunables (env):
 #   FM_PENDING_REPLY_GRACE_SECS   default 120
+#   FM_PENDING_REPLY_OBSERVE_TIMEOUT  per-probe bound in seconds on a remote
+#                                 secondmate's busy observation (default 10,
+#                                 valid 1..120). The remote read is an SSH round
+#                                 trip driven from the watcher's poll loop, so an
+#                                 unbounded hung remote home would otherwise
+#                                 starve the liveness beacon and every later
+#                                 home's probe in the same cycle. On timeout the
+#                                 observation degrades to `unknown`, which the
+#                                 library already treats as "no evidence", never
+#                                 as a missed report.
 #   FM_PENDING_REPLY_DIR_OVERRIDE override the pending-replies directory (tests)
 #   FM_PENDING_REPLY_SEND_HOOK    optional command template for recovery delivery
 #                                 (tests); receives task_id and full message as args
@@ -96,10 +106,13 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-tmux-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$_FM_PENDING_REPLY_LIB_DIR/fm-timeout-lib.sh"
 
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
+FM_PENDING_REPLY_OBSERVE_TIMEOUT_DEFAULT=10
 
 fm_pending_reply_now() {
   if [ -n "${FM_PENDING_REPLY_NOW:-}" ]; then
@@ -115,6 +128,18 @@ fm_pending_reply_grace_secs() {
     ''|*[!0-9]*) g=$FM_PENDING_REPLY_GRACE_DEFAULT ;;
   esac
   printf '%s' "$g"
+}
+
+# Single owner of the per-probe bound named in the tunables above: the seconds
+# allowed for one remote secondmate's busy observation before it degrades to
+# unknown. Invalid, zero, and out-of-range values fall back to the default.
+fm_pending_reply_observe_timeout() {
+  local t=${FM_PENDING_REPLY_OBSERVE_TIMEOUT:-$FM_PENDING_REPLY_OBSERVE_TIMEOUT_DEFAULT}
+  case "$t" in
+    ''|*[!0-9]*) t=$FM_PENDING_REPLY_OBSERVE_TIMEOUT_DEFAULT ;;
+  esac
+  [ "$t" -ge 1 ] && [ "$t" -le 120 ] || t=$FM_PENDING_REPLY_OBSERVE_TIMEOUT_DEFAULT
+  printf '%s' "$t"
 }
 
 # Directory holding durable pending-reply records for <state-dir>.
@@ -1410,13 +1435,21 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
 # Scan every pending record for this parent state. Safe to call every poll.
 # Never scrapes secondmate conversation; uses only parent status, backend busy
 # state, and optional secondmate-home wrong-home path checks.
-fm_pending_reply_tick() {  # <state-dir>
+# Optional beat callback: a watcher caller that owns a liveness beacon passes its
+# own beat function so a large remote fleet cannot accumulate probe time between
+# the caller's stage-boundary beats. The callback must never block: it is called
+# between records, not inside a probe.
+fm_pending_reply_tick() {  # <state-dir> [beat-callback]
   local state=$1 dir rec corr task_id phase delivered meta backend target label busy sm_home harness remote_host
   local observation observation_task found i
+  local beat_cb=${2:-}
   local -a observation_tasks=() observation_values=()
   dir=$(fm_pending_reply_dir "$state")
   [ -d "$dir" ] || return 0
   for rec in "$dir"/*; do
+    if [ -n "$beat_cb" ] && declare -F "$beat_cb" >/dev/null 2>&1; then
+      "$beat_cb"
+    fi
     [ -f "$rec" ] || continue
     case "$(basename "$rec")" in
       .*) continue ;;
@@ -1506,8 +1539,14 @@ fm_pending_reply_tick() {  # <state-dir>
         done
         if [ "$found" = 0 ]; then
           if [ -n "$remote_host" ]; then
-            observation=$("$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
-              fm-remote-secondmate-control.sh observe "$task_id" < /dev/null 2>/dev/null || printf 'unknown')
+            # One remote home's read must not starve the watcher's liveness
+            # beacon or the fleet's later probes: the observe is an SSH round
+            # trip bounded per probe, and a timeout is the no-evidence answer
+            # this loop already understands, not a missed report.
+            observation=$(fm_run_timed "$(fm_pending_reply_observe_timeout)" \
+              "$_FM_PENDING_REPLY_LIB_DIR/fm-on.sh" "$task_id" \
+              fm-remote-secondmate-control.sh observe "$task_id" \
+              < /dev/null 2>/dev/null || printf 'unknown')
             case "$observation" in busy|idle|fallback-idle|unknown) ;; *) observation=unknown ;; esac
           else
             observation=$(fm_pending_reply_backend_observation "$backend" "$target" "$label" "$harness")
