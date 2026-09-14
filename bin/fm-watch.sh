@@ -140,6 +140,15 @@ mkdir -p "$STATE"
 # Persistent watcher-marker identity, shared with the away-mode daemon.
 # shellcheck source=bin/fm-marker-lib.sh
 . "$SCRIPT_DIR/fm-marker-lib.sh"
+# Context-hygiene policy: the config knobs, the per-harness compact/clear
+# command table, the durable compact-pending marker, and the idle test. The
+# watcher owns DELIVERY into the home's own pane; this library owns the policy.
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
+# Supervisor-pane discovery, shared with the away-mode daemon: whose pane this
+# home's own agent runs in, and through which backend to reach it.
+# shellcheck source=bin/fm-supervisor-target-lib.sh
+. "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -180,16 +189,20 @@ POLL=${FM_POLL:-15}                   # seconds between cycles
 # POLL is known.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$POLL")}}
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
-HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
+# Idle-fleet backoff cap. While any task is in flight the heartbeat stays on the
+# base cadence; with an empty fleet it doubles per consecutive no-change
+# heartbeat up to this cap. config/heartbeat-idle-seconds sets it (default 3600).
+HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-$(fm_context_hygiene_seconds "$CONFIG" heartbeat-idle-seconds "$FM_HEARTBEAT_IDLE_DEFAULT")}
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 HOME_SUMMARY_INTERVAL=${FM_HOME_SUMMARY_INTERVAL:-300}
 case "$HOME_SUMMARY_INTERVAL" in
   ''|*[!0-9]*|0) HOME_SUMMARY_INTERVAL=300 ;;
 esac
-SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trailing
+SIGNAL_GRACE=${FM_SIGNAL_GRACE:-$(fm_context_hygiene_seconds "$CONFIG" wake-coalesce-seconds "$FM_WAKE_COALESCE_DEFAULT")}   # seconds to linger after a signal so trailing
                                       # signals (a status write, then the same turn's
-                                      # turn-end hook) coalesce into one wake
+                                      # turn-end hook) coalesce into one wake;
+                                      # config/wake-coalesce-seconds sets it (default 20)
 TURNEND_CHURN_ABSORB_SECS=${FM_TURNEND_CHURN_ABSORB_SECS:-900}  # longest a task's
                                       # bare turn-ends may be deferred on pane-churn
                                       # evidence alone (signal_turnend_panes_churned)
@@ -696,6 +709,35 @@ secondmate_in_active_turn() {  # <task> <window>
   window_is_busy "$w" "$tail40"
 }
 
+# 0 when a local secondmate is HEALTHY IDLE: its steering inbox has nothing
+# unhandled AND its own pane is affirmatively parked at an empty prompt. An aged
+# row in its foreign queue then cannot mean a wedged turn - the mate simply has
+# nothing to drain - so secondmate_wake_stall_tick must not escalate it. Both
+# halves must be POSITIVELY proven: the inbox must be absent or a readable real
+# directory, and the composer must read exactly empty; anything else (busy,
+# pending, unreadable) returns 1 so a genuine freeze still escalates.
+secondmate_healthy_idle() {  # <task> <meta>
+  local task=$1 meta=$2 window backend inbox tail40
+  inbox="$STATE/$task.inbox"
+  if [ -e "$inbox" ] || [ -L "$inbox" ]; then
+    [ -d "$inbox" ] && [ ! -L "$inbox" ] && [ -r "$inbox" ] || return 1
+  fi
+  fm_task_inbox_oldest_unhandled "$STATE" "$task" >/dev/null 2>&1 && return 1
+  window=$(fm_backend_target_of_meta "$meta")
+  [ -n "$window" ] || return 1
+  backend=$(fm_backend_of_meta "$meta")
+  # Composer first: unless the prompt is affirmatively empty there is nothing to
+  # prove idle, so return without paying for the busy capture. When it IS empty,
+  # the unbounded busy proof matters (not the time-bounded active-turn gate): a
+  # pane still generating past FM_BUSY_TURN_MAX_SECS is not idle, and the caller
+  # treats that crossed bound as a possible wedge. An unreadable pane cannot
+  # prove idle either, so decline.
+  [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ] || return 1
+  tail40=$(fm_backend_capture "$backend" "$window" 40 2>/dev/null) || return 1
+  window_is_busy "$window" "$tail40" && return 1
+  return 0
+}
+
 # Surface one durable parent check when the foreign queue's drain position has
 # not moved for the bounded interval. The progress marker records that position
 # as the same epoch-sequence row identity the stall receipts use, so the timer
@@ -713,6 +755,7 @@ secondmate_wake_stall_tick() {
   local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker progress observed_at observed_key
   local receipt receipt_dir notify_key queued idle reason episode_alerted
+  local mate_window
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -770,7 +813,17 @@ EOF
     [ "$episode_alerted" -eq 0 ] || continue
     idle=$((now - observed_at))
     [ "$idle" -ge "$threshold" ] || continue
-    ! secondmate_in_active_turn "$task" "$(fm_backend_target_of_meta "$meta")" || continue
+    # A mate whose steering inbox is empty and which is sitting idle at its own
+    # prompt is healthy idle, not a stalled wake loop: it has nothing to drain,
+    # so an aged row cannot mean a wedged turn. A genuinely frozen or unreadable
+    # pane falls through to the escalation below.
+    mate_window=$(fm_backend_target_of_meta "$meta")
+    if secondmate_healthy_idle "$task" "$meta"; then
+      # No active episode (the guard above already continued when one was
+      # alerted), so there is nothing to clear: just decline this escalation.
+      continue
+    fi
+    ! secondmate_in_active_turn "$task" "$mate_window" || continue
     receipt="$receipt_dir/$row_key"
     if [ "$(cat "$receipt" 2>/dev/null || true)" = "$row_key" ]; then
       fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
@@ -1597,6 +1650,171 @@ event_wait_or_sleep() {
   esac
 }
 
+# --- Adaptive heartbeat and wake coalescing ---------------------------------
+# Print this home's heartbeat interval due now, updating the backoff streak.
+# Any task in flight holds the base cadence and resets the streak immediately,
+# so a fresh spawn is never hidden behind an idle-fleet backoff; with an empty
+# fleet the interval doubles per consecutive no-change heartbeat up to
+# HEARTBEAT_MAX (config/heartbeat-idle-seconds).
+heartbeat_interval() {
+  local streak hb
+  streak=$(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0)
+  case "$streak" in ''|*[!0-9]*) streak=0 ;; esac
+  [ "$streak" -gt 12 ] && streak=12
+  if [ "$(fm_context_hygiene_in_flight_count "$STATE")" -gt 0 ]; then
+    echo 0 > "$STATE/.heartbeat-streak"
+    printf '%s\n' "$HEARTBEAT"
+    return 0
+  fi
+  hb=$(( HEARTBEAT * (1 << streak) ))
+  [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
+  printf '%s\n' "$hb"
+}
+
+# Read scan_signals rows on stdin (first scan then re-scan, concatenated) and
+# print one row per file with the LAST signature seen. The re-scan returns the
+# same still-uncommitted files, so without this dedupe a file that appears in
+# both scans is enqueued twice - one wake per signal rather than one handling
+# turn for the coalesced batch.
+coalesce_signal_rows() {
+  awk -F '\t' '
+    NF >= 3 && $3 != "" {
+      if (!($3 in seen)) { seen[$3] = 1; order[++n] = $3 }
+      line[$3] = $0
+    }
+    END { for (i = 1; i <= n; i++) print line[order[i]] }
+  '
+}
+
+# --- Context hygiene --------------------------------------------------------
+# Keep this home's own long-lived agent from accumulating context forever. Two
+# boundaries only:
+#   - a task reached a merged or torn-down outcome, which leaves a durable
+#     state/.context-compact-pending marker (bin/fm-teardown.sh,
+#     bin/fm-pr-merge.sh) -> send the harness's compact command; and
+#   - the home has been fully idle (no in-flight task, empty wake queue, no
+#     pending captain reply) for config/context-hygiene-idle-seconds -> send the
+#     harness's clear command.
+# Everything durable is on disk (backlog, status, metadata), so the cleared
+# agent re-seeds from the next session-start digest. Delivery goes only into a
+# pane that is positively idle at an empty prompt, so a mid-turn agent is never
+# typed into; a refused delivery leaves the compact marker pending for the next
+# cycle. Away mode's daemon owns the pane, so this pauses while afk is active.
+_context_hygiene_harness=""
+
+context_hygiene_harness() {
+  if [ -z "$_context_hygiene_harness" ]; then
+    _context_hygiene_harness=$(fm_context_hygiene_harness "$SCRIPT_DIR")
+    [ -n "$_context_hygiene_harness" ] || _context_hygiene_harness=unknown
+  fi
+  printf '%s\n' "$_context_hygiene_harness"
+}
+
+# pane_is_busy_explicit <backend> <target> <harness>
+# 0 when the pane is provably busy: the native semantic verdict first, then the
+# same rendered-tail harness signature window_is_busy uses. A bare
+# fm_backend_busy_state read is native-only and returns `unknown` on tmux, so a
+# mid-turn tmux pane would otherwise pass the busy guard; the rendered fallback
+# is what catches it. An empty or unknown harness matches no signature.
+pane_is_busy_explicit() {
+  local backend=$1 target=$2 harness=$3 tail40 native
+  native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
+  [ "$native" = busy ] && return 0
+  [ -n "$harness" ] || return 1
+  if ! tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null); then
+    # An unreadable pane cannot prove idle: decline unless the native verdict
+    # already proves it idle, so a failed capture never reopens a typing hazard.
+    [ "$native" = idle ] && return 1
+    return 0
+  fi
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match "$harness"
+}
+
+# Type <command> into this home's own supervising pane, but only when the pane
+# exists and is affirmatively idle at an empty composer. 0 only on a confirmed
+# submit, so the caller keeps the compact marker pending on any refusal.
+# The busy guard uses the full native+rendered verdict (pane_is_busy_explicit),
+# so a mid-turn pane on a backend with no native busy source is still caught; the
+# composer proof then confirms the prompt is genuinely empty (never true for a
+# bare dead shell or an unreadable pane). Both must hold.
+context_hygiene_inject() {  # <command> <harness>
+  local command=$1 harness=$2 target backend composer verdict
+  target=$(discover_supervisor_target) || return 1
+  backend=$(discover_supervisor_backend) || return 1
+  fm_backend_target_exists "$backend" "$target" || return 1
+  pane_is_busy_explicit "$backend" "$target" "$harness" && return 1
+  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
+  [ "$composer" = empty ] || return 1
+  verdict=$(fm_backend_send_text_submit "$backend" "$target" "$command" 1 0.4 1.2 2>/dev/null) || return 1
+  [ "$verdict" = empty ]
+}
+
+# Maintain the continuous-idle window on EVERY cycle, including one that exits on
+# a wake before context_hygiene_tick runs. Activity (an in-flight task, a queued
+# wake, or a pending captain reply) clears the window; a fully idle home starts
+# one. Without this, a wake-handling cycle could leave a stale elapsed stamp that
+# the next quiet tick would immediately act on, clearing a home that was busy
+# moments earlier.
+context_hygiene_idle_touch() {
+  fm_context_hygiene_disabled "$CONFIG" && return 0
+  afk_present && return 0
+  if [ "$(fm_context_hygiene_in_flight_count "$STATE")" -ne 0 ] \
+    || [ "$(fm_context_hygiene_pending_replies "$STATE")" -ne 0 ] \
+    || ! fm_context_hygiene_wake_queue_empty "$STATE"; then
+    rm -f -- "$STATE/$FM_CONTEXT_IDLE_SINCE"
+    return 0
+  fi
+  [ -e "$STATE/$FM_CONTEXT_IDLE_SINCE" ] \
+    || date +%s > "$STATE/$FM_CONTEXT_IDLE_SINCE" 2>/dev/null || true
+}
+
+context_hygiene_tick() {
+  local harness marker command
+  fm_context_hygiene_disabled "$CONFIG" && return 0
+  afk_present && return 0
+
+  marker=$(fm_context_hygiene_marker_path "$STATE")
+  command=
+  if [ -f "$marker" ] && [ ! -L "$marker" ]; then
+    harness=$(context_hygiene_harness)
+    if [ -n "$harness" ] && [ "$harness" != unknown ]; then
+      command=$(fm_context_hygiene_compact_command "$harness" "$(cat "$marker" 2>/dev/null || true)")
+      if [ -n "$command" ] && context_hygiene_inject "$command" "$harness"; then
+        fm_context_hygiene_clear_marker "$STATE"
+        # A clear right after a compact would wipe its effect; require a full
+        # fresh idle window before the next clear.
+        fm_context_hygiene_reset_idle "$STATE"
+        triage_log "context hygiene: sent compact after a task boundary"
+        return 0
+      fi
+    fi
+    # The compact did not go out this cycle. Keep the durable marker only while
+    # a verified compact command actually exists (the pane was busy or its state
+    # unreadable, so retry); a harness with no verified compact command (or an
+    # unproven one) drops it so a pending marker can never pin the marker
+    # forever and starve the idle-clear path below.
+    if [ -n "$command" ]; then
+      return 0
+    fi
+    fm_context_hygiene_clear_marker "$STATE"
+  fi
+
+  # Clear is the only remaining path, and only an idle home is a candidate. Test
+  # idleness FIRST so the (comparatively costly) harness read runs only on the
+  # rare cycle that could actually deliver, never on every poll.
+  fm_context_hygiene_idle_ready \
+    "$STATE" "$(fm_context_hygiene_seconds "$CONFIG" context-hygiene-idle-seconds "$FM_CONTEXT_HYGIENE_IDLE_DEFAULT")" \
+    || return 0
+  harness=$(context_hygiene_harness)
+  case "$harness" in ''|unknown) return 0 ;; esac
+  command=$(fm_context_hygiene_command "$harness" clear)
+  [ -n "$command" ] || return 0
+  if context_hygiene_inject "$command" "$harness"; then
+    fm_context_hygiene_reset_idle "$STATE"
+    triage_log "context hygiene: sent clear while idle"
+  fi
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -1787,6 +2005,10 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
 
+  # Keep the context-hygiene idle window honest on every cycle, including a
+  # cycle that exits on a wake before context_hygiene_tick runs.
+  context_hygiene_idle_touch
+
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
   fi
@@ -1924,7 +2146,12 @@ while :; do
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
     sleep "$SIGNAL_GRACE"
-    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    # config/wake-coalesce-seconds (SIGNAL_GRACE) is the coalescing window: any
+    # signal landing inside it joins this one batch and one handling turn. The
+    # re-scan returns the same still-uncommitted files, so dedupe by file with
+    # last-signature-wins; without it a file that appears in both scans is
+    # enqueued twice, which is exactly the per-signal wake this change removes.
+    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)" | coalesce_signal_rows)
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
@@ -2258,13 +2485,11 @@ EOF
   done < <(recorded_windows)
 
   # Heartbeat: the watcher runs a cheap fleet-scan at a regular cadence no matter
-  # what. Time-based via .last-heartbeat mtime; interval doubles per consecutive
-  # no-change heartbeat (idle fleet) up to HEARTBEAT_MAX, and resets on any
-  # surfaced non-heartbeat wake.
-  streak=$(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0)
-  [ "$streak" -gt 12 ] && streak=12
-  hb=$(( HEARTBEAT * (1 << streak) ))
-  [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
+  # what. Time-based via .last-heartbeat mtime; while the fleet is idle the
+  # interval doubles per consecutive no-change heartbeat up to
+  # config/heartbeat-idle-seconds (default 3600), and any task in flight holds the
+  # base cadence. A surfaced non-heartbeat wake also resets the streak in wake().
+  hb=$(heartbeat_interval)
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
@@ -2295,6 +2520,12 @@ EOF
       triage_log "absorbed heartbeat (no captain-relevant change)"
     fi
   fi
+
+  # Context hygiene runs last, on a fully quiet cycle: a pending wake already
+  # exited above, and only here is this home's own agent known to be between
+  # turns. It types nothing unless that pane is affirmatively idle at an empty
+  # prompt, and it never enqueues a wake or advances any suppression marker.
+  context_hygiene_tick
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.

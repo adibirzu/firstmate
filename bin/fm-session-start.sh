@@ -270,6 +270,8 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-startup-memory-budget-lib.sh
+. "$SCRIPT_DIR/fm-startup-memory-budget-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
@@ -385,6 +387,87 @@ print_file_or_absent() {
 
 print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: tasks-axi show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
+}
+
+# the budget decision treats it as over-allowance.
+FM_CONTEXT_UNMEASURABLE_TOKENS=999999999
+
+# fm_context_measure_tokens <path>: the budget library's portable estimate for
+# one memory file. A file the measurement refuses (a symlink, a non-regular
+# file, or an unreadable one) is counted as consuming the whole allowance
+# rather than as zero: a silent zero would under-count and wrongly let a huge
+# learnings file print in full, while print_file_or_absent still follows a
+# symlinked captain file and inlines it. Failing safe here forces truncation.
+fm_context_measure_tokens() {
+  local out
+  out=$(fm_startup_memory_measure_file "$1" 2>/dev/null) || { printf '%s\n' "$FM_CONTEXT_UNMEASURABLE_TOKENS"; return 0; }
+  printf '%s\n' "$out" | awk '{ print $2 + 0 }'
+}
+
+# print_file_budgeted <path> <label> <token-budget>: print a file in full when it
+# fits the allowance, otherwise print as many leading lines as fit and an
+# explicit pointer naming the file, the omitted line count, and the full size,
+# so a truncated digest never hides that more exists.
+print_file_budgeted() {
+  local path=$1 label=$2 budget=$3 bytes limit total line linebytes used=0 shown=0 truncated=0
+  subsection "$label"
+  if [ ! -f "$path" ]; then
+    printf 'ABSENT\n'
+    return 0
+  fi
+  if [ ! -s "$path" ]; then
+    printf '(present, empty)\n'
+    return 0
+  fi
+  case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
+  bytes=$(LC_ALL=C wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
+  case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+  total=$(LC_ALL=C wc -l < "$path" 2>/dev/null | tr -d '[:space:]')
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  limit=$(( budget * 3 ))
+  while IFS= read -r line || [ -n "$line" ]; do
+    linebytes=$(( ${#line} + 1 ))
+    if [ "$shown" -gt 0 ] && [ $(( used + linebytes )) -gt "$limit" ]; then
+      truncated=1
+      break
+    fi
+    if [ "$shown" -eq 0 ] && [ "$limit" -le 0 ]; then
+      truncated=1
+      break
+    fi
+    printf '%s\n' "$line"
+    used=$(( used + linebytes ))
+    shown=$(( shown + 1 ))
+  done < "$path"
+  if [ "$truncated" -eq 1 ] || [ "$shown" -lt "$total" ]; then
+    printf '(%s truncated by config/startup-memory-budget: showing %s of %s line(s), ~%s estimated tokens total; read the full file at %s)\n' \
+      "$label" "$shown" "$total" "$(( (bytes + 2) / 3 ))" "$path"
+  fi
+}
+
+# print_context_memory: the startup prompt-memory surface, enforced against
+# config/startup-memory-budget. The allowance's documented scope is captain.md,
+# captain-shared.md, and learnings.md together. The two captain preference files
+# are small and load-bearing, so they always print in full; learnings - curated,
+# prunable, and fully readable on demand - absorbs the truncation when the three
+# exceed the allowance. An absent or malformed budget uses the documented
+# default rather than disabling the bound.
+print_context_memory() {
+  local budget captain captain_shared learnings remaining
+  print_file_or_absent "$DATA/captain.md" "data/captain.md"
+  print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
+  budget=$(fm_startup_memory_budget_read "$CONFIG" 2>/dev/null) || budget=$FM_STARTUP_MEMORY_BUDGET_DEFAULT
+  case "$budget" in ''|*[!0-9]*) budget=$FM_STARTUP_MEMORY_BUDGET_DEFAULT ;; esac
+  captain=$(fm_context_measure_tokens "$DATA/captain.md")
+  captain_shared=$(fm_context_measure_tokens "$DATA/captain-shared.md")
+  learnings=$(fm_context_measure_tokens "$DATA/learnings.md")
+  if [ $(( captain + captain_shared + learnings )) -le "$budget" ]; then
+    print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+    return 0
+  fi
+  remaining=$(( budget - captain - captain_shared ))
+  [ "$remaining" -lt 0 ] && remaining=0
+  print_file_budgeted "$DATA/learnings.md" "data/learnings.md" "$remaining"
 }
 
 # A queued title line whose own text already marks it held or blocked. The
@@ -943,9 +1026,7 @@ stage context
 section "CONTEXT"
 print_file_or_absent "$DATA/projects.md" "data/projects.md"
 print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
-print_file_or_absent "$DATA/captain.md" "data/captain.md"
-print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
-print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+print_context_memory
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step

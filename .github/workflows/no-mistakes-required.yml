@@ -26,5 +26,18 @@ jobs:
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
+      - uses: actions/checkout@v6
+      - name: Check direct-PR two-stage review attestation
+        id: direct_pr
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -eu
+          if printf '%s' "$PR_BODY" | bin/fm-direct-pr-attestation.sh; then
+            echo "attested=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "attested=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Verify no-mistakes signature and pipeline attestation
+        if: steps.direct_pr.outputs.attested != 'true'
         uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@32d396ac0f29135daf7fcb9964aba9d5f4e796d6 # post-v1.57.1, untagged (action added in #819)

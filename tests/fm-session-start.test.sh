@@ -784,6 +784,148 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
+# --- context digest: startup-memory-budget enforcement -----------------------
+
+test_context_memory_budget_truncates_learnings() {
+  local rec root home fakebin out i
+  rec=$(new_world context-budget-over)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'small captain preference\n' > "$home/data/captain.md"
+  printf 'FIRST-LEARNINGS-LINE\n' > "$home/data/learnings.md"
+  i=0
+  while [ "$i" -lt 200 ]; do
+    printf 'padding line %s well past any tiny allowance\n' "$i" >> "$home/data/learnings.md"
+    i=$((i + 1))
+  done
+  printf 'LAST-LEARNINGS-LINE\n' >> "$home/data/learnings.md"
+  printf '100\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "FIRST-LEARNINGS-LINE" "over-budget learnings dropped its leading content"
+  assert_contains "$out" "truncated by config/startup-memory-budget" \
+    "an over-budget learnings section was not truncated with a pointer"
+  assert_contains "$out" "data/learnings.md" "the truncation pointer did not name the full file"
+  assert_not_contains "$out" "LAST-LEARNINGS-LINE" "an over-budget learnings file was inlined in full"
+  assert_contains "$out" "small captain preference" \
+    "the captain preference file was dropped under a tight allowance"
+  pass "an over-budget learnings section is truncated with an explicit pointer"
+}
+
+test_context_memory_within_budget_prints_in_full() {
+  local rec root home fakebin out
+  rec=$(new_world context-budget-under)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'a captain preference\n' > "$home/data/captain.md"
+  printf 'LEARNINGS-ALPHA\nLEARNINGS-OMEGA\n' > "$home/data/learnings.md"
+  printf '100000\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "LEARNINGS-ALPHA" "an in-budget learnings file lost its first line"
+  assert_contains "$out" "LEARNINGS-OMEGA" "an in-budget learnings file lost its last line"
+  assert_not_contains "$out" "truncated by config/startup-memory-budget" \
+    "an in-budget learnings file was truncated anyway"
+  pass "a within-budget learnings section prints in full"
+}
+
+test_context_memory_budget_malformed_falls_back() {
+  local rec root home fakebin out
+  rec=$(new_world context-budget-malformed)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'a captain preference\n' > "$home/data/captain.md"
+  printf 'LEARNINGS-ALPHA\nLEARNINGS-OMEGA\n' > "$home/data/learnings.md"
+  printf 'not-a-number\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "LEARNINGS-OMEGA" \
+    "a malformed budget must fall back to the default and keep a small file in full"
+  assert_not_contains "$out" "truncated by config/startup-memory-budget" \
+    "a malformed budget must not disable or distort the bound"
+  pass "a malformed startup-memory-budget falls back to the documented default"
+}
+
+test_context_memory_counts_captain_shared() {
+  local rec root home fakebin out i
+  rec=$(new_world context-budget-shared)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'a captain preference\n' > "$home/data/captain.md"
+  printf 'SHARED-ALPHA\n' > "$home/data/captain-shared.md"
+  i=0
+  while [ "$i" -lt 200 ]; do
+    printf 'shared preference line %s\n' "$i" >> "$home/data/captain-shared.md"
+    i=$((i + 1))
+  done
+  printf 'LEARNINGS-ALPHA\nLEARNINGS-OMEGA\n' > "$home/data/learnings.md"
+  printf '100\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "SHARED-ALPHA" "the shared captain file must always print in full"
+  assert_contains "$out" "truncated by config/startup-memory-budget" \
+    "a shared captain file counted against the allowance did not truncate learnings"
+  assert_contains "$out" "data/learnings.md" "the truncation pointer did not name the full file"
+  assert_not_contains "$out" "LEARNINGS-OMEGA" \
+    "learnings printed in full despite the shared captain file exhausting the allowance"
+  pass "captain-shared.md counts against the startup-memory allowance"
+}
+
+test_context_memory_unmeasurable_file_fails_safe() {
+  local rec root home fakebin out i real
+  rec=$(new_world context-budget-symlink)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # The budget measurement only counts regular, non-symlink files, so a
+  # symlinked captain.md is refused. The digest must treat that as consuming the
+  # whole allowance (fail safe) rather than counting it as zero and inlining
+  # learnings in full.
+  real="$home/data/captain-real.md"
+  : > "$real"
+  i=0
+  while [ "$i" -lt 250 ]; do
+    printf 'symlinked captain line %s\n' "$i" >> "$real"
+    i=$((i + 1))
+  done
+  rm -f "$home/data/captain.md"
+  ln -s "$real" "$home/data/captain.md"
+  printf 'LEARNINGS-ALPHA\nLEARNINGS-OMEGA\n' > "$home/data/learnings.md"
+  printf '100000\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "truncated by config/startup-memory-budget" \
+    "a symlinked captain file counted as zero and defeated the budget"
+  assert_contains "$out" "data/learnings.md" "the truncation pointer did not name the full file"
+  assert_not_contains "$out" "LEARNINGS-OMEGA" \
+    "learnings were inlined despite an unmeasurable memory file"
+  pass "an unmeasurable memory file fails the startup budget safe"
+}
+
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
@@ -2693,6 +2835,11 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_context_memory_budget_truncates_learnings
+test_context_memory_within_budget_prints_in_full
+test_context_memory_budget_malformed_falls_back
+test_context_memory_counts_captain_shared
+test_context_memory_unmeasurable_file_fails_safe
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock

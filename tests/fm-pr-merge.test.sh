@@ -403,6 +403,10 @@ test_verified_merge_records_pr_and_head() {
     "records-before-merge: pr_head= was not recorded"
   grep -qxF 'pr merge 9 --repo example/repo --squash' "$case_dir/gh-axi.log" \
     || fail "records-before-merge: gh-axi pr merge was not invoked with number, --repo, and default --squash"
+  # A verified merge is a context-hygiene boundary: queue the compact for this
+  # home's own agent.
+  [ -f "$case_dir/state/.context-compact-pending" ] \
+    || fail "records-before-merge: a verified merge did not queue a context compact"
   pass "fm-pr-merge records pr= and pr_head= for a verified GitHub merge"
 }
 
