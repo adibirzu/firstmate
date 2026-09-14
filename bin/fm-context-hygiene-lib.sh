@@ -41,7 +41,6 @@ FM_CONTEXT_IDLE_SINCE=".context-hygiene-idle-since"
 fm_context_hygiene_setting() {
   local dir=$1 name=$2 path line
   path="$dir/$name"
-  [ -f "$path" ] || [ -L "$path" ] || return 0
   [ -f "$path" ] && [ ! -L "$path" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}

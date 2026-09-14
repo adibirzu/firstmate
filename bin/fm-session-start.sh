@@ -389,12 +389,18 @@ print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: tasks-axi show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
 }
 
+# the budget decision treats it as over-allowance.
+FM_CONTEXT_UNMEASURABLE_TOKENS=999999999
+
 # fm_context_measure_tokens <path>: the budget library's portable estimate for
-# one memory file, or 0 when it cannot be measured (an absent file, or an unsafe
-# one the measurement refuses). Never fails the digest.
+# one memory file. A file the measurement refuses (a symlink, a non-regular
+# file, or an unreadable one) is counted as consuming the whole allowance
+# rather than as zero: a silent zero would under-count and wrongly let a huge
+# learnings file print in full, while print_file_or_absent still follows a
+# symlinked captain file and inlines it. Failing safe here forces truncation.
 fm_context_measure_tokens() {
   local out
-  out=$(fm_startup_memory_measure_file "$1" 2>/dev/null) || { printf '0\n'; return 0; }
+  out=$(fm_startup_memory_measure_file "$1" 2>/dev/null) || { printf '%s\n' "$FM_CONTEXT_UNMEASURABLE_TOKENS"; return 0; }
   printf '%s\n' "$out" | awk '{ print $2 + 0 }'
 }
 
