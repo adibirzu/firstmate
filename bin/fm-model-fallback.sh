@@ -142,7 +142,7 @@ STATUS="$STATE/$ID.status"
 # Telemetry-backed providers whose credit identity the router prices natively.
 native_provider_of() {  # <harness>
   case "$1" in
-    claude|codex|grok|cursor|agy) printf '%s\n' "$1" ;;
+    claude|codex|opencode|grok|cursor|agy) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -246,7 +246,7 @@ if [ "$VERB" = apply ]; then
     PROVIDER=$(native_provider_of "$HARNESS") || PROVIDER=
   fi
   case "$PROVIDER" in
-    claude|codex|grok|cursor|agy)
+    claude|codex|opencode|grok|cursor|agy)
       "$ROUTER" record --provider "$PROVIDER" --outcome rate_limit --task "$ID" >/dev/null 2>&1 \
         || log "provider=$PROVIDER cooldown was not recorded; continuing with automatic fallback"
       ;;

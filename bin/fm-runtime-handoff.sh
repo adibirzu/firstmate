@@ -347,7 +347,7 @@ SPAWN_ARGS=(
   --handoff-brief "$HANDOFF_PROMPT"
 )
 case "$HARNESS" in
-  claude|codex|grok|cursor|agy) SPAWN_ARGS+=(--provider "$HARNESS") ;;
+  claude|codex|opencode|grok|cursor|agy) SPAWN_ARGS+=(--provider "$HARNESS") ;;
   *)
     if [ "$HARNESS" = "${OLD_HARNESS:-}" ]; then
       RECORDED_PROVIDER=$(fm_meta_get "$META" provider)

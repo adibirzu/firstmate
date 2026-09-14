@@ -1165,6 +1165,15 @@ model fallback chains are accepted^{"default":{"harness":"agy"},"modelFallback":
  legacy _model_fallback alias is accepted^{"default":{"harness":"claude"},"_model_fallback":{"claude":["claude-sonnet-5","haiku"]}}^empty^
  fallback lane order is accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"]},"fallbackLanes":["agy","cursor","opencode"]}^empty^
  single-entry fallback lane order is accepted^{"default":{"harness":"agy"},"fallbackLanes":["agy"]}^empty^
+ opencode subscription provider identity is accepted^{"default":{"harness":"opencode","provider":"opencode","model":"opencode-go/deepseek-v4.1-flash"}}^empty^
+ opencode native subscription provider mismatch is flagged^{"default":{"harness":"opencode","provider":"claude"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: opencode:claude
+ grok with a real model chain can sit in modelFallbackCycles^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6","grok-4.5"]},"modelFallbackCycles":["grok"]}^empty^
+ grok in modelFallbackCycles without a model chain is flagged^{"default":{"harness":"grok"},"modelFallbackCycles":["grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles requires a modelFallback chain with at least two model ids: grok
+ grok in modelFallbackCycles with a one-id chain is flagged^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6"]},"modelFallbackCycles":["grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles requires a modelFallback chain with at least two model ids: grok
+ unverified harness in modelFallback is flagged^{"default":{"harness":"grok"},"modelFallback":{"spaceship":["a","b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
+ modelFallback and its alias cannot both be declared^{"default":{"harness":"grok"},"modelFallback":{"grok":["a","b"]},"_model_fallback":{"grok":["a","b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback and its legacy alias _model_fallback cannot both be declared
+ duplicate modelFallbackCycles entries are flagged^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6","grok-4.5"]},"modelFallbackCycles":["grok","grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles has duplicate entries; a cyclic lane must be named once
+ unverified harness in fallbackLanes is flagged^{"default":{"harness":"agy"},"fallbackLanes":["agy","spaceship"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: spaceship
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
