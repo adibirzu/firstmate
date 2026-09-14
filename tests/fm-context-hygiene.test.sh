@@ -38,12 +38,16 @@ TARGET_EXISTS=0
 SEND_VERDICT=empty
 INBOX_UNHANDLED=1
 CAPTURE_OUTPUT=""
+CAPTURE_FAIL=0
 MATE_BUSY=1
 
 fm_backend_target_exists() { return "$TARGET_EXISTS"; }
 fm_backend_busy_state() { printf '%s\n' "$BUSY_STATE"; }
 fm_backend_composer_state() { printf '%s\n' "$COMPOSER_STATE"; }
-fm_backend_capture() { printf '%s' "$CAPTURE_OUTPUT"; }
+fm_backend_capture() {
+  [ "$CAPTURE_FAIL" = 0 ] || return 1
+  printf '%s' "$CAPTURE_OUTPUT"
+}
 fm_backend_send_text_submit() {  # <backend> <target> <text> ...
   printf '%s\n' "$3" >> "$SENT"
   printf '%s\n' "$SEND_VERDICT"
@@ -51,8 +55,8 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> ...
 fm_backend_target_of_meta() { printf 'firstmate:0\n'; }
 fm_backend_of_meta() { printf 'tmux\n'; }
 fm_task_inbox_oldest_unhandled() { return "$INBOX_UNHANDLED"; }
-# 1 means not in an active turn (the healthy-idle normal case); 0 means busy.
-secondmate_in_active_turn() { return "$MATE_BUSY"; }
+# 1 means not busy (the healthy-idle normal case); 0 means a busy pane.
+window_is_busy() { return "$MATE_BUSY"; }
 discover_supervisor_target() { printf 'firstmate:0\n'; }
 discover_supervisor_backend() { printf 'tmux\n'; }
 wake() { printf 'WAKE %s\n' "$1" >> "$SENT"; return 0; }
@@ -67,6 +71,7 @@ reset_case() {
   SEND_VERDICT=empty
   INBOX_UNHANDLED=1
   CAPTURE_OUTPUT=""
+  CAPTURE_FAIL=0
   MATE_BUSY=1
   _context_hygiene_harness=""
   export FM_CONTEXT_HYGIENE_HARNESS=claude
@@ -250,6 +255,17 @@ test_tick_compact_at_boundary() {
   BUSY_STATE=idle
   CAPTURE_OUTPUT=""
 
+  # An unreadable pane is not proof of idle: a failed capture fails closed and
+  # keeps the marker.
+  BUSY_STATE=unknown
+  CAPTURE_FAIL=1
+  : > "$SENT"
+  context_hygiene_tick
+  [ -s "$SENT" ] && fail "a failed pane capture must block delivery: $(cat "$SENT")"
+  [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a capture-failure refusal must keep the marker"
+  CAPTURE_FAIL=0
+  BUSY_STATE=idle
+
   # An unknown busy verdict beside a proven-empty composer is still deliverable:
   # the composer proof is the load-bearing guard.
   BUSY_STATE=unknown
@@ -323,6 +339,23 @@ test_afk_pauses_delivery() {
   [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a paused away-mode compact must keep its marker"
   rm -f "$STATE_DIR/.afk"
   pass "context-hygiene delivery pauses while away mode owns the home's pane"
+}
+
+test_idle_touch_maintains_window() {
+  reset_case
+  export FM_CONTEXT_HYGIENE_HARNESS=claude
+  _context_hygiene_harness=""
+  context_hygiene_idle_touch
+  [ -e "$STATE_DIR/.context-hygiene-idle-since" ] || fail "an idle touch must start the window"
+  printf '1\tsignal\tk\tsignal: x\n' > "$STATE_DIR/.wake-queue"
+  context_hygiene_idle_touch
+  [ ! -e "$STATE_DIR/.context-hygiene-idle-since" ] || fail "a queued wake must clear the idle window"
+  rm -f "$STATE_DIR/.wake-queue"
+  printf 'kind=ship\n' > "$STATE_DIR/task.meta"
+  printf '111\n' > "$STATE_DIR/.context-hygiene-idle-since"
+  context_hygiene_idle_touch
+  [ ! -e "$STATE_DIR/.context-hygiene-idle-since" ] || fail "an in-flight task must clear the idle window"
+  pass "the idle window is cleared by any activity and started only when idle"
 }
 
 test_reset_idle_failure_does_not_respam() {
@@ -456,6 +489,7 @@ test_idle_ready_window
 test_tick_compact_at_boundary
 test_tick_clear_on_idle
 test_afk_pauses_delivery
+test_idle_touch_maintains_window
 test_reset_idle_failure_does_not_respam
 test_heartbeat_interval
 test_coalesce_signal_rows

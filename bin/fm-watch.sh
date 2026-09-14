@@ -717,7 +717,7 @@ secondmate_in_active_turn() {  # <task> <window>
 # directory, and the composer must read exactly empty; anything else (busy,
 # pending, unreadable) returns 1 so a genuine freeze still escalates.
 secondmate_healthy_idle() {  # <task> <meta>
-  local task=$1 meta=$2 window backend inbox
+  local task=$1 meta=$2 window backend inbox tail40
   inbox="$STATE/$task.inbox"
   if [ -e "$inbox" ] || [ -L "$inbox" ]; then
     [ -d "$inbox" ] && [ ! -L "$inbox" ] && [ -r "$inbox" ] || return 1
@@ -726,11 +726,12 @@ secondmate_healthy_idle() {  # <task> <meta>
   window=$(fm_backend_target_of_meta "$meta")
   [ -n "$window" ] || return 1
   backend=$(fm_backend_of_meta "$meta")
-  # A provably-working pane is not idle, even with an empty composer: the
-  # idle-at-prompt claim is exactly what the busy contract refutes. This mirrors
-  # the active-turn gate the caller applies next, and keeps a pane busy past the
-  # turn bound (which the active-turn gate treats as NOT active) escalating.
-  secondmate_in_active_turn "$task" "$window" && return 1
+  # Unbounded busy proof, deliberately NOT the time-bounded active-turn gate: a
+  # pane still generating past FM_BUSY_TURN_MAX_SECS is not idle, and the caller
+  # treats that crossed bound as a possible wedge. If the pane cannot be read at
+  # all, the idle claim is unproven, so decline.
+  tail40=$(fm_backend_capture "$backend" "$window" 40 2>/dev/null) || return 1
+  window_is_busy "$window" "$tail40" && return 1
   [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ]
 }
 
@@ -1713,10 +1714,16 @@ context_hygiene_harness() {
 # mid-turn tmux pane would otherwise pass the busy guard; the rendered fallback
 # is what catches it. An empty or unknown harness matches no signature.
 pane_is_busy_explicit() {
-  local backend=$1 target=$2 harness=$3 tail40
-  [ "$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)" = busy ] && return 0
+  local backend=$1 target=$2 harness=$3 tail40 native
+  native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
+  [ "$native" = busy ] && return 0
   [ -n "$harness" ] || return 1
-  tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
+  if ! tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null); then
+    # An unreadable pane cannot prove idle: decline unless the native verdict
+    # already proves it idle, so a failed capture never reopens a typing hazard.
+    [ "$native" = idle ] && return 1
+    return 0
+  fi
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match "$harness"
 }
 
@@ -1739,6 +1746,25 @@ context_hygiene_inject() {  # <command> <harness>
   [ "$verdict" = empty ]
 }
 
+# Maintain the continuous-idle window on EVERY cycle, including one that exits on
+# a wake before context_hygiene_tick runs. Activity (an in-flight task, a queued
+# wake, or a pending captain reply) clears the window; a fully idle home starts
+# one. Without this, a wake-handling cycle could leave a stale elapsed stamp that
+# the next quiet tick would immediately act on, clearing a home that was busy
+# moments earlier.
+context_hygiene_idle_touch() {
+  fm_context_hygiene_disabled "$CONFIG" && return 0
+  afk_present && return 0
+  if [ "$(fm_context_hygiene_in_flight_count "$STATE")" -ne 0 ] \
+    || [ "$(fm_context_hygiene_pending_replies "$STATE")" -ne 0 ] \
+    || ! fm_context_hygiene_wake_queue_empty "$STATE"; then
+    rm -f -- "$STATE/$FM_CONTEXT_IDLE_SINCE"
+    return 0
+  fi
+  [ -e "$STATE/$FM_CONTEXT_IDLE_SINCE" ] \
+    || date +%s > "$STATE/$FM_CONTEXT_IDLE_SINCE" 2>/dev/null || true
+}
+
 context_hygiene_tick() {
   local harness marker command
   fm_context_hygiene_disabled "$CONFIG" && return 0
@@ -1752,6 +1778,9 @@ context_hygiene_tick() {
       command=$(fm_context_hygiene_compact_command "$harness" "$(cat "$marker" 2>/dev/null || true)")
       if [ -n "$command" ] && context_hygiene_inject "$command" "$harness"; then
         fm_context_hygiene_clear_marker "$STATE"
+        # A clear right after a compact would wipe its effect; require a full
+        # fresh idle window before the next clear.
+        fm_context_hygiene_reset_idle "$STATE"
         triage_log "context hygiene: sent compact after a task boundary"
         return 0
       fi
@@ -1972,6 +2001,10 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  # Keep the context-hygiene idle window honest on every cycle, including a
+  # cycle that exits on a wake before context_hygiene_tick runs.
+  context_hygiene_idle_touch
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
