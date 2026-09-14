@@ -1230,6 +1230,18 @@ write_legacy_meta() {
     "harness=codex"
 }
 
+# Write a meta that predates the spawn_gen field AND records no window endpoint
+# at all - the pre-update husk shape. Args: case_dir mode kind
+write_legacy_meta_no_window() {
+  local case_dir=$1 mode=$2 kind=$3
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=$kind" \
+    "mode=$mode" \
+    "harness=codex"
+}
+
 # Count spawn_gen fields in the task's meta, so a refusal can prove it left the
 # record byte-equivalent rather than stamped.
 legacy_meta_gen_count() {
@@ -1252,10 +1264,65 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
-test_legacy_record_without_the_flag_refuses() {
-  local case_dir rc
-  case_dir=$(make_case legacy-noflag)
+# A record predating spawn_gen whose recorded endpoint is confidently gone is
+# retirable by a plain teardown: the dead-or-agent-less endpoint proof is the
+# whole incarnation gate, so --legacy-record is not required for this shape.
+test_legacy_record_without_spawn_gen_retires_when_endpoint_dead() {
+  local case_dir out
+  case_dir=$(make_case legacy-plain-dead)
   write_legacy_meta "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  # The default fakebin tmux answers every query with success and no output, so
+  # the classifier reads the recorded window as authoritatively missing.
+
+  out=$(run_teardown "$case_dir") \
+    || fail "legacy-plain-dead: plain teardown refused a landed legacy record with a missing endpoint"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-plain-dead: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint missing, incarnation legacy-' \
+    || fail "legacy-plain-dead: the teardown line did not log the accepted legacy incarnation: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-plain-dead: teardown left the task record behind"
+  pass "a landed legacy record with a dead endpoint retires without --legacy-record"
+}
+
+# The plain path's relaxation is bounded by the endpoint proof: a recorded
+# endpoint that cannot be read as dead or agent-less still refuses.
+test_legacy_record_without_spawn_gen_refuses_unknown_endpoint() {
+  local case_dir rc before
+  case_dir=$(make_case legacy-plain-ambiguous)
+  write_legacy_meta "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  add_unreadable_tmux "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "legacy-plain-ambiguous: an unreadable endpoint must still refuse a plain teardown"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr" \
+    || fail "legacy-plain-ambiguous: the refusal did not name the endpoint state"
+  [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
+    || fail "legacy-plain-ambiguous: the refusal stamped a spawn generation into the record"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "legacy-plain-ambiguous: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "legacy-plain-ambiguous: the refusal closed the backlog item anyway"
+  pass "a legacy record whose endpoint cannot be read as dead still refuses a plain teardown"
+}
+
+# A record with no window endpoint at all cannot offer the dead-or-agent-less
+# proof, so a plain teardown refuses and points at --legacy-record.
+test_legacy_record_without_window_needs_the_flag() {
+  local case_dir rc
+  case_dir=$(make_case legacy-nowindow-noflag)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
   seed_backlog_in_flight "$case_dir"
   wt_commit "$case_dir" "landed legacy work"
   add_fork_with_pushed_branch "$case_dir"
@@ -1265,16 +1332,85 @@ test_legacy_record_without_the_flag_refuses() {
   rc=$?
   set -e
 
-  expect_code 1 "$rc" "legacy-noflag: a record without spawn_gen must refuse without --legacy-record"
+  expect_code 1 "$rc" "legacy-nowindow-noflag: a no-window record must require --legacy-record"
   grep -q -- '--legacy-record' "$case_dir/stderr" \
-    || fail "legacy-noflag: the refusal did not name the --legacy-record path"
+    || fail "legacy-nowindow-noflag: the refusal did not name the --legacy-record path"
   [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
-    || fail "legacy-noflag: the refusal stamped a spawn generation into the record"
+    || fail "legacy-nowindow-noflag: the refusal stamped a spawn generation into the record"
   [ "$(backlog_row_state "$case_dir")" = in_flight ] \
-    || fail "legacy-noflag: the refusal closed the backlog item anyway"
+    || fail "legacy-nowindow-noflag: the refusal closed the backlog item anyway"
   assert_present "$case_dir/state/task-x1.meta" \
-    "legacy-noflag: the refusal removed the task record"
-  pass "a record predating spawn_gen refuses teardown until --legacy-record is passed"
+    "legacy-nowindow-noflag: the refusal removed the task record"
+  pass "a no-window legacy record still requires --legacy-record for a plain teardown"
+}
+
+# --legacy-record accepts the no-window husk once its worktree is clean and
+# landed, which is exactly the safety the ordinary landed-work gate enforces.
+test_legacy_record_without_window_retires_when_worktree_landed() {
+  local case_dir out
+  case_dir=$(make_case legacy-nowindow-allow)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "legacy-nowindow-allow: --legacy-record refused a landed record with no window endpoint"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-nowindow-allow: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent, incarnation legacy-' \
+    || fail "legacy-nowindow-allow: the teardown line did not log the no-endpoint acceptance: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-nowindow-allow: teardown left the task record behind"
+  pass "a landed legacy record with no window endpoint retires with --legacy-record"
+}
+
+# The no-window acceptance is bounded by the ordinary landed-work refusal,
+# which prints the exact unlanded evidence and leaves the record untouched.
+test_legacy_record_without_window_refuses_unlanded_work() {
+  local case_dir rc before
+  case_dir=$(make_case legacy-nowindow-unlanded)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  # Real content committed but pushed nowhere and merged nowhere.
+  wt_commit_file "$case_dir" feature.txt unique-legacy-content "real unlanded work"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" --legacy-record > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "legacy-nowindow-unlanded: --legacy-record must refuse a no-window record with unlanded work"
+  grep -q "not on any remote and not landed" "$case_dir/stderr" \
+    || fail "legacy-nowindow-unlanded: the refusal did not print the exact unlanded evidence: $(cat "$case_dir/stderr")"
+  [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal stamped a spawn generation into the record"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal closed the backlog item anyway"
+  pass "--legacy-record refuses a no-window legacy record whose worktree holds unlanded work"
+}
+
+# An absent worktree has no work to lose, so it is retirable the same way.
+test_legacy_record_without_window_retires_when_worktree_absent() {
+  local case_dir out
+  case_dir=$(make_case legacy-nowindow-absent)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  # The recorded worktree path is already gone.
+  rm -rf "$case_dir/wt"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "legacy-nowindow-absent: --legacy-record refused a no-window record whose worktree is gone"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-nowindow-absent: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent, incarnation legacy-' \
+    || fail "legacy-nowindow-absent: the teardown line did not log the no-endpoint acceptance: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-nowindow-absent: teardown left the task record behind"
+  pass "a no-window legacy record whose worktree is already gone retires with --legacy-record"
 }
 
 test_legacy_record_teardown_completes_when_landed_and_endpoint_dead() {
@@ -1375,14 +1511,18 @@ test_legacy_record_rolls_the_stamp_back_when_the_marker_write_fails() {
   [ "$(backlog_row_state "$case_dir")" = in_flight ] \
     || fail "legacy-stamp-rollback: the failed teardown closed the backlog item anyway"
 
+  # The rolled-back record is byte-identical again, so a flag-less retry
+  # re-runs the endpoint gate rather than sailing past it on the abandoned
+  # attempt's absent stamp. An unreadable endpoint refuses there.
+  add_unreadable_tmux "$case_dir"
   set +e
   run_teardown "$case_dir" > "$case_dir/stdout2" 2> "$case_dir/stderr2"
   rc=$?
   set -e
   expect_code 1 "$rc" \
     "legacy-stamp-rollback: the flag-less retry must not sail past the endpoint gate on the rolled-back record"
-  grep -q -- '--legacy-record' "$case_dir/stderr2" \
-    || fail "legacy-stamp-rollback: the retry refusal did not name the flag path"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr2" \
+    || fail "legacy-stamp-rollback: the retry refusal did not re-run the endpoint gate"
   [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
     || fail "legacy-stamp-rollback: the flag-less retry modified the record"
   pass "--legacy-record teardown rolls its stamp back when the close marker write fails"
@@ -1450,9 +1590,9 @@ test_retained_legacy_stamp_still_faces_the_endpoint_gate() {
   rc=$?
   set -e
   expect_code 1 "$rc" \
-    "legacy-stamp-retained: a flag-less retry must refuse the retained legacy stamp"
-  grep -q -- '--legacy-record' "$case_dir/stderr3" \
-    || fail "legacy-stamp-retained: the flag-less refusal did not name the flag path"
+    "legacy-stamp-retained: a flag-less retry still faces the endpoint gate on the retained legacy stamp"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr3" \
+    || fail "legacy-stamp-retained: the flag-less refusal did not re-run the endpoint gate"
   [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$stamped" ] \
     || fail "legacy-stamp-retained: the flag-less refusal modified the task record"
   pass "a legacy stamp a failed rollback left behind still faces the endpoint gate"
@@ -3751,7 +3891,12 @@ test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_gh_error_and_content_absent_refuses
-test_legacy_record_without_the_flag_refuses
+test_legacy_record_without_spawn_gen_retires_when_endpoint_dead
+test_legacy_record_without_spawn_gen_refuses_unknown_endpoint
+test_legacy_record_without_window_needs_the_flag
+test_legacy_record_without_window_retires_when_worktree_landed
+test_legacy_record_without_window_refuses_unlanded_work
+test_legacy_record_without_window_retires_when_worktree_absent
 test_legacy_record_teardown_completes_when_landed_and_endpoint_dead
 test_legacy_record_teardown_refuses_unlanded_work
 test_legacy_record_teardown_refuses_an_ambiguous_endpoint
