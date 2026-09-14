@@ -72,6 +72,14 @@ FM_BACKEND_HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_HERDR_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
+# Shared herdr display-name composer (fm_herdr_name_prefix and friends). Single
+# owner of the configurable task-tab label prefix (default "adix",
+# config/herdr-session-prefix), reused here so recovery/orphan discovery
+# recognizes this home's own freshly-labeled tabs without re-deriving the
+# prefix logic.
+# shellcheck source=bin/fm-herdr-name-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-herdr-name-lib.sh"
+
 # Shared composer-content classifier (empty|pending|unknown, and the fleet-wide
 # dead-shell-vs-agent-composer rule). Owned by bin/fm-composer-lib.sh, reused by
 # every backend so the decision cannot drift.
@@ -3406,27 +3414,32 @@ EOF
 }
 
 # fm_backend_herdr_list_live: recovery/orphan discovery. Lists every tab whose
-# label looks like a firstmate task window (fm-<id>) in <session>'s, THIS
-# HOME'S OWN workspace (fm_backend_herdr_workspace_label - never another
-# home's), by LABEL - never by trusting a stored pane id, since ids are not
-# guaranteed stable across every server lifecycle (see herdr-verification-p2.md
-# "ID stability"). A caller running as a given home (e.g. a secondmate
-# recovering its own in-flight work) naturally scopes to that home's own
-# workspace because FM_HOME already names it - no glue needed, unlike the
-# primary-spawns-a-secondmate path in fm-spawn.sh. Read-only: a session/
-# workspace that does not exist yet simply lists nothing. One
-# "<session>:<pane_id>\t<label>" line per live task tab.
+# label looks like a firstmate task window - either the legacy `fm-<id>` form,
+# or this home's own current display-name prefix (fm_herdr_name_prefix,
+# `config/herdr-session-prefix`, default `adix`; bin/fm-herdr-name-lib.sh
+# owns the format) - in <session>'s, THIS HOME'S OWN workspace
+# (fm_backend_herdr_workspace_label - never another home's), by LABEL - never
+# by trusting a stored pane id, since ids are not guaranteed stable across
+# every server lifecycle (see herdr-verification-p2.md "ID stability"). A
+# caller running as a given home (e.g. a secondmate recovering its own
+# in-flight work) naturally scopes to that home's own workspace because
+# FM_HOME already names it - no glue needed, unlike the primary-spawns-a-
+# secondmate path in fm-spawn.sh. Read-only: a session/workspace that does not
+# exist yet simply lists nothing. One "<session>:<pane_id>\t<label>" line per
+# live task tab.
 fm_backend_herdr_list_live() {  # <session>
-  local session=$1 wsid tabs tab_id label pane_id
+  local session=$1 wsid tabs tab_id label pane_id prefix
   wsid=$(fm_backend_herdr_workspace_find "$session") || return 0
   [ -n "$wsid" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
+  prefix=$(fm_herdr_name_prefix "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")
   while IFS=$'\t' read -r tab_id label; do
     [ -n "$tab_id" ] || continue
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
     printf '%s:%s\t%s\n' "$session" "$pane_id" "$label"
-  done < <(printf '%s' "$tabs" | jq -r '.result.tabs[]? | select(.label | startswith("fm-")) | "\(.tab_id)\t\(.label)"' 2>/dev/null)
+  done < <(printf '%s' "$tabs" | jq -r --arg legacy "fm-" --arg prefix "$prefix-" \
+    '.result.tabs[]? | select((.label | startswith($legacy)) or (.label | startswith($prefix))) | "\(.tab_id)\t\(.label)"' 2>/dev/null)
 }
 
 # --- native event push: pane.agent_status_changed subscriber -----------------
