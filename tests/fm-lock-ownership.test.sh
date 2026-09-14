@@ -209,9 +209,9 @@ test_owner_readmits_after_clear_session_id_change() {
   pass "fm-lock: an owner re-admits after a /clear regenerates its session id"
 }
 
-# The self-owner fallback must not loosen the genuine refusal: a lock recorded
-# to a different, live session (a different harness pid outside this session's
-# ancestry) still refuses even when its session id is unknown to it.
+# The claude /clear exemption must not loosen the genuine refusal: a lock
+# recorded to a different, live session (a different harness pid outside this
+# session's ancestry) still refuses even when its session id is unknown to it.
 test_different_live_session_is_refused_after_owner_clear() {
   local home fakebin session sibling spare host parent out
   home=$(make_home after-clear-intruder)
@@ -230,7 +230,7 @@ test_different_live_session_is_refused_after_owner_clear() {
     && fail "a different live session claimed the owner's lock: $out"
   case "$out" in *"another live firstmate session holds the lock (pid $session)"*) ;; *) fail "the different-session refusal was not explicit: $out" ;; esac
   [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the refused session moved the lock off its owner"
-  pass "fm-lock: a different live session is still refused by the shared self-owner predicate"
+  pass "fm-lock: a different live session is still refused after a /clear session-id change"
 }
 
 test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner
