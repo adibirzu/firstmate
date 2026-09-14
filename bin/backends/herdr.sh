@@ -586,12 +586,14 @@ fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
     && [ -n "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" ] || return 1
   expected_label=$(fm_backend_herdr_projection_workspace_label "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
   # The task label is the legacy `fm-<id>` for a projection created before the
-  # display-name change, or the new `fm-<host>-<project>-<task-id>`
+  # display-name change, or the new `<prefix>-[<host>-]<project>-<task-id>`
   # (bin/fm-herdr-name-lib.sh), whose task segment has one leading `fm-`
-  # stripped. Accept both so a legacy journal still validates for restart
-  # reclaim, and bound the charset to the label alphabet the naming owner emits.
+  # stripped and whose prefix is configurable. Accept both so a legacy journal
+  # still validates for restart reclaim, and bound the charset to the label
+  # alphabet the naming owner emits.
+  local task_segment=${id#fm-}
   case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
-    "fm-$id"|fm-*-"$id"|fm-*-"${id#fm-}") ;;
+    "fm-$id"|*-"$task_segment") ;;
     *) return 1 ;;
   esac
   case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
@@ -2179,7 +2181,7 @@ fm_backend_herdr_agent_alive() {  # <target>
 #
 # <legacy-alias-label> (5th arg, may be empty) is the pre-naming `fm-<id>` tab
 # label for the SAME task. The label firstmate creates now is the display name
-# `fm-<host>-<project>-<task-id>` (bin/fm-herdr-name-lib.sh), but a task tab
+# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh), but a task tab
 # created by an older firstmate still carries `fm-<id>`; treating that label as
 # a husk candidate for this task lets a respawn replace the stale tab instead of
 # leaving a duplicate beside it. It is scoped to this task's own id by the

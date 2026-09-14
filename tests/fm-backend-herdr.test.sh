@@ -897,10 +897,10 @@ test_create_task_alias_replaces_legacy_label_husk() {
   printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/2.out"
   printf '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}\n' > "$resp/3.out"
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/4.out"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-mini-firstmate-task1","workspace_id":"w1"}]}}\n' > "$resp/6.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"adix-firstmate-task1","workspace_id":"w1"}]}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mini-firstmate-task1 /tmp/proj "" fm-task1' "$ROOT" ) \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 adix-firstmate-task1 /tmp/proj "" fm-task1' "$ROOT" ) \
     || fail "create_task should replace a legacy fm-<id> husk when given the alias label"
   read -r tab pane <<EOF
 $out
@@ -908,7 +908,7 @@ EOF
   if [ "$tab" != "w1:t3" ] || [ "$pane" != "w1:p3" ]; then
     fail "create_task should echo the NEW tab/pane ids, got '$out'"
   fi
-  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''fm-mini-firstmate-task1' \
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''adix-firstmate-task1' \
     "create_task must create the tab under the NEW display label"
   assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''close'$'\x1f''w1:t2' "create_task did not close the legacy fm-<id> husk"
   pass "fm_backend_herdr_create_task: replaces a legacy fm-<id> husk while creating the tab under the new display label"
@@ -923,7 +923,7 @@ test_create_task_alias_live_tab_refuses() {
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mini-firstmate-task2 /tmp/proj "" fm-task2' "$ROOT" 2>&1 )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 adix-firstmate-task2 /tmp/proj "" fm-task2' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task must refuse when a legacy-labelled tab still hosts a live agent"
   assert_contains "$out" "already exists" "create_task did not report the live legacy label"
@@ -1467,11 +1467,11 @@ test_projection_journal_v2_accepts_display_name_task_label() {
     home=$(fm_backend_herdr_projection_home_identity "$2") || exit 1
     label=$(fm_backend_herdr_projection_workspace_label fm-nm-r1 "$token")
     fm_backend_herdr_projection_journal_bind \
-      "$journal" fm-nm-r1 "$home" lab-session w2 w2:t2 w2:p2 w1 firstmate "$label" fm-mini-firstmate-nm-r1 || exit 1
+      "$journal" fm-nm-r1 "$home" lab-session w2 w2:t2 w2:p2 w1 firstmate "$label" adix-adi1-firstmate-nm-r1 || exit 1
     fm_backend_herdr_projection_journal_snapshot "$journal" fm-nm-r1 || exit 1
     printf "%s\n" "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL"
   ' "$ROOT" "$state" "$home") || fail "a v2 journal carrying the new display-name task label must validate"
-  [ "$out" = "fm-mini-firstmate-nm-r1" ] || fail "journal task label round-trip mismatch: $out"
+  [ "$out" = "adix-adi1-firstmate-nm-r1" ] || fail "journal task label round-trip mismatch: $out"
   # A foreign task label (not this id's legacy or display form) is still rejected.
   token=$(sed -n 's/^projection_id=//p' "$state/fm-nm-r1.herdr-presentation")
   { grep -v '^task_label=' "$state/fm-nm-r1.herdr-presentation"; printf 'task_label=fm-some-other-task\n'; } > "$state/foreign.herdr-presentation"

@@ -1,39 +1,47 @@
 #!/usr/bin/env bash
 # fm-herdr-name-lib.sh - the single owner of the Herdr session DISPLAY NAME.
 #
-# Every herdr task tab firstmate creates is labelled
-#   fm-<host>-<project>-<task-id>
-# so the captain can tell at a glance, on any connected machine, which host and
-# project a task belongs to (AGENTS.md task fm-herdr-session-naming). Examples:
-#   fm-mini-firstmate-herdr-session-naming   (a firstmate-repo task on the Mac)
-#   fm-adi1-lifeos-adi1                      (the lifeos-adi1 secondmate itself)
-#   fm-adi2-ts-usage-axi-add-quota-window    (a crewmate of a remote secondmate)
+# Every herdr task tab firstmate creates is labelled with a configurable
+# prefix followed by the project and the task:
+#   <prefix>-<project>-<task-id>
+# where the prefix defaults to `adix` (the captain's own words).
+# A host segment is inserted after the prefix ONLY when this home has an
+# explicit host token configured, so most tabs stay short:
+#   adix-firstmate-herdr-session-naming      (no host configured)
+#   adix-adi1-firstmate-herdr-session-naming (config/herdr-session-host=adi1)
+#   adix-lifeos-adi1                          (the lifeos-adi1 secondmate itself)
 #
 # This label is a DISPLAY name only. Task identity, endpoint resolution,
 # supervision, teardown, and recovery keep using the recorded
 # state/<id>.meta endpoint - never this string. bin/backends/herdr.sh's
 # presentation journal, workspace labels, and the `fm-<id>` legacy tab label
-# all remain as they were; only a freshly created task tab takes the new name,
-# and existing live sessions are never renamed or restarted.
+# all remain as they were; only a freshly created task tab takes the display
+# name, and existing live sessions are never renamed or restarted. The legacy
+# `fm-<id>` form survives solely as the create_task husk-replacement alias.
 #
-# The label is composed from three sanitized segments:
-#   host    - fm_herdr_name_host: FM_HERDR_HOST, else config/herdr-session-host,
-#             else the machine's short hostname. The per-host override is LOCAL
-#             and deliberately NOT inherited by secondmate homes, because the
-#             host token is a property of the machine each home runs on.
+# Segments:
+#   prefix  - fm_herdr_name_prefix: local config/herdr-session-prefix, else
+#             `adix`. Whitespace is stripped and the value is sanitized.
+#   host    - fm_herdr_name_host_optional: FM_HERDR_HOST, else local
+#             config/herdr-session-host, else EMPTY. An absent host is omitted
+#             from the label, so a plain home never carries a host segment.
+#             config/herdr-session-host is LOCAL and deliberately NOT inherited:
+#             which machine a home runs on is a property of that machine.
 #   project - the registered project name (the project clone's directory name),
 #             `firstmate` for a firstmate-repo task, or the secondmate id for a
 #             secondmate agent.
 #   task-id - the task id, with a single leading `fm-` stripped so the common
-#             firstmate task id does not double the `fm-` prefix.
+#             firstmate task id does not repeat that prefix.
 #
 # A segment equal to the segment immediately before it is dropped, so a
-# secondmate agent (project == task id) renders `fm-<host>-<id>` rather than
-# `fm-<host>-<id>-<id>`.
+# secondmate agent (project == task id) renders `adix-<id>` rather than
+# `adix-<id>-<id>`.
 #
 # No side effects on source. set -u / set -e safe.
 
+FM_HERDR_NAME_PREFIX_CONFIG="herdr-session-prefix"
 FM_HERDR_NAME_HOST_CONFIG="herdr-session-host"
+FM_HERDR_NAME_DEFAULT_PREFIX="adix"
 FM_HERDR_NAME_SEGMENT_MAX=48
 
 # fm_herdr_name_sanitize <text>: fold arbitrary text into a label-safe token.
@@ -50,48 +58,61 @@ fm_herdr_name_sanitize() {  # <text>
   printf '%s' "$out"
 }
 
-# fm_herdr_name_host [<config-dir>]: resolve the host token for a label.
-# Precedence: an explicit FM_HERDR_HOST (used by the remote-secondmate launch
-# path and by tests), then local config/herdr-session-host, then the machine's
-# own short hostname. Never empty: an unreadable host falls back to `local`.
-fm_herdr_name_host() {  # [<config-dir>]
-  local config_dir=${1:-} file value=
+# fm_herdr_name_read_config <config-dir> <filename>: the whitespace-stripped
+# content of one regular, non-symlink config file, or empty.
+fm_herdr_name_read_config() {  # <config-dir> <filename>
+  local config_dir=${1:-} filename=${2:-} file
+  [ -n "$config_dir" ] || return 0
+  file="$config_dir/$filename"
+  if [ -f "$file" ] && [ ! -L "$file" ]; then
+    tr -d '[:space:]' < "$file" 2>/dev/null
+  fi
+}
+
+# fm_herdr_name_prefix [<config-dir>]: the label prefix. config/herdr-session-prefix
+# wins when set; an absent or empty value falls back to `adix`.
+fm_herdr_name_prefix() {  # [<config-dir>]
+  local config_dir=${1:-} value
+  value=$(fm_herdr_name_sanitize "$(fm_herdr_name_read_config "$config_dir" "$FM_HERDR_NAME_PREFIX_CONFIG")")
+  [ -n "$value" ] || value=$FM_HERDR_NAME_DEFAULT_PREFIX
+  printf '%s' "$value"
+}
+
+# fm_herdr_name_host_optional [<config-dir>]: the explicit host token, or empty
+# when this home is not configured with one. Never falls back to the machine
+# hostname: an unconfigured home renders a plain `<prefix>-<project>-<task>`.
+fm_herdr_name_host_optional() {  # [<config-dir>]
+  local config_dir=${1:-} value=
   if [ -n "${FM_HERDR_HOST:-}" ]; then
     value=$(fm_herdr_name_sanitize "$FM_HERDR_HOST")
   else
-    if [ -n "$config_dir" ]; then
-      file="$config_dir/$FM_HERDR_NAME_HOST_CONFIG"
-      if [ -f "$file" ] && [ ! -L "$file" ]; then
-        value=$(fm_herdr_name_sanitize "$(tr -d '[:space:]' < "$file" 2>/dev/null)")
-      fi
-    fi
-    if [ -z "$value" ]; then
-      value=$(fm_herdr_name_sanitize "$(hostname -s 2>/dev/null || hostname 2>/dev/null)")
-    fi
+    value=$(fm_herdr_name_sanitize "$(fm_herdr_name_read_config "$config_dir" "$FM_HERDR_NAME_HOST_CONFIG")")
   fi
-  [ -n "$value" ] || value=local
   printf '%s' "$value"
 }
 
 # fm_herdr_name_task_segment <task-id>: the task label segment. A single
 # leading `fm-` is stripped so `fm-herdr-session-naming` renders as
-# `herdr-session-naming` and the composed label does not repeat the prefix.
+# `herdr-session-naming` and the composed label stays readable.
 fm_herdr_name_task_segment() {  # <task-id>
   local id=${1:-}
   printf '%s' "${id#fm-}"
 }
 
-# fm_herdr_name_label <host> <project> <task-id>: compose the display label.
-# Each segment is sanitized; a segment equal to the one before it is dropped.
-fm_herdr_name_label() {  # <host> <project> <task-id>
-  local host project task seg out=fm prev=
-  host=$(fm_herdr_name_sanitize "${1:-}")
-  project=$(fm_herdr_name_sanitize "${2:-}")
-  task=$(fm_herdr_name_sanitize "$(fm_herdr_name_task_segment "${3:-}")")
-  for seg in "$host" "$project" "$task"; do
+# fm_herdr_name_label <prefix> <host> <project> <task-id>: compose the display
+# label. Each segment is sanitized; an empty host is omitted; a segment equal
+# to the one before it is dropped.
+fm_herdr_name_label() {  # <prefix> <host> <project> <task-id>
+  local prefix host project task seg out='' prev=''
+  prefix=$(fm_herdr_name_sanitize "${1:-}")
+  host=$(fm_herdr_name_sanitize "${2:-}")
+  project=$(fm_herdr_name_sanitize "${3:-}")
+  task=$(fm_herdr_name_sanitize "$(fm_herdr_name_task_segment "${4:-}")")
+  [ -n "$prefix" ] || prefix=$FM_HERDR_NAME_DEFAULT_PREFIX
+  for seg in "$prefix" "$host" "$project" "$task"; do
     [ -n "$seg" ] || continue
     [ "$seg" = "$prev" ] && continue
-    out="$out-$seg"
+    if [ -z "$out" ]; then out=$seg; else out="$out-$seg"; fi
     prev=$seg
   done
   printf '%s' "$out"
@@ -102,12 +123,38 @@ fm_herdr_name_label() {  # <host> <project> <task-id>
 # or anything else); <project-dir> is the resolved project directory for a
 # crewmate/scout and is ignored for a secondmate, whose project is its own id.
 fm_herdr_name_label_for() {  # <config-dir> <kind> <task-id> <project-dir>
-  local config_dir=${1:-} kind=${2:-} id=${3:-} project_dir=${4:-} project host
+  local config_dir=${1:-} kind=${2:-} id=${3:-} project_dir=${4:-} project prefix host
   if [ "$kind" = secondmate ]; then
     project=$id
   else
     project=$(basename "$project_dir" 2>/dev/null)
   fi
-  host=$(fm_herdr_name_host "$config_dir")
-  fm_herdr_name_label "$host" "$project" "$id"
+  prefix=$(fm_herdr_name_prefix "$config_dir")
+  host=$(fm_herdr_name_host_optional "$config_dir")
+  fm_herdr_name_label "$prefix" "$host" "$project" "$id"
+}
+
+# fm_herdr_name_seed_host_config <home> <token>: write the sanitized token into
+# <home>/config/herdr-session-host ONLY when that file does not already exist, so
+# a deliberate operator override is never clobbered. The remote-secondmate
+# launch uses this to give that home its registry host segment for its own tab
+# and every crewmate or scout it later spawns. Best-effort: a naming seed never
+# fails a caller and returns 0 even when nothing is written.
+fm_herdr_name_seed_host_config() {  # <home> <token>
+  local home=${1:-} token config_dir host_file tmp
+  token=$(fm_herdr_name_sanitize "${2:-}")
+  [ -n "$home" ] && [ -n "$token" ] || return 0
+  config_dir="$home/config"
+  host_file="$config_dir/$FM_HERDR_NAME_HOST_CONFIG"
+  [ -L "$config_dir" ] && return 0
+  if [ -e "$host_file" ] || [ -L "$host_file" ]; then
+    return 0
+  fi
+  [ -d "$config_dir" ] || return 0
+  tmp="$host_file.tmp.$$"
+  if printf '%s\n' "$token" > "$tmp" 2>/dev/null && mv -f "$tmp" "$host_file" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
 }

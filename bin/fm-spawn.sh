@@ -848,9 +848,10 @@ spawn_remote_secondmate() {
   fi
   launch_args=("$id" "$harness" "$model" "$effort" "$backend")
   [ -z "$remote_traceparent" ] || launch_args+=("$remote_traceparent")
-  # Hand the remote host this route's registry host token so the secondmate's
-  # Herdr tab display name uses the exact `fm-<host>-<project>-<task-id>`
-  # host segment the captain sees for this machine (bin/fm-herdr-name-lib.sh).
+  # Hand the remote host this route's registry host token; its launch seeds the
+  # remote home's config/herdr-session-host when absent, so the secondmate's tab
+  # and every crewmate/scout it later spawns share one `adix-[<host>-]...` host
+  # segment (bin/fm-herdr-name-lib.sh).
   launch_args+=(--herdr-host "$host")
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" < /dev/null 2>&1); then
@@ -3070,12 +3071,13 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 W="fm-$ID"
-# Herdr's visible per-task label is the display name fm-<host>-<project>-<task-id>
-# (bin/fm-herdr-name-lib.sh). It applies to a freshly CREATED task tab only: an
-# adopted endpoint keeps the label it was created with, and recovery of an
-# existing presentation journal reuses the label recorded in that journal, so no
-# live session is renamed or restarted. `fm-<id>` stays the adapter's identity
-# anchor, passed alongside as the legacy alias for husk replacement.
+# Herdr's visible per-task label is the display name
+# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh). It applies
+# to a freshly CREATED task tab only: an adopted endpoint keeps the label it was
+# created with, and recovery of an existing presentation journal reuses the label
+# recorded in that journal, so no live session is renamed or restarted. `fm-<id>`
+# stays the adapter's identity anchor, passed alongside as the legacy alias for
+# husk replacement.
 HERDR_TASK_LABEL=$W
 if [ "$BACKEND" = herdr ]; then
   HERDR_TASK_LABEL=$(fm_herdr_name_label_for "$CONFIG" "$KIND" "$ID" "$PROJ_ABS")

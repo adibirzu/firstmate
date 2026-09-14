@@ -101,14 +101,14 @@ printf '%s' "$POST_CREATE_TABS" | jq -e --arg t "$SEEDED_TAB_ID" '.result.tabs[]
   && fail "the seeded default tab ($SEEDED_TAB_ID) should have been pruned but is still present: $POST_CREATE_TABS"
 pass "real herdr: create_task prunes the freshly-created workspace's seeded default tab, leaving exactly one clean fm-<id> task tab"
 
-# --- display name fm-<host>-<project>-<task-id> on a real tab ----------------
+# --- display name <prefix>-[<host>-]<project>-<task-id> on a real tab --------
 # The captain-visible label is composed by bin/fm-herdr-name-lib.sh and handed
 # to create_task; verify the real client stores and returns it byte-for-byte
 # via its own CLI, then tear the trial tab down.
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-herdr-name-lib.sh"
 NAME_LABEL=$(FM_HERDR_HOST=fm-smokehost fm_herdr_name_label_for /tmp ship fm-smoke-name /tmp/proj/firstmate)
-[ "$NAME_LABEL" = "fm-fm-smokehost-firstmate-smoke-name" ] || fail "naming library produced an unexpected label: $NAME_LABEL"
+[ "$NAME_LABEL" = "adix-fm-smokehost-firstmate-smoke-name" ] || fail "naming library produced an unexpected label: $NAME_LABEL"
 NAME_IDS=$(fm_backend_herdr_create_task "$CONTAINER" "$NAME_LABEL" /tmp) || fail "display-name create_task failed"
 read -r NAME_TAB NAME_PANE <<EOF
 $NAME_IDS
@@ -117,7 +117,7 @@ EOF
 REAL_LABEL=$(fm_backend_herdr_cli "$SESSION" tab get "$NAME_TAB" 2>/dev/null | jq -r '.result.tab.label // empty')
 [ "$REAL_LABEL" = "$NAME_LABEL" ] || fail "real herdr stored '$REAL_LABEL', expected the display name '$NAME_LABEL'"
 fm_backend_herdr_cli "$SESSION" tab close "$NAME_TAB" >/dev/null 2>&1 || fail "could not tear down the display-name trial tab"
-pass "real herdr: a task tab carries the fm-<host>-<project>-<task-id> display name byte-for-byte through herdr's own CLI"
+pass "real herdr: a task tab carries the <prefix>-[<host>-]<project>-<task-id> display name byte-for-byte through herdr's own CLI"
 
 # NOTE: create_task no longer refuses EVERY same-labeled duplicate
 # unconditionally - a same-labeled tab whose pane hosts no registered agent is

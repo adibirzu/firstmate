@@ -14,6 +14,12 @@
 #   fm-remote-secondmate-control.sh update <id>
 #   fm-remote-secondmate-control.sh retire <id> [--force]
 #
+# The optional launch `--herdr-host <token>` is this route's registry host token.
+# `launch` seeds the secondmate home's local config/herdr-session-host with it
+# when that file does not already exist (never clobbering an operator override),
+# so the mate's own Herdr tab and every later crewmate or scout it spawns from
+# that home share one host segment in the fm-herdr-name-lib.sh display name.
+#
 # Remote placement ends here, but the second-mate agent always runs on the
 # Herdr backend in the dedicated fm-remote session, so launch refuses any other
 # selection rather than reading this home's config/backend. The interactive
@@ -65,9 +71,11 @@ REMOTE_HERDR_SESSION=fm-remote
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-herdr-name-lib.sh
+. "$SCRIPT_DIR/fm-herdr-name-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 validate_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) die "invalid secondmate id: $1" ;; esac; }
 
 validate_home() { # <id> [allow-absent]
@@ -156,8 +164,8 @@ cmd_launch() {
   local -a rest=()
   # An optional --herdr-host <token> (or --herdr-host=<token>) lets the parent
   # hand this host the registry host token for the secondmate's Herdr task tab
-  # display name (fm-<host>-<project>-<task-id>, bin/fm-herdr-name-lib.sh).
-  # Without it the remote spawn falls back to this host's own short hostname.
+  # display name (<prefix>-<host>-<project>-<task-id>, bin/fm-herdr-name-lib.sh).
+  # Without it this home renders the plain host-less <prefix>-<project>-<task-id>.
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --herdr-host)
@@ -216,6 +224,11 @@ cmd_launch() {
   # already fast-forwarded this home to ITS primary commit and pushed inherited
   # local material, so this spawn must not redo either against this host's own
   # Firstmate copy, which would target the wrong checkout.
+  #
+  # Seed this home's own config/herdr-session-host with the registry host token
+  # BEFORE the spawn (only when absent), so the secondmate's tab and every later
+  # local crewmate/scout spawned from this home resolve the same host segment.
+  fm_herdr_name_seed_host_config "$TARGET_HOME" "$herdr_host"
   ARGS=("$id" "$TARGET_HOME" --secondmate --harness "$harness" --backend "$selected_backend")
   [ "$model" = - ] || ARGS+=(--model "$model")
   [ "$effort" = - ] || ARGS+=(--effort "$effort")
@@ -223,7 +236,7 @@ cmd_launch() {
   if ! out=$(HERDR_SESSION="$REMOTE_HERDR_SESSION" FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
     FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_SKIP_SECONDMATE_INHERIT=1 \
-    FM_SKIP_SECONDMATE_SYNC=1 FM_HERDR_HOST="$herdr_host" \
+    FM_SKIP_SECONDMATE_SYNC=1 \
     "$SCRIPT_DIR/fm-spawn.sh" "${ARGS[@]}" 2>&1); then
     [ -z "$out" ] || printf '%s\n' "$out" >&2
     die "remote host-local secondmate launch failed"
