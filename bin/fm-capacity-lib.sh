@@ -11,6 +11,11 @@
 # The router README and policy schema own the gauge definitions and thresholds;
 # docs/configuration.md points at them rather than restating the contract.
 #
+# Spawn admission asks the bare `capacity` purpose, so the one-suite-at-a-time
+# slot is context here and never refuses a spawn: the rule serializes suite
+# STARTS, not agent launches. The purpose-scoped `capacity --for suite` verdict
+# is enforced by bin/fm-test-run.sh before it starts a full suite.
+#
 # WHY THE GUARD STILL EXISTS HERE
 # A saturated machine is not a throughput problem, it is a "the operator cannot
 # use his own computer" problem, so every spawn is admitted against the router's

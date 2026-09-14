@@ -1236,6 +1236,7 @@ SH
     # An authored role heading must neither suppress nor duplicate the current
     # worker contract; the launch section is its single, superseding owner.
     assert_grep 'follow this brief instead of that supervisor contract' "$prompt" "$kind command did not deliver the role correction"
+    assert_grep 'capacity --for suite' "$prompt" "$kind command did not deliver the suite-start contract"
     assert_grep 'brief for' "$prompt" "$kind command lost the task"
     [ "$(grep -c '^# Current worker role contract$' "$prompt")" -eq 1 ] ||
       fail "$brief_kind $kind duplicated the delivered worker contract"

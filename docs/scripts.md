@@ -61,6 +61,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
+| `fm-worker-isolation-check.sh` | Fail closed when a worker's shell is not the exact assigned task worktree, never a firstmate home or primary checkout |
 | `fm-berth.sh`            | Print opt-in per-project session-berth environments and lock status                  |
 | `fm-name.sh`             | Derive a stable readable crew name from a task id                                    |
 | `fm-graphify.sh`         | Build or query a fleet-only Graphify orientation index stored outside the project    |
@@ -133,6 +134,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-unregister.sh` | Retire a custom watcher check and its trust binding by validated task id            |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
+| `fm-check-shim-lib.sh`   | Single owner of writing and registering a custom watcher check shim and its rollback contract |
+| `fm-station-idle.sh`     | Read-only per-station idle-window probe and its watcher check for gating disruptive herdr/firstmate updates |
 | `fm-tool-update-check.sh` | Report watched tooling with an update available, and updates installed but left inert by PATH order |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication, merge-notification identity, and retirement |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated PR/MR-poll sidecars           |

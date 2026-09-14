@@ -440,6 +440,10 @@ fm_backend_target_of_meta() {  # <meta-file>
 # valid only when their window name itself is exactly fm-<task-id>.
 # On success, sets FM_BACKEND_VALIDATED_BACKEND and
 # FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
+# The optional --allow-missing-window relaxation is for fm-teardown's legacy
+# pre-spawn_gen husks only: identity fields (worktree, project, backend, task
+# binding) are still validated exactly, FM_BACKEND_VALIDATED_TARGET is left
+# empty, and the caller must supply the separate retirability proof.
 fm_backend_meta_exact_value() {  # <meta-file> <key>
   local meta=$1 key=$2 count value
   count=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
@@ -455,9 +459,9 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
-fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
-  local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface
+fm_backend_validate_task_endpoint() {  # <meta-file> <task-id> [--allow-missing-window]
+  local meta=$1 id=$2 allow_missing_window=${3:-} backend_count backend window worktree project binding_count binding
+  local window_count session pane recorded_session workspace tab terminal worktree_id surface
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -468,10 +472,24 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task endpoint identity has an invalid task id; preserving task state." >&2
     return 1
   esac
-  window=$(fm_backend_meta_exact_value "$meta" window) || {
+  # A window endpoint is the ordinary requirement. --allow-missing-window is the
+  # one caller-authorized relaxation, used only by fm-teardown's legacy-record
+  # path for a record that predates both spawn_gen and any window: the identity
+  # fields below are still validated exactly, and the caller owns the separate
+  # proof that the record's worktree is clean and landed or already gone.
+  window_count=$(grep -c '^window=' "$meta" 2>/dev/null || true)
+  case "$window_count" in
+    0) window= ;;
+    1) window=$(fm_backend_meta_exact_value "$meta" window) || window= ;;
+    *)
+      echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
+      return 1
+      ;;
+  esac
+  if [ -z "$window" ] && [ "$allow_missing_window" != --allow-missing-window ]; then
     echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
     return 1
-  }
+  fi
   worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
     return 1
@@ -511,6 +529,16 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   if [ -n "$binding" ] && [ "$binding" != "$id" ]; then
     echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
     return 1
+  fi
+  if [ -z "$window" ]; then
+    # The caller authorized a missing window, and every identity field above is
+    # valid. There is no endpoint target to hand back; the caller decides
+    # whether the record is retirable from its own worktree evidence.
+    # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+    FM_BACKEND_VALIDATED_BACKEND=$backend
+    # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+    FM_BACKEND_VALIDATED_TARGET=
+    return 0
   fi
 
   case "$backend" in

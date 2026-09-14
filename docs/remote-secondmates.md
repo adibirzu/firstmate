@@ -248,6 +248,49 @@ SSH exit 255 preserves both the route and local records because completion is un
 `--force` remains the explicit discard path and requires the same captain authority as local secondmate discard.
 No generic remote delete or write surface exists: remote writes are confined to inherited allowlist files and backlog handoff scratch files, and remote home removal is reachable only through guarded secondmate retirement.
 
+## Idle-window update gate
+
+A herdr update restarts the whole server on a station and stops every pane on that host, so the captain's rule is that herdr and firstmate are updated on a station only when its tasks are finished, never mid-run.
+`bin/fm-station-idle.sh <station>` encodes that rule as a read-only probe: it prints exactly one line, `station-idle: <station>`, only when every Firstmate home on that station is provably idle, and otherwise stays silent.
+The probe is the condition half only - it never performs the update.
+Homes are resolved from this home's `data/secondmates.md`: a remote station matches its `host:` routes, so `adi2` reaches a route whose host alias is `adi2-ts`, while the local station `local` matches the local routes plus this home.
+A station is idle when every home has zero in-flight tasks, no recorded task endpoint is live, and herdr on that host reports no `working` or `blocked` agent in any session.
+The line is news once and only after the station has been idle continuously for `FM_STATION_IDLE_WINDOW` seconds (default 300), so a brief gap between tasks is not mistaken for a real window.
+The probe's own header is the single owner of its flags, environment knobs, and failure behavior.
+
+Register the gate per station once, from the primary home, so the watcher turns the line into a `check:` wake:
+
+```sh
+bin/fm-station-idle.sh arm adi1
+bin/fm-station-idle.sh arm adi2
+bin/fm-station-idle.sh arm adi3
+```
+
+`disarm <station>` removes the check and its record.
+The update itself is always a wake-time decision, never an action bound to the condition.
+
+When a station reports idle, run the per-station update sequence:
+
+```sh
+# 1. re-verify the whole host is still idle (the wake is a moment, not a grant)
+bin/fm-station-idle.sh <station>
+
+# 2. update herdr on that host - the disruptive step that stops every pane
+ssh <ssh-alias> 'herdr update'
+
+# 3. fast-forward firstmate and every local or remote secondmate home
+bin/fm-update.sh
+
+# 4. restart the second mates that live on that host
+bin/fm-secondmate-restart.sh <id>...
+
+# 5. verify
+ssh <ssh-alias> 'herdr --version; herdr session list'
+```
+
+Per-station targets from the fleet inventory: adi2 needs `herdr 0.7.4 -> 0.8.2` and `treehouse v2.0.1 -> v2.3.0`, while adi1, adi3, and the mini are already on herdr 0.8.2 and take only the firstmate fast-forward.
+A station with no registered home yet (for example a not-yet-onboarded adi3) is still probed host-wide through herdr, and an unreachable host keeps the gate silent rather than reporting a window that was never proven.
+
 ## Verification
 
 The portable tests use the real entrypoint protocol, real git repositories, a deterministic SSH boundary, a stateful host-local Herdr CLI fixture, and a controlled account fixture for the readiness gate.
@@ -268,6 +311,7 @@ bin/fm-test-run.sh tests/fm-remote-reply.test.sh
 bin/fm-test-run.sh tests/fm-remote-backlog-handoff.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-lifecycle-e2e.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-trace-context.test.sh
+bin/fm-test-run.sh tests/fm-station-idle.test.sh
 ```
 
 The account-level checks the doctor performs - a real Aqua login session, a real `launchctl` domain, and a real herdr server - are only ever exercised against fixtures here, so the readiness gate's behavior on a genuine Mac remains an operator-run smoke test.

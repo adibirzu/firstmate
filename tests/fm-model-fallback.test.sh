@@ -347,6 +347,54 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   pass "full exhaustion consumes evidence before blocking, and never blocks twice on it"
 }
 
+# A task meta shared with an armed merge poll carries the canonical
+# pr=/pr_head= identity block. The fallback cursor rewrite must keep that block
+# trailing: appending fallback_cursor= after it made bin/fm-pr-lib.sh's
+# fm_pr_metadata_identity_parse reject the record and silently disarm the merge
+# poll. This exercises the real writer twice so a repeated advance cannot
+# duplicate the cursor or push it back past the identity block.
+{
+  setup_case apply-pr-meta-layout apply-a6 "$STEP_CHAIN" "$DEPLETED_LINE" depleted
+  fm_write_meta "$CASE_HOME/state/apply-a6.meta" \
+    "window=firstmate:fm-apply-a6" \
+    "endpoint_task_id=apply-a6" \
+    "worktree=$CASE_WT" \
+    "project=$CASE_PROJ" \
+    "harness=agy" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "model=gemini-3.7-flash-high" \
+    "pr=https://github.com/o/r/pull/9" \
+    "pr_head=0123456789abcdef0123456789abcdef01234567"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a6 apply >/dev/null 2>&1 \
+    || fail "apply over a PR-armed meta should succeed"
+  meta="$CASE_HOME/state/apply-a6.meta"
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-pr-lib.sh"
+  fm_pr_metadata_identity_parse "$meta" \
+    || fail "the fallback cursor rewrite disarmed the PR identity parser"
+  [ "$FM_PR_META_URL" = https://github.com/o/r/pull/9 ] || fail "fallback rewrite changed the PR identity"
+  cursor_line=$(grep -n '^fallback_cursor=' "$meta" | cut -d: -f1)
+  pr_line=$(grep -n '^pr=' "$meta" | cut -d: -f1)
+  [ -n "$cursor_line" ] && [ -n "$pr_line" ] || fail "cursor or PR identity missing after rewrite"
+  [ "$cursor_line" -lt "$pr_line" ] || fail "the fallback cursor was appended after the PR identity block"
+  [ "$(grep -c '^fallback_cursor=' "$meta")" -eq 1 ] || fail "the first advance duplicated the cursor"
+
+  printf 'working: gemini-3.6-flash-high also returned 429 quota exceeded\n' \
+    >> "$CASE_HOME/state/apply-a6.status"
+  FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a6 apply >/dev/null 2>&1 \
+    || fail "a second fresh-evidence apply should step again"
+  [ "$(grep -c '^fallback_cursor=' "$meta")" -eq 1 ] || fail "a repeated advance duplicated the cursor"
+  cursor_line=$(grep -n '^fallback_cursor=' "$meta" | cut -d: -f1)
+  pr_line=$(grep -n '^pr=' "$meta" | cut -d: -f1)
+  [ "$cursor_line" -lt "$pr_line" ] || fail "the second advance moved the cursor past the PR identity"
+  fm_pr_metadata_identity_parse "$meta" || fail "the second advance disarmed the PR identity parser"
+  pass "the fallback cursor rewrite preserves the trailing PR identity block without duplicating the cursor"
+}
+
 # --- apply over the REAL handoff path ---------------------------------------
 
 {

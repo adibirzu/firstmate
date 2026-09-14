@@ -16,7 +16,12 @@
 #   placeholders, an empty Task, or an incomplete pair of Task subsections.
 #   Every ship or scout spawn renders `launch-brief.md`; for a no-mistakes ship
 #   it also carries the current `--intent` contract and the extracted captain
-#   intent. A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
+#   intent. The ship/scout isolation assertion names the assigned worktree through
+#   a `{WORKTREE}` placeholder bin/fm-brief.sh emits, which this script replaces
+#   with the exact leased or reused path once it is known, so the worker's first
+#   command checks that path; a brief scaffolded before the placeholder existed
+#   warns once and launches without it, matching the delivery-contract pattern.
+#   A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
 #   provenance-marking rules; unmarked legacy Tasks stop for migration rather
 #   than becoming intent. That library owns the parsing and intent rules. When
 #   the explicit mode carries less rigor than the project's standing posture, a
@@ -211,10 +216,13 @@
 #   Every kind - crewmate, scout, and secondmate - is admitted by the
 #   machine-capacity guard first (bin/fm-capacity-lib.sh, backed by
 #   llm-router-axi's `capacity` verdict and policy): it reads live free memory,
-#   swap in use, kernel memory pressure, worker-root agent count, load per core,
-#   and the one-suite-at-a-time slot, and refuses a spawn when the machine has no
-#   headroom, printing what it measured against what it wanted. It only declines
-#   NEW work and never touches anything already running.
+#   swap in use, kernel memory pressure, worker-root agent count, and load per
+#   core, and refuses a spawn when the machine has no headroom, printing what it
+#   measured against what it wanted. The one-suite-at-a-time slot is context
+#   here and never refuses a spawn; bin/fm-test-run.sh enforces it with
+#   `capacity --for suite` before starting a full suite, because that rule
+#   serializes suite starts, not agent launches. The guard only declines NEW
+#   work and never touches anything already running.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -2045,6 +2053,26 @@ shell_quote() {
   printf "'"
 }
 
+# bin/fm-brief.sh emits the exact assigned-worktree placeholder {WORKTREE} in the
+# ship/scout isolation assertion. Once the worktree is known (leased, Orca-created,
+# or reused in place) render it into the final launch brief so the worker's first
+# command checks the exact path it was launched in. A brief scaffolded before the
+# placeholder existed names no assigned worktree: warn once, matching the missing
+# delivery-contract pattern, rather than refuse.
+render_brief_worktree_name() {  # <brief-file> <worktree>
+  local brief=$1 worktree=$2 content quoted
+  [ -f "$brief" ] || return 0
+  if ! grep -qF '{WORKTREE}' "$brief"; then
+    if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+      echo "warning: $brief names no assigned worktree (scaffolded before the isolation assertion named it); launching without the exact-path isolation check - re-scaffold the brief to enable it" >&2
+    fi
+    return 0
+  fi
+  content=$(cat "$brief")
+  quoted=$(shell_quote "$worktree")
+  printf '%s\n' "${content//'{WORKTREE}'/$quoted}" > "$brief"
+}
+
 resolve_kimi_binary() {
   local candidate dir fallback
   candidate=$(command -v kimi 2>/dev/null || true)
@@ -3048,6 +3076,14 @@ if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ] && [ "${REUSE_OLD_STA
   WT_TARGET=$T
   SES=${T%%:*}
 else
+  # The recorded endpoint is gone (herdr reports pane_not_found, which the
+  # classifier reads as `missing`): recreate it here rather than treating a
+  # stale identity as adoptable. Say plainly that a fresh endpoint is being
+  # created, so a relaunch that silently fell back to a new endpoint is never
+  # mistaken for an ordinary in-place adoption of the recorded one.
+  if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ]; then
+    echo "note: task $ID's recorded endpoint $REUSE_OLD_TARGET is gone (read as '${REUSE_OLD_STATE:-unknown}'); creating a fresh endpoint" >&2
+  fi
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
@@ -3326,22 +3362,32 @@ spawn_current_path() {  # <target>
   esac
 }
 spawn_send_literal() {  # <target> <text>
+  local rc=0
   case "$BACKEND" in
-    tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
-    herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-    zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
-    orca) fm_backend_orca_send_literal "$1" "$2" ;;
-    cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+    tmux) fm_backend_tmux_send_literal "$1" "$2" || rc=$? ;;
+    herdr) fm_backend_herdr_send_literal "$1" "$2" || rc=$? ;;
+    zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" || rc=$? ;;
+    orca) fm_backend_orca_send_literal "$1" "$2" || rc=$? ;;
+    cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send literal text to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 spawn_send_key() {  # <target> <key>
+  local rc=0
   case "$BACKEND" in
-    tmux) fm_backend_tmux_send_key "$1" "$2" ;;
-    herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-    zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
-    orca) fm_backend_orca_send_key "$1" "$2" ;;
-    cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
+    tmux) fm_backend_tmux_send_key "$1" "$2" || rc=$? ;;
+    herdr) fm_backend_herdr_send_key "$1" "$2" || rc=$? ;;
+    zellij) fm_backend_zellij_send_key "$1" "$2" "$W" || rc=$? ;;
+    orca) fm_backend_orca_send_key "$1" "$2" || rc=$? ;;
+    cmux) fm_backend_cmux_send_key "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send key '$2' to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 
 kimi_capture() {
@@ -4437,6 +4483,7 @@ fi
 if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
+render_brief_worktree_name "$BRIEF" "$WT"
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
