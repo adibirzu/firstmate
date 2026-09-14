@@ -900,7 +900,7 @@ do_relaunch() {
   # cross-harness move into an adapter with no native credit identity gets no
   # guess - the stale provider stays dropped.
   case "$TARGET_HARNESS" in
-    claude|codex|grok|cursor|agy) spawn_args+=(--provider "$TARGET_HARNESS") ;;
+    claude|codex|opencode|grok|cursor|agy) spawn_args+=(--provider "$TARGET_HARNESS") ;;
     *)
       if [ "$TARGET_HARNESS" = "$PRIOR_RECORDED_HARNESS" ]; then
         recorded_provider=$(fm_meta_get "$META" provider)

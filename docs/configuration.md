@@ -474,7 +474,7 @@ The reserve, cooldown, telemetry age, in-run step-down chain, and machine-capaci
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "provider": "<claude|codex|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota pool id>" }
+        { "harness": "<adapter>", "provider": "<claude|codex|opencode|grok|cursor|agy, optional>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "quotaWindow": "<optional quota pool id>" }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
@@ -492,7 +492,7 @@ Profile `provider`, `model`, `effort`, and `quotaWindow` fields and rule `why` a
 OpenRouter Auto Router is requested as the model id `openrouter/auto` on a harness that forwards `--model`, typically opencode; LiteLLM catalogs may expose the same router as `or-auto`.
 `quotaWindow` names the one pool this route actually draws on so a provider whose pools are billed separately is priced on the pool it uses instead of on its worst pool; `llm-router-axi` owns how a pool name maps to the live windows.
 Read the current model ids from `bin/fm-model-refresh.sh` before writing either field.
-Native `claude`, `codex`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for those harnesses a provider that is present must match the harness.
+Native `claude`, `codex`, `opencode`, `grok`, `cursor`, and `agy` profiles establish the same-named provider without a redundant field; for those harnesses a provider that is present must match the harness.
 A non-native adapter needs an explicit provider when it participates in subscription-aware selection, because model spelling does not establish account identity.
 Kimi 0.29.1 is rejected from subscription-aware profiles because its guarded Herdr lifecycle exit was not deterministic after interrupt; no other Moonshot route is substituted.
 Every profile array is an implicit subscription-aware choice resolved through `llm-router-axi select` after firstmate removes candidates that do not meet task fit or the strongest required reasoning class.
@@ -503,6 +503,8 @@ Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstr
 Malformed JSON, an empty or malformed rule/default array, an unverified harness, an unsupported provider relationship, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+Bootstrap also validates the optional fallback fields `modelFallback` (or its legacy alias `_model_fallback`), `modelFallbackCycles`, and `fallbackLanes` against the same contract the router policy enforces: each entry names a verified harness, a `modelFallback` chain is a non-empty array of unique model ids, and a lane listed in `modelFallbackCycles` needs a `modelFallback` chain with at least two model ids, so grok can sit in the cycle only once its chain carries its accepted ids `grok-4.6` and `grok-4.5`.
+The live step-down chain remains the router policy's own, as above; validating the legacy fields here keeps an inherited or copied dispatch file from silently carrying an invalid chain.
 
 Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
 At the supervision status-event boundary, `bin/fm-watch.sh` invokes `apply` automatically for ship and scout tasks; without fresh classified depletion evidence, `apply` refuses and does not relaunch the worker.

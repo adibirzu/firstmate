@@ -381,6 +381,29 @@ test_selected_provider_is_persisted_and_native_identity_is_enforced() {
   pass "selected routing providers persist and native identities stay aligned"
 }
 
+test_opencode_is_accepted_as_a_native_subscription_provider_identity() {
+  local rec id out status
+  id=profile-opencode-provider-z13b
+  rec=$(make_spawn_case profile-opencode-provider opencode "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --harness opencode --provider opencode --model opencode-go/deepseek-v4.1-flash)
+  status=$?
+  expect_code 0 "$status" "opencode native provider identity should be accepted"
+  assert_grep "harness=opencode" "$HOME_DIR/state/$id.meta" "meta missing opencode harness"
+  assert_grep "provider=opencode" "$HOME_DIR/state/$id.meta" "meta missing opencode routing provider"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    profile-opencode-mismatch-z13b "$PROJ_DIR" --harness opencode --provider claude)
+  status=$?
+  expect_code 1 "$status" "opencode provider mismatch must refuse before spawn"
+  assert_contains "$out" "native harness opencode requires provider opencode" "opencode provider mismatch was unclear"
+  assert_absent "$HOME_DIR/state/profile-opencode-mismatch-z13b.meta" "mismatched opencode provider wrote metadata"
+  pass "opencode is accepted as a native subscription routing provider identity"
+}
+
 test_active_dispatch_profile_allows_positional_harness() {
   local rec id out status
   id=profile-positional-z14
@@ -1266,6 +1289,7 @@ test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
 test_selected_provider_is_persisted_and_native_identity_is_enforced
+test_opencode_is_accepted_as_a_native_subscription_provider_identity
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
