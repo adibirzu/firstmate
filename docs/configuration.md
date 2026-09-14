@@ -257,6 +257,7 @@ The helper's header owns exact parsing, publication, and report output mechanics
 
 Every spawn - crewmate, scout, and secondmate, in every home - is admitted only when the machine still has room for another agent.
 `bin/fm-spawn.sh` calls `bin/fm-capacity-lib.sh`, a thin adapter over `llm-router-axi capacity`, before it creates anything, and a refusal prints each signal the router measured against the value it wanted.
+A relaunch (`bin/fm-control.sh relaunch`, driven by `bin/fm-secondmate-restart.sh`) consults the same guard before stopping the running agent, so a capacity refusal leaves the existing agent alive instead of stranding a bare shell after the stop.
 Run `bin/fm-capacity.sh` at any time to see the same reading without attempting a spawn, or `bin/fm-capacity.sh check` for a script-friendly exit status.
 
 The check declines new work and nothing else.
