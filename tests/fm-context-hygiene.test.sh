@@ -63,9 +63,10 @@ reset_case() {
   INBOX_UNHANDLED=1
   _context_hygiene_harness=""
   export FM_CONTEXT_HYGIENE_HARNESS=claude
-  STATE="$STATE_DIR"
-  CONFIG="$CONFIG_DIR"
-  DATA="$DATA_DIR"
+  # Read as globals by the sourced watcher functions, so export them.
+  export STATE="$STATE_DIR"
+  export CONFIG="$CONFIG_DIR"
+  export DATA="$DATA_DIR"
 }
 
 # --- command table -----------------------------------------------------------
@@ -260,6 +261,7 @@ test_heartbeat_interval() {
   reset_case
   HEARTBEAT=600
   HEARTBEAT_MAX=3600
+  export HEARTBEAT HEARTBEAT_MAX
   printf '0\n' > "$STATE_DIR/.heartbeat-streak"
   [ "$(heartbeat_interval)" = 600 ] || fail "a fresh idle fleet must heartbeat on the base cadence"
   printf '1\n' > "$STATE_DIR/.heartbeat-streak"
@@ -326,6 +328,7 @@ test_stall_tick_suppresses_healthy_idle() {
   printf '%s\t7\tcheck\trouted\tcheck: routed row\n' "$epoch" > "$mate_home/state/.wake-queue"
   printf '%s %s-7\n' "$(( now - 2 ))" "$epoch" > "$STATE_DIR/.secondmate-wake-progress-mate"
   SECONDMATE_WAKE_STALL_SECS=1
+  export SECONDMATE_WAKE_STALL_SECS
   INBOX_UNHANDLED=1
   COMPOSER_STATE=empty
   secondmate_in_active_turn() { return 1; }
