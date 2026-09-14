@@ -179,6 +179,7 @@ cmux has no session layer at all - one workspace per task, in whatever cmux wind
 The caller-facing label remains `fm-<id>`, but the actual cmux workspace title is scoped by the active `FM_HOME` readable label plus a short hash of the resolved `FM_ROOT` path as `fm-<home-label>-<id>`.
 Test cleanup must use the guarded path in [`docs/cmux-backend.md`](cmux-backend.md#current-operation-and-safety), never enumerate-and-close every workspace.
 `config/backend` is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
+The local, gitignored `config/remote-dev-backend` selects a remote development session's backend (`herdr` default, `tmux` explicit fallback) and is not inherited; [`remote-dev-sessions.md`](remote-dev-sessions.md) owns that backend selection and the session continuity contract.
 
 ## Away-mode supervisor backend (FM_SUPERVISOR_BACKEND / FM_SUPERVISOR_TARGET)
 
