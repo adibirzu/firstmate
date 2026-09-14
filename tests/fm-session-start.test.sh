@@ -784,6 +784,61 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
+# --- context digest: startup-memory-budget enforcement -----------------------
+
+test_context_memory_budget_truncates_learnings() {
+  local rec root home fakebin out i
+  rec=$(new_world context-budget-over)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'small captain preference\n' > "$home/data/captain.md"
+  printf 'FIRST-LEARNINGS-LINE\n' > "$home/data/learnings.md"
+  i=0
+  while [ "$i" -lt 200 ]; do
+    printf 'padding line %s well past any tiny allowance\n' "$i" >> "$home/data/learnings.md"
+    i=$((i + 1))
+  done
+  printf 'LAST-LEARNINGS-LINE\n' >> "$home/data/learnings.md"
+  printf '100\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "FIRST-LEARNINGS-LINE" "over-budget learnings dropped its leading content"
+  assert_contains "$out" "truncated by config/startup-memory-budget" \
+    "an over-budget learnings section was not truncated with a pointer"
+  assert_contains "$out" "data/learnings.md" "the truncation pointer did not name the full file"
+  assert_not_contains "$out" "LAST-LEARNINGS-LINE" "an over-budget learnings file was inlined in full"
+  assert_contains "$out" "small captain preference" \
+    "the captain preference file was dropped under a tight allowance"
+  pass "an over-budget learnings section is truncated with an explicit pointer"
+}
+
+test_context_memory_within_budget_prints_in_full() {
+  local rec root home fakebin out
+  rec=$(new_world context-budget-under)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'a captain preference\n' > "$home/data/captain.md"
+  printf 'LEARNINGS-ALPHA\nLEARNINGS-OMEGA\n' > "$home/data/learnings.md"
+  printf '100000\n' > "$home/config/startup-memory-budget"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "LEARNINGS-ALPHA" "an in-budget learnings file lost its first line"
+  assert_contains "$out" "LEARNINGS-OMEGA" "an in-budget learnings file lost its last line"
+  assert_not_contains "$out" "truncated by config/startup-memory-budget" \
+    "an in-budget learnings file was truncated anyway"
+  pass "a within-budget learnings section prints in full"
+}
+
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
@@ -2693,6 +2748,8 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_context_memory_budget_truncates_learnings
+test_context_memory_within_budget_prints_in_full
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock
