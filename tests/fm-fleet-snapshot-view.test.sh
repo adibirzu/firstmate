@@ -147,7 +147,10 @@ test_empty_fleet_json() {
   ' >/dev/null \
     || fail "empty snapshot schema or absence markers wrong: $out"
   view=$(FM_HOME="$home" "$VIEW")
-  assert_contains "$view" "No live task metadata found." "empty fleet view should say no live metadata"
+  assert_contains "$view" "| local | main | " "empty fleet view should still render the local station"
+  assert_contains "$view" "No queued backlog records found." "empty fleet view should use explicit absence markers"
+  assert_contains "$view" "| - | - | - | - | - | - | - | - | - |" \
+    "empty fleet view should render an explicit placeholder child row"
   pass "empty fleet snapshot and view use explicit absence markers"
 }
 
@@ -628,8 +631,8 @@ EOF
       and .paths.report.present == true
   ' >/dev/null || fail "bold task did not join to override-backed backlog and report"
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$VIEW")
-  assert_contains "$view" "| bold-task | done / status-log | scout | alpha | tmux | present | $data/bold-task/report.md" \
-    "view should render bold in-flight row from snapshot"
+  assert_contains "$view" "| local | alpha | bold-task | done | - | - | - | - | - |" \
+    "view should render the bold in-flight child row from the snapshot"
   assert_contains "$view" "| blocked-reason | Blocked Reason | beta | ship | queued-comma - waits on queued-comma | - |" \
     "view should render blocked reason without title metadata"
   assert_contains "$view" "| done-bracket-pr | Done Bracket PR | gamma | ship | - | https://github.com/kunchenguid/firstmate/pull/43 |" \
@@ -737,19 +740,22 @@ test_view_renders_snapshot() {
   write_fixture "$home"
   fakebin=$(make_fakebin "$home")
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
-  assert_contains "$view" "| ship-task | working / pane | ship | alpha | tmux | present | https://github.com/kunchenguid/firstmate/pull/9" \
-    "view should render ship row from snapshot"
-  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | -" \
+  assert_contains "$view" "Generated: " "view must carry an observation timestamp"
+  assert_contains "$view" "Schema: fm-fleet-snapshot.v1" "view must name the snapshot schema"
+  assert_contains "$view" "| local | main | " "view must render the local home as a station"
+  assert_contains "$view" "| local | secondmate-task | unknown (secondmate metadata is not registered) | present/alive |" \
+    "a local secondmate without a registered ledger must still render as a station"
+  assert_contains "$view" "| local | alpha | ship-task | working | - | - | - | https://github.com/kunchenguid/firstmate/pull/9 | - |" \
+    "view must render child rows with state, model, PR and explicit - fallbacks"
+  assert_contains "$view" "| local | alpha | cmux-task | unknown | - | - | - | - | - |" \
+    "a child with no PR must render explicit - links, never a blank"
+  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | - |" \
     "view should render queued backlog row"
   assert_contains "$view" "| done-task | Done Task | alpha | ship | - | https://github.com/kunchenguid/firstmate/pull/7 |" \
     "view should render done backlog row"
-  assert_contains "$view" "bin/fm-send.sh fm-secondmate-task" \
-    "view should show secondmate send guidance"
-  assert_contains "$view" "| secondmate-task | working / status-log | secondmate | $home/secondmate-home | tmux | present / alive |" \
-    "view should show secondmate endpoint agent liveness"
   assert_not_contains "$view" "fm-peek.sh fm-secondmate-task" \
     "view must not tell firstmate to routinely peek secondmates"
-  pass "fleet view renders the snapshot without secondmate peek guidance"
+  pass "fleet view renders stations, child agents, links, and explicit fallbacks"
 }
 
 test_view_renders_dead_secondmate_agent_status() {
@@ -766,11 +772,11 @@ test_view_renders_dead_secondmate_agent_status() {
   printf 'working: watching delegated scope\n' > "$home/state/dead-secondmate.status"
   fakebin=$(make_fakebin "$home")
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
-  assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead |" \
+  assert_contains "$view" "| local | dead-secondmate | unknown (secondmate metadata is not registered) | present/dead |" \
     "view should distinguish a present secondmate endpoint from a dead agent"
-  assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead | - | $home/secondmate-home (absent) |" \
-    "view should show a recorded missing secondmate home path"
-  pass "fleet view renders secondmate agent liveness"
+  assert_contains "$view" "| - | - | - | - | - | - | - | - | - |" \
+    "an empty fleet must render an explicit placeholder child row, never a blank table"
+  pass "fleet view renders secondmate endpoint liveness and explicit empty state"
 }
 
 # A still-open decision must survive a LATER, UNRELATED terminal event on the same
@@ -1046,18 +1052,25 @@ EOF
 }
 
 write_remote_ledger_summary() {  # <home> <generated-epoch>
-  mkdir -p "$1/state"
-  jq -n --arg home "$1" --argjson epoch "$2" '{
+  local dest=$1
+  mkdir -p "$dest/state"
+  jq -n --arg home "$dest" --argjson epoch "$2" '{
     schema:"fm-secondmate-home-summary.v1",
     hold_classifier_schema:"fm-captain-hold-buckets.v1",
     generated:"2026-09-01T22:00:00Z",generated_epoch:$epoch,home:$home,
     valid:true,reason:null,invalidity:{kind:null,ids:[]},state:"no_active_work",
     active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
     counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
-  }' > "$home/state/home-summary.json"
+  }' > "$dest/state/home-summary.json"
 }
 
-make_timeout_remote_ssh() {  # <dir>
+# make_remote_ssh <dir>: a fake SSH transport that answers per host so one run
+# can exercise every cross-home read outcome:
+#   host-slow - a live but slow home that consumes the per-home budget
+#   host-fail - a live read that produces nothing
+#   host-bad  - a ledger that is not a valid summary
+#   host-ok   - a healthy ledger at $FM_TEST_HEALTHY_LEDGER
+make_remote_ssh() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
   cat > "$fb/fake-ssh" <<'SH'
@@ -1070,15 +1083,36 @@ while [ "$#" -gt 0 ]; do
     *) exit 90 ;;
   esac
 done
-if [ "${1:-}" = "${FM_TEST_SLOW_SSH_HOST:-}" ]; then
-  sleep 30
-  exit 1
-fi
-[ -f "${FM_TEST_HEALTHY_LEDGER:?}" ] || exit 1
-cat "$FM_TEST_HEALTHY_LEDGER"
+case "${1:-}" in
+  host-slow) sleep 30; exit 1 ;;
+  host-fail) exit 1 ;;
+  host-bad) printf 'this is not a valid summary\n'; exit 0 ;;
+  host-ok) cat "${FM_TEST_HEALTHY_LEDGER:?}"; exit 0 ;;
+  *) exit 1 ;;
+esac
 SH
   chmod +x "$fb/fake-ssh"
   printf '%s\n' "$fb"
+}
+
+# register_remote_secondmate <home> <id> <host> <remote-home>: record a remote
+# home in the registry and its local metadata.
+register_remote_secondmate() {  # <home> <id> <host> <remote-home>
+  local home=$1 id=$2 host=$3 remote=$4
+  mkdir -p "$remote/state"
+  printf -- '- %s - fixture (host: %s; root: /remote/root; home: %s; scope: fixture; projects: sample; added 2026-09-01)\n' \
+    "$id" "$host" "$remote" >> "$home/data/secondmates.md"
+  fm_write_meta "$home/state/$id.meta" \
+    "kind=secondmate" "mode=secondmate" "harness=pi" \
+    "remote_host=$host" "remote_root=/remote/root" "home=$remote"
+}
+
+# remote_ledger_cache_path <home> <id> <host> <remote-home>: the exact cache path
+# fm-fleet-snapshot.sh computes for one remote route.
+remote_ledger_cache_path() {  # <home> <id> <host> <remote-home>
+  local home=$1 id=$2 host=$3 remote=$4 key
+  key=$(printf '%s\n%s\n%s\n' "$id" "$host" "$remote" | shasum -a 256 | awk '{print $1}')
+  printf '%s/state/secondmate-summary-cache/%s.json\n' "$home" "$key"
 }
 
 test_view_reports_timed_out_secondmate_home_distinctly() {
@@ -1086,28 +1120,87 @@ test_view_reports_timed_out_secondmate_home_distinctly() {
   home=$(make_home view-timeout)
   slow_home="$TMP_ROOT/view-timeout-slow"
   ok_home="$TMP_ROOT/view-timeout-ok"
-  mkdir -p "$slow_home/state"
   write_remote_ledger_summary "$ok_home" 1000
-  cat > "$home/data/secondmates.md" <<EOF
-- ledger-slow - slow fixture (host: host-slow; root: /remote/root; home: $slow_home; scope: fixture; projects: sample; added 2026-09-01)
-- ledger-ok - healthy fixture (host: host-ok; root: /remote/root; home: $ok_home; scope: fixture; projects: sample; added 2026-09-01)
-EOF
-  fm_write_meta "$home/state/ledger-slow.meta" \
-    "kind=secondmate" "mode=secondmate" "harness=pi" \
-    "remote_host=host-slow" "remote_root=/remote/root" "home=$slow_home"
-  fm_write_meta "$home/state/ledger-ok.meta" \
-    "kind=secondmate" "mode=secondmate" "harness=pi" \
-    "remote_host=host-ok" "remote_root=/remote/root" "home=$ok_home"
-  fb=$(make_timeout_remote_ssh "$home")
+  register_remote_secondmate "$home" ledger-slow host-slow "$slow_home"
+  register_remote_secondmate "$home" ledger-ok host-ok "$ok_home"
+  fb=$(make_remote_ssh "$home")
   view=$(PATH="$fb:$PATH" FM_HOME="$home" \
-    FM_SSH_BIN="$fb/fake-ssh" FM_TEST_SLOW_SSH_HOST=host-slow \
+    FM_SSH_BIN="$fb/fake-ssh" \
     FM_TEST_HEALTHY_LEDGER="$ok_home/state/home-summary.json" \
     FM_SNAPSHOT_SECONDMATE_TIMEOUT=2 "$VIEW")
-  assert_contains "$view" "| ledger-slow | unknown / none | secondmate | - | unknown | timed out |" \
-    "a timed-out remote home must render timed out, not unknown: $view"
-  assert_contains "$view" "| ledger-ok | unknown / none | secondmate | - | unknown | unknown / unknown |" \
+  assert_contains "$view" "| host-slow | ledger-slow | timeout (" \
+    "a timed-out remote home must render timeout, not unknown: $view"
+  assert_contains "$view" "no valid cached copy" \
+    "a timeout must name the missing cached copy: $view"
+  assert_contains "$view" "| host-ok | ledger-ok | no_active_work |" \
     "a healthy remote home must be unaffected by another home's timeout: $view"
+  assert_not_contains "$view" "| host-ok | ledger-ok | timeout" \
+    "one home's timeout must never be attributed to another home: $view"
   pass "fleet view distinguishes a timed-out remote home from unknown"
+}
+
+test_view_reports_stale_cached_remote_home() {
+  local home stale_home fb cache view
+  home=$(make_home view-stale)
+  stale_home="$TMP_ROOT/view-stale-home"
+  register_remote_secondmate "$home" ledger-stale host-fail "$stale_home"
+  write_remote_ledger_summary "$stale_home" 1000
+  cache=$(remote_ledger_cache_path "$home" ledger-stale host-fail "$stale_home")
+  mkdir -p "$(dirname "$cache")"
+  chmod 700 "$(dirname "$cache")"
+  cp "$stale_home/state/home-summary.json" "$cache"
+  chmod 600 "$cache"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$stale_home/state/home-summary.json" "$VIEW")
+  assert_contains "$view" "| host-fail | ledger-stale | no_active_work |" \
+    "a failed live read with a valid cached copy must render the cached state: $view"
+  assert_contains "$view" "remote-ledger-cache/cached" \
+    "a cached read must disclose its source and freshness: $view"
+  assert_contains "$view" "| host-fail | ledger-stale | no_active_work |" \
+    "a stale cached home must never render blank: $view"
+  pass "fleet view renders a stale cached remote home from its cached ledger"
+}
+
+test_view_reports_invalid_remote_ledger_loudly() {
+  local home bad_home fb view
+  home=$(make_home view-invalid)
+  bad_home="$TMP_ROOT/view-invalid-home"
+  register_remote_secondmate "$home" ledger-bad host-bad "$bad_home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$bad_home/state/home-summary.json" "$VIEW")
+  assert_contains "$view" "| host-bad | ledger-bad | unknown (" \
+    "an invalid ledger with no cache must render an explicit unknown, not blank: $view"
+  assert_contains "$view" "missing, unreadable, or invalid" \
+    "an invalid ledger must name the invalidity: $view"
+  assert_not_contains "$view" "| host-bad | ledger-bad | timeout" \
+    "an invalid ledger is not a timeout: $view"
+  assert_not_contains "$view" "| host-bad | ledger-bad | - |" \
+    "an invalid ledger must never render as an absent row: $view"
+  pass "fleet view reports an invalid remote ledger with an explicit reason"
+}
+
+test_view_reads_release_manifest_seam() {
+  local home alt view
+  home=$(make_home view-manifest)
+  view=$(FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "## Release Manifest" "view must always render the manifest seam"
+  assert_contains "$view" "(not present)" "an absent manifest must be stated explicitly, never blank"
+  jq -n '{schema:"release-manifest.v1",generated:"2026-09-14T00:00:00Z",stations:[{id:"a"}]}' \
+    > "$home/data/fleet-release-manifest.json"
+  view=$(FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "Schema: release-manifest.v1" "a present manifest must disclose its own schema"
+  assert_contains "$view" "Generated: 2026-09-14T00:00:00Z" "a present manifest must disclose its stamp"
+  assert_contains "$view" "Top-level entries: 3" "a present manifest must be consumed generically"
+  alt="$home/data/other-manifest.json"
+  jq -n '{schema:"other.v1",generated:"2025-01-01T00:00:00Z"}' > "$alt"
+  view=$(FM_HOME="$home" "$VIEW" --release-manifest "$alt")
+  assert_contains "$view" "Schema: other.v1" "the --release-manifest override must select the named file"
+  assert_not_contains "$view" "Schema: release-manifest.v1" "the override must not read the default path"
+  pass "view consumes an optional release manifest through a documented, schema-agnostic seam"
 }
 
 test_empty_fleet_json
@@ -1129,3 +1222,6 @@ test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
 test_view_reports_timed_out_secondmate_home_distinctly
+test_view_reports_stale_cached_remote_home
+test_view_reports_invalid_remote_ledger_loudly
+test_view_reads_release_manifest_seam

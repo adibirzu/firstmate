@@ -413,6 +413,25 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Only tmux and Herdr can host the away-mode supervisor terminal.
 - No launch command is persisted from 0.8.0, so a restored worker's flags cannot be replayed and are only detected as drift.
 
+## Fleet live view
+
+`bin/fm-fleet-live.sh` surfaces the human fleet view as a live Herdr tab in a named session.
+It ensures one dedicated workspace and tab labeled `<prefix>-fleet-view` (the prefix from [Session naming](#session-naming)) and runs `bin/fm-fleet-view.sh` in that tab's pane, so the local home and every local or remote secondmate home plus their child agents are readable in the current session.
+The view itself is a pure renderer over `fm-fleet-snapshot.sh --json` and the `fm-secondmate-home-summary.v1` contract; it never computes a summary and never invents a second state source.
+Missing data renders `-` (not carried) or `unknown` (not known), never a blank cell, and branch and production are never inferred from a branch.
+
+Verbs are `open`, `refresh`, `close`, and `status`.
+`open` is idempotent: it refreshes a live recorded tab in place, replaces a stale record or a pane-less husk, and prunes only the exact seeded tab returned by its own `workspace create`.
+If the recorded tab belongs to a different session than the one `open` was given, `open` best-effort closes only that exact recorded tab, in the session that recorded it, before creating the new tab in the requested session.
+`close` clears the record and removes only the recorded tab; since that tab is the sole tab of its own dedicated workspace and Herdr refuses an explicit `tab close` of a workspace's last tab, `close` removes it by closing that exclusively-owned workspace, never any other workspace, tab, or label it did not record.
+Session targeting is always explicit: `--session`, then `FM_FLEET_VIEW_SESSION`, then local gitignored `config/fleet-view-session`, then the real `default` session.
+Every verb touches only its own recorded tab, in the session that recorded it, and the surface never calls a server-global or session-lifecycle operation.
+
+Regeneration is explicit only: an operator, or any caller that wants an up-to-date view, re-runs `open` (or `refresh`) directly.
+There is no watcher, poll loop, or background process, and nothing in firstmate calls this primitive automatically today.
+Wiring automatic regeneration into the supervision heartbeat and after each task completion, as recommended by the fleet-view decision set, is tracked as the pending decision `fm-fleet-view-decision-view-regeneration-trigger` and is not implemented here.
+Production and convergence stay display-only, and an optional release manifest is consumed through the documented, schema-agnostic seam described in `bin/fm-fleet-view.sh`'s header.
+
 ## Regression entry points
 
 ```sh
@@ -432,6 +451,9 @@ tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
 tests/fm-afk-inject-herdr-e2e.test.sh
 tests/fm-afk-pi-herdr-return-e2e.test.sh
+tests/fm-fleet-snapshot-view.test.sh
+tests/fm-fleet-live.test.sh
+tests/fm-fleet-live-herdr-smoke.test.sh
 ```
 
 Real Herdr tests use the named lab helper and default-session tripwire.

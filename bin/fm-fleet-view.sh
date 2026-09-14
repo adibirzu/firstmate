@@ -4,23 +4,67 @@
 # This command intentionally does not parse fleet state itself.
 # It shells out to fm-fleet-snapshot.sh --json and renders that stable
 # structured contract for humans.
+#
+# The view covers the whole registered fleet: the local home and every local or
+# remote secondmate home, plus every child agent each home reports. It reads only
+# fields the snapshot already carries (schema fm-fleet-snapshot.v1) and the
+# remote home-summary contract (fm-secondmate-home-summary.v1); it never
+# computes a summary and never invents a second state source.
+#
+# Every rendered row keeps missing data explicit: a field the contract does not
+# carry renders "-" and an unknown value renders "unknown", never a blank cell.
+# Branch is not carried by the snapshot contract, so it renders "-". Production
+# is display-only and is never inferred from a branch; it renders "unknown"
+# unless a release manifest supplies it (see the Release Manifest section and
+# FM_FLEET_VIEW_MANIFEST below).
+#
+# A release manifest is the documented seam the remote consolidation owner will
+# fill later. This renderer does not assume its schema: it reports the file's
+# presence, its own schema id and generated stamp when present, and its
+# top-level entry count. Mapping its fields into the fleet tables is deferred
+# until that owner publishes the manifest schema.
+#
+# Usage:
+#   fm-fleet-view.sh            # render the fleet view
+#   fm-fleet-view.sh --json     # print the underlying snapshot JSON
+#   fm-fleet-view.sh --release-manifest <path>   # override the manifest path
+#   fm-fleet-view.sh --help
+#
+# Environment:
+#   FM_FLEET_VIEW_MANIFEST   optional release-manifest path (see above)
+#   FM_HOME                  operational home (resolved by fm-fleet-snapshot.sh)
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
-usage: fm-fleet-view.sh [--json]
+usage: fm-fleet-view.sh [--json] [--release-manifest <path>]
 
-Render a human fleet view from fm-fleet-snapshot.sh.
-Use --json to print the underlying snapshot.
+Render a human fleet view from fm-fleet-snapshot.sh covering the local home and
+every local or remote secondmate home plus their child agents.
+
+Options:
+  --json                    Print the underlying fm-fleet-snapshot.v1 JSON.
+  --release-manifest <path> Read the optional release manifest from <path>
+                            instead of FM_HOME/data/fleet-release-manifest.json.
+  -h, --help                Show this help.
+
+Missing data renders as "-" (not carried) or "unknown" (not known); branch and
+production are never inferred from a branch.
 EOF
 }
 
+MANIFEST_ARG=
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   --json) "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json; exit $? ;;
   "") ;;
+  --release-manifest)
+    [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+    MANIFEST_ARG=$2
+    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+    ;;
   *) usage >&2; exit 2 ;;
 esac
 
@@ -28,56 +72,94 @@ command -v jq >/dev/null 2>&1 || { echo "fm-fleet-view: jq not found" >&2; exit 
 
 SNAPSHOT=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --json) || exit $?
 
-printf '%s\n' "$SNAPSHOT" | jq -r '
-  (.secondmate_current.records // []) as $secondmate_current
-  | def dash($v): if $v == null or $v == "" then "-" else $v end;
-  def endpoint_exists($t):
-    if $t.endpoint.exists == null then "unknown"
-    elif $t.endpoint.exists then "present"
-    else "absent" end;
-  def home_ledger_timed_out($t):
-    if $t.kind == "secondmate" then
-      any($secondmate_current[]; .id == $t.id and .current.state == "timeout")
-    else false end;
-  def endpoint_of($t):
-    if home_ledger_timed_out($t) then "timed out"
-    elif $t.kind == "secondmate" then "\(endpoint_exists($t)) / \($t.endpoint.agent_alive)"
-    else endpoint_exists($t) end;
-  def artifact($t):
-    if $t.pr.url != null then $t.pr.url
-    elif $t.paths.report.present then $t.paths.report.path
-    else "-" end;
-  def path_of($t):
-    if $t.paths.home.present then $t.paths.home.path
-    elif $t.paths.home.path != null then $t.paths.home.path + " (absent)"
-    elif $t.paths.worktree.present then $t.paths.worktree.path
-    elif $t.paths.worktree.path != null then $t.paths.worktree.path + " (absent)"
-    else "-" end;
-  def action_of($t):
-    if $t.kind == "secondmate" then "\($t.actions.send) - \($t.actions.watch)"
-    else $t.actions.watch end;
-  def task_row($t):
-    "| \($t.id) | \($t.current_state.state) / \($t.current_state.source) | \($t.kind) | \(dash($t.backlog.repo // $t.project)) | \($t.backend) | \(endpoint_of($t)) | \(artifact($t)) | \(path_of($t)) | \(action_of($t)) |";
-  def blocker($r):
-    if ($r.blocked_by // "") == "" then "-"
-    elif ($r.blocked_reason // "") == "" then $r.blocked_by
-    else "\($r.blocked_by) - \($r.blocked_reason)" end;
-  def backlog_row($r):
-    "| \($r.id // "-") | \(dash($r.title // $r.raw)) | \(dash($r.repo)) | \(dash($r.kind)) | \(blocker($r)) | \(dash($r.pr_url // $r.report_path // $r.local_note)) |";
+FM_VIEW_HOME=$(printf '%s\n' "$SNAPSHOT" | jq -r '.fm_home // empty' 2>/dev/null)
+DATA_DIR="${FM_DATA_OVERRIDE:-${FM_VIEW_HOME:+$FM_VIEW_HOME/data}}"
+MANIFEST_PATH=${MANIFEST_ARG:-${FM_FLEET_VIEW_MANIFEST:-${DATA_DIR:+$DATA_DIR/fleet-release-manifest.json}}}
+
+# fm_view_manifest_json: a small, schema-agnostic summary of the optional
+# release manifest. Prints a JSON object or null. Never guesses the manifest's
+# own field meaning beyond the near-universal schema/generated stamps.
+fm_view_manifest_json() {  # <path>
+  local path=$1
+  [ -n "$path" ] || { printf 'null\n'; return 0; }
+  [ -f "$path" ] && [ ! -L "$path" ] || { printf 'null\n'; return 0; }
+  jq -c '
+    if type != "object" then null
+    else {
+      schema: ((.schema // null) | if . == null then null else tostring end),
+      generated: ((.generated // null) | if . == null then null else tostring end),
+      entries: (to_entries | length)
+    } end
+  ' "$path" 2>/dev/null || printf 'null\n'
+}
+
+MANIFEST_JSON=$(fm_view_manifest_json "$MANIFEST_PATH")
+case "$MANIFEST_JSON" in
+  *[![:space:]]*) ;;
+  *) MANIFEST_JSON=null ;;
+esac
+
+printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson manifest "$MANIFEST_JSON" '
+  (.secondmate_current.records // []) as $rows
+  | (.backlog.records // []) as $brecs
+  | (.tasks // []) as $tasks
+  | def dash($v): if $v == null or ($v | tostring) == "" then "-" else ($v | tostring) end;
+  def base($p): if $p == null or ($p | tostring) == "" then "-" else (($p | tostring) | sub("/+$"; "") | split("/") | last) end;
+  def short($v; $n): if $v == null then "-" else (($v | tostring) | gsub("\\s+"; " ") | if length > $n then .[:$n] + "…" else . end) end;
+  def merge_of($id): ( [ $brecs[] | select(.id == $id) | (.completion.verb // empty) ] | .[0] // "-" );
+  def nm_of($state; $source): if $source == "run-step" then dash($state) else "-" end;
+  def station_of($r): ( ($r.host // "") | if . == "" then "local" else . end );
+  def registered_ids: [ $rows[].id ];
+  def endpoint_cell($t):
+    "\(if $t.endpoint.exists == null then "unknown" elif $t.endpoint.exists then "present" else "absent" end)/\(dash($t.endpoint.agent_alive))";
+  def endpoint_of_id($id): ( [ $tasks[] | select(.id == $id) | endpoint_cell(.) ] | .[0] // "unknown" );
+  def station_state($r):
+    if ($r.current.reason // "") == "" then dash($r.current.state)
+    else "\(dash($r.current.state)) (\(short($r.current.reason; 70)))" end;
+  def convergence($r): "\($r.provenance.summary_source // "unknown")/\($r.freshness.status // "unknown") \(($r.freshness.age_seconds // 0))s";
+  def child_row($station; $project; $task; $state; $model; $nomistakes; $pr; $merge):
+    "| \(dash($station)) | \(dash($project)) | \(dash($task)) | \(dash($state)) | \(dash($model)) | - | \($nomistakes) | \($pr) | \($merge) |";
 
   "# Fleet View",
   "",
+  "Generated: \(.generated)",
   "Schema: \(.schema)",
   "Home: \(.fm_home)",
   "",
-  "## Under Way",
-  (if (.tasks | length) == 0 then
-    "No live task metadata found."
-   else
-    "| ID | Current | Kind | Repo/Project | Backend | Endpoint | Artifact | Path | Watch / return channel |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    (.tasks[] | task_row(.))
-   end),
+  "Readable station/project/task/state/model and the PR, run and merge status",
+  "come from the existing fleet snapshot and remote home-summary contracts.",
+  "Branch and production are not carried there and are never inferred from a",
+  "branch; they render as \"-\"/\"unknown\".",
+  "",
+  "## Stations",
+  "| Station | Home | State | Endpoint | Convergence | Children | Decisions | Holds | Queued | Landed | Production |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ("| local | main | \(if .main_inventory.valid then "ok" else "inventory-invalid" end) | - | local-backlog \(.generated) | "
+    + "\([ $tasks[] | select(.kind != "secondmate") ] | length) | "
+    + "\([ $brecs[] | select(.captain_actionable == true) ] | length) | "
+    + "\([ $brecs[] | select(.hold_kind == "captain") ] | length) | "
+    + "\([ $brecs[] | select(.state == "queued") ] | length) | "
+    + "\([ $brecs[] | select(.state == "done") ] | length) | unknown |"),
+  ( $rows[]
+    | "| \(station_of(.)) | \(dash(.id)) | \(station_state(.)) | \(endpoint_of_id(.id)) | \(convergence(.)) | "
+    + "\(.counts.active_children // 0) | \(.counts.decisions_open // 0) | \(.counts.holds // 0) | "
+    + "\(.counts.queued // 0) | \(.counts.landed // 0) | unknown |" ),
+  ( $tasks[]
+    | select(.kind == "secondmate")
+    | select(.id as $i | (registered_ids | index($i)) == null)
+    | "| local | \(dash(.id)) | \(dash(.current_state.state)) | \(endpoint_cell(.)) | unregistered-local | - | - | - | - | - | unknown |" ),
+  "",
+  "## Child Agents",
+  "| Station | Project | Task | State | Model | Branch | No-mistakes | PR | Merge |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ( ( [ .tasks[]? | select(.kind != "secondmate")
+        | child_row("local"; base(.backlog.repo // .project); .id; .current_state.state; .usage.model;
+                    nm_of(.current_state.state; .current_state.source); dash(.pr.url); merge_of(.id)) ]
+      + [ $rows[] as $r | ($r.active_children // [])[]
+          | child_row(station_of($r); base(.repo // $r.id); .id; .state; .usage.model;
+                      nm_of(.state; .source); "-"; "-") ] )
+    | (if length == 0 then ["| - | - | - | - | - | - | - | - | - |"] else . end)[]
+  ),
   "",
   "## Queued",
   (if ([.backlog.records[]? | select(.state == "queued")] | length) == 0 then
@@ -85,7 +167,10 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
    else
     "| ID | Title | Repo | Kind | Blocked By | Artifact |",
     "| --- | --- | --- | --- | --- | --- |",
-    (.backlog.records[] | select(.state == "queued") | backlog_row(.))
+    (.backlog.records[] | select(.state == "queued")
+      | "| \(.id // "-") | \(dash(.title // .raw)) | \(dash(.repo)) | \(dash(.kind)) | "
+        + "\(if (.blocked_by // "") == "" then "-" elif (.blocked_reason // "") == "" then .blocked_by else "\(.blocked_by) - \(.blocked_reason)" end) | "
+        + "\(dash(.pr_url // .report_path // .local_note)) |")
    end),
   "",
   "## Done",
@@ -94,9 +179,21 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
    else
     "| ID | Title | Repo | Kind | Blocked By | Artifact |",
     "| --- | --- | --- | --- | --- | --- |",
-    (.backlog.records[] | select(.state == "done") | backlog_row(.))
+    (.backlog.records[] | select(.state == "done")
+      | "| \(.id // "-") | \(dash(.title // .raw)) | \(dash(.repo)) | \(dash(.kind)) | "
+        + "\(if (.blocked_by // "") == "" then "-" elif (.blocked_reason // "") == "" then .blocked_by else "\(.blocked_by) - \(.blocked_reason)" end) | "
+        + "\(dash(.pr_url // .report_path // .local_note)) |")
    end),
   "",
-  "## Secondmates",
-  .secondmate_guidance.note
+  "## Release Manifest",
+  (if $manifest == null then
+    "Source: \($manifest_path // "-") (not present)",
+    "No release manifest available; convergence and production stay display-only."
+   else
+    "Source: \($manifest_path)",
+    "Schema: \(dash($manifest.schema))",
+    "Generated: \(dash($manifest.generated))",
+    "Top-level entries: \($manifest.entries)",
+    "Field mapping into the fleet tables is deferred until the consolidation owner publishes its schema."
+   end)
 '
