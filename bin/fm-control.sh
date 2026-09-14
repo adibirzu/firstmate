@@ -123,6 +123,7 @@ fi
 }
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 [ -d "$STATE" ] || {
   echo "error: state dir '$STATE' is missing; fm-control cannot resolve tasks for FM_HOME '$FM_HOME'" >&2
   exit 1
@@ -138,6 +139,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -831,6 +834,14 @@ do_relaunch() {
 
   require_state_verified_backend relaunch
   resolve_relaunch_profile
+
+  # Consult machine capacity before any mutation or agent stop. A relaunch is an
+  # in-place replacement, but the replacement launch is still a new agent from
+  # the guard's point of view. Running the guard here - before the old agent is
+  # stopped - means a refusal leaves the running agent untouched, instead of
+  # stranding a dead endpoint after a post-stop refusal inside fm-spawn.sh.
+  fm_capacity_guard "$CONFIG" "relaunch of $KIND $ID" \
+    || die "relaunch of $ID refused: machine capacity declined the replacement launch"
 
   case "$KIND" in
     ship|scout)

@@ -60,9 +60,9 @@
 #   FM_SECONDMATE_PERSIST_WAIT  seconds to wait for one mate's persist answer (900)
 #   FM_SECONDMATE_PERSIST_POLL  seconds between checks of that answer (5)
 #
-# Exit status: 0 every named mate restarted; 3 at least one was nudged or left
-# unreached and every mate was still accounted for; 1 the input itself is
-# unusable; 2 invalid use.
+# Exit status: 0 every named mate restarted; 3 at least one was nudged,
+# refused, or left unreached and every mate was still accounted for; 1 the
+# input itself is unusable; 2 invalid use.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -130,6 +130,7 @@ RESTART_RESULT=()
 
 restarted_count=0
 nudged_count=0
+refused_count=0
 unreached_count=0
 
 # One nonce per restart pass, so each fallback re-read nudge derives a distinct
@@ -169,6 +170,11 @@ report_unreached() {  # <id> <reason>
   printf 'unreached: %s: %s\n' "$1" "$2"
 }
 
+report_refused() {  # <id> <reason>
+  refused_count=$((refused_count + 1))
+  printf 'refused: %s: %s\n' "$1" "$2"
+}
+
 restart_mate() {  # <array-index>
   local i=$1 id restart_out restart_rc restart_reason ran_on
   id=${IDS[$i]}
@@ -190,6 +196,12 @@ restart_mate() {  # <array-index>
     else
       printf 'restarted: %s (%s)\n' "$id" "$ran_on"
     fi
+    return
+  fi
+
+  if printf '%s\n' "$restart_out" | grep -q 'machine capacity declines'; then
+    restart_reason=$(first_reported_line "$restart_out")
+    report_refused "$id" "the relaunch was refused before the agent was stopped: $restart_reason"
     return
   fi
 
@@ -242,6 +254,7 @@ harvest_restarts() {
     case "$out" in
       restarted:*) restarted_count=$((restarted_count + 1)) ;;
       nudged:*) nudged_count=$((nudged_count + 1)) ;;
+      refused:*) refused_count=$((refused_count + 1)) ;;
       *) unreached_count=$((unreached_count + 1)) ;;
     esac
     PLAN[i]="done"
@@ -376,7 +389,7 @@ done
 
 # --- summary ---------------------------------------------------------------
 
-printf 'summary: %d of %d restarted, %d nudged, %d unreached\n' \
-  "$restarted_count" "${#IDS[@]}" "$nudged_count" "$unreached_count"
-[ "$((nudged_count + unreached_count))" -eq 0 ] || exit 3
+printf 'summary: %d of %d restarted, %d nudged, %d refused, %d unreached\n' \
+  "$restarted_count" "${#IDS[@]}" "$nudged_count" "$refused_count" "$unreached_count"
+[ "$((nudged_count + refused_count + unreached_count))" -eq 0 ] || exit 3
 exit 0
