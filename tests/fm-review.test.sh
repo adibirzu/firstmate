@@ -76,8 +76,39 @@ EOF
   chmod +x "$FAKEBIN/gh"
 }
 
+# fake_router writes a fake `llm-router-axi` whose `policy show --json` emits a
+# REVIEW lane: medium names the `reviewers` group (grok -> agy -> cursor) and
+# hard names `reviewers-escalated` (which appends claude and codex). Every call
+# is logged to $TMP_ROOT/router.log so tests can prove the resolver was (or was
+# not) consulted.
+fake_router() {
+  cat > "$FAKEBIN/llm-router-axi" <<EOF
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "\$*" >> "$TMP_ROOT/router.log"
+if [[ "\${1:-}" == policy && "\${2:-}" == show ]]; then
+  cat <<'JSON'
+{"version":1,"kinds":{"review":{"easy":{"effort":"low","candidates":["reviewers"]},"medium":{"effort":"medium","candidates":["reviewers"]},"hard":{"effort":"high","candidates":["reviewers-escalated"]}}},"candidateGroups":{"reviewers":[{"harness":"grok","provider":"grok"},{"harness":"agy","provider":"agy","pool":"gemini"},{"harness":"cursor","provider":"cursor","pool":"auto_usage"}],"reviewers-escalated":[{"harness":"grok","provider":"grok"},{"harness":"agy","provider":"agy","pool":"gemini"},{"harness":"cursor","provider":"cursor","pool":"auto_usage"},{"harness":"claude","provider":"claude"},{"harness":"codex","provider":"codex"}]}}
+JSON
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$FAKEBIN/llm-router-axi"
+}
+
 run_review() {
   PATH="$FAKEBIN:$PATH" "$ROOT/bin/fm-review.sh" "$@"
+}
+
+# Review-run helpers that pin the router the wrapper consults, because
+# tests/lib.sh's capacity pin exports FM_LLM_ROUTER_AXI to its own fake.
+run_review_router() {
+  PATH="$FAKEBIN:$PATH" FM_LLM_ROUTER_AXI="$FAKEBIN/llm-router-axi" "$ROOT/bin/fm-review.sh" "$@"
+}
+
+run_review_no_router() {
+  PATH="$FAKEBIN:$PATH" FM_LLM_ROUTER_AXI=/nonexistent/llm-router-axi "$ROOT/bin/fm-review.sh" "$@"
 }
 
 # --- usage / missing-tool guards --------------------------------------------
@@ -202,7 +233,7 @@ rm -f "$TMP_ROOT/config/code-review"
 # --- JSON format --------------------------------------------------------------
 
 fake_ocr 10 0 "'z.py'"
-OUT=$(run_review worktree --dir "$TMP_ROOT" --from base --to head --format json)
+OUT=$(run_review_router worktree --dir "$TMP_ROOT" --from base --to head --format json)
 echo "$OUT" | jq -e '.stage1.total_changed_lines == 10' >/dev/null || fail "json verdict missing/wrong total_changed_lines: $OUT"
 echo "$OUT" | jq -e '.escalated == false' >/dev/null || fail "json verdict should report escalated=false: $OUT"
 pass "--format json produces a parseable verdict with the expected stage1/escalated fields"
@@ -220,5 +251,79 @@ pass "pr mode resolves --from from gh pr view's baseRefName"
 OUT=$(PATH="$FAKEBIN:$PATH" "$ROOT/bin/fm-review.sh" pr 2>&1) && fail "pr mode without a URL must fail"
 assert_contains "$OUT" "requires a PR URL" "pr mode must name the missing URL argument"
 pass "pr mode refuses to run without a PR URL argument"
+
+# --- Stage 2 second-level reviewer order (REVIEW lane) ------------------------
+
+fake_router
+fake_ocr 2000 0 "'big.py'"
+: > "$TMP_ROOT/ocr.log"
+: > "$TMP_ROOT/router.log"
+
+OUT=$(run_review_router worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 2 ] || fail "reviewer-order escalation must still exit 2, got $CODE"
+assert_contains "$OUT" "Second-level reviewers" "verdict must name the second-level reviewer section"
+assert_contains "$OUT" "llm-router-axi policy (reviewers)" "the order must be resolved through the router owner"
+assert_contains "$OUT" "- grok" "first reviewer must be grok"
+assert_contains "$OUT" "- agy (gemini-3.8-flash)" "second reviewer must be agy on gemini-3.8-flash"
+assert_contains "$OUT" "- cursor (auto)" "third reviewer must be cursor auto"
+# Literal backtick/quoted prose, not command substitution.
+# shellcheck disable=SC2016
+assert_contains "$OUT" 'Escalate to `claude` only when the reviewer'"'"'s own verdict states it needs more.' \
+  "the claude escalation rule must be stated"
+grep -Eq '^review ' "$TMP_ROOT/ocr.log" && fail "resolving the reviewer order must not trigger an ocr review LLM call"
+pass "Stage 2 delegate resolves the reviewer order through the router owner and states the claude escalation rule"
+
+# The router's own difficulty axis drives the escalated group.
+OUT=$(FM_REVIEW_STAGE2_DIFFICULTY=hard run_review_router worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 2 ] || fail "hard-difficulty escalation must still exit 2, got $CODE"
+assert_contains "$OUT" "llm-router-axi policy (reviewers-escalated)" "hard difficulty must name the escalated group"
+assert_contains "$OUT" "- claude" "the escalated group must add claude"
+pass "FM_REVIEW_STAGE2_DIFFICULTY selects the router's escalated reviewer group"
+
+# With no router, the built-in default mirrors the same REVIEW lane.
+OUT=$(run_review_no_router worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 2 ] || fail "offline reviewer order must still exit 2, got $CODE"
+assert_contains "$OUT" "built-in default (REVIEW lane mirror)" "offline order must name the built-in mirror"
+assert_contains "$OUT" "- grok" "offline first reviewer must be grok"
+assert_contains "$OUT" "- agy (gemini-3.8-flash)" "offline second reviewer must be agy on gemini-3.8-flash"
+assert_contains "$OUT" "- cursor (auto)" "offline third reviewer must be cursor auto"
+pass "with no llm-router-axi the built-in default still resolves the same REVIEW lane order"
+
+# An explicit config/code-review stage2Reviewers array overrides the router.
+mkdir -p "$TMP_ROOT/config"
+cat > "$TMP_ROOT/config/code-review" <<'JSON'
+{"stage2Reviewers": ["claude", "codex:gpt-5.6-sol"], "stage2EscalateTo": "opus"}
+JSON
+OUT=$(run_review_no_router worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 2 ] || fail "configured reviewer order must still exit 2, got $CODE"
+assert_contains "$OUT" "config/code-review" "an explicit reviewer list must be named as its source"
+assert_contains "$OUT" "- claude" "configured first reviewer must be claude"
+assert_contains "$OUT" "- codex (gpt-5.6-sol)" "a harness:model string must render its model"
+# Literal backtick-quoted prose, not command substitution.
+# shellcheck disable=SC2016
+assert_contains "$OUT" 'Escalate to `opus`' "stage2EscalateTo must set the escalation target"
+pass "config/code-review stage2Reviewers overrides the router order and stage2EscalateTo names the target"
+rm -f "$TMP_ROOT/config/code-review"
+
+# The reviewer order appears in the JSON verdict too.
+OUT=$(run_review_router worktree --dir "$TMP_ROOT" --from base --to head --format json)
+echo "$OUT" | jq -e '.stage2.reviewers | length == 3' >/dev/null \
+  || fail "json verdict must list three reviewers: $OUT"
+echo "$OUT" | jq -e '.stage2.reviewers[1].harness == "agy"' >/dev/null \
+  || fail "json verdict reviewer order must start grok, agy: $OUT"
+echo "$OUT" | jq -e '.stage2.reviewers_source | test("llm-router-axi")' >/dev/null \
+  || fail "json verdict must name the router as the reviewer-order source: $OUT"
+echo "$OUT" | jq -e '.stage2.escalate_to == "claude"' >/dev/null \
+  || fail "json verdict must carry the claude escalation target: $OUT"
+pass "--format json carries the reviewer order, its source, and the escalation target"
+
+# No escalation => no reviewer resolution and no reviewer section.
+: > "$TMP_ROOT/router.log"
+fake_ocr 50 5 "'src/a.py'"
+OUT=$(run_review_router worktree --dir "$TMP_ROOT" --from base --to head); CODE=$?
+[ "$CODE" = 0 ] || fail "a small changeset must stay clean, got $CODE"
+assert_not_contains "$OUT" "Second-level reviewers" "no escalation must not print a reviewer order"
+[ -s "$TMP_ROOT/router.log" ] && fail "the router must not be consulted when Stage 1 does not escalate"
+pass "the reviewer order is resolved only when a host-agent review is owed"
 
 echo "# fm-review.test.sh: all assertions passed"
