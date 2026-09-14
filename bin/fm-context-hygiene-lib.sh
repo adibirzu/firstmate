@@ -83,7 +83,11 @@ fm_context_hygiene_seconds() {
 
 # fm_context_hygiene_harness
 # The home's own harness: an explicit FM_CONTEXT_HYGIENE_HARNESS test/override
-# seam, else bin/fm-harness.sh's process-ancestry verdict.
+# seam, else bin/fm-harness.sh's detection. That detection is env-marker first
+# (CLAUDECODE, PI_CODING_AGENT, GROK_AGENT, ...), which every watcher process
+# inherits from the harness that launched it even when it is reparented, so the
+# two harnesses with verified context commands (Claude and Pi) are identifiable
+# from the watcher; markerless harnesses fall back to process ancestry.
 fm_context_hygiene_harness() {
   local script_dir=$1 harness
   if [ -n "${FM_CONTEXT_HYGIENE_HARNESS:-}" ]; then
@@ -260,7 +264,11 @@ fm_context_hygiene_idle_ready() {
 
 # fm_context_hygiene_reset_idle <state>
 # Restart the continuous-idle window, called after a delivered clear so the next
-# clear waits a full window rather than firing on the following poll.
+# clear waits a full window rather than firing on the following poll. If the
+# stamp cannot be rewritten, remove it so the next poll starts a fresh window
+# instead of re-reading the stale stamp and re-clearing every cycle.
 fm_context_hygiene_reset_idle() {
-  date +%s > "$1/$FM_CONTEXT_IDLE_SINCE" 2>/dev/null || true
+  if ! date +%s > "$1/$FM_CONTEXT_IDLE_SINCE" 2>/dev/null; then
+    rm -f -- "$1/$FM_CONTEXT_IDLE_SINCE" 2>/dev/null || true
+  fi
 }

@@ -76,10 +76,13 @@ test_missing_root_is_reported() {
 }
 
 test_bad_hours_refuses() {
-  local rc=0 out
-  out=$("$REPORT" --hours 0 --projects-dir "$PROJECTS" 2>&1) || rc=$?
-  [ "$rc" -eq 2 ] || fail "a non-positive --hours must be refused (got rc=$rc: $out)"
-  pass "a non-positive --hours is refused"
+  local rc=0 out value
+  for value in 0 00 08 0x -1 abc; do
+    rc=0
+    out=$("$REPORT" --hours "$value" --projects-dir "$PROJECTS" 2>&1) || rc=$?
+    [ "$rc" -eq 2 ] || fail "a non-positive or malformed --hours ($value) must be refused (got rc=$rc: $out)"
+  done
+  pass "a non-positive or octal-looking --hours is refused"
 }
 
 test_groups_and_threshold_share

@@ -75,7 +75,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$HOURS" in
-  ''|*[!0-9]*|0) echo "error: --hours must be a positive integer" >&2; exit 2 ;;
+  ''|*[!0-9]*|0*) echo "error: --hours must be a positive integer" >&2; exit 2 ;;
 esac
 
 if ! command -v jq >/dev/null 2>&1; then

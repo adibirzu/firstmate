@@ -713,10 +713,15 @@ secondmate_in_active_turn() {  # <task> <window>
 # unhandled AND its own pane is affirmatively parked at an empty prompt. An aged
 # row in its foreign queue then cannot mean a wedged turn - the mate simply has
 # nothing to drain - so secondmate_wake_stall_tick must not escalate it. Both
-# halves are required, and anything but a positively-empty composer (busy,
-# pending, or unreadable) returns 1 so a genuine freeze still escalates.
+# halves must be POSITIVELY proven: the inbox must be absent or a readable real
+# directory, and the composer must read exactly empty; anything else (busy,
+# pending, unreadable) returns 1 so a genuine freeze still escalates.
 secondmate_healthy_idle() {  # <task> <meta>
-  local task=$1 meta=$2 window backend
+  local task=$1 meta=$2 window backend inbox
+  inbox="$STATE/$task.inbox"
+  if [ -e "$inbox" ] || [ -L "$inbox" ]; then
+    [ -d "$inbox" ] && [ ! -L "$inbox" ] && [ -r "$inbox" ] || return 1
+  fi
   fm_task_inbox_oldest_unhandled "$STATE" "$task" >/dev/null 2>&1 && return 1
   window=$(fm_backend_target_of_meta "$meta")
   [ -n "$window" ] || return 1

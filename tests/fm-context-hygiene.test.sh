@@ -231,8 +231,20 @@ test_tick_compact_at_boundary() {
   [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a busy-pane refusal must keep the marker"
   BUSY_STATE=idle
 
+  # An unknown busy verdict beside a proven-empty composer is still deliverable:
+  # the composer proof is the load-bearing guard.
+  BUSY_STATE=unknown
+  : > "$SENT"
+  context_hygiene_tick
+  [ "$(cat "$SENT" 2>/dev/null)" = "/compact Focus again" ] \
+    || fail "an unknown busy verdict with an empty composer must still deliver (sent: $(cat "$SENT" 2>/dev/null))"
+  [ ! -e "$STATE_DIR/.context-compact-pending" ] || fail "a delivered compact must clear the marker"
+  BUSY_STATE=idle
+  fm_context_hygiene_mark_compact "$STATE_DIR" "Focus again"
+
   # A harness with no verified compact command drops the marker rather than
   # retrying forever.
+  : > "$SENT"
   export FM_CONTEXT_HYGIENE_HARNESS=codex
   _context_hygiene_harness=""
   context_hygiene_tick
@@ -294,6 +306,24 @@ test_afk_pauses_delivery() {
   pass "context-hygiene delivery pauses while away mode owns the home's pane"
 }
 
+test_reset_idle_failure_does_not_respam() {
+  reset_case
+  printf '111\n' > "$STATE_DIR/.context-hygiene-idle-since"
+  local stamp_before stamp_after
+  stamp_before=$(cat "$STATE_DIR/.context-hygiene-idle-since")
+  # Force the rewrite to fail; the stamp must be removed so the next poll starts
+  # a fresh window instead of re-reading the stale stamp and re-clearing.
+  # shellcheck disable=SC2329 # Shadowed for this case only; the sourced lib calls it.
+  date() { return 1; }
+  fm_context_hygiene_reset_idle "$STATE_DIR"
+  unset -f date 2>/dev/null || true
+  [ ! -e "$STATE_DIR/.context-hygiene-idle-since" ] \
+    || fail "a failed idle reset must drop the stamp (still $stamp_before)"
+  stamp_after=$(cat "$STATE_DIR/.context-hygiene-idle-since" 2>/dev/null || true)
+  [ -z "$stamp_after" ] || fail "stale idle stamp survived: $stamp_after"
+  pass "a failed idle-reset drops the stamp rather than re-clearing every poll"
+}
+
 # --- adaptive heartbeat ------------------------------------------------------
 
 test_heartbeat_interval() {
@@ -349,6 +379,19 @@ test_secondmate_healthy_idle() {
   secondmate_healthy_idle mate "$meta" && fail "an unconfirmed composer must not read as healthy idle"
   COMPOSER_STATE=unknown
   secondmate_healthy_idle mate "$meta" && fail "an unreadable composer must not read as healthy idle"
+  COMPOSER_STATE=empty
+  # The inbox half must be positively proven too: an unreadable or non-directory
+  # inbox is not "empty".
+  : > "$STATE_DIR/mate.inbox"
+  secondmate_healthy_idle mate "$meta" && fail "a non-directory steering inbox must not read as empty"
+  rm -f "$STATE_DIR/mate.inbox"
+  mkdir -p "$STATE_DIR/mate.inbox"
+  chmod 000 "$STATE_DIR/mate.inbox"
+  if [ ! -r "$STATE_DIR/mate.inbox" ]; then
+    secondmate_healthy_idle mate "$meta" && fail "an unreadable steering inbox must not read as empty"
+  fi
+  chmod 700 "$STATE_DIR/mate.inbox"
+  rm -rf "$STATE_DIR/mate.inbox"
   pass "a healthy-idle mate needs both an empty steering inbox and a proven-empty prompt"
 }
 
@@ -391,6 +434,7 @@ test_idle_ready_window
 test_tick_compact_at_boundary
 test_tick_clear_on_idle
 test_afk_pauses_delivery
+test_reset_idle_failure_does_not_respam
 test_heartbeat_interval
 test_coalesce_signal_rows
 test_secondmate_healthy_idle
