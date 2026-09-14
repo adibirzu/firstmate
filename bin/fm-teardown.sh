@@ -213,6 +213,23 @@
 #     roots are unique per task and never
 #     shared, so this can never reach another task's or the primary's
 #     processes. Idempotent: nothing left to find is a silent no-op.
+#   Fix 2b - reap the endpoint's whole worker process TREE. Fix 2 only reaches
+#     processes whose cwd is still inside the worktree or tasktmp; a harness
+#     child that calls setsid (a detached MCP server or poll shell) leaves
+#     both the pane's process group and the task's working directory, so the
+#     cwd scan never sees it and the pane close never signals it, and it
+#     reparents to init and leaks for the life of the host (observed
+#     2026-09-13: idle cursor-agent and claude workers alive hours after their
+#     tasks closed). task_endpoint_capture snapshots every descendant of the
+#     endpoint's validated pane shell, with each process's birth identity,
+#     BEFORE any destructive step; reap_task_endpoint_processes then TERMs
+#     them on up to three bounded passes (stopping early once the tree is
+#     gone), KILLs any survivor whose identity still matches, and refuses the
+#     teardown loudly if one remains. The root is the
+#     pane shell resolved live through the backend, or the pid recorded at
+#     spawn (worker_root_pid=) when the pane can no longer be queried; only a
+#     descendant of this task's own endpoint is ever signalled. Idempotent:
+#     an unresolvable root is a silent no-op.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -1894,30 +1911,34 @@ $out
 EOF
 }
 
+# The single owner is bin/fm-backend.sh's fm_process_birth_identity, which
+# bin/fm-spawn.sh also uses to record the worker process-tree root; both must
+# agree on the token format for the recorded root to be provable at teardown.
 task_process_identity() {  # <pid>
-  local pid=$1 proc_root stat_line starttime value
-  local -a stat_fields
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  if [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
-    read -r -a stat_fields <<< "${stat_line##*)}"
-    [ "${#stat_fields[@]}" -ge 20 ] || return 1
-    starttime=${stat_fields[19]}
-    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
-    printf 'starttime=%s\n' "$starttime"
-    return 0
-  fi
-  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-  value=$(fm_nm_trim "$value")
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf 'lstart=%s\n' "$value"
+  fm_process_birth_identity "$1"
 }
 
 task_process_identity_matches() {  # <pid> <identity>
   local current
   current=$(task_process_identity "$1") || return 1
   [ "$current" = "$2" ]
+}
+
+# Like task_process_identity_matches, but a zombie (Linux stat state Z, or a
+# dead state X) is treated as already gone: it keeps a /proc entry until its
+# parent reaps it, yet it is not a leak. Without this the endpoint-tree reap
+# could force-kill and then falsely REFUSE a teardown over a process that has
+# already exited. Reads the state char directly so it stays portable.
+task_process_live_identity_matches() {  # <pid> <identity>
+  local proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} stat_line fields
+  task_process_identity_matches "$1" "$2" || return 1
+  if [ -r "$proc_root/$1/stat" ]; then
+    stat_line=$(cat "$proc_root/$1/stat" 2>/dev/null) || return 1
+    fields=${stat_line##*)}
+    fields=${fields#"${fields%%[![:space:]]*}"}
+    case "$fields" in Z*|X*) return 1 ;; esac
+  fi
+  return 0
 }
 
 task_pid_list_contains() {  # <pid-list> <pid>
@@ -2085,6 +2106,181 @@ EOF
   [ -z "$TASK_PIDS" ] && return 0
   echo "REFUSED: leaked $label processes for $ID remain after $max_passes reap attempts; preserving the worktree/tasktmp for manual inspection or retry." >&2
   return 1
+}
+
+# Every pid descended (transitively, by ppid) from <root>, one per line and
+# excluding <root> itself. One bounded process-table snapshot, then an
+# in-memory closure; bash 3.2 has no associative arrays, so membership is a
+# whitespace-delimited string scan and the closure iterates until no new pid
+# appears. A zombie (stat Z) is skipped: it is already dead and would
+# otherwise look like a survivor its parent has not reaped yet. Nonzero only
+# when the process table cannot be read.
+descendant_pids_of() {  # <root-pid>
+  local root=$1 snapshot pid ppid stat frontier result changed
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  snapshot=$(LC_ALL=C ps -eo pid=,ppid=,stat= 2>/dev/null) || return 1
+  frontier=" $root "
+  result=""
+  changed=1
+  while [ "$changed" -eq 1 ]; do
+    changed=0
+    while read -r pid ppid stat; do
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      case "$ppid" in ''|*[!0-9]*) continue ;; esac
+      case "$stat" in Z*) continue ;; esac
+      case "$frontier" in *" $ppid "*) ;; *) continue ;; esac
+      case "$frontier" in *" $pid "*) continue ;; esac
+      frontier="$frontier$pid "
+      result="$result$pid
+"
+      changed=1
+    done <<EOF
+$snapshot
+EOF
+  done
+  printf '%s' "$result"
+}
+
+# The root pid of this task's worker process tree: the endpoint's pane shell
+# resolved live through the backend, or - when the pane cannot be queried - the
+# pid recorded at spawn, accepted only while its birth identity still matches.
+# Nonzero when neither is provable, which is a silent no-op for the reaper.
+task_endpoint_root_pid() {
+  local root recorded recorded_start
+  if root=$(fm_backend_task_process_root "$BACKEND" "$T" 2>/dev/null); then
+    case "$root" in
+      ''|*[!0-9]*) ;;
+      *) [ "$root" -gt 1 ] && { printf '%s\n' "$root"; return 0; } ;;
+    esac
+  fi
+  recorded=$(meta_value "$META" worker_root_pid)
+  recorded_start=$(meta_value "$META" worker_root_start)
+  case "$recorded" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$recorded_start" ] || return 1
+  task_process_identity_matches "$recorded" "$recorded_start" || return 1
+  printf '%s\n' "$recorded"
+}
+
+# Capture this task's WHOLE worker process tree - every descendant of the
+# endpoint's pane shell, plus the shell itself - with each process's birth
+# identity, BEFORE any destructive step (the focus-preserving projected pane
+# close can kill the shell and reparent a surviving setsid child to init, at
+# which point a live walk can no longer find it). Reads only; never signals.
+# A best-effort no-op when the root is unresolvable. Results live in the
+# TASK_ENDPOINT_* globals consumed by reap_task_endpoint_processes.
+TASK_ENDPOINT_ROOT_CAPTURED=""
+TASK_ENDPOINT_PIDS_CAPTURED=()
+TASK_ENDPOINT_IDS_CAPTURED=()
+task_endpoint_capture() {
+  local root pids pid identity
+  TASK_ENDPOINT_ROOT_CAPTURED=""
+  TASK_ENDPOINT_PIDS_CAPTURED=()
+  TASK_ENDPOINT_IDS_CAPTURED=()
+  root=$(task_endpoint_root_pid) || return 0
+  [ -n "$root" ] || return 0
+  TASK_ENDPOINT_ROOT_CAPTURED=$root
+  pids=$(descendant_pids_of "$root") || return 0
+  pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" != "$$" ] || continue
+    identity=$(task_process_identity "$pid") || continue
+    TASK_ENDPOINT_PIDS_CAPTURED+=("$pid")
+    TASK_ENDPOINT_IDS_CAPTURED+=("$identity")
+  done <<EOF
+$pids
+EOF
+}
+
+# Fix 2b (see script header): reap the endpoint's whole WORKER process tree,
+# not only the processes whose cwd is still inside the worktree. A harness
+# child that calls setsid - a detached MCP server or poll shell - leaves both
+# the pane's process group and the task's working directory, so the cwd scan
+# in reap_task_worktree_processes never sees it and the pane close never
+# signals it; it then reparents to init and leaks for the life of the host
+# (observed 2026-09-13: idle cursor-agent and claude workers alive hours after
+# their tasks closed). This seeds from task_endpoint_capture's pre-destructive
+# snapshot, discovers any further descendant on three bounded passes, TERMs
+# each, then KILLs every captured pid whose birth identity still matches, and
+# finally verifies none survives. Identity matching (never a bare pid) is what
+# keeps a reused pid and a concurrently replaced process safe. Scoping to this
+# task's own validated endpoint pane can never reach another task's or the
+# primary's processes. Best-effort: an unresolvable root is a silent no-op.
+reap_task_endpoint_processes() {  # <label>
+  local label=$1 root pids pid identity i pass max_passes=3 alive
+  local -a tracked_pids tracked_identities survivors
+  tracked_pids=("${TASK_ENDPOINT_PIDS_CAPTURED[@]+"${TASK_ENDPOINT_PIDS_CAPTURED[@]}"}")
+  tracked_identities=("${TASK_ENDPOINT_IDS_CAPTURED[@]+"${TASK_ENDPOINT_IDS_CAPTURED[@]}"}")
+  root=${TASK_ENDPOINT_ROOT_CAPTURED:-}
+  if [ -z "$root" ]; then
+    root=$(task_endpoint_root_pid) || return 0
+  fi
+  [ -n "$root" ] || return 0
+  pass=1
+  while [ "$pass" -le "$max_passes" ]; do
+    pids=$(descendant_pids_of "$root") || return 0
+    pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      [ "$pid" != "$$" ] || continue
+      task_pid_list_contains "$(printf '%s\n' "${tracked_pids[@]+"${tracked_pids[@]}"}")" "$pid" && continue
+      identity=$(task_process_identity "$pid") || continue
+      tracked_pids+=("$pid")
+      tracked_identities+=("$identity")
+    done <<EOF
+$pids
+EOF
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done
+    # Settle only while something is still alive: a tree that is already gone
+    # must not cost the teardown three bounded sleeps every time.
+    alive=0
+    for i in "${!tracked_pids[@]}"; do
+      if task_process_live_identity_matches "${tracked_pids[$i]}" "${tracked_identities[$i]}"; then
+        alive=1
+        break
+      fi
+    done
+    [ "$alive" -eq 1 ] || break
+    sleep 1
+    pass=$((pass + 1))
+  done
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "teardown: force-killing leaked $label process(es) for $ID: ${survivors[*]}" >&2
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    done
+    sleep 1
+  fi
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "REFUSED: leaked $label process(es) for $ID remain after reaping the endpoint process tree: ${survivors[*]}; preserving the worktree for manual inspection or retry." >&2
+    return 1
+  fi
+  if [ "${#tracked_pids[@]}" -gt 0 ]; then
+    echo "teardown: reaped leaked $label process tree for $ID: ${tracked_pids[*]}" >&2
+  fi
+  return 0
 }
 
 require_orca_worktree_path_match() {
@@ -3330,6 +3526,14 @@ if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
 fi
 
+# Snapshot the worker's whole process tree BEFORE any destructive step below
+# can kill its shell and orphan a setsid child to init. Fix 2b reaps what this
+# captures. Not for kind=secondmate, whose child tree is owned by the dedicated
+# machinery further below.
+if [ "$KIND" != secondmate ]; then
+  task_endpoint_capture
+fi
+
 # A projected pane must close while its session lock is held and before any
 # worktree cleanup can kill its shell.
 # Killing that shell first lets Herdr remove the last pane outside the exact
@@ -3373,6 +3577,7 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
 fi
 
 if [ "$KIND" != secondmate ]; then
+  reap_task_endpoint_processes worktree
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
 

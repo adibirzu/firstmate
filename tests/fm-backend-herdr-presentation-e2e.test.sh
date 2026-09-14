@@ -477,6 +477,12 @@ finish_concurrent_teardown() {  # <id> <status> <stdout> <stderr>
     || fail "projected teardown $id retry failed after presentation cleanup completed: $(cat "$err")"
 }
 
+# normalize_meta erases every field that legitimately differs between two
+# spawns of the same task: the Herdr container IDs that name the endpoint, the
+# fresh per-spawn incarnation marker, and the live pane shell process identity
+# that spawn records as the teardown worker-process root (worker_root_pid/start
+# are birth-bound, so they change every launch exactly like spawn_gen). Every
+# other metadata byte must match, which is what the comparison below proves.
 normalize_meta() {  # <meta>
   sed -E \
     -e 's|^window=.*$|window=<herdr-container-id>|' \
@@ -484,6 +490,8 @@ normalize_meta() {  # <meta>
     -e 's|^herdr_tab_id=.*$|herdr_tab_id=<herdr-container-id>|' \
     -e 's|^herdr_pane_id=.*$|herdr_pane_id=<herdr-container-id>|' \
     -e 's|^spawn_gen=.*$|spawn_gen=<spawn-incarnation>|' \
+    -e 's|^worker_root_pid=.*$|worker_root_pid=<worker-process-root>|' \
+    -e 's|^worker_root_start=.*$|worker_root_start=<worker-process-birth>|' \
     "$1"
 }
 
@@ -952,7 +960,7 @@ teardown_task shape "$HOME_DIR" > "$TMP_ROOT/on-teardown.out" 2> "$TMP_ROOT/on-t
   || fail "projected teardown failed: $(cat "$TMP_ROOT/on-teardown.err")"
 assert_focus_is "$CAPTAIN_FOCUS" "projected teardown"
 assert_cleanup_focus_preserved "$SHAPE_CLEANUP_AUDIT_START" "$PROJECTED_PANE" "$CAPTAIN_FOCUS"
-pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs and spawn incarnation"
+pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs, spawn incarnation, and the per-spawn worker process root"
 if lab workspace get "$PROJECTED_WSID" >/dev/null 2>&1; then
   fail "closing the exact projected task pane did not remove its last-tab workspace"
 fi

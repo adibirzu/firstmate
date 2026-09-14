@@ -4236,6 +4236,43 @@ spawn_record_launch_argv() {
   return "$status"
 }
 
+# spawn_record_worker_process_root publishes the endpoint's process-tree root
+# (its pane shell) and that process's birth identity as the task record's
+# worker_root_pid=/worker_root_start= lines, using the same locked rewrite as
+# spawn_record_launch_argv. bin/fm-teardown.sh walks descendants from this
+# root to reap the worker's whole tree - including a harness child that called
+# setsid and so left the pane's process group and cwd - and accepts the
+# recorded pid only while its birth identity still matches. It is recorded
+# best-effort after launch delivery, so a failure only costs that fallback and
+# never fails the spawn.
+spawn_record_worker_process_root() {
+  local meta="$STATE/$ID.meta" tmp status=0 acquired=0 root start
+  root=$(fm_backend_task_process_root "$BACKEND" "$T" 2>/dev/null) || return 1
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$root" -gt 1 ] || return 1
+  start=$(fm_process_birth_identity "$root") || return 1
+  case "$start" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+    SPAWN_META_LOCK_HELD=1
+    acquired=1
+  fi
+  tmp="$STATE/.$ID.meta.root.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "worker_root_pid" && $1 != "worker_root_start"' "$meta" > "$tmp" \
+     || ! printf 'worker_root_pid=%s\nworker_root_start=%s\n' "$root" "$start" >> "$tmp" \
+     || ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  if [ "$acquired" = 1 ]; then
+    fm_lock_release "$SPAWN_META_LOCK" || status=1
+    SPAWN_META_LOCK_HELD=0
+  fi
+  return "$status"
+}
+
 # spawn_write_meta serializes the whole read-modify-write against every other
 # metadata writer. A relaunch keeps every key it does not own (pr=, x_request=,
 # ...), so a Relay reply publishing concurrently between the read and the write
@@ -4278,7 +4315,7 @@ spawn_write_meta_locked() {
   # fully resolved), so a relaunch must drop the previous incarnation's command
   # rather than leave the launch-drift detector comparing the live worker against
   # a retired run's flags.
-  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|launch_argv|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
+  drop_re='^(window|endpoint_task_id|worktree|project|harness|kind|mode|yolo|traceparent|launch_argv|worker_root_pid|worker_root_start|tasktmp|model|effort|busy_gen|spawn_gen|provider|account|backend|herdr_session|herdr_workspace_id|herdr_tab_id|herdr_pane_id|zellij_session|zellij_tab_id|zellij_pane_id|orca_worktree_id|terminal|cmux_workspace_id|cmux_surface_id|home|projects|control_relaunch_tx)='
   # The symlink refusal comes first, because the probe below opens the path for
   # append - through a symlink that would be an append to whatever it points at.
   if [ -L "$meta" ]; then
@@ -4678,6 +4715,10 @@ if [ "$HARNESS" = rovo ]; then
     exit 1
   fi
 fi
+# Launch delivery has now succeeded for every harness, so record this
+# endpoint's process-tree root for a later teardown. Best-effort: a failure
+# only costs the fallback root, never the spawn.
+spawn_record_worker_process_root || true
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
     if fm_config_reread_quarantine_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then

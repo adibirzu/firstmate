@@ -87,6 +87,33 @@ fm_backend_is_known() {  # <name>
   fm_backend_list_contains "$FM_BACKEND_KNOWN" "$1"
 }
 
+# fm_process_birth_identity: a portable per-process birth token, stable across
+# an exec and unique against pid reuse. Uses /proc's starttime field when
+# readable (Linux) and ps -o lstart= otherwise (macOS), so bin/fm-spawn.sh can
+# record a worker process-tree root and bin/fm-teardown.sh can later prove the
+# same process before it is ever signalled. FM_PROC_ROOT_OVERRIDE redirects the
+# /proc read for tests. Nonzero when the process is gone or the token cannot be
+# read.
+fm_process_birth_identity() {  # <pid>
+  local pid=$1 proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} stat_line starttime value
+  local -a stat_fields
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -r "$proc_root/$pid/stat" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 20 ] || return 1
+    starttime=${stat_fields[19]}
+    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
+    printf 'starttime=%s\n' "$starttime"
+    return 0
+  fi
+  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  [ -n "$value" ] || return 1
+  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  printf 'lstart=%s\n' "$value"
+}
+
 # fm_backend_detect: detect the runtime firstmate itself is CURRENTLY executing
 # inside, from verified environment markers (mirrors bin/fm-harness.sh's
 # env-marker detection layer for harnesses). Prints the detected backend name
@@ -922,6 +949,23 @@ fm_backend_current_path() {  # <backend> <target> [expected-label]
   case "$backend" in
     tmux) fm_backend_tmux_bound_current_path "$target" ;;
     herdr) fm_backend_herdr_current_path "$target" ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_task_process_root: the pid of the endpoint's process-tree root
+# (its pane shell), or a nonzero return when this backend cannot answer.
+# bin/fm-teardown.sh walks descendants from this root to reach a worker child
+# that called setsid and so left the pane's process group and working
+# directory; a backend with no process-model reader (zellij, orca, cmux)
+# returns nonzero and teardown falls back to its working-directory scan.
+fm_backend_task_process_root() {  # <backend> <target>
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_task_process_root "$@" ;;
+    herdr) fm_backend_herdr_task_process_root "$@" ;;
     *) return 1 ;;
   esac
 }
