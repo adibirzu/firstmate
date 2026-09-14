@@ -103,6 +103,16 @@ case "$cmd $sub" in
     printf '%s\t%s\n' "$ws" "$tab" >> "$state/seeded"
     printf '{"result":{"workspace":{"workspace_id":"%s"},"tab":{"tab_id":"%s"}}}\n' "$ws" "$tab"
     ;;
+  "workspace close")
+    want=${3:-}
+    awk -F'\t' -v w="$want" '$1 != w' "$state/workspaces" > "$state/workspaces.new" 2>/dev/null || true
+    mv "$state/workspaces.new" "$state/workspaces"
+    awk -F'\t' -v w="$want" '$2 != w' "$state/tabs" > "$state/tabs.new" 2>/dev/null || true
+    mv "$state/tabs.new" "$state/tabs"
+    awk -F'\t' -v w="$want" '$3 != w' "$state/panes" > "$state/panes.new" 2>/dev/null || true
+    mv "$state/panes.new" "$state/panes"
+    printf '{"result":{"type":"ok"}}\n'
+    ;;
   "tab list")
     want=
     prev=

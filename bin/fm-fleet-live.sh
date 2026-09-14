@@ -27,8 +27,11 @@
 # `open` is idempotent: a live recorded tab is refreshed in place, and a stale
 # record is replaced. If the record belongs to a different session than the one
 # `open` was given, `open` best-effort closes only that exact recorded tab, in
-# the session that recorded it, before creating the new one. `close` closes
-# only the exact recorded tab (never a workspace) and clears the record.
+# the session that recorded it, before creating the new one. `close` clears the
+# record and removes only its own recorded tab. The tab is the sole tab of its
+# own dedicated workspace, and Herdr refuses an explicit `tab close` of a
+# workspace's last tab, so `close` removes it by closing that exclusively-owned
+# workspace instead - never any other workspace or tab.
 # `status` reports the recorded tab and whether it still exists. Every verb
 # touches only its own recorded tab, in the session that recorded it, and none
 # calls a server-global or session-lifecycle Herdr operation.
@@ -56,10 +59,12 @@ usage: fm-fleet-live.sh open    [--session <name>] [--label <text>]
 
 Surface the fleet view as a Herdr tab in a named session (default: "default").
 open is idempotent (refreshes a live recorded tab, or best-effort closes a
-record's old tab in its own session before opening in a new one); close closes
-only the exact recorded tab; status reports the recorded tab. Every verb
-touches only its own recorded tab, in the session that recorded it, and none
-calls a server-global or session-lifecycle Herdr operation.
+record's old tab in its own session before opening in a new one); close
+removes only the recorded tab, by closing its own dedicated workspace since
+Herdr refuses to close a workspace's last tab directly; status reports the
+recorded tab. Every verb touches only its own recorded tab, in the session
+that recorded it, and none calls a server-global or session-lifecycle Herdr
+operation.
 EOF
 }
 
@@ -273,7 +278,7 @@ fm_fleet_live_refresh() {  # <session>
 }
 
 fm_fleet_live_close() {  # <session>
-  local session=$1 tab pane
+  local session=$1 tab pane workspace
   [ -f "$RECORD" ] || { printf 'no fleet-view tab recorded in session %s\n' "$session"; return 0; }
   [ "$(fm_fleet_live_record_session)" = "$session" ] || {
     fm_fleet_live_error "the recorded fleet-view tab belongs to session $(fm_fleet_live_record_session), not $session"
@@ -281,12 +286,18 @@ fm_fleet_live_close() {  # <session>
   }
   tab=$(fm_fleet_live_record_tab)
   pane=$(fm_fleet_live_record_pane)
+  workspace=$(fm_fleet_live_record_workspace)
   if ! fm_fleet_live_pane_exists "$session" "$pane"; then
     rm -f -- "$RECORD"
     printf 'fleet-view tab already gone in session %s\n' "$session"
     return 0
   fi
-  fm_fleet_live_herdr "$session" tab close "$tab" >/dev/null 2>&1 || {
+  # The recorded tab is the sole tab of its own dedicated workspace. Herdr
+  # refuses an explicit `tab close` of a workspace's last tab ("cannot close
+  # the last tab in a workspace", verified against the real 0.7.4 client), so
+  # remove it by closing that exclusively-owned workspace instead; nothing
+  # else ever shares it.
+  fm_fleet_live_herdr "$session" workspace close "$workspace" >/dev/null 2>&1 || {
     fm_fleet_live_error "could not close fleet-view tab $tab in session $session"
     return 1
   }

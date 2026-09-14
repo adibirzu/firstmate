@@ -67,13 +67,6 @@ done
 printf '%s' "$pane_out" | grep -q "Generated: " || fail "the rendered view is missing its observation timestamp"
 pass "real herdr: the pane runs the renderer and its fleet view is readable"
 
-# The renderer's own process (and its jq/fm-fleet-snapshot.sh children) must
-# exit and the pane's shell return to idle before closing it: pre-0.8.0 Herdr
-# refuses to close a pane that still hosts a foreground command (see
-# docs/herdr-backend.md "focus defect"). Its output already appeared above, so
-# a short settle wait is enough - no idle-proof machinery needed here.
-sleep 1
-
 out=$(FM_HOME="$HOME_DIR" "$LIVE" close --session "$SESSION" 2>&1) || fail "close failed: $out"
 [ ! -f "$RECORD" ] || fail "close did not clear the record"
 remaining=$("$LAB" run "$SESSION" tab list 2>/dev/null \

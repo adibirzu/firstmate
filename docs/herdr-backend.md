@@ -423,7 +423,7 @@ Missing data renders `-` (not carried) or `unknown` (not known), never a blank c
 Verbs are `open`, `refresh`, `close`, and `status`.
 `open` is idempotent: it refreshes a live recorded tab in place, replaces a stale record or a pane-less husk, and prunes only the exact seeded tab returned by its own `workspace create`.
 If the recorded tab belongs to a different session than the one `open` was given, `open` best-effort closes only that exact recorded tab, in the session that recorded it, before creating the new tab in the requested session.
-`close` closes only the exact recorded tab and clears the record; it never closes a workspace or touches a label it did not record.
+`close` clears the record and removes only the recorded tab; since that tab is the sole tab of its own dedicated workspace and Herdr refuses an explicit `tab close` of a workspace's last tab, `close` removes it by closing that exclusively-owned workspace, never any other workspace, tab, or label it did not record.
 Session targeting is always explicit: `--session`, then `FM_FLEET_VIEW_SESSION`, then local gitignored `config/fleet-view-session`, then the real `default` session.
 Every verb touches only its own recorded tab, in the session that recorded it, and the surface never calls a server-global or session-lifecycle operation.
 
