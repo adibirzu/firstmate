@@ -37,10 +37,13 @@ BUSY_STATE=idle
 TARGET_EXISTS=0
 SEND_VERDICT=empty
 INBOX_UNHANDLED=1
+CAPTURE_OUTPUT=""
+MATE_BUSY=1
 
 fm_backend_target_exists() { return "$TARGET_EXISTS"; }
 fm_backend_busy_state() { printf '%s\n' "$BUSY_STATE"; }
 fm_backend_composer_state() { printf '%s\n' "$COMPOSER_STATE"; }
+fm_backend_capture() { printf '%s' "$CAPTURE_OUTPUT"; }
 fm_backend_send_text_submit() {  # <backend> <target> <text> ...
   printf '%s\n' "$3" >> "$SENT"
   printf '%s\n' "$SEND_VERDICT"
@@ -48,6 +51,8 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> ...
 fm_backend_target_of_meta() { printf 'firstmate:0\n'; }
 fm_backend_of_meta() { printf 'tmux\n'; }
 fm_task_inbox_oldest_unhandled() { return "$INBOX_UNHANDLED"; }
+# 1 means not in an active turn (the healthy-idle normal case); 0 means busy.
+secondmate_in_active_turn() { return "$MATE_BUSY"; }
 discover_supervisor_target() { printf 'firstmate:0\n'; }
 discover_supervisor_backend() { printf 'tmux\n'; }
 wake() { printf 'WAKE %s\n' "$1" >> "$SENT"; return 0; }
@@ -61,6 +66,8 @@ reset_case() {
   TARGET_EXISTS=0
   SEND_VERDICT=empty
   INBOX_UNHANDLED=1
+  CAPTURE_OUTPUT=""
+  MATE_BUSY=1
   _context_hygiene_harness=""
   export FM_CONTEXT_HYGIENE_HARNESS=claude
   # Read as globals by the sourced watcher functions, so export them.
@@ -231,6 +238,18 @@ test_tick_compact_at_boundary() {
   [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a busy-pane refusal must keep the marker"
   BUSY_STATE=idle
 
+  # An unknown native busy verdict is NOT enough: a rendered mid-turn signature
+  # must still block delivery (this is what catches a tmux pane, where the
+  # native verdict is always unknown).
+  BUSY_STATE=unknown
+  CAPTURE_OUTPUT="esc to interrupt"
+  : > "$SENT"
+  context_hygiene_tick
+  [ -s "$SENT" ] && fail "a rendered mid-turn signature must block delivery: $(cat "$SENT")"
+  [ -f "$STATE_DIR/.context-compact-pending" ] || fail "a rendered-busy refusal must keep the marker"
+  BUSY_STATE=idle
+  CAPTURE_OUTPUT=""
+
   # An unknown busy verdict beside a proven-empty composer is still deliverable:
   # the composer proof is the load-bearing guard.
   BUSY_STATE=unknown
@@ -372,6 +391,9 @@ test_secondmate_healthy_idle() {
   INBOX_UNHANDLED=1
   COMPOSER_STATE=empty
   secondmate_healthy_idle mate "$meta" || fail "an empty steering inbox at an empty prompt must be healthy idle"
+  MATE_BUSY=0
+  secondmate_healthy_idle mate "$meta" && fail "a provably-working mate must not read as healthy idle"
+  MATE_BUSY=1
   INBOX_UNHANDLED=0
   secondmate_healthy_idle mate "$meta" && fail "an unhandled steering record must not read as healthy idle"
   INBOX_UNHANDLED=1
@@ -413,7 +435,7 @@ test_stall_tick_suppresses_healthy_idle() {
   export SECONDMATE_WAKE_STALL_SECS
   INBOX_UNHANDLED=1
   COMPOSER_STATE=empty
-  secondmate_in_active_turn() { return 1; }
+  MATE_BUSY=1
 
   secondmate_wake_stall_tick
   [ ! -s "$SENT" ] || fail "a healthy-idle mate with an empty steering inbox was escalated as stalled: $(cat "$SENT")"

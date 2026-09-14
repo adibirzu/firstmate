@@ -726,6 +726,11 @@ secondmate_healthy_idle() {  # <task> <meta>
   window=$(fm_backend_target_of_meta "$meta")
   [ -n "$window" ] || return 1
   backend=$(fm_backend_of_meta "$meta")
+  # A provably-working pane is not idle, even with an empty composer: the
+  # idle-at-prompt claim is exactly what the busy contract refutes. This mirrors
+  # the active-turn gate the caller applies next, and keeps a pane busy past the
+  # turn bound (which the active-turn gate treats as NOT active) escalating.
+  secondmate_in_active_turn "$task" "$window" && return 1
   [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ]
 }
 
@@ -1701,22 +1706,33 @@ context_hygiene_harness() {
   printf '%s\n' "$_context_hygiene_harness"
 }
 
+# pane_is_busy_explicit <backend> <target> <harness>
+# 0 when the pane is provably busy: the native semantic verdict first, then the
+# same rendered-tail harness signature window_is_busy uses. A bare
+# fm_backend_busy_state read is native-only and returns `unknown` on tmux, so a
+# mid-turn tmux pane would otherwise pass the busy guard; the rendered fallback
+# is what catches it. An empty or unknown harness matches no signature.
+pane_is_busy_explicit() {
+  local backend=$1 target=$2 harness=$3 tail40
+  [ "$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)" = busy ] && return 0
+  [ -n "$harness" ] || return 1
+  tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match "$harness"
+}
+
 # Type <command> into this home's own supervising pane, but only when the pane
 # exists and is affirmatively idle at an empty composer. 0 only on a confirmed
 # submit, so the caller keeps the compact marker pending on any refusal.
-# The composer proof is the load-bearing guard: fm_backend_composer_state only
-# returns `empty` for a positively identified empty composer (never for a bare
-# dead shell or an unreadable pane), so an `unknown` busy verdict alongside a
-# proven-empty composer is still safe to type into - the same boundary the
-# away-mode daemon's inject_msg applies.
-context_hygiene_inject() {  # <command>
-  local command=$1 target backend composer verdict
+# The busy guard uses the full native+rendered verdict (pane_is_busy_explicit),
+# so a mid-turn pane on a backend with no native busy source is still caught; the
+# composer proof then confirms the prompt is genuinely empty (never true for a
+# bare dead shell or an unreadable pane). Both must hold.
+context_hygiene_inject() {  # <command> <harness>
+  local command=$1 harness=$2 target backend composer verdict
   target=$(discover_supervisor_target) || return 1
   backend=$(discover_supervisor_backend) || return 1
   fm_backend_target_exists "$backend" "$target" || return 1
-  case "$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)" in
-    busy) return 1 ;;
-  esac
+  pane_is_busy_explicit "$backend" "$target" "$harness" && return 1
   composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
   [ "$composer" = empty ] || return 1
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$command" 1 0.4 1.2 2>/dev/null) || return 1
@@ -1734,7 +1750,7 @@ context_hygiene_tick() {
     harness=$(context_hygiene_harness)
     if [ -n "$harness" ] && [ "$harness" != unknown ]; then
       command=$(fm_context_hygiene_compact_command "$harness" "$(cat "$marker" 2>/dev/null || true)")
-      if [ -n "$command" ] && context_hygiene_inject "$command"; then
+      if [ -n "$command" ] && context_hygiene_inject "$command" "$harness"; then
         fm_context_hygiene_clear_marker "$STATE"
         triage_log "context hygiene: sent compact after a task boundary"
         return 0
@@ -1761,7 +1777,7 @@ context_hygiene_tick() {
   case "$harness" in ''|unknown) return 0 ;; esac
   command=$(fm_context_hygiene_command "$harness" clear)
   [ -n "$command" ] || return 0
-  if context_hygiene_inject "$command"; then
+  if context_hygiene_inject "$command" "$harness"; then
     fm_context_hygiene_reset_idle "$STATE"
     triage_log "context hygiene: sent clear while idle"
   fi
