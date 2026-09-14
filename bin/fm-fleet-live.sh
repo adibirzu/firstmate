@@ -25,11 +25,13 @@
 #   fm-fleet-live.sh --help
 #
 # `open` is idempotent: a live recorded tab is refreshed in place, and a stale
-# record is replaced. `close` closes only the exact recorded tab (never a
-# workspace) and clears the record. `status` reports the recorded tab and
-# whether it still exists. No verb ever touches a session other than the one it
-# was given, and none calls a server-global or session-lifecycle Herdr
-# operation.
+# record is replaced. If the record belongs to a different session than the one
+# `open` was given, `open` best-effort closes only that exact recorded tab, in
+# the session that recorded it, before creating the new one. `close` closes
+# only the exact recorded tab (never a workspace) and clears the record.
+# `status` reports the recorded tab and whether it still exists. Every verb
+# touches only its own recorded tab, in the session that recorded it, and none
+# calls a server-global or session-lifecycle Herdr operation.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,9 +55,11 @@ usage: fm-fleet-live.sh open    [--session <name>] [--label <text>]
        fm-fleet-live.sh status  [--session <name>]
 
 Surface the fleet view as a Herdr tab in a named session (default: "default").
-open is idempotent (refreshes a live recorded tab); close closes only the exact
-recorded tab; status reports the recorded tab. No verb touches another session
-and none calls a server-global or session-lifecycle Herdr operation.
+open is idempotent (refreshes a live recorded tab, or best-effort closes a
+record's old tab in its own session before opening in a new one); close closes
+only the exact recorded tab; status reports the recorded tab. Every verb
+touches only its own recorded tab, in the session that recorded it, and none
+calls a server-global or session-lifecycle Herdr operation.
 EOF
 }
 
@@ -169,6 +173,12 @@ fm_fleet_live_open() {  # <session> <label>
       }
       printf 'refreshed fleet view tab %s (%s) in session %s\n' "$rt" "$rp" "$session"
       return 0
+    fi
+    if [ -n "$rs" ] && [ "$rs" != "$session" ] && [ -n "$rt" ]; then
+      # The record is bound to a different session. Best-effort close only that
+      # exact recorded tab, in the session that recorded it, before discarding
+      # the record; never touch any other tab in that session.
+      fm_fleet_live_herdr "$rs" tab close "$rt" >/dev/null 2>&1 || true
     fi
     rm -f -- "$RECORD"
   fi

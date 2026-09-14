@@ -272,6 +272,24 @@ test_refuses_ambiguous_label() {
   pass "fm-fleet-live refuses an ambiguous view label instead of guessing"
 }
 
+test_open_closes_old_session_tab_on_session_switch() {
+  local home old_tab new_tab
+  reset_fake
+  home=$(make_home session-switch)
+  run_live "$home" open --session fm-lab-switch-a-$$ >/dev/null || fail "open in session A failed"
+  old_tab=$(record_field "$home" tab)
+  grep -q "^$old_tab	" "$FAKE_STATE/tabs" || fail "session A tab was not recorded as created"
+  run_live "$home" open --session fm-lab-switch-b-$$ >/dev/null || fail "open in session B failed"
+  new_tab=$(record_field "$home" tab)
+  [ "$(record_field "$home" session)" = "fm-lab-switch-b-$$" ] || fail "record must now bind session B"
+  [ "$new_tab" != "$old_tab" ] || fail "switching sessions must open a new tab, not reuse the old one"
+  grep -q "^$old_tab	" "$FAKE_STATE/tabs" && fail "the old session's tab must be closed, not leaked"
+  grep -q "^$new_tab	" "$FAKE_STATE/tabs" || fail "the new session's tab must exist"
+  grep -q "^fm-lab-switch-a-$$ tab close $old_tab --session fm-lab-switch-a-$$\$" "$FAKE_STATE/calls" \
+    || fail "the old tab must be closed in the session that recorded it: $(cat "$FAKE_STATE/calls")"
+  pass "fm-fleet-live open closes the old session's recorded tab instead of leaking it"
+}
+
 test_session_resolution_prefers_explicit_then_config() {
   local home configured
   reset_fake
@@ -343,6 +361,7 @@ test_status_then_close
 test_refresh_requires_a_record
 test_stale_record_is_recreated
 test_refuses_ambiguous_label
+test_open_closes_old_session_tab_on_session_switch
 test_session_resolution_prefers_explicit_then_config
 test_default_session_targets_the_real_session
 test_never_calls_lifecycle_or_server_ops
