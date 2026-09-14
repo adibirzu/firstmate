@@ -734,6 +734,13 @@ assert_grep 'remote_target=fm-remote:' "$PARENT/state/ios.meta" "parent metadata
 assert_grep 'herdr_session=fm-remote' "$REMOTE_HOME/state/parent-route/ios.meta" "remote metadata did not record the pinned Herdr session"
 assert_grep '--session fm-remote' "$HERDR_LOG" "remote launch did not target the fm-remote session"
 assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the interactive default session"
+# The registry host token is seeded into the remote home's own
+# config/herdr-session-host (when absent) and drives the task tab display name
+# adix-<host>-<project>-<task> (project == task id for a secondmate agent, so the
+# duplicate segment collapses).
+assert_grep '--label adix-remote-mac-ios' "$HERDR_LOG" "remote launch did not apply the host-qualified display name to the task tab"
+[ "$(cat "$REMOTE_HOME/config/herdr-session-host" 2>/dev/null)" = "remote-mac" ] \
+  || fail "remote launch did not seed config/herdr-session-host with the registry host token"
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"

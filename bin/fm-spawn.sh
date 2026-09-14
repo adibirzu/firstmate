@@ -475,6 +475,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-herdr-name-lib.sh
+. "$SCRIPT_DIR/fm-herdr-name-lib.sh"
 # shellcheck source=bin/fm-account-env.sh
 . "$SCRIPT_DIR/fm-account-env.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -846,6 +848,11 @@ spawn_remote_secondmate() {
   fi
   launch_args=("$id" "$harness" "$model" "$effort" "$backend")
   [ -z "$remote_traceparent" ] || launch_args+=("$remote_traceparent")
+  # Hand the remote host this route's registry host token; its launch seeds the
+  # remote home's config/herdr-session-host when absent, so the secondmate's tab
+  # and every crewmate/scout it later spawns share one `adix-[<host>-]...` host
+  # segment (bin/fm-herdr-name-lib.sh).
+  launch_args+=(--herdr-host "$host")
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" < /dev/null 2>&1); then
     rc=0
@@ -3064,6 +3071,17 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 W="fm-$ID"
+# Herdr's visible per-task label is the display name
+# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh). It applies
+# to a freshly CREATED task tab only: an adopted endpoint keeps the label it was
+# created with, and recovery of an existing presentation journal reuses the label
+# recorded in that journal, so no live session is renamed or restarted. `fm-<id>`
+# stays the adapter's identity anchor, passed alongside as the legacy alias for
+# husk replacement.
+HERDR_TASK_LABEL=$W
+if [ "$BACKEND" = herdr ]; then
+  HERDR_TASK_LABEL=$(fm_herdr_name_label_for "$CONFIG" "$KIND" "$ID" "$PROJ_ABS")
+fi
 if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ] && [ "${REUSE_OLD_STATE:-}" != "missing" ]; then
   # Adopt the recorded endpoint instead of creating one. This is what keeps a
   # relaunch a REPLACEMENT rather than a second copy of the task: no new
@@ -3148,11 +3166,20 @@ case "$BACKEND" in
         fm_backend_herdr_projection_recovery_allows_flat \
           "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
         if [ "${HERDR_RECOVERY_BACKEND:-}" = herdr ]; then
+          # Reclaim swaps only the pane of an existing projection, so it must
+          # keep the tab label the journal recorded (a legacy `fm-<id>` journal
+          # stays legacy; a new-named one stays new). Renaming a live projection
+          # is exactly what the task forbids, and passing the wrong label would
+          # make reclaim refuse and strand the old space.
+          HERDR_RECLAIM_TASK_LABEL=$HERDR_TASK_LABEL
+          if fm_backend_herdr_projection_journal_snapshot "$HERDR_PRESENTATION_JOURNAL" "$ID" 2>/dev/null; then
+            HERDR_RECLAIM_TASK_LABEL=${FM_BACKEND_HERDR_JOURNAL_TASK_LABEL:-$HERDR_TASK_LABEL}
+          fi
           set +e
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+            "$HERDR_PARENT_LABEL" "$HERDR_RECLAIM_TASK_LABEL" "$PROJ_ABS"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in
@@ -3203,7 +3230,7 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$HERDR_TASK_LABEL"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -3229,11 +3256,11 @@ case "$BACKEND" in
                && fm_backend_herdr_projection_live_binding_matches \
                  "$HERDR_SES" "$HERDR_PROJECTION_ID" "$HERDR_WORKSPACE_ID" \
                  "$HERDR_TAB_ID" "$HERDR_PANE_ID" "$HERDR_PARENT_WORKSPACE_ID" \
-                 "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$W" \
+                 "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$HERDR_TASK_LABEL" \
                && fm_backend_herdr_projection_journal_bind \
                  "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_HOME_ID" "$HERDR_SES" \
                  "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID" \
-                 "$HERDR_PARENT_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$W"; then
+                 "$HERDR_PARENT_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$HERDR_TASK_LABEL"; then
               :
             else
               echo "warning: herdr presentation could not publish an exact restart binding; this task will use flat fallback after a restart" >&2
@@ -3256,13 +3283,17 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      # The fifth argument is the legacy `fm-<id>` alias: a task tab created by
+      # an older firstmate carries that label, and create_task treats a
+      # same-id legacy husk as replaceable rather than letting a respawn leave a
+      # duplicate tab beside it.
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$HERDR_TASK_LABEL" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID" "$W") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
     fi
     if [ -z "$HERDR_TAB_ID" ] || [ -z "$HERDR_PANE_ID" ]; then
-      echo "error: herdr did not return a tab/pane id for $W" >&2
+      echo "error: herdr did not return a tab/pane id for $HERDR_TASK_LABEL" >&2
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"

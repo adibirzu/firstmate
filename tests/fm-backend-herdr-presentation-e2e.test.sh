@@ -164,15 +164,20 @@ if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
   esac
 fi
 if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
+  # fm-spawn labels each new task tab <prefix>-[<host>-]<project>-<task-id>, so
+  # match the display name by its task-id suffix rather than the legacy fm-<id> form.
   case "$label" in
-    fm-active-seeded)
+    *-active-seeded)
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/task-pane"
       printf '%s\n' task-created > "$ACTIVE_SEEDED_CONTROL/stage"
       ;;
-    fm-abort-a|fm-abort-b)
-      task=${label#fm-}
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
+    *-abort-a)
+      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-a"
+      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane"
+      ;;
+    *-abort-b)
+      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-b"
+      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane"
       ;;
   esac
 fi
@@ -691,8 +696,8 @@ PROJECTED_PANES=$(lab pane list --workspace "$PROJECTED_WSID")
 [ "$(printf '%s' "$PROJECTED_PANES" | jq -r '.result.panes | length')" = 1 ] \
   || fail "projected workspace did not contain exactly one task pane"
 printf '%s' "$PROJECTED_TABS" | jq -e --arg tab "$PROJECTED_TAB" \
-  '.result.tabs[0].tab_id == $tab and .result.tabs[0].label == "fm-shape"' >/dev/null 2>&1 \
-  || fail "projected workspace's only tab was not the normal fm-shape task tab"
+  '.result.tabs[0].tab_id == $tab and (.result.tabs[0].label | endswith("-shape"))' >/dev/null 2>&1 \
+  || fail "projected workspace's only tab was not the task's <prefix>-[<host>-]<project>-<task-id> display-name tab"
 printf '%s' "$PROJECTED_PANES" | jq -e --arg pane "$PROJECTED_PANE" \
   '.result.panes[0].pane_id == $pane' >/dev/null 2>&1 \
   || fail "projected workspace's only pane was not the exact recorded task pane"

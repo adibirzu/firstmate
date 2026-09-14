@@ -72,6 +72,14 @@ FM_BACKEND_HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_HERDR_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
+# Shared herdr display-name composer (fm_herdr_name_prefix and friends). Single
+# owner of the configurable task-tab label prefix (default "adix",
+# config/herdr-session-prefix), reused here so recovery/orphan discovery
+# recognizes this home's own freshly-labeled tabs without re-deriving the
+# prefix logic.
+# shellcheck source=bin/fm-herdr-name-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-herdr-name-lib.sh"
+
 # Shared composer-content classifier (empty|pending|unknown, and the fleet-wide
 # dead-shell-vs-agent-composer rule). Owned by bin/fm-composer-lib.sh, reused by
 # every backend so the decision cannot drift.
@@ -530,7 +538,7 @@ fm_backend_herdr_projection_journal_field() {  # <journal> <key>
 # journal or a version 2 exact projection binding without sourcing shell code.
 # Version 2 sets FM_BACKEND_HERDR_JOURNAL_* globals for same-process callers.
 fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
-  local journal=$1 id=$2 lines expected_label expected_task_label exact
+  local journal=$1 id=$2 lines expected_label exact
   FM_BACKEND_HERDR_JOURNAL_VERSION=""
   FM_BACKEND_HERDR_JOURNAL_TASK_ID=""
   FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID=""
@@ -585,9 +593,21 @@ fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
     && [ -n "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" ] \
     && [ -n "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" ] || return 1
   expected_label=$(fm_backend_herdr_projection_workspace_label "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
-  expected_task_label="fm-$id"
-  [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" = "$expected_label" ] \
-    && [ "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" = "$expected_task_label" ]
+  # The task label is the legacy `fm-<id>` for a projection created before the
+  # display-name change, or the new `<prefix>-[<host>-]<project>-<task-id>`
+  # (bin/fm-herdr-name-lib.sh), whose task segment has one leading `fm-`
+  # stripped and whose prefix is configurable. Accept both so a legacy journal
+  # still validates for restart reclaim, and bound the charset to the label
+  # alphabet the naming owner emits.
+  local task_segment=${id#fm-}
+  case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
+    "fm-$id"|*-"$task_segment") ;;
+    *) return 1 ;;
+  esac
+  case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" = "$expected_label" ]
 }
 
 # fm_backend_herdr_projection_journal_token: validate and read either journal
@@ -2166,12 +2186,20 @@ fm_backend_herdr_agent_alive() {  # <target>
 # the safety argument). An ADOPTED workspace's caller always passes an empty
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
-fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
-  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
+#
+# <legacy-alias-label> (5th arg, may be empty) is the pre-naming `fm-<id>` tab
+# label for the SAME task. The label firstmate creates now is the display name
+# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh), but a task tab
+# created by an older firstmate still carries `fm-<id>`; treating that label as
+# a husk candidate for this task lets a respawn replace the stale tab instead of
+# leaving a duplicate beside it. It is scoped to this task's own id by the
+# caller, so it can never match another task's tab.
+fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id> [<legacy-alias-label>]
+  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} alias_label=${5:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
-  dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" 'if (.result.tabs | type) == "array" then .result.tabs[] | select(.label == $want) | .tab_id else error("missing result.tabs") end' 2>/dev/null) || {
+  dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg alias "$alias_label" 'if (.result.tabs | type) == "array" then .result.tabs[] | select(.label == $want or ($alias != "" and .label == $alias)) | .tab_id else error("missing result.tabs") end' 2>/dev/null) || {
     echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
     return 1
   }
@@ -2212,8 +2240,8 @@ EOF
       echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
       return 1
     fi
-    remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg replacement "$tab_id" \
-      '.result.tabs[]? | select(.label == $want and .tab_id != $replacement) | .tab_id' 2>/dev/null)
+    remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg alias "$alias_label" --arg replacement "$tab_id" \
+      '.result.tabs[]? | select((.label == $want or ($alias != "" and .label == $alias)) and .tab_id != $replacement) | .tab_id' 2>/dev/null)
     remaining_dup_tabs=${remaining_dup_tabs//$'\n'/ }
     if [ -n "$remaining_dup_tabs" ]; then
       echo "error: failed to remove preexisting herdr tab(s) $remaining_dup_tabs for label '$label' in workspace $wsid (session $session)" >&2
@@ -3408,27 +3436,32 @@ EOF
 }
 
 # fm_backend_herdr_list_live: recovery/orphan discovery. Lists every tab whose
-# label looks like a firstmate task window (fm-<id>) in <session>'s, THIS
-# HOME'S OWN workspace (fm_backend_herdr_workspace_label - never another
-# home's), by LABEL - never by trusting a stored pane id, since ids are not
-# guaranteed stable across every server lifecycle (see herdr-verification-p2.md
-# "ID stability"). A caller running as a given home (e.g. a secondmate
-# recovering its own in-flight work) naturally scopes to that home's own
-# workspace because FM_HOME already names it - no glue needed, unlike the
-# primary-spawns-a-secondmate path in fm-spawn.sh. Read-only: a session/
-# workspace that does not exist yet simply lists nothing. One
-# "<session>:<pane_id>\t<label>" line per live task tab.
+# label looks like a firstmate task window - either the legacy `fm-<id>` form,
+# or this home's own current display-name prefix (fm_herdr_name_prefix,
+# `config/herdr-session-prefix`, default `adix`; bin/fm-herdr-name-lib.sh
+# owns the format) - in <session>'s, THIS HOME'S OWN workspace
+# (fm_backend_herdr_workspace_label - never another home's), by LABEL - never
+# by trusting a stored pane id, since ids are not guaranteed stable across
+# every server lifecycle (see herdr-verification-p2.md "ID stability"). A
+# caller running as a given home (e.g. a secondmate recovering its own
+# in-flight work) naturally scopes to that home's own workspace because
+# FM_HOME already names it - no glue needed, unlike the primary-spawns-a-
+# secondmate path in fm-spawn.sh. Read-only: a session/workspace that does not
+# exist yet simply lists nothing. One "<session>:<pane_id>\t<label>" line per
+# live task tab.
 fm_backend_herdr_list_live() {  # <session>
-  local session=$1 wsid tabs tab_id label pane_id
+  local session=$1 wsid tabs tab_id label pane_id prefix
   wsid=$(fm_backend_herdr_workspace_find "$session") || return 0
   [ -n "$wsid" ] || return 0
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
+  prefix=$(fm_herdr_name_prefix "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")
   while IFS=$'\t' read -r tab_id label; do
     [ -n "$tab_id" ] || continue
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
     printf '%s:%s\t%s\n' "$session" "$pane_id" "$label"
-  done < <(printf '%s' "$tabs" | jq -r '.result.tabs[]? | select(.label | startswith("fm-")) | "\(.tab_id)\t\(.label)"' 2>/dev/null)
+  done < <(printf '%s' "$tabs" | jq -r --arg legacy "fm-" --arg prefix "$prefix-" \
+    '.result.tabs[]? | select((.label | startswith($legacy)) or (.label | startswith($prefix))) | "\(.tab_id)\t\(.label)"' 2>/dev/null)
 }
 
 # --- native event push: pane.agent_status_changed subscriber -----------------
