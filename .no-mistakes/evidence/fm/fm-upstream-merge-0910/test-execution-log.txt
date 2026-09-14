@@ -1,0 +1,50 @@
+=== FIRSTMATE UPSTREAM MERGE TEST EXECUTION LOG ===
+Date: 2026-09-14
+Branch: fm/fm-upstream-merge-0910
+Commit: 2a4b23dcb1217c8af83cb9b56f2223f7997af8c5
+
+=== TEST SUITE 1: fm-test-fixtures.test.sh ===
+Status: ALL PASSED (8/8 tests)
+
+ok - fm_touch_epoch preserves both epochs in the repeated DST hour
+ok - fake no-mistakes --version is the shared constant and overridable
+ok - init/doctor no-mistakes stub touches markers and refuses other verbs
+ok - fake gh authenticates and fake gh-axi reports the shared version
+ok - spawn fakebin answers pane path, logs -l payloads, and installs extra tools
+ok - send stubs log typed text and fake ssh records argv with a controllable exit
+ok - spawn-home layout writes harness pin, beat, and brief
+ok - lib.sh clears an ambient live home so fixture reports stay in the sandbox
+
+=== TEST SUITE 2: fm-spawn-dispatch-profile.test.sh ===
+Status: ALL PASSED (49/49 tests)
+
+Selected critical tests:
+ok - Pi launch probing omits --tui-mode on older Pi and preserves it on supporting Pi ← RESTORED UPSTREAM TEST
+ok - pi-signed shares Pi launch semantics while preserving its configured and recorded identity
+ok - pi-signed refuses safely and actionably when the selected executable is unavailable
+ok - pi-signed is a distinct persistent secondmate runtime with shared Pi supervision semantics
+ok - Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning
+ok - batch dispatch preserves native Ultra in metadata and launch flags
+ok - allowlist=absent preserves the operational floor and filters only when opted in
+ok - secondmate launch inherits the allowlist for subsequent worker launches
+ok - claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store
+
+Full test completion: # all fm-spawn-dispatch-profile tests passed
+
+=== VERIFICATION SUMMARY ===
+
+Code Fixes Verified:
+✓ fm_backlog_record_present hardening (bin/fm-spawn.sh:772)
+✓ Pi tui-mode probe test restored (tests/fm-spawn-dispatch-profile.test.sh:851, :1387)
+✓ Task-set lock cleanup trap ordering (bin/fm-spawn.sh:1160)
+✓ Pause-governing line in away-mode check (bin/fm-watch.sh:1111)
+✓ Verification doc grammar fix (docs/verification/runtime-backends.md:1231)
+✓ Stranded test invocation moved (tests/fm-test-fixtures.test.sh:196)
+✓ Marker key v2 usage (tests/fm-watch-triage.test.sh:2505, :3315)
+
+Tests Executed:
+✓ 57 automated tests passed
+✓ 0 tests failed
+✓ Critical merge-specific functionality verified
+
+Working Tree: Clean, no conflicts
