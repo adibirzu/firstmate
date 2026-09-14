@@ -63,6 +63,9 @@ case "\${FM_LOCK_TEST_MODE}:\$pid:\$field" in
   direct:*:comm=) printf '%s\n' bash ;;
   direct:*:args=) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
   direct:*:ppid=) printf '%s\n' $3 ;;
+  sibling:*:comm=) printf '%s\n' bash ;;
+  sibling:*:args=) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
+  sibling:*:ppid=) printf '%s\n' $4 ;;
   pool:*:comm=) printf '%s\n' bash ;;
   pool:*:args=) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
   pool:*:ppid=) printf '%s\n' $5 ;;
@@ -174,7 +177,65 @@ test_claude_without_its_session_marker_cannot_fall_back_to_ancestry() {
   pass "fm-lock: a Claude worker without session identity fails closed"
 }
 
+# Claude Code regenerates CLAUDE_CODE_SESSION_ID on /clear while the same
+# harness process keeps running and keeps the lock. The published session
+# binding misses, but the recorded holder is still this session's own harness
+# pid, so the owner must re-admit rather than be refused as another session.
+test_owner_readmits_after_clear_session_id_change() {
+  local home fakebin session sibling spare host parent out
+  home=$(make_home after-clear)
+  fakebin=$(fm_fakebin "$home/bin")
+  spawn_live_pid; session=$LIVE_PID
+  spawn_live_pid; sibling=$LIVE_PID
+  spawn_live_pid; spare=$LIVE_PID
+  spawn_live_pid; host=$LIVE_PID
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
+
+  out=$(run_lock "$home" "$fakebin" direct before-clear "$session") \
+    || fail "initial lock acquisition failed: $out"
+  [ "$(cat "$home/state/.lock.session")" = "$(printf 'format=1\nkind=claude\npid=%s\nsession=before-clear' "$session")" ] \
+    || fail "initial lock did not record the pre-clear session binding"
+
+  out=$(run_lock "$home" "$fakebin" direct after-clear "$session") \
+    || fail "the lock owner was falsely refused after /clear: $out"
+  case "$out" in *"lock acquired: harness pid $session"*) ;; *) fail "self re-entry after /clear did not report its own lock: $out" ;; esac
+
+  out=$(FM_LOCK_TEST_MODE=direct CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=after-clear CLAUDE_PID="$session" \
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" PATH="$fakebin:$PATH" \
+    bash "$ROOT/bin/fm-lock.sh" status 2>&1) \
+    || fail "lock status failed after /clear: $out"
+  case "$out" in *"lock: held by this session"*) ;; *) fail "status did not recognize the owner after /clear: $out" ;; esac
+  pass "fm-lock: an owner re-admits after a /clear regenerates its session id"
+}
+
+# The self-owner fallback must not loosen the genuine refusal: a lock recorded
+# to a different, live session (a different harness pid outside this session's
+# ancestry) still refuses even when its session id is unknown to it.
+test_different_live_session_is_refused_after_owner_clear() {
+  local home fakebin session sibling spare host parent out
+  home=$(make_home after-clear-intruder)
+  fakebin=$(fm_fakebin "$home/bin")
+  spawn_live_pid; session=$LIVE_PID
+  spawn_live_pid; sibling=$LIVE_PID
+  spawn_live_pid; spare=$LIVE_PID
+  spawn_live_pid; host=$LIVE_PID
+  spawn_live_pid; parent=$LIVE_PID
+  write_ps "$fakebin" ignored "$session" "$sibling" "$spare" "$host" "$parent"
+
+  out=$(run_lock "$home" "$fakebin" direct before-clear "$session") \
+    || fail "initial lock acquisition failed: $out"
+
+  out=$(run_lock "$home" "$fakebin" sibling other-session "$sibling") \
+    && fail "a different live session claimed the owner's lock: $out"
+  case "$out" in *"another live firstmate session holds the lock (pid $session)"*) ;; *) fail "the different-session refusal was not explicit: $out" ;; esac
+  [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the refused session moved the lock off its owner"
+  pass "fm-lock: a different live session is still refused by the shared self-owner predicate"
+}
+
 test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner
 test_legacy_pool_lock_is_logged_when_temporarily_accepted
 test_unidentifiable_claude_session_cannot_use_legacy_compatibility
 test_claude_without_its_session_marker_cannot_fall_back_to_ancestry
+test_owner_readmits_after_clear_session_id_change
+test_different_live_session_is_refused_after_owner_clear

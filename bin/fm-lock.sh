@@ -4,7 +4,7 @@
 # Claude's binding is independent of its reparented worker-pool ancestry, so a
 # sibling session cannot claim the same home through that shared pool.
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
-#        fm-lock.sh status    print holder and liveness; always exits 0
+#        fm-lock.sh status    print holder and ownership; always exits 0
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +29,13 @@ if [ "${1:-}" = "status" ]; then
     echo "lock: unreadable"
     exit 0
   }
-  if fm_harness_pid_alive "$old"; then echo "lock: held by live harness pid $old"; else echo "lock: stale (pid $old dead or not a harness)"; fi
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    echo "lock: held by this session (harness pid $old)"
+  elif fm_harness_pid_alive "$old"; then
+    echo "lock: held by live harness pid $old"
+  else
+    echo "lock: stale (pid $old dead or not a harness)"
+  fi
   exit 0
 fi
 

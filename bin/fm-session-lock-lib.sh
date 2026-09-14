@@ -414,17 +414,29 @@ fm_session_lock_owned_by_legacy_compatibility() {  # <state-dir>
 # prove Claude ownership with the session identity that survives worker-pool
 # reparenting. A PID-only record reaches only the temporary, logged migration
 # path above and can never be used to create a new lock.
+#
+# The published binding can miss on a lock this session still genuinely owns:
+# Claude Code regenerates CLAUDE_CODE_SESSION_ID on /clear while the same
+# harness process keeps running and keeps the lock. So a binding mismatch falls
+# back to the shared ancestry predicate fm_session_lock_owned_by_self, which is
+# the single owner of "is the recorded lock holder this session's own live
+# harness pid". A lock recorded to a different live session is outside this
+# ancestry and still fails closed, and a malformed or missing record never
+# reaches this fallback.
 fm_session_lock_owned_by_current_session() {  # <state-dir>
   local state=$1 lock_pid
-  state=$1
   if fm_session_lock_read_record "$state"; then
-    fm_session_lock_prepare_acquisition_identity || return 1
-    lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
-    [ "$lock_pid" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
-    fm_harness_pid_alive "$lock_pid" || return 1
-    [ "$FM_SESSION_LOCK_OWNER_KIND" = "$FM_SESSION_LOCK_RECORD_KIND" ] || return 1
-    [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
-    [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ]
+    if fm_session_lock_prepare_acquisition_identity 2>/dev/null; then
+      lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+      if [ "$lock_pid" = "$FM_SESSION_LOCK_RECORD_PID" ] \
+        && fm_harness_pid_alive "$lock_pid" \
+        && [ "$FM_SESSION_LOCK_OWNER_KIND" = "$FM_SESSION_LOCK_RECORD_KIND" ] \
+        && [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ] \
+        && [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ]; then
+        return 0
+      fi
+    fi
+    fm_session_lock_owned_by_self "$state"
     return
   fi
   fm_session_lock_owned_by_legacy_compatibility "$state"
