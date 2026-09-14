@@ -2001,6 +2001,24 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
+# The durable remote-development continuity records written by
+# bin/fm-remote-dev-session.sh. The record schema is owned by
+# docs/remote-dev-sessions.md; this collector only projects it.
+remote_dev_sessions_json() {
+  local dir="$STATE/remote-dev-sessions" f one out='[]'
+  if [ ! -d "$dir" ]; then
+    jq -n '[]'
+    return 0
+  fi
+  for f in "$dir"/*.session; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    one=$(jq -Rn '[inputs | capture("^(?<k>[^=]*)=(?<v>.*)$") | {(.k): .v}] | add' < "$f" 2>/dev/null) || continue
+    [ -n "$one" ] && [ "$one" != null ] || continue
+    out=$(printf '%s\n%s\n' "$out" "$one" | jq -cs '.[0] + [.[1]]') || continue
+  done
+  printf '%s\n' "$out" | jq -c 'sort_by(.station)'
+}
+
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
@@ -2013,6 +2031,7 @@ MAIN_INVENTORY_JSON_FILE="$JSON_TRANSPORT_DIR/main-inventory.json"
 SCOUT_REPORTS_JSON_FILE="$JSON_TRANSPORT_DIR/scout-reports.json"
 SECONDMATE_CURRENT_JSON_FILE="$JSON_TRANSPORT_DIR/secondmate-current.json"
 SECONDMATE_LANDED_JSON_FILE="$JSON_TRANSPORT_DIR/secondmate-landed.json"
+REMOTE_DEV_SESSIONS_JSON_FILE="$JSON_TRANSPORT_DIR/remote-dev-sessions.json"
 printf '%s\n' "$BACKLOG_JSON" > "$BACKLOG_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary backlog file write failed" >&2; exit 1; }
 printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
@@ -2032,6 +2051,8 @@ secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
   || { echo "fm-fleet-snapshot: registered secondmate aggregation failed" >&2; exit 1; }
 secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
   || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
+remote_dev_sessions_json > "$REMOTE_DEV_SESSIONS_JSON_FILE" \
+  || { echo "fm-fleet-snapshot: remote dev session read failed" >&2; exit 1; }
 
 jq -n \
   --arg generated "$SNAPSHOT_NOW" \
@@ -2047,12 +2068,14 @@ jq -n \
   --slurpfile scout_reports "$SCOUT_REPORTS_JSON_FILE" \
   --slurpfile secondmate_current "$SECONDMATE_CURRENT_JSON_FILE" \
   --slurpfile secondmate_landed "$SECONDMATE_LANDED_JSON_FILE" \
+  --slurpfile remote_dev_sessions "$REMOTE_DEV_SESSIONS_JSON_FILE" \
   '($backlog[0]) as $backlog
    | ($tasks[0]) as $tasks
    | ($main_inventory[0]) as $main_inventory
    | ($scout_reports[0]) as $scout_reports
    | ($secondmate_current[0]) as $secondmate_current
    | ($secondmate_landed[0]) as $secondmate_landed
+   | ($remote_dev_sessions[0]) as $remote_dev_sessions
    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");
@@ -2067,6 +2090,7 @@ jq -n \
      scout_reports:($scout_reports | map(. + {kind:report_kind(.id)})),
      secondmate_current:$secondmate_current,
      secondmate_landed:$secondmate_landed,
+     remote_dev_sessions:$remote_dev_sessions,
      secondmate_guidance:{
        note:"For kind=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
      }

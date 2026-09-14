@@ -481,6 +481,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/remote-dev-sessions.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/remote-secondmates.md",
       "audience": "operator-current"
     },

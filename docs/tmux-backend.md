@@ -13,6 +13,7 @@ Select it explicitly with local `config/backend` containing `tmux`, with `FM_BAC
 An explicit selection is also the opt-out from Herdr or cmux runtime auto-detection.
 
 No provisioning is required before the first task.
+A remote development session's explicit tmux fallback and its continuity record are owned by [`remote-dev-sessions.md`](remote-dev-sessions.md).
 
 ## Watching the crew
 

@@ -161,6 +161,18 @@ printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson
     | (if length == 0 then ["| - | - | - | - | - | - | - | - | - |"] else . end)[]
   ),
   "",
+  "## Remote Development Sessions",
+  "| Station | Backend | Session | Workspace/Window | Tab/Pane | Task | Project | Branch | Attach |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ( (.remote_dev_sessions // []) as $rd
+    | (if ($rd | length) == 0 then ["| - | - | - | - | - | - | - | - | - |"]
+       else [ $rd[]
+         | "| \(dash(.station)) | \(dash(.backend)) | \(dash(.session)) | "
+           + "\(dash(if (.workspace // "") != "" then .workspace else .window end)) | "
+           + "\(dash(if (.tab // "") != "" then "\(.tab)/\(.pane)" else .pane end)) | "
+           + "\(dash(.task_id)) | \(dash(.project)) | \(dash(.branch)) | \(dash(.attach_command)) |"
+         ] end)[] ),
+  "",
   "## Queued",
   (if ([.backlog.records[]? | select(.state == "queued")] | length) == 0 then
     "No queued backlog records found."
