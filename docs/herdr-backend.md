@@ -426,8 +426,9 @@ Verbs are `open`, `refresh`, `close`, and `status`.
 Session targeting is always explicit: `--session`, then `FM_FLEET_VIEW_SESSION`, then local gitignored `config/fleet-view-session`, then the real `default` session.
 The surface never calls a server-global or session-lifecycle operation.
 
-Regeneration rides work already happening rather than a new daemon: firstmate re-runs `open` (or `refresh`) on its supervision heartbeat and after each task completion, matching the held fleet-view decision.
-There is no watcher, poll loop, or background process; `refresh` is a single explicit re-render.
+Regeneration is explicit only: an operator, or any caller that wants an up-to-date view, re-runs `open` (or `refresh`) directly.
+There is no watcher, poll loop, or background process, and nothing in firstmate calls this primitive automatically today.
+Wiring automatic regeneration into the supervision heartbeat and after each task completion, as recommended by the fleet-view decision set, is tracked as the pending decision `fm-fleet-view-decision-view-regeneration-trigger` and is not implemented here.
 Production and convergence stay display-only, and an optional release manifest is consumed through the documented, schema-agnostic seam described in `bin/fm-fleet-view.sh`'s header.
 
 ## Regression entry points
