@@ -1448,7 +1448,7 @@ fm_pending_reply_tick() {  # <state-dir> [beat-callback]
   [ -d "$dir" ] || return 0
   for rec in "$dir"/*; do
     if [ -n "$beat_cb" ] && declare -F "$beat_cb" >/dev/null 2>&1; then
-      "$beat_cb"
+      "$beat_cb" || true
     fi
     [ -f "$rec" ] || continue
     case "$(basename "$rec")" in

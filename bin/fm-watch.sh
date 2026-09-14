@@ -183,7 +183,7 @@ POLL=${FM_POLL:-15}                   # seconds between cycles
 # stage boundaries inside a cycle (see beat_watcher_clock), and touched
 # immediately before the terminal wait below (event_wait_or_sleep) as well as at
 # the top of the next cycle, so a healthy cycle's beacon ages only as far as the
-# slowest single bounded stage between two beats, never as far as the whole
+# slowest single stage between two beats, never as far as the whole
 # cycle's fleet-wide work. fm_poll_derived_grace (bin/fm-wake-lib.sh, already
 # sourced transitively above) is the single owner of the max(300, poll+60)
 # derivation - see docs/turnend-guard.md "Guard grace and the poll cadence".
@@ -191,8 +191,10 @@ POLL=${FM_POLL:-15}                   # seconds between cycles
 # POLL is known.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$POLL")}}
 case "$WATCHER_STALE_GRACE" in
-  ''|*[!0-9]*|0) WATCHER_STALE_GRACE=$(fm_poll_derived_grace "$POLL") ;;
+  ''|*[!0-9]*) WATCHER_STALE_GRACE=$(fm_poll_derived_grace "$POLL") ;;
 esac
+[ "$WATCHER_STALE_GRACE" -gt 0 ] \
+  || WATCHER_STALE_GRACE=$(fm_poll_derived_grace "$POLL")
 # Sub-cadence for the in-cycle beats: a boundary beat re-touches the beacon only
 # once it has aged this far, so a busy cycle does not churn the mtime on every
 # window while the gap between touches stays a small fraction of the stale
@@ -201,8 +203,10 @@ esac
 # crosses grace, so the stale verdict keeps its meaning.
 WATCHER_BEAT_SUBCADENCE=${FM_WATCHER_BEAT_SUBCADENCE:-60}
 case "$WATCHER_BEAT_SUBCADENCE" in
-  ''|*[!0-9]*|0) WATCHER_BEAT_SUBCADENCE=60 ;;
+  ''|*[!0-9]*) WATCHER_BEAT_SUBCADENCE=60 ;;
 esac
+[ "$WATCHER_BEAT_SUBCADENCE" -ge 1 ] \
+  || WATCHER_BEAT_SUBCADENCE=60
 _beat_subcadence_cap=$(( WATCHER_STALE_GRACE / 3 ))
 [ "$_beat_subcadence_cap" -ge 1 ] || _beat_subcadence_cap=1
 [ "$WATCHER_BEAT_SUBCADENCE" -le "$_beat_subcadence_cap" ] \
@@ -1848,8 +1852,11 @@ fi
 # getting through its work" rather than "some helper is alive": a watcher wedged
 # inside one probe reaches no further boundary and still crosses the stale grace.
 # docs/turnend-guard.md "Guard grace and the poll cadence" owns the beacon
-# contract; the per-probe bounds that keep any single stage shorter than the
-# grace are owned by their call sites (bin/fm-timeout-lib.sh supplies them).
+# contract. The stages that carry explicit time bounds own them at their call
+# sites (bin/fm-timeout-lib.sh supplies them: the remote per-home observe and
+# each .check.sh); the remaining stages are beaten between but not timed, so a
+# beat there only proves the stage returned, which is what keeps the stale
+# verdict meaningful for a watcher wedged inside one call.
 beat_watcher_clock() {
   [ "$(age_of "$STATE/.last-watcher-beat")" -ge "$WATCHER_BEAT_SUBCADENCE" ] \
     && touch "$STATE/.last-watcher-beat"
