@@ -726,13 +726,16 @@ secondmate_healthy_idle() {  # <task> <meta>
   window=$(fm_backend_target_of_meta "$meta")
   [ -n "$window" ] || return 1
   backend=$(fm_backend_of_meta "$meta")
-  # Unbounded busy proof, deliberately NOT the time-bounded active-turn gate: a
+  # Composer first: unless the prompt is affirmatively empty there is nothing to
+  # prove idle, so return without paying for the busy capture. When it IS empty,
+  # the unbounded busy proof matters (not the time-bounded active-turn gate): a
   # pane still generating past FM_BUSY_TURN_MAX_SECS is not idle, and the caller
-  # treats that crossed bound as a possible wedge. If the pane cannot be read at
-  # all, the idle claim is unproven, so decline.
+  # treats that crossed bound as a possible wedge. An unreadable pane cannot
+  # prove idle either, so decline.
+  [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ] || return 1
   tail40=$(fm_backend_capture "$backend" "$window" 40 2>/dev/null) || return 1
   window_is_busy "$window" "$tail40" && return 1
-  [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ]
+  return 0
 }
 
 # Surface one durable parent check when the foreign queue's drain position has
