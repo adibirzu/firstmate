@@ -251,7 +251,34 @@ Use `bin/fm-startup-memory-budget.sh read` to validate and print the effective v
 The stable local estimate is `ceil(UTF-8 bytes / 3)` per file, a conservative portable approximation rather than a provider-exact tokenizer.
 An inherited `data/captain-shared.md` counts in a secondmate's total but remains primary-owned and read-only there.
 The internal [`/stow` skill](../.agents/skills/stow/SKILL.md) owns curation and its automatic secondmate cascade, which accounts every home against this same per-home allowance separately rather than against a fleet total.
+The session-start digest enforces the allowance: when `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md` together exceed it, `data/learnings.md` is truncated to fit with an explicit pointer to the full file, while the two captain preference files always print in full.
 The helper's header owns exact parsing, publication, and report output mechanics.
+
+## Context hygiene (config/context-hygiene / config/context-hygiene-idle-seconds)
+
+A home's own primary or secondmate agent is long-lived: every supervision wake is another full-context turn, so an agent that never compacts or clears can accumulate a very large context and spend most of its allowance re-reading it.
+`config/context-hygiene` is an optional local, gitignored switch; the literal `off` disables the whole feature for that home, and an absent file or any other value leaves it on.
+When it is on, the home's own agent receives its harness's context command at two boundaries only, never mid-task and never in a worker or crewmate pane: a durable compact request at a task's merged or torn-down outcome, and a clear once the home has been fully idle for `config/context-hygiene-idle-seconds` (default `900`) continuous seconds with zero in-flight tasks, an empty wake queue, and no pending captain reply.
+Durable state on disk (backlog, status, task records) is authoritative, so a clear is a non-event: the next session-start digest re-seeds everything the agent needs.
+Delivery goes only into a pane proven idle at an empty prompt, so a mid-turn agent is never typed into, and a refused compact stays pending for a later cycle.
+Only a harness with a firstmate-verified context command is ever sent one (Claude and Pi today); every other harness is sent nothing rather than a guessed command.
+Away mode's daemon owns the pane, so delivery pauses while `state/.afk` exists.
+Both files are home-local and not inherited by secondmate homes, which apply the same defaults unless they set their own.
+`bin/fm-context-hygiene-lib.sh`'s header owns the command table, the compact marker, and the idle-window contract, while `bin/fm-watch.sh` owns delivery.
+
+## Wake coalescing (config/wake-coalesce-seconds)
+
+`config/wake-coalesce-seconds` is an optional local, gitignored window, default `20`, during which status and turn-end signals that land together are batched into one supervision wake and one handling turn instead of one wake per signal.
+It sets the watcher's signal-grace linger, so a crew's final status write and the same turn's turn-end hook become one wake, and a file seen by the post-grace re-scan is enqueued once with its latest signature.
+A value that is absent, non-numeric, or zero falls back to the default, and an explicit `FM_SIGNAL_GRACE` environment value still wins.
+The setting is home-local and not inherited; `bin/fm-watch.sh` owns the coalescing and `bin/fm-context-hygiene-lib.sh` owns the parse.
+
+## Idle heartbeat backoff (config/heartbeat-idle-seconds)
+
+`config/heartbeat-idle-seconds` is an optional local, gitignored cap, default `3600`, on the watcher's heartbeat backoff while nothing is in flight fleet-wide.
+The base heartbeat interval doubles on each consecutive no-change heartbeat up to this cap; the moment any task is in flight the interval returns to its base cadence and the backoff resets, so a new spawn is never hidden behind an idle-fleet backoff.
+A value that is absent, non-numeric, or zero falls back to the default, and an explicit `FM_HEARTBEAT_MAX` environment value still wins.
+The setting is home-local and not inherited; `bin/fm-watch.sh`'s `heartbeat_interval` owns the doubling and the reset, and `bin/fm-context-hygiene-lib.sh` owns the parse.
 
 ## Machine capacity (llm-router-axi policy)
 
@@ -968,8 +995,8 @@ FM_SNAPSHOT_SECONDMATE_TIMEOUT=45   # seconds bounding each registered remote ho
 FM_SNAPSHOT_CACHE_DIR=$FM_HOME/state/secondmate-summary-cache   # private parent-side cache of successfully fetched remote home ledgers
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=14  # floored elapsed-day threshold at which an undated captain hold (no hold-until; age from its UTC hold-set timestamp, falling back to since for legacy unstamped holds) is projected as a Charted Next gate instead of a live Captain's Call; 0 applies once the computed age is non-negative
 FM_RECONCILE_REQUEST_MAX_BYTES=1048576   # maximum captured Bearings or fleet snapshot accepted for durable reconcile-notify request publication
-FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
-FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
+FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle, and the interval doubles per consecutive idle heartbeat
+FM_HEARTBEAT_MAX=3600   # heartbeat backoff cap while nothing is in flight; set by config/heartbeat-idle-seconds
 FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity threshold; locked session start also requests an immediate scan in the deferred worker
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
@@ -1030,7 +1057,7 @@ FM_WATCH_REARM_RETRY_LIMIT=5   # Pi/OpenCode adapter launch-failure retries befo
 FM_WATCH_CYCLE_LOG_MAX_BYTES=262144   # size cap for the arm-owned watcher lifecycle ledger
 FM_WATCH_CYCLE_LOG_KEEP_LINES=1000   # newest complete lifecycle rows considered when the ledger is capped
 FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE if set, else the poll-derived grace (docs/turnend-guard.md "Guard grace and the poll cadence"); seconds a live watcher lock may have a stale beacon before re-arm errors
-FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
+FM_SIGNAL_GRACE=20      # seconds to coalesce nearby status and turn-end signals into one wake; set by config/wake-coalesce-seconds
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked

@@ -74,11 +74,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
 . "$SCRIPT_DIR/fm-merge-outcome-lib.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
 # Role partition: merging is MAIN-owned; the Pi supervision branch reports the
 # green PR and never merges (contract: bin/fm-lease-lib.sh; no-op in homes
 # without a branch actor).
@@ -743,3 +747,10 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+# A merged task is a task boundary: queue a compact for this home's own
+# long-lived agent, which the watcher delivers at the next idle moment. Durable,
+# so a boundary reached while the agent is busy is not lost.
+if [ -d "$STATE" ] && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
+fi
