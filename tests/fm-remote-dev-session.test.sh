@@ -67,6 +67,11 @@ printf '%s\n' "$*" >> "${FM_TEST_CONTROL_LOG:-/dev/null}"
 exit "${FM_TEST_CONTROL_RC:-0}"
 SH
 
+write_stub pr-state <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_TEST_PR_STATE:-unknown}"
+SH
+
 make_home() {  # <name>
   local name=$1 home
   home="$TMP_ROOT/$name"
@@ -677,6 +682,27 @@ test_a_duplicate_branch_refuses() {
   pass "an existing branch refuses as duplicate work"
 }
 
+test_open_pr_refuses_without_a_derived_branch() {
+  local home status out control
+  home=$(make_home branchless-open-pr)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$home/projects/unavailable" \
+    'pr=https://forge.example.invalid/firstmate/pull/1'
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" FM_RDS_PR_STATE="$STUB/pr-state" FM_TEST_PR_STATE=open \
+    open adi2 --task t1 --project alpha)
+  expect_code 3 "$status" "an open PR must refuse without a derived branch"
+  assert_contains "$(cat "$out")" 'verdict=duplicate reason=pr-open' \
+    "the open PR refusal was not reported"
+  assert_absent "$control" "an open PR must refuse before relaunch"
+  assert_absent "$home/state/remote-dev-sessions/adi2.session" \
+    "an open PR refusal must not write a continuity record"
+  pass "an open PR refuses even when no branch is derived"
+}
+
 test_explicit_invalid_repo_refuses_before_launch() {
   local home repo status out control
   home=$(make_home invalid-explicit-repo)
@@ -1020,6 +1046,7 @@ test_remote_missing_task_relaunches_through_the_control_plane
 test_uncertain_remote_endpoint_refuses_to_relaunch
 test_check_runs_the_gates_without_launching_or_recording
 test_a_duplicate_branch_refuses
+test_open_pr_refuses_without_a_derived_branch
 test_explicit_invalid_repo_refuses_before_launch
 test_line_breaking_options_refuse_before_relaunch
 test_a_stale_base_refuses

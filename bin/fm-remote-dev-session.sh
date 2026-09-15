@@ -468,6 +468,13 @@ prelaunch_gate() {  # <id> <project>
   [ -n "$repo" ] || repo="$PROJECTS/$project"
   recorded=$(recorded_branch_of "$id" "$project")
   branch=${BRANCH:-$recorded}
+  state=$(pr_state_of "$id")
+  case "$state" in
+    open|merged)
+      printf 'verdict=duplicate reason=pr-%s\n' "$state"
+      return 3
+      ;;
+  esac
   if [ -z "$branch" ]; then
     printf 'fm-remote-dev-session: no intended branch resolved for %s; equivalence gate skipped\n' "$id" >&2
     return 0
@@ -482,7 +489,6 @@ prelaunch_gate() {  # <id> <project>
   [ "$remote" != "$default_ref" ] || remote=origin
   fm_rds_converge "$repo" "$remote" "${default_ref#*/}" \
     || { printf 'fm-remote-dev-session: default-branch convergence failed for %s; refusing\n' "$repo" >&2; return 1; }
-  state=$(pr_state_of "$id")
   fm_rds_equivalence "$repo" "$default_ref" "$branch" "$recorded" "$state" || rc=$?
   case "$rc" in
     0) return 0 ;;
