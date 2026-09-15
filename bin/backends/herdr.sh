@@ -361,9 +361,16 @@ fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
 # label (docs/herdr-backend.md "Default task container shape"). The PRIMARY home (no
 # secondmate marker) resolves to the constant "firstmate", byte-identical to
 # every pre-existing task's recorded label - no forced migration. A SECONDMATE
-# home resolves to "2ndmate-<secondmate-id>", so its tasks land in their own
+# home resolves to "2m-<secondmate-id>", so its tasks land in their own
 # workspace, obviously distinguishable from the primary's (and from every
-# other secondmate's) in herdr's spaces sidebar. Read fresh from FM_HOME on
+# other secondmate's) in herdr's spaces sidebar. The short `2m-` prefix keeps
+# the fixed overhead to 3 cells: Herdr right-truncates each sidebar token with
+# an ellipsis (measured on 0.9.0: 26-column default sidebar, 18 minimum, 36
+# maximum), and the legacy `2ndmate-` prefix burned 8 cells before the first
+# distinguishing character, rendering mate workspaces as truncated `2ndmate-`
+# labels. Workspaces created under the legacy `2ndmate-<id>` label are never
+# renamed or migrated; label matchers below keep accepting them, exactly like
+# the older `firstmate-<id>` form. Read fresh from FM_HOME on
 # every call rather than cached at source time: FM_HOME is the home's own
 # durable identity, not env plumbing threaded through a call chain, so the
 # label is automatically stable across every respawn/recovery for the life of
@@ -399,7 +406,7 @@ fm_backend_herdr_workspace_label() {
   if [ -f "$marker" ]; then
     id=$(tr -d '[:space:]' < "$marker" 2>/dev/null)
     if [ -n "$id" ]; then
-      printf '2ndmate-%s' "$id"
+      printf '2m-%s' "$id"
       return 0
     fi
   fi
@@ -711,7 +718,7 @@ fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
     && [ -n "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" ] || return 1
   expected_label=$(fm_backend_herdr_projection_workspace_label "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
   # The task label is the legacy `fm-<id>` for a projection created before the
-  # display-name change, or the new `<prefix>-[<host>-]<project>-<task-id>`
+  # display-name change, or the new `<prefix>-[<host>-][<owner>-]<project>-<task-id>`
   # (bin/fm-herdr-name-lib.sh), whose task segment has one leading `fm-`
   # stripped and whose prefix is configurable. Accept both so a legacy journal
   # still validates for restart reclaim, and bound the charset to the label
@@ -799,13 +806,14 @@ fm_backend_herdr_projection_journal_replace_endpoint() {  # <journal> <task-id> 
 
 # fm_backend_herdr_projection_concise_task_label: strip redundant owner
 # prefixes from a task id used only in the presentation workspace label.
-# Removes firstmate/, 2ndmate-<id>/, and a presentation-level fm- owner
-# prefix when present. The ordinary task tab remains fm-<id> and is not
-# built by this helper.
+# Removes firstmate/, 2m-<id>/ and legacy 2ndmate-<id>/, and a
+# presentation-level fm- owner prefix when present. The ordinary task tab
+# remains fm-<id> and is not built by this helper.
 fm_backend_herdr_projection_concise_task_label() {  # <task-id>
   local task=$1
   case "$task" in
     firstmate/*) task=${task#firstmate/} ;;
+    2m-*/*) task=${task#*/} ;;
     2ndmate-*/*) task=${task#*/} ;;
   esac
   case "$task" in
@@ -1588,7 +1596,8 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
 # returned by THIS projected create immediately after its owning parent's
 # contiguous child block and before the next parent.
 #
-# <parent-label> is the owning FM_HOME label (firstmate or 2ndmate-<id>).
+# <parent-label> is the owning FM_HOME label (firstmate or 2m-<id>, with a
+# legacy 2ndmate-<id> still accepted wherever a recorded label is compared).
 # Optional <parent-workspace-id> is that parent's EXACT id, which the caller
 # already resolved from the launching agent's own herdr identity. When given it
 # anchors the owning parent by id, so two workspaces sharing the home label no
@@ -1596,8 +1605,8 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
 # label exactly as before. With a unique label the two select the same
 # workspace, so ordering behavior is unchanged in the ordinary case.
 # New-format └ ... · p:<token> children and, for compatibility only, already
-# adjacent old-format firstmate/... or 2ndmate-<id>/... projections may extend
-# the block read-only; they are never renamed or moved.
+# adjacent old-format firstmate/..., 2m-<id>/..., or legacy 2ndmate-<id>/...
+# projections may extend the block read-only; they are never renamed or moved.
 #
 # This is presentation-only and always returns success.
 # Every unavailable, ambiguous, failed, or unverifiable ordering step prints a
@@ -1628,13 +1637,13 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
       end;
     def is_top_level_parent:
       (.label | type) == "string"
-      and ((.label == "firstmate") or (.label | test("^2ndmate-[^/]+$")));
+      and ((.label == "firstmate") or (.label | test("^(2ndmate|2m)-[^/]+$")));
     def is_new_child:
       (.label | type) == "string"
       and (.label | test("^└ .+ · p:[A-Za-z0-9_-]{22}$"));
     def is_legacy_child:
       (.label | type) == "string"
-      and (.label | test("^(firstmate|2ndmate-[^/]+)/.+ · p:[A-Za-z0-9_-]{22}$"));
+      and (.label | test("^(firstmate|(2ndmate|2m)-[^/]+)/.+ · p:[A-Za-z0-9_-]{22}$"));
     def is_legacy_child_for($owner):
       is_legacy_child and (.label | startswith($owner + "/"));
     def is_child_for($owner):
@@ -2429,7 +2438,7 @@ fm_backend_herdr_agent_alive() {  # <target>
 #
 # <legacy-alias-label> (5th arg, may be empty) is the pre-naming `fm-<id>` tab
 # label for the SAME task. The label firstmate creates now is the display name
-# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh), but a task tab
+# `<prefix>-[<host>-][<owner>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh), but a task tab
 # created by an older firstmate still carries `fm-<id>`; treating that label as
 # a husk candidate for this task lets a respawn replace the stale tab instead of
 # leaving a duplicate beside it. It is scoped to this task's own id by the
@@ -2667,7 +2676,7 @@ fm_backend_herdr_projection_live_binding_matches() {  # <session> <token> <works
         and (.label | test("^└ .+ · p:[A-Za-z0-9_-]{22}$"));
       def is_legacy_child_for($owner):
         (.label | type) == "string"
-        and (.label | test("^(firstmate|2ndmate-[^/]+)/.+ · p:[A-Za-z0-9_-]{22}$"))
+        and (.label | test("^(firstmate|(2ndmate|2m)-[^/]+)/.+ · p:[A-Za-z0-9_-]{22}$"))
         and (.label | startswith($owner + "/"));
       (.result.workspaces // null) as $spaces
       | select(($spaces | type) == "array")
