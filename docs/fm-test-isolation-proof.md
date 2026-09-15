@@ -198,7 +198,8 @@ Both proof runs above were taken while the machine carried a five-minute load av
 
 This family is the residual set that used to sit in `unclassified`, and it exists because the catch-all itself must never be admitted.
 `unclassified` is the family map's `*)` arm, so admitting it would silently grant concurrency to every test added afterwards, which is exactly the population with no proof.
-`standalone` enumerates its 28 members instead, and `unclassified` stays the always-serial home for anything nobody has classified yet.
+`standalone` enumerates its 29 members instead, and `unclassified` stays the always-serial home for anything nobody has classified yet.
+The timing table below measured the 28-member set on 2026-09-03; the write-confinement guard joined `standalone` afterwards without changing its tmp-private, concurrency-safe shape.
 `tests/fm-test-run.test.sh` covers that split behaviorally: two `standalone` members run concurrently while an unmapped basename is refused under `--jobs` and still runs serially.
 
 Two scripts left the residual set rather than joining it.
@@ -229,7 +230,7 @@ The three families retain the same coverage guarantees; what changed is one cras
 ## Scope
 
 Each worker used a separate mode-`0700` temporary root and private `TMPDIR` and `TMP`.
-The harness cleared ambient `FM_HOME` and `FM_*_OVERRIDE` values for every worker and verified that global Git configuration was unchanged.
+The harness cleared ambient `FM_HOME` and `FM_*_OVERRIDE` values for every worker, plus the `FM_TEST_HOME` and `FM_TEST_USER_HOME` overrides the pr-merge helper resolves its sandbox home from, and verified that global Git configuration was unchanged.
 A candidate failure fails the aggregate run and requires investigation rather than a retry.
 
 ## Re-run

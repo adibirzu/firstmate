@@ -60,8 +60,12 @@ unset FM_TASK_ID
 # FM_STATE_OVERRIDE otherwise resolves FM_HOME from the ambient value, and in a
 # secondmate home its parent-channel publishers append fixture lines to the
 # real parent's status log. A case that needs a home sets these itself.
+# FM_TEST_HOME and FM_TEST_USER_HOME join them: the pr-merge helper resolves
+# its sandbox home from the former, so an ambient export would route the same
+# fabricated lines into a live home instead of the case directory.
 unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
-  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME
+  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME \
+  FM_TEST_HOME FM_TEST_USER_HOME
 
 # Clear agy's own load-bearing detection marker (bin/fm-harness.sh,
 # .agents/skills/harness-adapters/references/harness/agy.md) so a value leaked

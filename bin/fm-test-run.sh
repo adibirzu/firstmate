@@ -413,6 +413,7 @@ family_for_basename() {
     fm-remote-entrypoint.test.sh|fm-remote-secondmate-parent-binding.test.sh|\
     fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
+    fm-test-write-confinement.test.sh|\
     fm-voice-relay.test.sh|fm-wake-drain-open-decisions-cursor.test.sh|\
     fm-wake-drain-open-decisions.test.sh|fm-wake-drain-outcome-backstop.test.sh)
       printf '%s\n' standalone
@@ -2553,7 +2554,8 @@ else
       export TMPDIR="$work/tmp"
       export TMP="$work/tmp"
       unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
-        FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
+        FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND \
+        FM_TEST_HOME FM_TEST_USER_HOME 2>/dev/null || true
       cd "$ROOT" || exit 1
       begin_ms=$(now_ms)
       set +e
