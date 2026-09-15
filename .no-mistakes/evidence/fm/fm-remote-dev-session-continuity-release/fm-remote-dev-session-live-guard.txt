@@ -1,0 +1,6 @@
+FM_TEST_BEGIN 2026-09-15T05:20:45Z tests/fm-remote-dev-session-live-e2e.test.sh family=unclassified expected_gate_skip=none
+not ok - live check failed for station adi2: fm-remote-dev-session: no safe secondmate registry at /Users/adrianb/.no-mistakes/worktrees/80e4cf1781af/01M2HN48P9RE2H2C0GC81B6MGM/data/secondmates.md
+FM_TEST_END 2026-09-15T05:20:45Z tests/fm-remote-dev-session-live-e2e.test.sh exit=1 duration_ms=108 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=186
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=108 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-remote-dev-session-live-e2e.test.sh duration_ms=108

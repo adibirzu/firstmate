@@ -1,0 +1,8 @@
+$ FM_HOME=/Volumes/ExternalNVME/GitHub/firstmate bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote
+remote-dev-session: backend=herdr session=fm-remote station=adi2 check=ok
+attach: herdr --remote adi2-ts --session fm-remote
+exit=0
+
+$ FM_HOME=/Volumes/ExternalNVME/GitHub/firstmate bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote --backend tmux
+fm-remote-dev-session: remote second mates require the herdr backend
+exit=1

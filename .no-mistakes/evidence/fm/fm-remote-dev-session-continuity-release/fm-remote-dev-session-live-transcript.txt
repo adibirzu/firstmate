@@ -1,0 +1,7 @@
+$ bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote
+fm-remote-dev-session: no safe secondmate registry at /Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-8bf1b0/2/firstmate/data/secondmates.md
+exit=1
+
+$ bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote --backend tmux
+fm-remote-dev-session: no safe secondmate registry at /Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-8bf1b0/2/firstmate/data/secondmates.md
+exit=1
