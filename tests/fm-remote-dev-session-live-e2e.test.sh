@@ -18,6 +18,11 @@
 # the command contract are owned by docs/remote-dev-sessions.md.
 set -u
 
+# The general test harness clears FM_HOME to isolate ordinary fixture tests.
+# Preserve the caller-selected real home before loading that shared library so
+# this explicitly opt-in guard can exercise the requested live registry.
+RDS_LIVE_HOME=${FM_HOME:-${FM_RDS_LIVE_HOME:-}}
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -37,7 +42,7 @@ fi
 
 out=$(mktemp "${TMPDIR:-/tmp}/fm-rds-live.XXXXXX")
 status=0
-"$ROOT/bin/fm-remote-dev-session.sh" check "$STATION" --secondmate "$MATE" >"$out" 2>&1 || status=$?
+FM_HOME="$RDS_LIVE_HOME" "$ROOT/bin/fm-remote-dev-session.sh" check "$STATION" --secondmate "$MATE" >"$out" 2>&1 || status=$?
 if [ "$status" -ne 0 ]; then
   fail "live check failed for station $STATION: $(cat "$out")"
 fi
@@ -46,7 +51,7 @@ assert_contains "$(cat "$out")" 'attach:' "the live check did not render an atta
 assert_contains "$(cat "$out")" "station=$STATION" "the live check did not name the station"
 
 status=0
-"$ROOT/bin/fm-remote-dev-session.sh" check "$STATION" --secondmate "$MATE" --backend tmux >"$out" 2>&1 || status=$?
+FM_HOME="$RDS_LIVE_HOME" "$ROOT/bin/fm-remote-dev-session.sh" check "$STATION" --secondmate "$MATE" --backend tmux >"$out" 2>&1 || status=$?
 if [ "$status" -eq 0 ]; then
   fail "live tmux check unexpectedly accepted remote secondmate $MATE on station $STATION"
 fi

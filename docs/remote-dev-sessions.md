@@ -65,13 +65,15 @@ The equivalence verdict refuses with exit 3 for a duplicate and exit 4 for stale
 An unreadable forge probe is reported but never refuses a launch, because it is not evidence of duplicate work.
 The gate is read-only and never rewrites a branch.
 `--repo` and `--branch` override the task worktree and branch the gate reads.
+An explicit `--repo` must name a Git clone; an invalid path refuses rather than skipping the duplicate and stale-work checks.
 
 ## Continuity record
 
 Each station's references persist at `state/remote-dev-sessions/<station>.session`, schema `fm-remote-dev-session.v1`, one `key=value` per line:
 `station`, `local`, `host`, `backend`, `session`, `workspace`, `window`, `tab`, `pane`, `task_id`, `project`, `branch`, `worktree`, `spawn_gen`, `return_channel`, `attach_command`, and `updated`.
 The record is a cached projection for reconnect; `state/<id>.meta` remains the endpoint authority that `bin/fm-spawn.sh` owns.
-The reader accepts only the complete schema key set, with the schema first and no duplicate or unknown fields; the shared writer refuses carriage returns and newlines in every field before it writes.
+The reader accepts only the complete schema key set, with the schema as its first field and no duplicate or unknown fields; the shared writer refuses carriage returns and newlines in every field before it writes.
+Record-affecting option values reject carriage returns and newlines before readiness, liveness, relaunch, or persistence can run.
 Any malformed record refuses instead of being half-trusted.
 The record is rewritten on every `open` and `recover`, so a restart or reconnect always reads current references.
 

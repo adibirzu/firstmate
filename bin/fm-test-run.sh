@@ -2547,6 +2547,13 @@ else
       set +e
       export TMPDIR="$work/tmp"
       export TMP="$work/tmp"
+      # An explicitly opted-in live remote-session guard needs the caller's
+      # selected primary home. Pass it under a dedicated name, then retain the
+      # normal isolation reset below for every suite.
+      if [ "$script" = "tests/fm-remote-dev-session-live-e2e.test.sh" ] \
+        && [ "${FM_RDS_LIVE:-}" = 1 ]; then
+        export FM_RDS_LIVE_HOME="${FM_HOME:-}"
+      fi
       unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
         FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
       cd "$ROOT" || exit 1
