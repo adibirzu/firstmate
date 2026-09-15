@@ -307,6 +307,7 @@ family_for_basename() {
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
+    fm-mail.test.sh|fm-mail-check.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
@@ -319,12 +320,13 @@ family_for_basename() {
     fm-backend-herdr-focus-flash-e2e.test.sh|\
     fm-fleet-live-herdr-smoke.test.sh|\
     fm-control-herdr-smoke.test.sh|\
+    fm-backend-herdr-stale-active-tab-e2e.test.sh|\
     fm-herdr-session-cleanup-e2e.test.sh|\
     fm-backend-herdr-smoke.test.sh|fm-backend-herdr-workspace-per-home-e2e.test.sh)
       printf '%s\n' real-herdr-gated
       ;;
     fm-backlog-handoff.test.sh|fm-on.test.sh|fm-remote-backlog-handoff.test.sh|\
-    fm-remote-doctor.test.sh|fm-remote-job.test.sh|fm-remote-job-orphan-reap.test.sh|\
+    fm-remote-doctor.test.sh|fm-remote-herdr-guard.test.sh|fm-remote-job.test.sh|fm-remote-job-orphan-reap.test.sh|\
     fm-remote-transport-lanes.test.sh|\
     fm-remote-reply.test.sh|fm-remote-secondmate-lifecycle-e2e.test.sh|\
     fm-remote-secondmate-trace-context.test.sh|\
@@ -357,7 +359,7 @@ family_for_basename() {
     fm-herdr-version-floor-live-e2e.test.sh|\
     fm-opencode-primary-live-e2e.test.sh|fm-pi-branch-live-e2e.test.sh|\
     fm-pi-branch-responsiveness-live-e2e.test.sh|\
-    fm-pi-primary-live-e2e.test.sh|fm-omp-primary-live-e2e.test.sh|\
+    fm-pi-primary-live-e2e.test.sh|fm-pi-codex-native.test.sh|fm-omp-primary-live-e2e.test.sh|\
     fm-sessionstart-hook-live-e2e.test.sh|fm-sessionstart-instruction-refresh-live-e2e.test.sh|\
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
     fm-send-inbox-doorbell-live-e2e.test.sh|\
@@ -379,7 +381,7 @@ family_for_basename() {
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
       ;;
-    fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
+    fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|\
@@ -630,6 +632,7 @@ tests/federation/test_fleet_ops.sh 1634
 tests/federation/test_quota_surfaces.sh 1831
 tests/federation/test_spawn_account.sh 388
 tests/fm-admiral-optin.test.sh 255
+tests/fm-afk-contract.test.sh 3000
 tests/fm-afk-inject-e2e.test.sh 36041
 tests/fm-afk-pi-herdr-return-e2e.test.sh 118
 tests/fm-afk-return.test.sh 1805
@@ -676,6 +679,7 @@ tests/fm-cursor-primary-live-e2e.test.sh 49
 tests/fm-cursor-primary.test.sh 55571
 tests/fm-daemon.test.sh 26424
 tests/fm-decision-hold-lifecycle.test.sh 204088
+tests/fm-dispatch-select.test.sh 2223
 tests/fm-documentation-audiences.test.sh 1818
 tests/fm-extension-binding.test.sh 20399
 tests/fm-fleet-snapshot-view.test.sh 9428
@@ -738,6 +742,7 @@ tests/fm-quota-choose.test.sh 1473
 tests/fm-remote-backlog-handoff.test.sh 68981
 tests/fm-remote-doctor.test.sh 14042
 tests/fm-remote-entrypoint.test.sh 310
+tests/fm-remote-herdr-guard.test.sh 1500
 tests/fm-remote-job-orphan-reap.test.sh 2983
 tests/fm-remote-job.test.sh 58809
 tests/fm-remote-reply.test.sh 95063
@@ -1389,7 +1394,7 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
       ;;
     .pi/extensions/fm-branch-supervision.ts|.pi/extensions/lib/fm-async-exec.ts|\
-    .pi/extensions/lib/fm-branch-dispatch.ts)
+    .pi/extensions/lib/fm-branch-dispatch.ts|.pi/extensions/lib/fm-native-contract.ts)
       # The portable suites that actually load these files, named one by one.
       # Left unmapped, a Pi extension library resolves through the reference
       # scan, which widens to each referencing suite's WHOLE family - and

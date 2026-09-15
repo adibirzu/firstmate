@@ -51,15 +51,18 @@
 #   model, and effort may change, which is what makes a harness switch one
 #   ordinary relaunch. It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
-#   or herdr), refuses unless the endpoint's shell is sitting in the recorded
-#   worktree, and clears the previous harness's per-task wiring before arming
-#   the new incarnation.
+#   or herdr), and clears the previous harness's per-task wiring before arming
+#   the new incarnation. The replacement still never starts outside the copy
+#   holding the work: a supported endpoint shell that has drifted out of the recorded
+#   worktree is told once to return, and only a shell that will not go refuses.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
-#   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
+#   --model <name> and --effort <low|medium|high|xhigh|max|ultra> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
-#   from that harness's launch rather than guessed.
+#   from that harness's launch rather than guessed. Ultra is the explicit
+#   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
+#   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -344,9 +347,10 @@
 # re-running the transition, so an eligible In-flight item is left untouched.
 # The transition is
 # skipped entirely for --secondmate spawns (persistent agents are not work
-# items), on a config/backlog-backend=manual home, and in a home that keeps no
-# data/backlog.md. An automatic-backend home with a backlog but no compatible
-# tasks-axi refuses before creating any lifecycle state.
+# items), on a config/backlog-backend=manual home, and in a markdown home that
+# keeps no data/backlog.md. A configured non-markdown adapter remains
+# active without a markdown file; any active automatic backend without
+# compatible tasks-axi refuses before creating lifecycle state.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
@@ -592,8 +596,8 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
 fi
 [ -z "$HANDOFF_BRIEF" ] || [ -f "$HANDOFF_BRIEF" ] || { echo "error: --handoff-brief is not a readable file: $HANDOFF_BRIEF" >&2; exit 1; }
 case "$EFFORT" in
-  ''|low|medium|high|xhigh|max) ;;
-  *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
+  ''|low|medium|high|xhigh|max|ultra) ;;
+  *) echo "error: --effort must be one of low, medium, high, xhigh, max, ultra" >&2; exit 1 ;;
 esac
 case "$PROVIDER" in
   ''|claude|codex|grok|cursor|agy) ;;
@@ -749,7 +753,7 @@ spawn_remote_secondmate() {
       ;;
   esac
   case "$effort" in
-    -|low|medium|high|xhigh|max) ;;
+    -|low|medium|high|xhigh|max|ultra) ;;
     *)
     fm_lock_release "$registry_lock" || true
     fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -757,9 +761,15 @@ spawn_remote_secondmate() {
       return 1
       ;;
   esac
+  if [ "$effort" = ultra ] && ! "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$harness" "$model" "$effort"; then
+    fm_lock_release "$registry_lock" || true
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+    return 1
+  fi
   meta="$STATE/$id.meta"
   if [ -e "$meta" ] || [ -L "$meta" ]; then
     if [ ! -f "$meta" ] || [ -L "$meta" ] \
+      || ! fm_backlog_record_present "$meta" "task record" "$STATE" \
       || [ "$(fm_meta_get "$meta" kind)" != secondmate ] \
       || [ "$(fm_meta_get "$meta" remote_host)" != "$host" ] \
       || [ "$(fm_meta_get "$meta" remote_root)" != "$root" ] \
@@ -951,72 +961,6 @@ spawn_remote_secondmate() {
   return 0
 }
 
-if [ "$KIND" = secondmate ]; then
-  if spawn_remote_secondmate "${POS[0]:-}"; then
-    exit 0
-  else
-    remote_spawn_rc=$?
-  fi
-  [ "$remote_spawn_rc" -eq 3 ] || exit "$remote_spawn_rc"
-fi
-
-# agy, cline and copilot are verified as CREWMATE/SCOUT adapters only. A
-# secondmate is a firstmate instance and needs a primary supervision protocol
-# none of them can arm (agy/copilot expose no reawakening handler; cline's
-# state model is crewmate-only). Refuse a bare secondmate name here so the gap
-# stays loud rather than standing up a secondmate whose supervision cycle could
-# never begin. The post-resolution guard below is the backstop for the
-# --harness and config/secondmate-harness paths that never reach this parse.
-secondmate_harness_unsupported() {  # <harness>
-  echo "error: $1 is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
-  exit 1
-}
-if [ "$KIND" = secondmate ]; then
-  case "${POS[1]:-}" in
-    agy) secondmate_harness_unsupported agy ;;
-    cline) secondmate_harness_unsupported cline ;;
-    copilot) secondmate_harness_unsupported copilot ;;
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse) : ;;
-    *) : ;;
-  esac
-fi
-
-# Backend selection (data/fm-backend-design-d7): explicit --backend, else
-# FM_BACKEND env, else config/backend, else runtime auto-detection, else
-# default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
-# non-spawn-capable backends. The resolved value is
-# recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
-# window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
-# so the default path's meta stays byte-identical.
-# --reuse-worktree is special: when --backend is omitted, keep the backend
-# already recorded for the task so a handoff does not silently move the
-# endpoint to a different session provider. That resolution runs after the
-# task id and meta are known (see reuse block below).
-BACKEND=
-if [ "$BACKEND_SET" -eq 1 ]; then
-  BACKEND=$BACKEND_ARG
-elif [ "$REUSE_WORKTREE" != 1 ]; then
-  BACKEND=$(fm_backend_name)
-fi
-spawn_validate_backend() {
-  fm_backend_validate_spawn "$BACKEND" || return 1
-  fm_backend_source "$BACKEND" || return 1
-  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=orca does not support --secondmate spawns yet" >&2
-    return 1
-  fi
-  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
-    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
-    return 1
-  fi
-  if [ "$BACKEND" = orca ]; then
-    fm_backend_orca_runtime_check || return 1
-  fi
-  return 0
-}
-if [ -n "$BACKEND" ]; then
-  spawn_validate_backend || exit 1
-fi
 TREEHOUSE_LEASE_ABORT_CLEANUP=0
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
@@ -1214,6 +1158,73 @@ spawn_abort_cleanup() {
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
+
+if [ "$KIND" = secondmate ]; then
+  if spawn_remote_secondmate "${POS[0]:-}"; then
+    exit 0
+  else
+    remote_spawn_rc=$?
+  fi
+  [ "$remote_spawn_rc" -eq 3 ] || exit "$remote_spawn_rc"
+fi
+
+# agy, cline and copilot are verified as CREWMATE/SCOUT adapters only. A
+# secondmate is a firstmate instance and needs a primary supervision protocol
+# none of them can arm (agy/copilot expose no reawakening handler; cline's
+# state model is crewmate-only). Refuse a bare secondmate name here so the gap
+# stays loud rather than standing up a secondmate whose supervision cycle could
+# never begin. The post-resolution guard below is the backstop for the
+# --harness and config/secondmate-harness paths that never reach this parse.
+secondmate_harness_unsupported() {  # <harness>
+  echo "error: $1 is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+}
+if [ "$KIND" = secondmate ]; then
+  case "${POS[1]:-}" in
+    agy) secondmate_harness_unsupported agy ;;
+    cline) secondmate_harness_unsupported cline ;;
+    copilot) secondmate_harness_unsupported copilot ;;
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse) : ;;
+    *) : ;;
+  esac
+fi
+
+# Backend selection (data/fm-backend-design-d7): explicit --backend, else
+# FM_BACKEND env, else config/backend, else runtime auto-detection, else
+# default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
+# non-spawn-capable backends. The resolved value is
+# recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
+# window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
+# so the default path's meta stays byte-identical.
+# --reuse-worktree is special: when --backend is omitted, keep the backend
+# already recorded for the task so a handoff does not silently move the
+# endpoint to a different session provider. That resolution runs after the
+# task id and meta are known (see reuse block below).
+BACKEND=
+if [ "$BACKEND_SET" -eq 1 ]; then
+  BACKEND=$BACKEND_ARG
+elif [ "$REUSE_WORKTREE" != 1 ]; then
+  BACKEND=$(fm_backend_name)
+fi
+spawn_validate_backend() {
+  fm_backend_validate_spawn "$BACKEND" || return 1
+  fm_backend_source "$BACKEND" || return 1
+  if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=orca does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+    return 1
+  fi
+  if [ "$BACKEND" = orca ]; then
+    fm_backend_orca_runtime_check || return 1
+  fi
+  return 0
+}
+if [ -n "$BACKEND" ]; then
+  spawn_validate_backend || exit 1
+fi
 
 # One bounded lock per live Herdr session/socket, shared across all homes.
 # <session> is required so secondmate and primary spawns serialize against the
@@ -2040,11 +2051,20 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
     SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
     if [ -n "$SM_EFFORT" ]; then
       case "$SM_EFFORT" in
-        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
-        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
+        low|medium|high|xhigh|max|ultra) EFFORT=$SM_EFFORT ;;
+        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
       esac
     fi
   fi
+fi
+# Ultra is an explicit native capability, never a Pi thinking-level alias.
+# Validate the fully resolved profile before worktree or endpoint provisioning.
+if [ "$EFFORT" = ultra ]; then
+  "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$HARNESS" "$MODEL" "$EFFORT" || exit 1
+  [ "$RAW_LAUNCH" = 0 ] || {
+    echo "error: --effort ultra requires the canonical --harness pi or pi-signed launch so its native flag cannot be omitted" >&2
+    exit 1
+  }
 fi
 if [ "$HARNESS" = omp ]; then
   omp_model_validate "$OMP_BIN" "$MODEL" || exit 1
@@ -2224,6 +2244,10 @@ effort_flag_for_harness() {
       # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
       # its --thinking flag.
       case "$effort" in
+        ultra)
+          "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$harness" "$model" "$effort" || return 1
+          printf -- '--codex-effort %s ' "$(shell_quote ultra)"
+          ;;
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
@@ -3929,6 +3953,17 @@ export default function (pi: any) {
     return busyEvent("idle", "agent-settled");
   });
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+  // A native harness can make progress inside one Pi turn. This separate
+  // marker prevents false wedge alarms without fabricating a completed turn.
+  let lastProgress = 0;
+  pi.events?.on?.("codex-native:progress", () => {
+    const now = Date.now();
+    if (now - lastProgress < 1000) return;
+    lastProgress = now;
+    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
+      "progress", "$STATE_REAL", "$ID", "--gen", "$BUSY_GEN",
+    ]);
+  });
 }
 EOF
       ;;
@@ -4525,7 +4560,7 @@ sq_ompcfg=$(shell_quote "${OMP_WORKER_CFG:-$FM_ROOT/.omp/fm-worker-overlay.yml}"
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
-EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL")
+EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 if [ "$HARNESS" = rovo ]; then
