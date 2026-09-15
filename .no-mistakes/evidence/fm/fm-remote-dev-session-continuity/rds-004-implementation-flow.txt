@@ -1,0 +1,249 @@
+=============================================================================
+RDS-004: Deterministic Continuation Note - Implementation Flow
+=============================================================================
+
+BACKGROUND:
+-----------
+When a remote development session task endpoint dies (e.g., crashes, is 
+terminated, or completes), the session needs to be relaunched with full 
+context so the replacement worker knows:
+  - What task it's continuing
+  - Which branch to work on
+  - What the current HEAD is
+  - Where the worktree is located
+  - How to sync before editing
+
+Without this context, a replacement worker would start blind, potentially
+working on stale code or the wrong branch.
+
+=============================================================================
+EXECUTION FLOW
+=============================================================================
+
+                     ┌─────────────────────────┐
+                     │  User runs command:     │
+                     │  fm-remote-dev-session  │
+                     │  open adi2 --task t1    │
+                     └───────────┬─────────────┘
+                                 │
+                                 ▼
+                     ┌─────────────────────────┐
+                     │  Check endpoint status  │
+                     │  via crew-state         │
+                     └───────────┬─────────────┘
+                                 │
+                ┌────────────────┴────────────────┐
+                │                                  │
+                ▼                                  ▼
+    ┌──────────────────────┐         ┌──────────────────────┐
+    │  Endpoint is LIVE    │         │  Endpoint is DEAD    │
+    │  (working/busy)      │         │  (done/none)         │
+    └──────────┬───────────┘         └──────────┬───────────┘
+               │                                  │
+               ▼                                  ▼
+    ┌──────────────────────┐         ┌──────────────────────┐
+    │  ATTACH to existing  │         │  Generate            │
+    │  session             │         │  CONTINUATION NOTE   │◄── RDS-004
+    └──────────┬───────────┘         └──────────┬───────────┘
+               │                                  │
+               │                                  ▼
+               │                      ┌──────────────────────┐
+               │                      │  Validate note:      │
+               │                      │  - Branch resolved?  │
+               │                      │  - Path exists?      │
+               │                      │  - Head SHA found?   │
+               │                      └──────────┬───────────┘
+               │                                  │
+               │                     ┌────────────┴──────────┐
+               │                     │                       │
+               │                     ▼                       ▼
+               │           ┌──────────────────┐   ┌──────────────────┐
+               │           │  Note validated  │   │  Validation      │
+               │           │  Continue...     │   │  FAILED: REFUSE  │
+               │           └────────┬─────────┘   └──────────────────┘
+               │                    │
+               │                    ▼
+               │           ┌──────────────────────┐
+               │           │  Call fm-control     │
+               │           │  relaunch --note     │
+               │           │  <continuation-note> │
+               │           └────────┬─────────────┘
+               │                    │
+               └────────────────────┴──────────────┐
+                                                   │
+                                                   ▼
+                                       ┌──────────────────────┐
+                                       │  Record continuity   │
+                                       │  references          │
+                                       └──────────┬───────────┘
+                                                  │
+                                                  ▼
+                                       ┌──────────────────────┐
+                                       │  Output attach       │
+                                       │  command for user    │
+                                       └──────────────────────┘
+
+=============================================================================
+CONTINUATION NOTE GENERATION (continuation_note function)
+=============================================================================
+
+Location: bin/fm-remote-dev-session.sh:473-518
+
+Inputs:
+  • Task ID (e.g., "t1")
+  • Project name (e.g., "alpha")
+  • Optional: explicit BRANCH, REPO from command flags
+
+Resolution Steps:
+  1. Read task metadata from state/<id>.meta
+  2. Resolve worktree path from metadata or compute from project
+  3. Resolve branch name from flag > recorded branch > metadata
+  4. Validate handoff path exists on filesystem
+  5. Resolve HEAD SHA from branch ref or default ref
+  6. Resolve default branch remote and name for sync instructions
+  7. Generate deterministic output
+
+Output Format (exactly 5 lines):
+  Line 1: Remote development session continuation for task <id>.
+  Line 2: Branch: <branch-name>
+  Line 3: Head: <commit-sha>
+  Line 4: Handoff path: <repo-path>
+  Line 5: Before editing, fetch the default branch with `git fetch <remote> <branch>` 
+          and sync this checkout onto <default-ref>, so no edit builds on a stale base.
+
+=============================================================================
+CODE SNIPPET: continuation_note()
+=============================================================================
+
+continuation_note() {  # <id> <project>
+  local id=$1 project=$2 meta repo recorded branch ref head default_ref remote defbranch sync_line
+  meta="$STATE/$id.meta"
+  repo=${REPO:-}
+  if [ -z "$repo" ]; then
+    repo=$(fm_rds_meta_value "$meta" worktree || true)
+  fi
+  [ -n "$repo" ] || repo="$PROJECTS/$project"
+  recorded=$(recorded_branch_of "$id" "$project")
+  branch=${BRANCH:-$recorded}
+  
+  # SAFETY: Refuse if branch cannot be resolved
+  if [ -z "$branch" ]; then
+    printf 'fm-remote-dev-session: no branch resolved for %s; refusing a relaunch without a continuation note\n' "$id" >&2
+    return 1
+  fi
+  
+  # SAFETY: Refuse if handoff path does not exist
+  if [ ! -d "$repo" ]; then
+    printf 'fm-remote-dev-session: no handoff path for %s at %s; refusing a relaunch without a continuation note\n' "$id" "$repo" >&2
+    return 1
+  fi
+  
+  # Resolve HEAD SHA
+  head=
+  if ref=$(fm_rds_resolve_branch_ref "$repo" '' "$branch" 2>/dev/null); then
+    head=$("$GIT" -C "$repo" rev-parse --verify "$ref" 2>/dev/null || true)
+  fi
+  default_ref=$(default_ref_of "$repo" 2>/dev/null || true)
+  if [ -z "$head" ]; then
+    if [ -n "$default_ref" ]; then
+      head=$("$GIT" -C "$repo" rev-parse --verify "$default_ref" 2>/dev/null || true)
+    fi
+    
+    # SAFETY: Refuse if HEAD SHA cannot be resolved
+    if [ -z "$head" ]; then
+      printf 'fm-remote-dev-session: no head SHA resolved for %s; refusing a relaunch without a continuation note\n' "$id" >&2
+      return 1
+    fi
+  fi
+  
+  # Build sync instruction
+  if [ -n "$default_ref" ]; then
+    remote=${default_ref%%/*}
+    [ "$remote" != "$default_ref" ] || remote=origin
+    defbranch=${default_ref#*/}
+    sync_line="Before editing, fetch the default branch with \`git fetch $remote $defbranch\` and sync this checkout onto $default_ref, so no edit builds on a stale base."
+  else
+    sync_line="Before editing, fetch the default branch and sync this checkout onto it, so no edit builds on a stale base."
+  fi
+  
+  # DETERMINISTIC OUTPUT: Same inputs always produce same output
+  printf 'Remote development session continuation for task %s.\n' "$id"
+  printf 'Branch: %s\n' "$branch"
+  printf 'Head: %s\n' "$head"
+  printf 'Handoff path: %s\n' "$repo"
+  printf '%s\n' "$sync_line"
+}
+
+=============================================================================
+INTEGRATION WITH fm-control
+=============================================================================
+
+When the continuation note is generated, it's passed to fm-control:
+
+  note=$(continuation_note "$TARGET_ID" "$PROJECT") \
+    || fail "relaunching $TARGET_ID refused: the continuation note could not be written"
+  
+  "$FM_CONTROL" "$TARGET_ID" relaunch --note "$note" \
+    || fail "fm-control refused to relaunch $TARGET_ID"
+
+The --note flag delivers the multi-line continuation text to the relaunched
+task as initial context, ensuring the replacement worker has all necessary
+information to continue work seamlessly.
+
+=============================================================================
+DETERMINISM TEST
+=============================================================================
+
+From tests/fm-remote-dev-session.test.sh:229-236:
+
+  # The note is deterministic: a second relaunch renders the same bytes.
+  note1=$(grep -F -A4 'Remote development session continuation' "$control" | head -5)
+  
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  
+  expect_code 0 "$status" "second relaunch exit"
+  note2=$(grep -F -A4 'Remote development session continuation' "$control" | tail -5)
+  
+  assert_equals "$note1" "$note2" "the continuation note was not deterministic"
+
+This test verifies that running the same relaunch operation twice produces
+byte-for-byte identical continuation notes, ensuring predictable behavior.
+
+=============================================================================
+SAFETY PROPERTIES
+=============================================================================
+
+1. NO BLIND LAUNCHES
+   └─ A relaunch MUST carry a continuation note
+   └─ Missing context → REFUSE instead of launching blind
+
+2. VALIDATED INPUTS
+   └─ Branch, HEAD, and path are verified before note generation
+   └─ Any unresolvable field → REFUSE with explicit error
+
+3. DETERMINISTIC OUTPUT
+   └─ Same inputs always produce same output
+   └─ Tested via duplicate relaunch verification
+
+4. EXPLICIT SYNC INSTRUCTIONS
+   └─ Replacement worker gets exact git fetch command
+   └─ Prevents working on stale base branches
+
+5. NO AUTOMATIC REWRITES
+   └─ Never forces, stashes, or discards local changes
+   └─ Operator maintains full control
+
+=============================================================================
+BENEFITS
+=============================================================================
+
+• CONTEXT PRESERVATION: Replacement workers inherit complete task context
+• PREDICTABILITY: Deterministic notes ensure consistent behavior
+• SAFETY: Multiple validation gates prevent launching with incomplete context
+• TRANSPARENCY: Explicit sync instructions in the note text
+• DEBUGGABILITY: All reference data is logged and recorded
+• IDEMPOTENCY: Same operation produces same result
+
+=============================================================================
