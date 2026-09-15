@@ -86,6 +86,9 @@ fm_rds_record_write() {  # <path> <key=value>...
   mkdir -p "$dir" 2>/dev/null || return 1
   tmp=$(umask 077; mktemp "$path.XXXXXX" 2>/dev/null) || return 1
   for kv in "$@"; do
+    case "$kv" in
+      *$'\r'*|*$'\n'*) rm -f -- "$tmp"; return 1 ;;
+    esac
     key=${kv%%=*}
     case " $FM_RDS_KEYS " in
       *" $key "*) ;;

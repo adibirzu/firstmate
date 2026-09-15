@@ -98,9 +98,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --secondmate)
       [ "$#" -ge 2 ] || die "--secondmate requires an id"
+      [ -z "$TARGET_KIND" ] || die "only one target may be selected"
       TARGET_KIND=secondmate; TARGET_ID=$2; shift 2 ;;
     --task)
       [ "$#" -ge 2 ] || die "--task requires an id"
+      [ -z "$TARGET_KIND" ] || die "only one target may be selected"
       TARGET_KIND=task; TARGET_ID=$2; shift 2 ;;
     --project)
       [ "$#" -ge 2 ] || die "--project requires a name"
@@ -575,6 +577,8 @@ if [ "$TARGET_KIND" = secondmate ]; then
     "$STATION"|"$STATION"-*) ;;
     *) fail "$TARGET_ID is registered on ${SECONDMATE_REGISTRY_HOST}, not station $STATION" ;;
   esac
+  [ "$SECONDMATE_REGISTRY_HOST" = "$STATION_HOST" ] \
+    || fail "$TARGET_ID is registered on ${SECONDMATE_REGISTRY_HOST}, not resolved station $STATION_HOST"
   [ "$RESOLVED_BACKEND" = herdr ] \
     || fail "remote second mates require the herdr backend"
   [ -n "$PROJECT" ] || PROJECT=$TARGET_ID

@@ -85,6 +85,7 @@ write_registry() {  # <home> <line...>
 }
 
 REMOTE_RECORD='- infra-remote - overflow firstmate work (host: adi2-ts; root: /home/adi/firstmate; home: /home/adi/.firstmate-infra; scope: firstmate repo work; projects: alpha; added 2026-09-13)'
+REMOTE_BUILD_RECORD='- infra-build - overflow firstmate work (host: adi2-build; root: /home/adi/firstmate; home: /home/adi/.firstmate-build; scope: firstmate repo work; projects: alpha; added 2026-09-13)'
 
 # run_cmd <home> <out> <args...> [NAME=VALUE...]
 # The NAME=VALUE pairs go before the command as environment assignments.
@@ -319,6 +320,59 @@ test_unregistered_remote_station_refuses() {
   assert_contains "$(cat "$out")" 'no registered remote station' \
     "the unregistered station refusal was not reported"
   pass "unregistered remote stations refuse instead of using arbitrary SSH aliases"
+}
+
+test_station_prefix_requires_the_resolved_secondmate_route() {
+  local home status out fmon
+  home=$(make_home station-prefix)
+  write_registry "$home" "$REMOTE_RECORD" "$REMOTE_BUILD_RECORD"
+  out="$home/out.txt"
+  fmon="$home/fmon.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_FMON_LOG="$fmon" \
+    open adi2 --secondmate infra-build)
+  expect_code 1 "$status" "a mismatched station prefix route must refuse"
+  assert_contains "$(cat "$out")" 'not resolved station adi2-ts' \
+    "the mismatched route refusal was not reported"
+  assert_absent "$fmon" "a mismatched route must fail before remote readiness"
+  pass "station prefixes cannot select a different registered remote route"
+}
+
+test_conflicting_target_selectors_refuse() {
+  local home repo status out
+  home=$(make_home target-selectors)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" open adi2 --task t1 --secondmate infra-remote)
+  expect_code 2 "$status" "task then secondmate must refuse"
+  status=$(run_cmd "$home" "$out" open adi2 --secondmate infra-remote --task t1)
+  expect_code 2 "$status" "secondmate then task must refuse"
+  assert_contains "$(cat "$out")" 'only one target may be selected' \
+    "the conflicting target refusal was not reported"
+  pass "conflicting target selectors refuse regardless of argument order"
+}
+
+test_multiline_record_values_refuse_before_writing() {
+  local home status record
+  home=$(make_home multiline-record)
+  record="$home/state/remote-dev-sessions/adi2.session"
+
+  status=0
+  bash -c '. "$1"; fm_rds_record_write "$2" "$3" "$4"' bash \
+    "$ROOT/bin/fm-remote-dev-session-lib.sh" "$record" \
+    'schema=fm-remote-dev-session.v1' $'project=project\nextra=value' || status=$?
+  expect_code 1 "$status" "newline record value must refuse"
+  assert_absent "$record" "a newline value must not write a continuity record"
+  status=0
+  bash -c '. "$1"; fm_rds_record_write "$2" "$3" "$4"' bash \
+    "$ROOT/bin/fm-remote-dev-session-lib.sh" "$record" \
+    'schema=fm-remote-dev-session.v1' $'project=project\rextra=value' || status=$?
+  expect_code 1 "$status" "carriage-return record value must refuse"
+  assert_absent "$record" "a carriage-return value must not write a continuity record"
+  pass "continuity record values refuse CR and LF before writing"
 }
 
 test_tmux_backend_is_explicit_and_renders_an_equivalent_attach() {
@@ -863,6 +917,9 @@ test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
 test_remote_secondmate_refuses_the_tmux_backend
 test_unregistered_remote_station_refuses
+test_station_prefix_requires_the_resolved_secondmate_route
+test_conflicting_target_selectors_refuse
+test_multiline_record_values_refuse_before_writing
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
 test_idle_remote_secondmate_attaches_without_relaunch
