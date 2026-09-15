@@ -3552,6 +3552,82 @@ rovo_spawn_fail() {  # <detail>
   rovo_endpoint_cleanup
 }
 
+# --- cursor pre-submit readiness gate ---------------------------------------
+# cursor-agent boots through pre-composer gates that hold the pane on a
+# non-composer screen: the blocking "Workspace Trust Required" dialog when no
+# .workspace-trusted marker covers the worktree (docs/verification/
+# cursor-agent-adapter.md), and cursor-agent 2026.09's "Command Execution"
+# sandbox-intro dialog when its showSandboxIntro flag is set (verified in the
+# installed bundle: title "Command Execution", keys a/m/u/q, quit exits 0).
+# Either screen makes the backend submit-confirmation read unknown forever,
+# and a quit modal exits the agent outright, so typing the seeded brief
+# without waiting can never confirm a first turn. firstmate therefore waits
+# for a proven past-gate signal - the idle composer placeholder or the
+# mid-turn busy footer - answering each dialog exactly once with the
+# launch-consistent choice (`a` trusts like --trust; `u` is Run Everything
+# unsandboxed like --yolo) and failing loudly on anything else (login, model
+# errors) instead of typing a brief into a screen that cannot receive it.
+# kimi, rovo, copilot, and agy already gate the same way; cursor is the only
+# bare-launch adapter that submitted blind.
+cursor_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+cursor_trust_dialog_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Workspace Trust Required'
+}
+
+cursor_sandbox_intro_present() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Fq 'Choose how commands should be executed'
+}
+
+# Past every gate: the idle composer placeholder (verified,
+# docs/verification/cursor-agent-adapter.md) or the mid-turn busy anchor. The
+# placeholder alternation is duplicated from FM_COMPOSER_IDLE_RE_DEFAULT and
+# the busy token from FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT because
+# fm-spawn.sh sources neither owner; the cursor suite feeds the shared
+# fixtures through both sides so the copies cannot drift apart unnoticed.
+cursor_pane_is_ready() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep -Eq '→ (Plan, search, build anything|Add a follow-up)|ctrl\+c to stop'
+}
+
+# Wait for cursor-agent's composer to become ready, answering each
+# pre-composer dialog at most once. Answers are once-only because after trust
+# or the intro clears a repeat keypress would land in the composer as stray
+# text. The positive ready anchor is tested first so dialog text lingering in
+# scrollback can never trigger an answer once the composer is up. The shared
+# composer verdict is the backstop after the dialogs: an `empty` read is
+# positive proof of a clear composer (a dead shell never reads empty), so a
+# future placeholder rename the shared classifier already learned cannot wedge
+# this gate. Anything less than ready keeps polling. A pane that never reaches
+# a ready signal within the poll budget is a failed spawn, not a silent hang,
+# and the caller names the spent answers.
+cursor_wait_for_ready() {
+  local pane i=0 max=${FM_CURSOR_READY_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} trust_answered=0 sandbox_answered=0
+  while [ "$i" -lt "$max" ]; do
+    pane=$(cursor_capture)
+    if cursor_pane_is_ready "$pane"; then
+      return 0
+    elif cursor_trust_dialog_present "$pane"; then
+      if [ "$trust_answered" -eq 0 ]; then
+        spawn_send_literal "$T" a
+        trust_answered=1
+      fi
+    elif cursor_sandbox_intro_present "$pane"; then
+      if [ "$sandbox_answered" -eq 0 ]; then
+        spawn_send_literal "$T" u
+        sandbox_answered=1
+      fi
+    elif [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  CURSOR_READY_DETAIL="trust answered: $trust_answered, sandbox-intro answered: $sandbox_answered"
+  return 1
+}
+
 cursor_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
@@ -4106,6 +4182,26 @@ EOF
       # conversation instead of its predecessor's. The classifier then accepts
       # only one remaining conversation and never guesses between incarnations.
       CURSOR_PROJECTS_ROOT="${CURSOR_PROJECTS_ROOT_OVERRIDE:-$HOME/.cursor/projects}"
+      # Workspace-trust pre-seed (verified bypass, docs/verification/
+      # cursor-agent-adapter.md): a pre-existing .workspace-trusted marker makes
+      # cursor-agent skip the blocking interactive trust dialog entirely. The
+      # --trust launch flag writes the same marker at startup, so this only
+      # covers the window before that write; cursor's length-capped slug
+      # variant for very long paths is not reproduced here, and the post-launch
+      # readiness gate still answers a residual dialog with `a`. The slug is
+      # the worktree abspath with the leading / dropped and every / replaced
+      # by -. A workspace that is already claimed stays untouched: a second
+      # marker under another slug would give the transcript binding two
+      # claimants for one workspace instead of one.
+      if ! fm_busy_cursor_project_dir "$CURSOR_PROJECTS_ROOT" "$WT" >/dev/null 2>&1; then
+        CURSOR_PROJECT_DIR="$CURSOR_PROJECTS_ROOT/$(printf '%s' "${WT#/}" | tr '/' '-')"
+        if [ ! -f "$CURSOR_PROJECT_DIR/.workspace-trusted" ]; then
+          mkdir -p "$CURSOR_PROJECT_DIR"
+          printf '{"trustedAt":"%s","workspacePath":"%s"}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$(json_escape "$WT")" \
+            > "$CURSOR_PROJECT_DIR/.workspace-trusted"
+        fi
+      fi
       {
         printf 'projects_root=%s\n' "$CURSOR_PROJECTS_ROOT"
         printf 'workspace_root=%s\n' "$WT"
@@ -4709,6 +4805,14 @@ if [ "$HARNESS" = cursor ]; then
   CURSOR_SUBMIT_RETRIES=${FM_CURSOR_SUBMIT_RETRIES:-3}
   CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.8}
   CURSOR_SUBMIT_SETTLE=${FM_CURSOR_SUBMIT_SETTLE:-0.3}
+  # The seeded brief is typed only into a proven-ready composer. Without this
+  # gate a pre-composer dialog (trust, sandbox intro) or a still-booting TUI
+  # receives the brief instead, and the submit below reads unknown forever
+  # without ever starting a turn.
+  if ! cursor_wait_for_ready; then
+    cursor_spawn_fail "cursor did not reach a ready composer before brief delivery (${CURSOR_READY_DETAIL:-no readiness detail})"
+    exit 1
+  fi
   CURSOR_BRIEF=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || {
     cursor_spawn_fail "cursor seeded brief could not be encoded"
     exit 1

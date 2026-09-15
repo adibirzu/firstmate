@@ -141,11 +141,49 @@ case "${1:-}" in
         printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
         printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
           > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+        # Mirror the fabricated turn into every OTHER project dir claiming
+        # this workspace (e.g. a pre-seeded slug dir): the transcript binding
+        # resolves one claimant, and whichever it picks must hold exactly one
+        # conversation for the confirmation callback to observe the turn.
+        for _claim_marker in "$root"/*/.workspace-trusted; do
+          [ -f "$_claim_marker" ] || continue
+          _claim=$(LC_ALL=C sed -n 's/.*"workspacePath"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$_claim_marker" | head -1)
+          [ "$_claim" = "$workspace" ] || continue
+          _claim_dir=${_claim_marker%/.workspace-trusted}
+          [ "$_claim_dir" = "$project" ] && continue
+          mkdir -p "$_claim_dir/agent-transcripts/fake-conversation"
+          printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+            > "$_claim_dir/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+        done
       fi
     fi
     exit 0
     ;;
   capture-pane)
+    # FM_FAKE_TMUX_SCREEN_DIR: serve $DIR/<n> for the nth capture call
+    # (1-based), holding the highest-numbered screen once the sequence is
+    # exhausted. Lets a suite script a pane's evolving screen (a dialog that
+    # clears into a ready composer) through the real spawn. Unset preserves
+    # the legacy pending/empty composer behavior below.
+    if [ -n "${FM_FAKE_TMUX_SCREEN_DIR:-}" ] && [ -d "$FM_FAKE_TMUX_SCREEN_DIR" ]; then
+      _screen_count_file="$FM_FAKE_TMUX_SCREEN_DIR/.count"
+      _screen_count=0
+      [ ! -f "$_screen_count_file" ] || _screen_count=$(cat "$_screen_count_file" 2>/dev/null || echo 0)
+      case "$_screen_count" in ''|*[!0-9]*) _screen_count=0 ;; esac
+      _screen_count=$((_screen_count + 1))
+      printf '%s\n' "$_screen_count" > "$_screen_count_file"
+      if [ -f "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_count" ]; then
+        cat "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_count"
+      else
+        _screen_last=$(ls "$FM_FAKE_TMUX_SCREEN_DIR" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
+        if [ -n "$_screen_last" ]; then
+          cat "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_last"
+        else
+          printf '╭────╮\n│    │\n╰────╯\n'
+        fi
+      fi
+      exit 0
+    fi
     if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     else

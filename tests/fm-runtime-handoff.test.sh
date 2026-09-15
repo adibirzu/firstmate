@@ -81,6 +81,10 @@ case "${1:-}" in
       *'#{pane_id}'*) printf '%%1\n' ;;
       *'#{pane_current_path}'*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}" ;;
       *'#{pane_current_command}'*) printf '%s\n' "${FM_FAKE_PANE_CMD:-bash}" ;;
+      # A numeric cursor row like real tmux returns: the cursor readiness
+      # gate reads the composer through it, and a session-name fallback
+      # would turn every composer read unknown instead.
+      *'#{cursor_y}'*) printf '1\n' ;;
       *) printf '%s\n' "${FM_FAKE_SESSION:-firstmate}" ;;
     esac
     exit 0

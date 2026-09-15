@@ -79,8 +79,10 @@ Interactive mode shows a BLOCKING trust dialog on an untrusted directory:
 2026-09-05 update: the spawn template no longer relies on positional prompt auto-run.
 Live tmux probing showed `cursor-agent --trust --yolo --model cursor-grok-4.6-low --workspace <dir> "<prompt>"` can start a turn directly, so the prompt is not generally parsed as the `--workspace` value and the model catalog accepts that id.
 However, two supervised Cursor dispatches reached the startup render with the seeded brief visible and no transcript/status append, while OpenCode workers using the same brief scaffold progressed normally.
-The root-cause fix is to launch Cursor bare with the model and workspace flags, then submit the encoded launch brief through the backend submit-confirmation path used for ordinary delivery.
-If the confirmed transition is not observed within the bounded submit window, spawn appends a failed status instead of reporting a zero-turn worker as spawned.
+2026-09-15 update (cursor-agent 2026.09.02-c22c1a3): the bare launch typed the seeded brief with no readiness wait, so any pre-composer gate held the submit at unknown (trust dialog: pending-unproven on the retry path) forever and a quit modal exited the agent (later sends: send-failed).
+The 2026.09 bundle adds a "Command Execution" sandbox-intro modal (keys a/m/u/q, quit exits 0) beside the trust dialog.
+Spawn now pre-seeds `.workspace-trusted` (skipped when the workspace is already claimed) and waits for a proven-ready composer - idle placeholder, busy footer, or a classifier-empty read - answering trust once with `a` and the intro once with `u` (Run Everything, matching `--yolo`), failing loudly otherwise before anything is typed.
+Verified by `tests/fm-cursor-submit-confirm.test.sh` (fake-tmux and canned-Herdr submit pins plus full spawn runs; live-Herdr cleanup case opt-in).
 
 Historical note: `cursor-agent --force "<prompt>"` was previously verified to seed and auto-run the prompt once trust was cleared.
 That is no longer the Firstmate launch contract.
