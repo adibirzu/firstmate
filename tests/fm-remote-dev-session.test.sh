@@ -348,6 +348,36 @@ test_unknown_liveness_refuses_to_relaunch() {
   pass "an unreadable liveness refuses instead of relaunching"
 }
 
+test_idle_remote_secondmate_attaches_without_relaunch() {
+  local home status out control spawn meta
+  home=$(make_home mate-idle)
+  write_registry "$home" "$REMOTE_RECORD"
+  meta="$home/state/infra-remote.meta"
+  {
+    printf 'window=fm-remote:wK:p2\n'
+    printf 'endpoint_task_id=infra-remote\n'
+    printf 'worktree=/home/adi/.firstmate-infra\n'
+    printf 'project=infra-remote\n'
+    printf 'kind=secondmate\n'
+    printf 'spawn_gen=s999\n'
+    printf 'backend=herdr\n'
+    printf 'herdr_workspace_id=wK\nherdr_tab_id=wK:t2\nherdr_pane_id=wK:p2\n'
+  } > "$meta"
+  out="$home/out.txt"
+  control="$home/control.log"
+  spawn="$home/spawn.log"
+
+  status=$(run_cmd "$home" "$out" \
+    FM_TEST_CREW_STATE='state: unknown · source: remote-endpoint · alive on adi2-ts (an idle secondmate is healthy)' \
+    FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
+    open adi2 --secondmate infra-remote)
+  expect_code 0 "$status" "idle secondmate attach exit"
+  assert_contains "$(cat "$out")" 'action=attached' "a healthy idle second mate was not attached"
+  assert_absent "$spawn" "a healthy idle second mate must never relaunch through fm-spawn"
+  assert_absent "$control" "a healthy idle second mate must never relaunch through fm-control"
+  pass "a confirmed-alive idle remote secondmate attaches instead of relaunching"
+}
+
 test_check_runs_the_gates_without_launching_or_recording() {
   local home repo status out control spawn
   home=$(make_home check)
@@ -584,6 +614,7 @@ test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
+test_idle_remote_secondmate_attaches_without_relaunch
 test_check_runs_the_gates_without_launching_or_recording
 test_a_duplicate_branch_refuses
 test_a_stale_base_refuses
