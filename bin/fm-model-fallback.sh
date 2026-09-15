@@ -40,10 +40,12 @@
 #   4. When the lane is exhausted and the router policy's fallbackLanes names
 #      a later lane, moves there and starts that lane's own chain head (or
 #      its default model when that lane has no chain).
-#   5. When the depleted harness carries a telemetry-backed routing provider,
-#      records the verified failure through `llm-router-axi record` so future
-#      dispatches avoid the account during the cooldown; that bookkeeping
-#      failure never blocks the relaunch itself.
+#   5. For router-classified subscription exhaustion, when the depleted harness
+#      carries a telemetry-backed routing provider, records the verified
+#      failure through `llm-router-axi record` so future dispatches avoid the
+#      account during the cooldown. A hosted-region opt-in refusal is specific
+#      to the model, so it never cools down the provider; bookkeeping failure
+#      never blocks the relaunch itself.
 #   6. Relaunches in place with --model <next> and a progress note naming the
 #      depletion signature and the automatic step-down. The effort axis is
 #      deliberately reset so the replacement model launches on its own
@@ -201,9 +203,10 @@ fi
 # whose model answers but refuses to serve without an explicit opt-in to
 # China-hosted inference (e.g. `latest version only available hosted in China,
 # requires explicit opt in`) is unavailable, not up against a working ceiling,
-# so it depletes exactly like quota exhaustion. The match requires the complete
-# failure wording in one failed status event, case-insensitive, so task content
-# cannot combine partial anchors into a false refusal.
+# so it triggers the same in-lane fallback without provider-wide cooldown. The
+# match requires the complete failure wording in one failed status event,
+# case-insensitive, so task content cannot combine partial anchors into a false
+# refusal.
 REFUSAL_SIGNATURE='hosted-region opt-in refusal'
 REFUSAL_CLASSIFIED=0
 evidence_has_refusal() {  # reads $EVIDENCE_TEXT

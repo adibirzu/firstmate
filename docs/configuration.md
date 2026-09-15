@@ -521,7 +521,8 @@ Its step-down chain is `llm-router-axi route chain`, which walks the router poli
 `apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs.
 Before classification, `apply` drops every line whose leading verb is the declared-pause verb (`bin/fm-classify-lib.sh`'s `status_is_paused`), so depletion words inside firstmate's own after-the-fact `paused:` bookkeeping never relaunch an endpoint stopped on purpose.
 Auto-step-down is standing policy (2026-08-24): availability beats escalation, so depletion never parks on the captain and never stops the fleet, and the downgrade is made visible through a progress note, a `working:` status line, and stderr.
-When the depleted harness carries a telemetry-backed routing provider, `apply` records the verified failure through `llm-router-axi record`, so future dispatches avoid that account for the cooldown while this task steps down within its lane; that bookkeeping failing never blocks the relaunch itself.
+For router-classified subscription exhaustion on a harness carrying a telemetry-backed routing provider, `apply` records the verified failure through `llm-router-axi record`, so future dispatches avoid that account for the cooldown while this task steps down within its lane.
+The hosted-region opt-in refusal is model-specific, so it follows the same in-lane fallback without a provider cooldown; that bookkeeping failing never blocks the relaunch itself.
 
 ## Fleet add-on (config/fleet-dir / config/admiral / config/accounts.json / FM_FLEET_*)
 
