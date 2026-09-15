@@ -2335,7 +2335,7 @@ agy_trust_dialog_present() {  # <plain-pane-capture>
 }
 
 agy_pane_is_past_trust() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts|Running.*\.\.\.|^[[:space:]]*(│|┃|\|)[[:space:]]*>[[:space:]]*(│|┃|\|)[[:space:]]*$|^[[:space:]]*>[[:space:]]*$'
+  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts|Running.*\.\.\.|^[[:space:]]*│[[:space:]]*>[[:space:]]*│[[:space:]]*$|^[[:space:]]*>[[:space:]]*$'
 }
 
 agy_wait_for_trust_clear() {
