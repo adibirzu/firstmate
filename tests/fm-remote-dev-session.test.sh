@@ -746,9 +746,24 @@ test_incomplete_record_refuses_status() {
 
   status=$(run_cmd "$home" "$out" status adi2)
   expect_code 1 "$status" "an incomplete record must refuse"
+  assert_not_contains "$(cat "$out")" 'schema=fm-remote-dev-session.v1' \
+    "status must not print partial record data before refusing"
   assert_contains "$(cat "$out")" 'continuity record is malformed' \
     "the incomplete record refusal was not reported"
   pass "status refuses continuity records missing required fields"
+}
+
+test_attach_without_a_record_refuses() {
+  local home status out
+  home=$(make_home attach-no-record)
+  write_registry "$home" "$REMOTE_RECORD"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" attach adi2 --exec)
+  expect_code 1 "$status" "attach without a continuity record must refuse"
+  assert_contains "$(cat "$out")" 'no continuity record' \
+    "the missing continuity record refusal was not reported"
+  pass "attach requires a durable continuity record"
 }
 
 test_attach_refuses_a_tampered_command() {
@@ -864,6 +879,7 @@ test_recover_preserves_recorded_backend_and_session
 test_record_driven_verbs_ignore_an_invalid_current_backend_config
 test_status_and_attach_read_the_record
 test_incomplete_record_refuses_status
+test_attach_without_a_record_refuses
 test_attach_refuses_a_tampered_command
 test_list_reports_records
 test_invalid_use_refuses

@@ -500,46 +500,45 @@ if [ "$ACTION" = recover ] && [ -z "$TARGET_ID" ]; then
 fi
 case "$ACTION" in
   status) ;;
-  attach)
-    [ -f "$(fm_rds_record_path "$STATE" "$STATION")" ] || resolve_backend_and_session
-    ;;
+  attach) ;;
   *) resolve_backend_and_session ;;
 esac
 
 case "$ACTION" in
   status)
-    load_record_if_present
+    RECORD_PATH=$(fm_rds_record_path "$STATE" "$STATION")
     if [ ! -f "$RECORD_PATH" ]; then
       printf 'remote-dev-session: none station=%s record=%s\n' "$STATION" "$RECORD_PATH"
       exit 0
     fi
-    fm_rds_record_read "$RECORD_PATH" || fail "continuity record is malformed: $RECORD_PATH"
+    record_output=$(fm_rds_record_read "$RECORD_PATH") \
+      || fail "continuity record is malformed: $RECORD_PATH"
+    printf '%s\n' "$record_output"
     exit 0
     ;;
 
   attach)
     load_record_if_present
-    if [ -f "$RECORD_PATH" ]; then
-      record_station=$(record_field station || true)
-      record_local=$(record_field local || true)
-      record_host=$(record_field host || true)
-      RESOLVED_BACKEND=$(record_field backend || true)
-      RESOLVED_SESSION=$(record_field session || true)
-      recorded_attach_command=$(record_field attach_command || true)
-      [ "$record_station" = "$STATION" ] \
-        || fail "continuity record station does not match $STATION"
-      [ "$record_local" = "$STATION_LOCAL" ] && [ "$record_host" = "$STATION_HOST" ] \
-        || fail "continuity record route does not match station $STATION"
-      fm_rds_backend_known "$RESOLVED_BACKEND" \
-        || fail "continuity record has an unknown backend"
-      case "$RESOLVED_SESSION" in
-        ''|*[!A-Za-z0-9._-]*) fail "continuity record has an invalid session name" ;;
-      esac
-      ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION") \
-        || fail "continuity record has an invalid attach target"
-      [ "$recorded_attach_command" = "$ATTACH_COMMAND" ] \
-        || fail "continuity record attach command does not match its validated fields"
-    fi
+    [ -f "$RECORD_PATH" ] || fail "no continuity record for station $STATION"
+    record_station=$(record_field station || true)
+    record_local=$(record_field local || true)
+    record_host=$(record_field host || true)
+    RESOLVED_BACKEND=$(record_field backend || true)
+    RESOLVED_SESSION=$(record_field session || true)
+    recorded_attach_command=$(record_field attach_command || true)
+    [ "$record_station" = "$STATION" ] \
+      || fail "continuity record station does not match $STATION"
+    [ "$record_local" = "$STATION_LOCAL" ] && [ "$record_host" = "$STATION_HOST" ] \
+      || fail "continuity record route does not match station $STATION"
+    fm_rds_backend_known "$RESOLVED_BACKEND" \
+      || fail "continuity record has an unknown backend"
+    case "$RESOLVED_SESSION" in
+      ''|*[!A-Za-z0-9._-]*) fail "continuity record has an invalid session name" ;;
+    esac
+    ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION") \
+      || fail "continuity record has an invalid attach target"
+    [ "$recorded_attach_command" = "$ATTACH_COMMAND" ] \
+      || fail "continuity record attach command does not match its validated fields"
     [ -n "$ATTACH_COMMAND" ] || fail "no attach command could be resolved for station $STATION"
     if [ "$EXEC" -eq 1 ]; then
       exec bash -c "$ATTACH_COMMAND"
