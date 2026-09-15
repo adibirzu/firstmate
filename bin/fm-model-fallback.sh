@@ -201,20 +201,23 @@ fi
 # whose model answers but refuses to serve without an explicit opt-in to
 # China-hosted inference (e.g. `latest version only available hosted in China,
 # requires explicit opt in`) is unavailable, not up against a working ceiling,
-# so it depletes exactly like quota exhaustion. The match requires both stable
-# anchors, case-insensitive - `hosted in china` and `opt in`/`opt-in` - and
-# never fires on volatile model-name or version wording alone, so either
-# anchor on its own stays quiet.
+# so it depletes exactly like quota exhaustion. The match requires the complete
+# failure wording in one failed status event, case-insensitive, so task content
+# cannot combine partial anchors into a false refusal.
 REFUSAL_SIGNATURE='hosted-region opt-in refusal'
+REFUSAL_CLASSIFIED=0
 evidence_has_refusal() {  # reads $EVIDENCE_TEXT
-  local lowered
-  lowered=$(printf '%s' "${EVIDENCE_TEXT:-}" | tr '[:upper:]' '[:lower:]')
-  case "$lowered" in
-    *'hosted in china'*)
-      case "$lowered" in
-        *'opt in'*|*'opt-in'*) return 0 ;;
-      esac ;;
-  esac
+  local evidence_line lowered
+  while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
+    lowered=$(printf '%s' "$evidence_line" | tr '[:upper:]' '[:lower:]')
+    case "$lowered" in
+      failed:*'latest version only available hosted in china,'*'requires explicit opt in'*|failed:*'latest version only available hosted in china,'*'requires explicit opt-in'*)
+        return 0
+        ;;
+    esac
+  done <<EOF_REFUSAL
+${EVIDENCE_TEXT:-}
+EOF_REFUSAL
   return 1
 }
 
@@ -226,6 +229,7 @@ case "$CLASSIFICATION" in
   *)
     if evidence_has_refusal; then
       CLASSIFICATION=$(printf 'classification=depleted\nsignature="%s"\n' "$REFUSAL_SIGNATURE")
+      REFUSAL_CLASSIFIED=1
     else
       if [ "$VERB" = plan ]; then
         echo "action=none"
@@ -268,7 +272,7 @@ advance_fallback_cursor() {
   FALLBACK_CURSOR=$cursor_end
 }
 
-if [ "$VERB" = apply ]; then
+if [ "$VERB" = apply ] && [ "$REFUSAL_CLASSIFIED" -eq 0 ]; then
   PROVIDER=$(fm_meta_get "$META" provider)
   if [ -z "$PROVIDER" ]; then
     PROVIDER=$(native_provider_of "$HARNESS") || PROVIDER=

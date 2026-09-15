@@ -421,7 +421,7 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
 #
 # The refusal below is firstmate-owned, never router vocabulary: the step-down
 # must fire even when the router reports no subscription depletion, while
-# partial wording on either anchor alone must stay quiet.
+# partial wording or task content must stay quiet.
 
 REFUSAL_LINE='failed: model deepseek-v4.1-flash is deprecated: latest version only available hosted in China, requires explicit opt in'
 
@@ -447,6 +447,7 @@ REFUSAL_LINE='failed: model deepseek-v4.1-flash is deprecated: latest version on
   assert_contains "$route_calls" "gemini-3.7-flash-high" "the step-down walks from the dispatched model, never re-opening class choice"
   status_log=$(cat "$CASE_HOME/state/apply-f1.status")
   assert_contains "$status_log" "hosted-region opt-in refusal" "the switch stays visible in status reporting"
+  [ ! -s "$CASE_DIR/record.calls" ] || fail "a model-specific hosted-region refusal must not cool down the provider"
   pass "the refusal auto-moves in place within the dispatched lane with the same visibility and cursor semantics"
 }
 
@@ -459,6 +460,10 @@ REFUSAL_LINE='failed: model deepseek-v4.1-flash is deprecated: latest version on
   out=$("$FALLBACK" plan-f3 plan 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || fail "near-miss plan should stay quiet-successful, rc=$rc: $out"
   assert_contains "$out" "action=none" "hosted-region wording without the opt-in anchor plans nothing"
+  setup_case refusal-task-content plan-f5 "$STEP_CHAIN" 'working: the policy requires data hosted in China to opt in' none
+  out=$("$FALLBACK" plan-f5 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "task-content plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "task content with both anchors must not trigger a fallback"
   pass "partial refusal wording never triggers a step-down on its own"
 }
 
