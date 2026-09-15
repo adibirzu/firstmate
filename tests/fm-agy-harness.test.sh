@@ -39,6 +39,7 @@ case "${1:-}" in
       clear) if [ "$n" -gt 1 ]; then printf '%s\n' '? for shortcuts Gemini 3.6 Flash · high'; else printf '%s\n' 'Do you trust the contents of this project?' '> Yes, I trust this folder'; fi ;;
       clear-123-busy) if [ "$n" -gt 1 ]; then printf '%s\n' "$FM_AGY_123_BUSY"; else printf '%s\n' "$FM_AGY_123_DIALOG"; fi ;;
       clear-123-idle) if [ "$n" -gt 1 ]; then printf '%s\n' "$FM_AGY_123_IDLE"; else printf '%s\n' "$FM_AGY_123_DIALOG"; fi ;;
+      blocked-unobserved-border) if [ "$n" -gt 1 ]; then printf '%s\n' '┃ > ┃' '| > |'; else printf '%s\n' "$FM_AGY_123_DIALOG"; fi ;;
       *) printf '%s\n' "${FM_AGY_123_DIALOG:-Do you trust the contents of this project?}";;
     esac ;;
 esac
@@ -106,6 +107,17 @@ test_agy_trust_gate_fails_bounded() {
   rm -rf "$dir"
   pass "fm-spawn: agy fails a bounded trust dialog without matching it as ready"
 }
+test_agy_trust_gate_rejects_unobserved_composer_borders() {
+  local rec dir fakebin mode id out rc dialog
+  dialog=$(agy_trust_dialog_capture)
+  rec=$(make_agy_spawn_case unobserved-border blocked-unobserved-border); IFS='|' read -r dir fakebin mode id <<<"$rec"
+  out=$(FM_AGY_MODE="$mode" FM_AGY_CAPTURE_COUNT="$dir/count" FM_AGY_KEYS="$dir/keys" FM_AGY_LAUNCH="$dir/launch" FM_AGY_123_DIALOG="$dialog" FM_AGY_TRUST_POLLS=2 FM_AGY_POLL_INTERVAL=0 fm_test_run_spawn "$dir/home" "$dir/wt" "$fakebin" "$id" "$dir/project" agy --model gemini-3.8-flash-high --mode no-mistakes --yolo off); rc=$?
+  expect_code 1 "$rc" "agy spawn must not accept unobserved composer borders"
+  assert_contains "$out" 'did not clear the project-trust gate' "unobserved borders must not clear agy trust"
+  [ "$(wc -l < "$dir/keys")" -eq 1 ] || fail "unobserved borders must not cause another trust answer"
+  rm -rf "$dir"
+  pass "fm-spawn: agy rejects unobserved composer-border spellings"
+}
 test_agy_secondmate_refusal() {
   local rec dir fakebin mode id out rc sm
   rec=$(make_agy_spawn_case secondmate clear); IFS='|' read -r dir fakebin mode id <<<"$rec"
@@ -123,5 +135,6 @@ test_agy_launch_and_trust_gate
 test_agy_trust_gate_clears_on_123_mid_turn
 test_agy_trust_gate_clears_on_123_idle
 test_agy_trust_gate_fails_bounded
+test_agy_trust_gate_rejects_unobserved_composer_borders
 test_agy_secondmate_refusal
 echo "ALL PASS: fm-agy-harness"
