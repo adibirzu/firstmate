@@ -574,15 +574,18 @@ test_cursor_spawn_fails_when_seeded_brief_starts_no_turn() {
   rec=$(make_spawn_case profile-cursor-no-turn cursor "$id")
   read_case_record "$rec"
 
+  # A composer that never clears is refused by the pre-submit readiness gate
+  # (before any brief is typed), not by the submit confirmation after it.
   out=$(FM_FAKE_TMUX_COMPOSER=pending FM_CURSOR_SUBMIT_RETRIES=1 \
     FM_CURSOR_SUBMIT_SLEEP=0 FM_CURSOR_SUBMIT_SETTLE=0 \
+    FM_CURSOR_READY_POLLS=3 FM_CURSOR_POLL_INTERVAL=0.01 \
     run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
       --model cursor-grok-4.5-high --effort high)
   status=$?
   expect_code 1 "$status" "cursor spawn must fail when the seeded brief starts no turn"
-  assert_contains "$out" "cursor seeded brief did not start a confirmed first turn" \
-    "cursor no-turn failure did not explain the bounded first-turn failure"
-  assert_grep "failed: cursor seeded brief did not start a confirmed first turn" \
+  assert_contains "$out" "cursor did not reach a ready composer" \
+    "cursor no-turn failure did not explain the bounded readiness failure"
+  assert_grep "failed: cursor did not reach a ready composer" \
     "$HOME_DIR/state/$id.status" "cursor no-turn failure did not append a task status"
   pass "cursor spawn refuses a zero-turn worker instead of reporting spawned"
 }

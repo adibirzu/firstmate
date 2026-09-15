@@ -16,7 +16,7 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 | Skill invocation | `/<skill>`, for example `/no-mistakes`; Cursor discovers Firstmate's user skills. |
 | Resume | No verified native pane resume; use deterministic relaunch. |
 | Autonomy | `--yolo`, documented alias for `--force`; footer `Run Everything`. |
-| Trust | `--trust` suppresses the dialog; `--yolo` does not, and every task has a fresh path. |
+| Trust | `--trust` suppresses the dialog; `--yolo` does not, and every task has a fresh path. Spawn additionally pre-seeds `.workspace-trusted` (unless the workspace is already claimed) and gates the seeded-brief submit on a proven-ready composer, answering a residual trust dialog once with `a` and the 2026.09 sandbox intro once with `u`, failing loudly on any other gate screen. |
 | Marker | `CURSOR_INVOKED_AS=cursor-agent` on agent and children, plus `CURSOR_AGENT=1` on child or tool processes; other `CURSOR_*` variables are not identity markers. |
 | Effort | No verified flag; `references/common/model-and-effort.md` owns unsupported-value handling. |
 | Composer | Bare borderless row with `→` (U+2192); de-emphasized placeholders `Plan, search, build anything` when fresh and `Add a follow-up` later. |
