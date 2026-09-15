@@ -1,0 +1,19 @@
+ok - a healthy worker is never relaunched by fallback: no evidence, no action
+ok - plan delegates depletion and the step-down decision to the router
+ok - firstmate's own paused: bookkeeping is never read as depletion evidence
+ok - filtering paused: bookkeeping never hides genuine evidence that follows it
+ok - an exhausted router chain exits 3 without improvising a model
+ok - an absent router refuses loudly rather than improvising a step-down
+ok - refuses a secondmate; its recovery is a different owner
+ok - apply relaunches in place with the next model, logs the downgrade, records the provider, and consumes the evidence
+ok - the same evidence can never trigger a second step-down
+ok - new depletion evidence after the cursor is actioned again
+ok - when the relaunch fails, the evidence stays unconsumed for the retry supervisor
+ok - full exhaustion consumes evidence before blocking, and never blocks twice on it
+ok - the fallback cursor rewrite preserves the trailing PR identity block without duplicating the cursor
+ok - over the real handoff path, fallback preserves the worktree and work while stepping the model down
+ok - the hosted-region opt-in refusal classifies as depletion even when the router reports none
+ok - the refusal auto-moves in place within the dispatched lane with the same visibility and cursor semantics
+ok - partial refusal wording never triggers a step-down on its own
+ok - an already-classified depletion keeps the router's signature
+All fm-model-fallback tests passed.

@@ -1,0 +1,7 @@
+action=harness-step
+task=live-refusal
+harness=agy
+from_model=gemini-3.7-flash-high
+to_model=gemini-3.8-flash
+signature="hosted-region opt-in refusal"
+fixture=/tmp/fm-live-model-fallback.lcJHR2

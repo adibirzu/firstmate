@@ -1,0 +1,1 @@
+{"local_qwen_profile":{"harness":"opencode","model":"vllm/qwen3.8-flash"},"trigger":"The task handles sensitive data that must stay on local infrastructure, is a long-duration run, or paid-quota headroom is low and the work fits a fast local lane."}

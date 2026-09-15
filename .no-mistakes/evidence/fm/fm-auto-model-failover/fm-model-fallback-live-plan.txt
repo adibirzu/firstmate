@@ -1,0 +1,4 @@
+$ FM_HOME=<isolated> bin/fm-model-fallback.sh refusal-live plan
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+$ FM_HOME=<isolated> bin/fm-model-fallback.sh task-content-live plan
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
