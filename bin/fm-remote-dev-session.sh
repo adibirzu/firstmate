@@ -152,6 +152,9 @@ esac
 if [ "$ACTION" = list ] && [ -n "$STATION" ]; then
   die "'list' does not take a station"
 fi
+if [ "$PRINT" -eq 1 ] && [ "$REPAIR" -eq 1 ]; then
+  die "--print cannot be combined with --repair"
+fi
 
 # --- record listing (no station needed) -------------------------------------
 
@@ -360,7 +363,7 @@ readiness_repair() {  # <local> <route>
 }
 
 print_gap_lines() {
-  printf '%s\n' "$doctor_output" | sed -n 's/^\(check .*\|action: .*\|required .*\)$/\1/p' >&2
+  printf '%s\n' "$doctor_output" | awk '/^(check|action:|required) /' >&2
 }
 
 # --- endpoint liveness ------------------------------------------------------
@@ -489,9 +492,25 @@ case "$ACTION" in
   attach)
     load_record_if_present
     if [ -f "$RECORD_PATH" ]; then
+      record_station=$(record_field station || true)
+      record_local=$(record_field local || true)
+      record_host=$(record_field host || true)
       RESOLVED_BACKEND=$(record_field backend || true)
       RESOLVED_SESSION=$(record_field session || true)
-      ATTACH_COMMAND=$(record_field attach_command || true)
+      recorded_attach_command=$(record_field attach_command || true)
+      [ "$record_station" = "$STATION" ] \
+        || fail "continuity record station does not match $STATION"
+      [ "$record_local" = "$STATION_LOCAL" ] && [ "$record_host" = "$STATION_HOST" ] \
+        || fail "continuity record route does not match station $STATION"
+      fm_rds_backend_known "$RESOLVED_BACKEND" \
+        || fail "continuity record has an unknown backend"
+      case "$RESOLVED_SESSION" in
+        ''|*[!A-Za-z0-9._-]*) fail "continuity record has an invalid session name" ;;
+      esac
+      ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION") \
+        || fail "continuity record has an invalid attach target"
+      [ "$recorded_attach_command" = "$ATTACH_COMMAND" ] \
+        || fail "continuity record attach command does not match its validated fields"
     fi
     [ -n "$ATTACH_COMMAND" ] || fail "no attach command could be resolved for station $STATION"
     if [ "$EXEC" -eq 1 ]; then
@@ -529,6 +548,8 @@ if [ "$TARGET_KIND" = secondmate ]; then
     "$STATION"|"$STATION"-*) ;;
     *) fail "$TARGET_ID is registered on ${SECONDMATE_REGISTRY_HOST}, not station $STATION" ;;
   esac
+  [ "$RESOLVED_BACKEND" = herdr ] \
+    || fail "remote second mates require the herdr backend"
   [ -n "$PROJECT" ] || PROJECT=$TARGET_ID
 else
   [ -f "$STATE/$TARGET_ID.meta" ] || fail "no task record for $TARGET_ID at $STATE/$TARGET_ID.meta"

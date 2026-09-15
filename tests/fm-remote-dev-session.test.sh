@@ -275,6 +275,37 @@ test_repair_rechecks_read_only_and_never_trusts_the_repair() {
   pass "repair runs then re-checks read-only, and a failed repair still refuses"
 }
 
+test_print_rejects_repair_without_mutating_the_station() {
+  local home repo status out fmon
+  home=$(make_home print-repair)
+  repo=$(make_repo "$home" alpha)
+  use_branch "$repo" fm/t1
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  fmon="$home/fmon.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_FMON_LOG="$fmon" \
+    open adi2 --task t1 --project alpha --print --repair)
+  expect_code 2 "$status" "print with repair must be invalid use"
+  assert_absent "$fmon" "print with repair must not contact the remote doctor"
+  pass "print rejects repair before it can mutate the remote station"
+}
+
+test_remote_secondmate_refuses_the_tmux_backend() {
+  local home status out
+  home=$(make_home mate-tmux)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" infra-remote herdr "$home/projects/missing" 'kind=secondmate'
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" open adi2 --secondmate infra-remote --backend tmux)
+  expect_code 1 "$status" "a remote secondmate must refuse tmux"
+  assert_contains "$(cat "$out")" 'require the herdr backend' \
+    "the remote secondmate backend restriction was not reported"
+  pass "remote secondmates refuse the incompatible tmux backend"
+}
+
 test_tmux_backend_is_explicit_and_renders_an_equivalent_attach() {
   local home repo status out rec
   home=$(make_home tmux)
@@ -610,6 +641,26 @@ test_status_and_attach_read_the_record() {
   pass "status and attach read the durable record and a malformed record refuses"
 }
 
+test_attach_refuses_a_tampered_command() {
+  local home repo status out rec marker
+  home=$(make_home attach-tamper)
+  repo=$(make_repo "$home" alpha)
+  use_branch "$repo" fm/t1
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  marker="$home/ran-untrusted-command"
+
+  run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    open adi2 --task t1 --project alpha >/dev/null
+  rec="$home/state/remote-dev-sessions/adi2.session"
+  sed -i '' "s|^attach_command=.*|attach_command=touch\\ $marker|" "$rec"
+  status=$(run_cmd "$home" "$out" attach adi2 --exec)
+  expect_code 1 "$status" "a tampered attach command must refuse"
+  assert_absent "$marker" "attach --exec ran the untrusted record command"
+  pass "attach verifies the persisted command before executing it"
+}
+
 test_list_reports_records() {
   local home repo status out
   home=$(make_home list)
@@ -681,9 +732,11 @@ test_dead_task_endpoint_relaunches_through_the_control_plane
 test_dead_secondmate_endpoint_relaunches_through_fm_spawn
 test_a_readiness_gap_refuses_with_the_doctor_text
 test_repair_rechecks_read_only_and_never_trusts_the_repair
+test_print_rejects_repair_without_mutating_the_station
 test_tmux_backend_is_explicit_and_renders_an_equivalent_attach
 test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
+test_remote_secondmate_refuses_the_tmux_backend
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
 test_idle_remote_secondmate_attaches_without_relaunch
@@ -696,6 +749,7 @@ test_a_stale_base_refuses
 test_a_branch_already_landed_refuses
 test_recover_is_idempotent_and_inherits_the_recorded_target
 test_status_and_attach_read_the_record
+test_attach_refuses_a_tampered_command
 test_list_reports_records
 test_invalid_use_refuses
 test_a_task_without_a_record_refuses

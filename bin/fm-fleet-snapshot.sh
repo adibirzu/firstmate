@@ -231,6 +231,9 @@ esac
 # shellcheck source=bin/fm-backend.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-remote-dev-session-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-remote-dev-session-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
@@ -2005,14 +2008,16 @@ scout_report_lines() {
 # bin/fm-remote-dev-session.sh. The record schema is owned by
 # docs/remote-dev-sessions.md; this collector only projects it.
 remote_dev_sessions_json() {
-  local dir="$STATE/remote-dev-sessions" f one out='[]'
+  local dir="$STATE/remote-dev-sessions" f canonical one out='[]'
   if [ ! -d "$dir" ]; then
     jq -n '[]'
     return 0
   fi
   for f in "$dir"/*.session; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
-    one=$(jq -Rn '[inputs | capture("^(?<k>[^=]*)=(?<v>.*)$") | {(.k): .v}] | add' < "$f" 2>/dev/null) || continue
+    canonical=$(fm_rds_record_read "$f" 2>/dev/null) || continue
+    one=$(printf '%s\n' "$canonical" \
+      | jq -Rn '[inputs | capture("^(?<k>[^=]*)=(?<v>.*)$") | {(.k): .v}] | add') || continue
     [ -n "$one" ] && [ "$one" != null ] || continue
     out=$(printf '%s\n%s\n' "$out" "$one" | jq -cs '.[0] + [.[1]]') || continue
   done

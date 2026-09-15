@@ -154,6 +154,22 @@ test_empty_fleet_json() {
   pass "empty fleet snapshot and view use explicit absence markers"
 }
 
+test_snapshot_omits_malformed_remote_dev_session_records() {
+  local home out record
+  home=$(make_home invalid-remote-dev-session)
+  mkdir -p "$home/state/remote-dev-sessions"
+  record="$home/state/remote-dev-sessions/adi2.session"
+  printf '%s\n' \
+    'schema=fm-remote-dev-session.v1' \
+    'station=adi2' \
+    'station=other' > "$record"
+
+  out=$(FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '.remote_dev_sessions == []' >/dev/null \
+    || fail "snapshot projected an invalid continuity record: $out"
+  pass "snapshot omits malformed remote development session records"
+}
+
 test_fixture_snapshot_json() {
   local home fakebin out ids
   home=$(make_home fixture)
@@ -1204,6 +1220,7 @@ test_view_reads_release_manifest_seam() {
 }
 
 test_empty_fleet_json
+test_snapshot_omits_malformed_remote_dev_session_records
 test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory
 test_undated_captain_hold_phrasing_and_aging
