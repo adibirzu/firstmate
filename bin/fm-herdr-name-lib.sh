@@ -2,14 +2,31 @@
 # fm-herdr-name-lib.sh - the single owner of the Herdr session DISPLAY NAME.
 #
 # Every herdr task tab firstmate creates is labelled with a configurable
-# prefix followed by the project and the task:
-#   <prefix>-<project>-<task-id>
+# prefix followed by the owning firstmate home, the project, and the task:
+#   <prefix>-[<host>-][<owner>-]<project>-<task-id>
 # where the prefix defaults to `adix` (the captain's own words).
 # A host segment is inserted after the prefix ONLY when this home has an
 # explicit host token configured, so most tabs stay short:
 #   adix-firstmate-herdr-session-naming      (no host configured)
 #   adix-adi1-firstmate-herdr-session-naming (config/herdr-session-host=adi1)
-#   adix-lifeos-adi1                          (the lifeos-adi1 secondmate itself)
+#   adix-adi1-2m-lifeos-adi1-fix-sidebar-view (a mate-launched task)
+#   adix-firstmate-lifeos-adi1                (the lifeos-adi1 secondmate itself,
+#                                              launched by the primary)
+#
+# The owner names the firstmate home that launched the tab (`firstmate` for
+# the primary home, `2m-<secondmate-id>` for a secondmate home), so one tab
+# strip answers which firstmate runs each agent without cross-referencing the
+# sidebar. A secondmate agent's own tab therefore carries its launcher
+# (`adix-firstmate-<id>`), while a crewmate its mate launched carries the
+# mate (`adix-2m-<id>-<project>-<task>`). The project names the ship under
+# work and the task segment names the work itself. Herdr right-truncates each sidebar token
+# with an ellipsis (measured on 0.9.0: a 26-column default sidebar, 18
+# minimum, 36 maximum, auto-scaling with workspace names), so the fixed fleet
+# head (prefix, owner) always precedes the variable work tail: a truncated tab
+# still names the fleet and the owning firstmate.
+#
+# An absent or empty owner keeps the legacy `<prefix>-[<host>-]<project>-<task>`
+# shape byte-identical, so older callers and recorded labels keep working.
 #
 # This label is a DISPLAY name only. Task identity, endpoint resolution,
 # supervision, teardown, and recovery keep using the recorded
@@ -27,6 +44,11 @@
 #             from the label, so a plain home never carries a host segment.
 #             config/herdr-session-host is LOCAL and deliberately NOT inherited:
 #             which machine a home runs on is a property of that machine.
+#   owner   - the firstmate home that launched the tab (`firstmate` for the
+#             primary home, `2m-<secondmate-id>` for a secondmate home).
+#             bin/fm-spawn.sh passes its own workspace label. Empty keeps the
+#             legacy owner-less shape. Sits after the host so Herdr's
+#             right-truncation eats the work tail before the fleet head.
 #   project - the registered project name (the project clone's directory name),
 #             `firstmate` for a firstmate-repo task, or the secondmate id for a
 #             secondmate agent.
@@ -34,8 +56,10 @@
 #             firstmate task id does not repeat that prefix.
 #
 # A segment equal to the segment immediately before it is dropped, so a
-# secondmate agent (project == task id) renders `adix-<id>` rather than
-# `adix-<id>-<id>`.
+# primary-home firstmate-repo task (owner == project == `firstmate`) renders
+# `adix-firstmate-<task>` rather than repeating itself, and a secondmate
+# agent (project == task id) renders `adix-<owner>-<id>` rather than
+# `adix-<owner>-<id>-<id>`.
 #
 # No side effects on source. set -u / set -e safe.
 
@@ -99,17 +123,23 @@ fm_herdr_name_task_segment() {  # <task-id>
   printf '%s' "${id#fm-}"
 }
 
-# fm_herdr_name_label <prefix> <host> <project> <task-id>: compose the display
-# label. Each segment is sanitized; an empty host is omitted; a segment equal
-# to the one before it is dropped.
-fm_herdr_name_label() {  # <prefix> <host> <project> <task-id>
-  local prefix host project task seg out='' prev=''
+# fm_herdr_name_label <prefix> <host> <project> <task-id> [<owner>]: compose
+# the display label. Each segment is sanitized; an empty host is omitted; an
+# empty owner keeps the legacy owner-less shape byte-identical; a segment
+# equal to the one before it is dropped.
+fm_herdr_name_label() {  # <prefix> <host> <project> <task-id> [<owner>]
+  local prefix host owner project task seg out='' prev=''
+  local -a segments=()
   prefix=$(fm_herdr_name_sanitize "${1:-}")
   host=$(fm_herdr_name_sanitize "${2:-}")
   project=$(fm_herdr_name_sanitize "${3:-}")
   task=$(fm_herdr_name_sanitize "$(fm_herdr_name_task_segment "${4:-}")")
+  owner=$(fm_herdr_name_sanitize "${5:-}")
   [ -n "$prefix" ] || prefix=$FM_HERDR_NAME_DEFAULT_PREFIX
-  for seg in "$prefix" "$host" "$project" "$task"; do
+  segments=("$prefix" "$host")
+  [ -n "$owner" ] && segments+=("$owner")
+  segments+=("$project" "$task")
+  for seg in "${segments[@]}"; do
     [ -n "$seg" ] || continue
     [ "$seg" = "$prev" ] && continue
     if [ -z "$out" ]; then out=$seg; else out="$out-$seg"; fi
@@ -118,12 +148,14 @@ fm_herdr_name_label() {  # <prefix> <host> <project> <task-id>
   printf '%s' "$out"
 }
 
-# fm_herdr_name_label_for <config-dir> <kind> <task-id> <project-dir>: the
-# one-call composer bin/fm-spawn.sh uses. <kind> is the spawn kind (`secondmate`
-# or anything else); <project-dir> is the resolved project directory for a
-# crewmate/scout and is ignored for a secondmate, whose project is its own id.
-fm_herdr_name_label_for() {  # <config-dir> <kind> <task-id> <project-dir>
-  local config_dir=${1:-} kind=${2:-} id=${3:-} project_dir=${4:-} project prefix host
+# fm_herdr_name_label_for <config-dir> <kind> <task-id> <project-dir> [<owner>]:
+# the one-call composer bin/fm-spawn.sh uses. <kind> is the spawn kind
+# (`secondmate` or anything else); <project-dir> is the resolved project
+# directory for a crewmate/scout and is ignored for a secondmate, whose
+# project is its own id. <owner> is the launching firstmate home's workspace
+# label (`firstmate`, `2m-<id>`); empty keeps the legacy owner-less shape.
+fm_herdr_name_label_for() {  # <config-dir> <kind> <task-id> <project-dir> [<owner>]
+  local config_dir=${1:-} kind=${2:-} id=${3:-} project_dir=${4:-} owner=${5:-} project prefix host
   if [ "$kind" = secondmate ]; then
     project=$id
   else
@@ -131,7 +163,7 @@ fm_herdr_name_label_for() {  # <config-dir> <kind> <task-id> <project-dir>
   fi
   prefix=$(fm_herdr_name_prefix "$config_dir")
   host=$(fm_herdr_name_host_optional "$config_dir")
-  fm_herdr_name_label "$prefix" "$host" "$project" "$id"
+  fm_herdr_name_label "$prefix" "$host" "$project" "$id" "$owner"
 }
 
 # fm_herdr_name_seed_host_config <home> <token>: write the sanitized token into

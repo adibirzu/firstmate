@@ -861,7 +861,7 @@ spawn_remote_secondmate() {
   # Hand the remote host this route's registry host token; its launch seeds the
   # remote home's config/herdr-session-host when absent, so the secondmate's tab
   # and every crewmate/scout it later spawns share one `adix-[<host>-]...` host
-  # segment (bin/fm-herdr-name-lib.sh).
+  # segment alongside the launcher-owner segment (bin/fm-herdr-name-lib.sh).
   launch_args+=(--herdr-host "$host")
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" < /dev/null 2>&1); then
@@ -3096,15 +3096,18 @@ fi
 
 W="fm-$ID"
 # Herdr's visible per-task label is the display name
-# `<prefix>-[<host>-]<project>-<task-id>` (bin/fm-herdr-name-lib.sh). It applies
-# to a freshly CREATED task tab only: an adopted endpoint keeps the label it was
-# created with, and recovery of an existing presentation journal reuses the label
-# recorded in that journal, so no live session is renamed or restarted. `fm-<id>`
-# stays the adapter's identity anchor, passed alongside as the legacy alias for
-# husk replacement.
+# `<prefix>-[<host>-][<owner>-]<project>-<task-id>`
+# (bin/fm-herdr-name-lib.sh). The owner is this launcher's own workspace label
+# (`firstmate`, `2m-<id>`), so one tab names the ship, the owning firstmate,
+# and the work. It applies to a freshly CREATED task tab only: an adopted
+# endpoint keeps the label it was created with, and recovery of an existing
+# presentation journal reuses the label recorded in that journal, so no live
+# session is renamed or restarted. `fm-<id>` stays the adapter's identity
+# anchor, passed alongside as the legacy alias for husk replacement.
 HERDR_TASK_LABEL=$W
 if [ "$BACKEND" = herdr ]; then
-  HERDR_TASK_LABEL=$(fm_herdr_name_label_for "$CONFIG" "$KIND" "$ID" "$PROJ_ABS")
+  HERDR_OWNER_LABEL=$(fm_backend_herdr_workspace_label)
+  HERDR_TASK_LABEL=$(fm_herdr_name_label_for "$CONFIG" "$KIND" "$ID" "$PROJ_ABS" "$HERDR_OWNER_LABEL")
 fi
 if [ "$REUSE_WORKTREE" = 1 ] && [ -n "$REUSE_OLD_TARGET" ] && [ "${REUSE_OLD_STATE:-}" != "missing" ]; then
   # Adopt the recorded endpoint instead of creating one. This is what keeps a
