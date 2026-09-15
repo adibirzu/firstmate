@@ -22,7 +22,6 @@ set -u
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
-SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-cursor-submit-confirm)
 
 # --- fixture screens (vendor text, shared by every section) ------------------
@@ -468,7 +467,7 @@ EOF
 # needs a live server and is opt-in like the rest of the live-harness family.
 
 test_real_tmux_submit_unknown_and_cleanup() {
-  local dir verdict windows waited=0 echoed=0 wid
+  local dir verdict windows waited=0 wid
   command -v tmux >/dev/null 2>&1 \
     || { pass "skip: tmux not installed (real-backend cleanup has nothing to drive)"; return 0; }
   dir="$TMP_ROOT/real-tmux"
