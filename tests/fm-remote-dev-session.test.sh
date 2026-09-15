@@ -770,6 +770,13 @@ test_recover_preserves_recorded_backend_and_session() {
   assert_grep 'session=custom-session' "$rec" "recover replaced the recorded session"
   assert_contains "$(cat "$out")" 'tmux attach -t custom-session' \
     "recover did not render the recorded tmux session"
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    recover adi2 --task t1)
+  expect_code 0 "$status" "explicit-target recover exit"
+  assert_grep 'backend=tmux' "$rec" "explicit-target recover replaced the recorded backend"
+  assert_grep 'session=custom-session' "$rec" "explicit-target recover replaced the recorded session"
+  assert_contains "$(cat "$out")" 'tmux attach -t custom-session' \
+    "explicit-target recover did not render the recorded tmux session"
   pass "recover preserves its recorded backend and session without overrides"
 }
 

@@ -493,7 +493,7 @@ emit_outcome() {  # <action>
 # --- verbs ------------------------------------------------------------------
 
 resolve_station "$STATION"
-if [ "$ACTION" = recover ] && [ -z "$TARGET_ID" ]; then
+if [ "$ACTION" = recover ]; then
   load_record_if_present
   if [ -f "$RECORD_PATH" ]; then
     RECOVERY_BACKEND=$(record_field backend || true)
