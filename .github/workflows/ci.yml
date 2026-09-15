@@ -47,8 +47,9 @@ jobs:
   tests-portable-parallel-1:
     name: Behavior portable parallel 1
     runs-on: ubuntu-latest
-    # Measured shard wall is ~1 min of serial sum on proven scripts; this cap is
-    # a hang tripwire with margin, not the expected healthy end of the lane.
+    # Each balanced shard carries ~7.5 min of CI-measured script time, so this
+    # cap is a hang tripwire with margin, not the expected healthy end of the
+    # lane. Balance evidence: docs/fm-test-portable-shards.md.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
