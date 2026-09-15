@@ -2321,8 +2321,11 @@ effort_flag_for_harness() {
 # project?" dialog on every launch into a worktree it has never seen. --yolo /
 # --dangerously-skip-permissions does NOT cover it, so firstmate answers it once
 # (Enter accepts the default "Yes, I trust this folder") and confirms the pane
-# reached a past-trust anchor (busy footer or the idle "? for shortcuts" bar)
-# before treating the spawn as ready. Verified: docs/verification/agy-adapter.md.
+# reached a past-trust anchor before treating the spawn as ready. The anchors
+# are the 1.1.9 footers ("esc to cancel", "? for shortcuts"), the 1.2.x busy
+# body ("Running..." / "Running command...", whose footers no longer carry the
+# old tokens), and the empty composer row (bordered "│ > │" or bare ">"), none
+# of which matches the dialog body. Verified: docs/verification/agy-adapter.md.
 agy_capture() {
   fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
 }
@@ -2332,7 +2335,7 @@ agy_trust_dialog_present() {  # <plain-pane-capture>
 }
 
 agy_pane_is_past_trust() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts'
+  printf '%s\n' "$1" | grep -Eq 'esc to cancel|\? for shortcuts|Running.*\.\.\.|^[[:space:]]*(│|┃|\|)[[:space:]]*>[[:space:]]*(│|┃|\|)[[:space:]]*$|^[[:space:]]*>[[:space:]]*$'
 }
 
 agy_wait_for_trust_clear() {

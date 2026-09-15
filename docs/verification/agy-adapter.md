@@ -7,6 +7,11 @@ scratch directories under `/tmp/fm-agy-fresh.*` and `/tmp/fm-agy-verify.*`.
 This is the "confirm every fact empirically" record the `harness-adapters` skill
 requires before an adapter is wired. Every value below is a capture, not a guess;
 anything not directly observed is marked NOT VERIFIED.
+**Readiness-gate addendum (agy 1.2.3, 2026-09-15):** live scratch-pane captures
+(model `gemini-3.8-flash-high`, mid-turn, idle, and post-turn) show the 1.1.9
+past-trust footers no longer render, so the gate additionally accepts the 1.2.x
+busy body (`Running...` / `Running command...`) and the empty composer row
+(bordered `│ > │` or bare `>`).
 
 ## Binary and identity
 
@@ -75,8 +80,14 @@ Antigravity CLI requires permission to read, edit, and execute files here.
 
 Past-trust anchors (must not match the dialog itself):
 
-- mid-turn: `esc to cancel`
-- idle: `? for shortcuts`
+- mid-turn (1.1.9 footer): `esc to cancel`
+- idle (1.1.9 footer): `? for shortcuts`
+- mid-turn (1.2.x body): `Running...` / `Running command...`
+- idle (1.2.x composer): an empty composer row, bordered (`│ > │`) or bare (`>`)
+- The 1.2.x additions were verified absent from the recorded trust-dialog body
+(`grep -c` for each new anchor over the dialog capture returned 0), and the
+1.2.x busy and idle captures contain neither 1.1.9 footer, so past-trust-first
+ordering stays correct on both versions.
 
 Deliberately **not** the substring `Antigravity CLI` — it appears inside the dialog body.
 
@@ -113,9 +124,11 @@ agent auto-runs the first turn. Verified capture: seeded brief
 |---|---|
 | Busy (generating) | braille spinner + `Generating...`; footer `esc to cancel` |
 | Busy (tool) | braille spinner + `Running...`; footer `esc to cancel`; tool lines like `● Bash(...)` |
+| Busy, 1.2.x (tool) | braille spinner + `Running...` / `Running command...`; tool lines like `● Bash(...) (ctrl+o to expand)` plus `└ Tip: ...` lines; no `esc to cancel` footer |
 | Idle | footer `? for shortcuts`; status `Gemini 3.6 Flash · low` |
+| Idle, 1.2.x | bordered composer box with a bare `>` and no placeholder text; no `? for shortcuts` footer |
 
-`esc to cancel` is the stable mid-turn token and clears the instant the turn ends.
+`esc to cancel` is the stable 1.1.9 mid-turn token and clears the instant the turn ends.
 No firstmate-owned semantic busy writer is wired yet for this adapter: delivery
 busy comes from `fm-tmux-lib.sh`, and task-state classification remains
 `unknown missing` until a lifecycle source is credited. Hooks exist (`Stop`,
@@ -183,6 +196,8 @@ tests/fm-agy-harness.test.sh
 
 That test pins the launch template, the model/effort resolution matrix
 (including the `xhigh`/`max` clamp-versus-withhold split), the trust-gate
-ordering and single-Enter budget, the harness-scoped busy token, detection
+ordering and single-Enter budget, the 1.2.x readiness fixtures (mid-turn
+`Running command...`, idle bare composer, and the bounded dialog-persist
+failure), the harness-scoped busy token, detection
 precedence ahead of `CLAUDECODE`, and the secondmate refusal on all three
 harness-resolution paths.

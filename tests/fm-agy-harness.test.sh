@@ -35,7 +35,12 @@ case "${1:-}" in
   send-keys) if [ "${!#}" = Enter ]; then [ "$(cat "$FM_AGY_CAPTURE_COUNT")" = 0 ] || printf '%s\n' Enter >> "$FM_AGY_KEYS"; else printf '%s\n' "$*" >> "$FM_AGY_LAUNCH"; fi ;;
   capture-pane)
     n=$(cat "$FM_AGY_CAPTURE_COUNT"); n=$((n + 1)); printf '%s\n' "$n" > "$FM_AGY_CAPTURE_COUNT"
-    if [ "$FM_AGY_MODE" = clear ] && [ "$n" -gt 1 ]; then printf '%s\n' '? for shortcuts Gemini 3.6 Flash · high'; else printf '%s\n' 'Do you trust the contents of this project?' '> Yes, I trust this folder'; fi ;;
+    case "$FM_AGY_MODE" in
+      clear) if [ "$n" -gt 1 ]; then printf '%s\n' '? for shortcuts Gemini 3.6 Flash · high'; else printf '%s\n' 'Do you trust the contents of this project?' '> Yes, I trust this folder'; fi ;;
+      clear-123-busy) if [ "$n" -gt 1 ]; then printf '%s\n' "$FM_AGY_123_BUSY"; else printf '%s\n' "$FM_AGY_123_DIALOG"; fi ;;
+      clear-123-idle) if [ "$n" -gt 1 ]; then printf '%s\n' "$FM_AGY_123_IDLE"; else printf '%s\n' "$FM_AGY_123_DIALOG"; fi ;;
+      *) printf '%s\n' "${FM_AGY_123_DIALOG:-Do you trust the contents of this project?}";;
+    esac ;;
 esac
 SH
   chmod +x "$fakebin/tmux"
@@ -44,6 +49,19 @@ SH
   fm_test_spawn_brief "$dir/home" "agy-$name"
   printf '0\n' > "$dir/count"; : > "$dir/keys"; : > "$dir/launch"
   printf '%s|%s|%s|%s\n' "$dir" "$fakebin" "$mode" "agy-$name"
+}
+# Recorded agy 1.2.3 pane shapes (live scratch-pane captures, model
+# gemini-3.8-flash-high). The 1.1.9 footers never render there, so each fixture
+# below deliberately carries no 1.1.9 anchor: the gate must clear on the new
+# signals alone, which keeps this regression from going quietly vacuous.
+agy_123_busy_capture() {
+  printf '%s\n' '⠋ Running command...' '● Bash(echo working: >> state/x.status) (ctrl+o to expand)' '└ Tip: press ctrl+o to expand tool output' '' '╭──────────────────╮' '│ >                │' '╰──────────────────╯'
+}
+agy_123_idle_capture() {
+  printf '%s\n' 'gemini-3.8-flash-high' '' '╭──────────────────╮' '│ >                │' '╰──────────────────╯'
+}
+agy_trust_dialog_capture() {
+  printf '%s\n' 'Accessing workspace:' '' '/tmp/fm-agy-fresh.TO2lcN' '' 'Do you trust the contents of this project?' '' 'Antigravity CLI requires permission to read, edit, and execute files here.' '' '> Yes, I trust this folder' '  No, exit' '' '  Navigate · enter Confirm'
 }
 test_agy_launch_and_trust_gate() {
   local rec dir fakebin mode id out rc
@@ -54,6 +72,39 @@ test_agy_launch_and_trust_gate() {
   assert_contains "$(cat "$dir/launch")" '--effort high' "agy xhigh launch must clamp to high"
   rm -rf "$dir"
   pass "fm-spawn: agy launches with supported effort and clears trust once"
+}
+test_agy_trust_gate_clears_on_123_mid_turn() {
+  local rec dir fakebin mode id out rc busy dialog
+  busy=$(agy_123_busy_capture); dialog=$(agy_trust_dialog_capture)
+  if printf '%s\n' "$busy" | grep -Eq 'esc to cancel|\? for shortcuts'; then fail "1.2.3 busy fixture must not carry a 1.1.9 anchor"; fi
+  rec=$(make_agy_spawn_case 123-busy clear-123-busy); IFS='|' read -r dir fakebin mode id <<<"$rec"
+  out=$(FM_AGY_MODE="$mode" FM_AGY_CAPTURE_COUNT="$dir/count" FM_AGY_KEYS="$dir/keys" FM_AGY_LAUNCH="$dir/launch" FM_AGY_123_BUSY="$busy" FM_AGY_123_DIALOG="$dialog" FM_AGY_TRUST_POLLS=4 FM_AGY_POLL_INTERVAL=0 fm_test_run_spawn "$dir/home" "$dir/wt" "$fakebin" "$id" "$dir/project" agy --model gemini-3.8-flash-high --mode no-mistakes --yolo off); rc=$?
+  expect_code 0 "$rc" "agy spawn should recognize the 1.2.3 mid-turn pane: $out"
+  [ "$(wc -l < "$dir/keys")" -eq 1 ] || fail "agy trust must send Enter once"
+  rm -rf "$dir"
+  pass "fm-spawn: agy clears trust on the 1.2.3 Running command pane"
+}
+test_agy_trust_gate_clears_on_123_idle() {
+  local rec dir fakebin mode id out rc idle dialog
+  idle=$(agy_123_idle_capture); dialog=$(agy_trust_dialog_capture)
+  if printf '%s\n' "$idle" | grep -Eq 'esc to cancel|\? for shortcuts'; then fail "1.2.3 idle fixture must not carry a 1.1.9 anchor"; fi
+  rec=$(make_agy_spawn_case 123-idle clear-123-idle); IFS='|' read -r dir fakebin mode id <<<"$rec"
+  out=$(FM_AGY_MODE="$mode" FM_AGY_CAPTURE_COUNT="$dir/count" FM_AGY_KEYS="$dir/keys" FM_AGY_LAUNCH="$dir/launch" FM_AGY_123_IDLE="$idle" FM_AGY_123_DIALOG="$dialog" FM_AGY_TRUST_POLLS=4 FM_AGY_POLL_INTERVAL=0 fm_test_run_spawn "$dir/home" "$dir/wt" "$fakebin" "$id" "$dir/project" agy --model gemini-3.8-flash-high --mode no-mistakes --yolo off); rc=$?
+  expect_code 0 "$rc" "agy spawn should recognize the 1.2.3 idle composer pane: $out"
+  [ "$(wc -l < "$dir/keys")" -eq 1 ] || fail "agy trust must send Enter once"
+  rm -rf "$dir"
+  pass "fm-spawn: agy clears trust on the 1.2.3 bare-composer pane"
+}
+test_agy_trust_gate_fails_bounded() {
+  local rec dir fakebin mode id out rc dialog
+  dialog=$(agy_trust_dialog_capture)
+  rec=$(make_agy_spawn_case blocked blocked); IFS='|' read -r dir fakebin mode id <<<"$rec"
+  out=$(FM_AGY_MODE="$mode" FM_AGY_CAPTURE_COUNT="$dir/count" FM_AGY_KEYS="$dir/keys" FM_AGY_LAUNCH="$dir/launch" FM_AGY_123_DIALOG="$dialog" FM_AGY_TRUST_POLLS=2 FM_AGY_POLL_INTERVAL=0 fm_test_run_spawn "$dir/home" "$dir/wt" "$fakebin" "$id" "$dir/project" agy --model gemini-3.8-flash-high --mode no-mistakes --yolo off); rc=$?
+  expect_code 1 "$rc" "agy spawn must fail when the trust dialog persists"
+  assert_contains "$out" 'did not clear the project-trust gate' "agy trust failure was not explicit"
+  [ "$(wc -l < "$dir/keys")" -eq 1 ] || fail "persistent dialog must still send Enter once"
+  rm -rf "$dir"
+  pass "fm-spawn: agy fails a bounded trust dialog without matching it as ready"
 }
 test_agy_secondmate_refusal() {
   local rec dir fakebin mode id out rc sm
@@ -69,5 +120,8 @@ test_agy_secondmate_refusal() {
 test_agy_env_marker_takes_precedence
 test_agy_busy_and_composer_states
 test_agy_launch_and_trust_gate
+test_agy_trust_gate_clears_on_123_mid_turn
+test_agy_trust_gate_clears_on_123_idle
+test_agy_trust_gate_fails_bounded
 test_agy_secondmate_refusal
 echo "ALL PASS: fm-agy-harness"
