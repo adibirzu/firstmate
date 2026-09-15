@@ -7,11 +7,8 @@ scratch directories under `/tmp/fm-agy-fresh.*` and `/tmp/fm-agy-verify.*`.
 This is the "confirm every fact empirically" record the `harness-adapters` skill
 requires before an adapter is wired. Every value below is a capture, not a guess;
 anything not directly observed is marked NOT VERIFIED.
-**Readiness-gate addendum (agy 1.2.3, 2026-09-15):** live scratch-pane captures
-(model `gemini-3.8-flash-high`, mid-turn, idle, and post-turn) show the 1.1.9
-past-trust footers no longer render, so the gate additionally accepts the 1.2.x
-busy body (`Running...` / `Running command...`) and the empty composer row
-(bordered `│ > │` or bare `>`).
+**Readiness-gate addendum (agy 1.2.3, 2026-09-15):** Recorded pane fixtures for model `gemini-3.8-flash-high` show the 1.1.9 past-trust footers do not render in the 1.2.x mid-turn and idle states.
+The gate additionally accepts the 1.2.x busy body (`Running...` / `Running command...`) and empty composer row (bordered `│ > │` or bare `>`).
 
 ## Binary and identity
 

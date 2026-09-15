@@ -51,10 +51,9 @@ SH
   printf '0\n' > "$dir/count"; : > "$dir/keys"; : > "$dir/launch"
   printf '%s|%s|%s|%s\n' "$dir" "$fakebin" "$mode" "agy-$name"
 }
-# Recorded agy 1.2.3 pane shapes (live scratch-pane captures, model
-# gemini-3.8-flash-high). The 1.1.9 footers never render there, so each fixture
-# below deliberately carries no 1.1.9 anchor: the gate must clear on the new
-# signals alone, which keeps this regression from going quietly vacuous.
+# Recorded agy 1.2.3 pane fixtures use model gemini-3.8-flash-high.
+# The 1.1.9 footers never render there.
+# Each fixture deliberately carries no 1.1.9 anchor, so the gate must clear on the new signals alone.
 agy_123_busy_capture() {
   printf '%s\n' '⠋ Running command...' '● Bash(echo working: >> state/x.status) (ctrl+o to expand)' '└ Tip: press ctrl+o to expand tool output' '' '╭──────────────────╮' '│ >                │' '╰──────────────────╯'
 }
