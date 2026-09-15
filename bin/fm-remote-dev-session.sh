@@ -246,15 +246,29 @@ resolve_station() {  # <station>
 RESOLVED_BACKEND=
 RESOLVED_SESSION=
 ATTACH_COMMAND=
+RECOVERY_BACKEND=
+RECOVERY_SESSION=
 
 resolve_backend_and_session() {
   local rc=0
-  RESOLVED_BACKEND=$(fm_rds_resolve_backend "$BACKEND_FLAG" "$CONFIG/remote-dev-backend") || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    [ "$rc" -eq 2 ] && exit 2
-    fail "could not resolve the session backend"
+  if [ -n "$BACKEND_FLAG" ]; then
+    RESOLVED_BACKEND=$(fm_rds_resolve_backend "$BACKEND_FLAG" "$CONFIG/remote-dev-backend") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      [ "$rc" -eq 2 ] && exit 2
+      fail "could not resolve the session backend"
+    fi
+  elif [ -n "$RECOVERY_BACKEND" ]; then
+    RESOLVED_BACKEND=$RECOVERY_BACKEND
+    fm_rds_backend_known "$RESOLVED_BACKEND" \
+      || fail "continuity record has an unknown backend"
+  else
+    RESOLVED_BACKEND=$(fm_rds_resolve_backend '' "$CONFIG/remote-dev-backend") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      [ "$rc" -eq 2 ] && exit 2
+      fail "could not resolve the session backend"
+    fi
   fi
-  RESOLVED_SESSION=${SESSION_FLAG:-$SESSION_DEFAULT}
+  RESOLVED_SESSION=${SESSION_FLAG:-${RECOVERY_SESSION:-$SESSION_DEFAULT}}
   case "$RESOLVED_SESSION" in ''|*[!A-Za-z0-9._-]*) die "session name must be letters, digits, dot, underscore, or dash: $RESOLVED_SESSION" ;; esac
   ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION")
 }
@@ -376,6 +390,9 @@ endpoint_liveness() {  # <id>
   fi
   line=$(FM_HOME="$FM_HOME" fm_run_timed "$TIMEOUT" "$CREW_STATE" "$id" 2>/dev/null) || return 2
   state=$(printf '%s\n' "$line" | sed -n 's/^state: *\([a-z-]*\).*/\1/p' | head -1)
+  case "$line" in
+    *'source: remote-endpoint'*'remote endpoint alive on '*) return 0 ;;
+  esac
   case "$state" in
     working|parked|blocked) return 0 ;;
     done|failed) return 1 ;;
@@ -474,7 +491,20 @@ emit_outcome() {  # <action>
 # --- verbs ------------------------------------------------------------------
 
 resolve_station "$STATION"
-resolve_backend_and_session
+if [ "$ACTION" = recover ] && [ -z "$TARGET_ID" ]; then
+  load_record_if_present
+  if [ -f "$RECORD_PATH" ]; then
+    RECOVERY_BACKEND=$(record_field backend || true)
+    RECOVERY_SESSION=$(record_field session || true)
+  fi
+fi
+case "$ACTION" in
+  status) ;;
+  attach)
+    [ -f "$(fm_rds_record_path "$STATE" "$STATION")" ] || resolve_backend_and_session
+    ;;
+  *) resolve_backend_and_session ;;
+esac
 
 case "$ACTION" in
   status)
@@ -523,14 +553,6 @@ esac
 # is a no-op for the operator.
 load_record_if_present
 if [ -z "$TARGET_ID" ] && [ "$ACTION" = recover ] && [ -f "$RECORD_PATH" ]; then
-  if [ -z "$BACKEND_FLAG" ]; then
-    RESOLVED_BACKEND=$(record_field backend || true)
-  fi
-  if [ -z "$SESSION_FLAG" ]; then
-    RESOLVED_SESSION=$(record_field session || true)
-  fi
-  ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION") \
-    || fail "continuity record has an invalid attach target"
   recorded_id=$(record_field task_id || true)
   if [ -n "$recorded_id" ]; then
     if [ -f "$STATE/$recorded_id.meta" ] && [ "$(fm_rds_meta_value "$STATE/$recorded_id.meta" kind || true)" = secondmate ]; then

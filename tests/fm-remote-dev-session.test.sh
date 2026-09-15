@@ -424,6 +424,35 @@ test_idle_remote_secondmate_attaches_without_relaunch() {
   pass "a confirmed-alive idle remote secondmate attaches instead of relaunching"
 }
 
+test_remote_alive_terminal_status_attaches_without_relaunch() {
+  local home status out spawn meta
+  home=$(make_home mate-terminal-alive)
+  write_registry "$home" "$REMOTE_RECORD"
+  meta="$home/state/infra-remote.meta"
+  {
+    printf 'window=fm-remote:wK:p2\n'
+    printf 'endpoint_task_id=infra-remote\n'
+    printf 'worktree=/home/adi/.firstmate-infra\n'
+    printf 'project=infra-remote\n'
+    printf 'kind=secondmate\n'
+    printf 'spawn_gen=s999\n'
+    printf 'backend=herdr\n'
+    printf 'herdr_workspace_id=wK\nherdr_tab_id=wK:t2\nherdr_pane_id=wK:p2\n'
+  } > "$meta"
+  out="$home/out.txt"
+  spawn="$home/spawn.log"
+
+  status=$(run_cmd "$home" "$out" \
+    FM_TEST_CREW_STATE='state: done · source: remote-endpoint · terminal status · remote endpoint alive on adi2-ts' \
+    FM_TEST_SPAWN_LOG="$spawn" \
+    open adi2 --secondmate infra-remote)
+  expect_code 0 "$status" "remote-alive terminal secondmate attach exit"
+  assert_contains "$(cat "$out")" 'action=attached' \
+    "a remote-alive terminal secondmate was not attached"
+  assert_absent "$spawn" "a remote-alive endpoint must never relaunch through fm-spawn"
+  pass "remote endpoint evidence outranks a terminal status event"
+}
+
 test_remote_dead_secondmate_relaunches_through_fm_spawn() {
   local home status out control spawn meta
   home=$(make_home mate-remote-dead)
@@ -651,6 +680,33 @@ test_recover_preserves_recorded_backend_and_session() {
   pass "recover preserves its recorded backend and session without overrides"
 }
 
+test_record_driven_verbs_ignore_an_invalid_current_backend_config() {
+  local home repo status out
+  home=$(make_home record-route-config)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 tmux "$repo"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    open adi2 --task t1 --project alpha --backend tmux --session stored-session)
+  expect_code 0 "$status" "initial tmux record open exit"
+  printf 'bogus\n' > "$home/config/remote-dev-backend"
+
+  status=$(run_cmd "$home" "$out" status adi2)
+  expect_code 0 "$status" "status must read its valid record despite current config"
+  status=$(run_cmd "$home" "$out" attach adi2)
+  expect_code 0 "$status" "attach must use its valid record despite current config"
+  assert_contains "$(cat "$out")" 'tmux attach -t stored-session' \
+    "attach did not render the recorded route"
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    recover adi2)
+  expect_code 0 "$status" "recover must use its valid record despite current config"
+  assert_contains "$(cat "$out")" 'tmux attach -t stored-session' \
+    "recover did not retain the recorded route"
+  pass "record-driven verbs ignore invalid current backend configuration"
+}
+
 test_status_and_attach_read_the_record() {
   local home repo status out rec
   home=$(make_home read)
@@ -795,6 +851,7 @@ test_unregistered_remote_station_refuses
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
 test_idle_remote_secondmate_attaches_without_relaunch
+test_remote_alive_terminal_status_attaches_without_relaunch
 test_remote_dead_secondmate_relaunches_through_fm_spawn
 test_remote_missing_task_relaunches_through_the_control_plane
 test_uncertain_remote_endpoint_refuses_to_relaunch
@@ -804,6 +861,7 @@ test_a_stale_base_refuses
 test_a_branch_already_landed_refuses
 test_recover_is_idempotent_and_inherits_the_recorded_target
 test_recover_preserves_recorded_backend_and_session
+test_record_driven_verbs_ignore_an_invalid_current_backend_config
 test_status_and_attach_read_the_record
 test_incomplete_record_refuses_status
 test_attach_refuses_a_tampered_command
