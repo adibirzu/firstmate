@@ -411,12 +411,22 @@ fm_session_lock_owned_by_legacy_compatibility() {  # <state-dir>
 }
 
 # True when the current session owns state dir $1's lock. New-format records
-# prove Claude ownership with the session identity that survives worker-pool
-# reparenting. A PID-only record reaches only the temporary, logged migration
-# path above and can never be used to create a new lock.
+# prove ownership with the identity published when the lock was taken: a claude
+# session id that survives worker-pool reparenting, or the ancestry session pid
+# every other harness carries. A PID-only record reaches only the temporary,
+# logged migration path above and can never be used to create a new lock.
+#
+# One published field can be stale on a lock this session still owns: Claude
+# Code regenerates CLAUDE_CODE_SESSION_ID on /clear while the same harness
+# process keeps running and keeps the lock. In that case every earlier identity
+# check still holds - the recorded holder is this session's own live harness
+# pid, its kind matches, and that pid equals this session's own pid - so only
+# the session-id comparison is exempted, and only for a claude-kind binding.
+# Every other kind carries its session identity in its pid, so a session
+# mismatch there is a same-pid successor and still fails closed; so does a lock
+# recorded to a different live pid, and so does an unreadable session identity.
 fm_session_lock_owned_by_current_session() {  # <state-dir>
   local state=$1 lock_pid
-  state=$1
   if fm_session_lock_read_record "$state"; then
     fm_session_lock_prepare_acquisition_identity || return 1
     lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
@@ -424,7 +434,8 @@ fm_session_lock_owned_by_current_session() {  # <state-dir>
     fm_harness_pid_alive "$lock_pid" || return 1
     [ "$FM_SESSION_LOCK_OWNER_KIND" = "$FM_SESSION_LOCK_RECORD_KIND" ] || return 1
     [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
-    [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ]
+    [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ] && return 0
+    [ "$FM_SESSION_LOCK_RECORD_KIND" = claude ]
     return
   fi
   fm_session_lock_owned_by_legacy_compatibility "$state"
