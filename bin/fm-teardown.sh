@@ -3795,6 +3795,12 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  # A completed task changes the live fleet view, so refresh it on this
+  # existing completion boundary rather than adding a service. One guarded line
+  # into the one owner of the refresh contract (bin/fm-fleet-live.sh's header):
+  # `refresh --best-effort` refreshes only an already-recorded view tab, never
+  # opens one, and is a silent, bounded no-op on any failure or absence.
+  "${FM_FLEET_LIVE_BIN:-$SCRIPT_DIR/fm-fleet-live.sh}" refresh --best-effort >/dev/null 2>&1 || true
 fi
 # A completed ship or scout is a task boundary: queue a compact for this home's
 # own long-lived agent, which the watcher delivers at the next idle moment. A

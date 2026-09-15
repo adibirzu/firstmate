@@ -6,10 +6,22 @@
 # that tab's pane, so the rendered view (which already covers the local home and
 # every local or remote secondmate home plus their child agents) is visible in
 # the current Herdr session. It never parses state, never computes a summary,
-# and never arms a watcher, poll, or background loop; refresh is an explicit,
-# idempotent re-run driven by the caller (the supervision heartbeat or the
-# operator), matching the held fleet-view decision to regenerate on work already
-# happening rather than adding a daemon.
+# and never arms a watcher, poll, or background loop; refresh is an idempotent
+# idempotent re-run driven by the caller, matching the held fleet-view decision
+# to regenerate on work already happening rather than adding a daemon. The two
+# automatic callers are the supervision heartbeat in bin/fm-watch.sh and the
+# successful task-completion path in bin/fm-teardown.sh; both invoke
+# `refresh --best-effort` and cross-reference this header, which stays the one
+# owner of the refresh contract.
+#
+# `refresh --best-effort` is the non-disruptive automatic-trigger form. It
+# refreshes only an already-recorded tab, in the session that recorded it,
+# bounded by FM_FLEET_LIVE_TIMEOUT seconds (default 5). Every failure or
+# absence - no record, no herdr or jq, a session the record does not match, a
+# dead pane, a hung or failed refresh - is a silent no-op that prints nothing
+# and returns 0, so it never opens a tab, writes a wake or status line, or
+# delays or fails its caller. Plain `refresh` keeps the loud form for tests and
+# direct operator use.
 #
 # Session targeting is always explicit. The real captain fleet runs in Herdr's
 # `default` session, so `default` is the fallback target; a `--session` flag,
@@ -19,7 +31,7 @@
 #
 # Usage:
 #   fm-fleet-live.sh open    [--session <name>] [--label <text>]
-#   fm-fleet-live.sh refresh [--session <name>]
+#   fm-fleet-live.sh refresh [--session <name>] [--best-effort]
 #   fm-fleet-live.sh close   [--session <name>]
 #   fm-fleet-live.sh status  [--session <name>]
 #   fm-fleet-live.sh --help
@@ -43,17 +55,26 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 RECORD="$STATE/fleet-view.herdr"
+FM_FLEET_LIVE_TIMEOUT=${FM_FLEET_LIVE_TIMEOUT:-5}
+case "$FM_FLEET_LIVE_TIMEOUT" in
+  ''|*[!0-9]*|0) FM_FLEET_LIVE_TIMEOUT=5 ;;
+esac
 
 # shellcheck source=bin/fm-herdr-name-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-herdr-name-lib.sh"
+# The single owner of bounded command execution (fm_run_timed), used by the
+# automatic best-effort refresh so a hung Herdr can never delay its caller.
+# shellcheck source=bin/fm-timeout-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 fm_fleet_live_error() { echo "fm-fleet-live: $*" >&2; }
 
 usage() {
   cat <<'EOF'
 usage: fm-fleet-live.sh open    [--session <name>] [--label <text>]
-       fm-fleet-live.sh refresh [--session <name>]
+       fm-fleet-live.sh refresh [--session <name>] [--best-effort]
        fm-fleet-live.sh close   [--session <name>]
        fm-fleet-live.sh status  [--session <name>]
 
@@ -65,6 +86,10 @@ Herdr refuses to close a workspace's last tab directly; status reports the
 recorded tab. Every verb touches only its own recorded tab, in the session
 that recorded it, and none calls a server-global or session-lifecycle Herdr
 operation.
+refresh --best-effort is the automatic-trigger form (supervision heartbeat and
+successful task completion): it refreshes only an already-recorded tab, bounded
+by FM_FLEET_LIVE_TIMEOUT seconds (default 5), and every failure or absence is a
+silent no-op that prints nothing and returns 0. It never opens a tab.
 EOF
 }
 
@@ -277,6 +302,27 @@ fm_fleet_live_refresh() {  # <session>
   printf 'refreshed fleet view tab %s (%s) in session %s\n' "$(fm_fleet_live_record_tab)" "$pane" "$session"
 }
 
+# fm_fleet_live_refresh_best_effort: the automatic-trigger entry point used by
+# the supervision heartbeat (bin/fm-watch.sh) and the successful task-completion
+# path (bin/fm-teardown.sh). Refresh only an already-recorded tab, in the session
+# that recorded it, under FM_FLEET_LIVE_TIMEOUT. Absence or failure is a silent
+# no-op: it never opens a tab, prints anything, or returns non-zero, so a
+# supervision cycle can never be delayed or failed by the live view.
+fm_fleet_live_refresh_best_effort() {
+  local session
+  command -v herdr >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$RECORD" ] || return 0
+  session=$(fm_fleet_live_record_session)
+  [ -n "$session" ] || return 0
+  fm_fleet_live_validate_session "$session" >/dev/null 2>&1 || return 0
+  fm_run_timed "$FM_FLEET_LIVE_TIMEOUT" env \
+    FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" \
+    FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-fleet-live.sh" refresh --session "$session" >/dev/null 2>&1 || true
+  return 0
+}
+
 fm_fleet_live_close() {  # <session>
   local session=$1 tab pane workspace
   [ -f "$RECORD" ] || { printf 'no fleet-view tab recorded in session %s\n' "$session"; return 0; }
@@ -318,13 +364,14 @@ fm_fleet_live_status() {  # <session>
 }
 
 fm_fleet_live_main() {
-  local command=${1:-} session_arg='' label_arg=''
+  local command=${1:-} session_arg='' label_arg='' best_effort=0
   [ "$#" -ge 1 ] || { usage >&2; return 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --session) [ "$#" -ge 2 ] || { fm_fleet_live_error "--session requires a value"; return 2; }; session_arg=$2; shift 2 ;;
       --label) [ "$#" -ge 2 ] || { fm_fleet_live_error "--label requires a value"; return 2; }; label_arg=$2; shift 2 ;;
+      --best-effort) best_effort=1; shift ;;
       *) fm_fleet_live_error "unknown argument: $1"; usage >&2; return 2 ;;
     esac
   done
@@ -333,6 +380,14 @@ fm_fleet_live_main() {
     open|refresh|close|status) ;;
     *) usage >&2; return 2 ;;
   esac
+  if [ "$best_effort" -eq 1 ]; then
+    [ "$command" = refresh ] || {
+      fm_fleet_live_error "--best-effort is supported only for refresh"
+      return 2
+    }
+    fm_fleet_live_refresh_best_effort
+    return 0
+  fi
   command -v herdr >/dev/null 2>&1 || { fm_fleet_live_error "herdr is not installed"; return 1; }
   command -v jq >/dev/null 2>&1 || { fm_fleet_live_error "jq is not installed"; return 1; }
   label=$label_arg
