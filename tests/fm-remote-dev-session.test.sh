@@ -677,6 +677,49 @@ test_a_duplicate_branch_refuses() {
   pass "an existing branch refuses as duplicate work"
 }
 
+test_explicit_invalid_repo_refuses_before_launch() {
+  local home repo status out control
+  home=$(make_home invalid-explicit-repo)
+  repo=$(make_repo "$home" alpha)
+  git -C "$repo" branch fm/existing
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha --branch fm/existing --repo "$home/missing-repo")
+  expect_code 1 "$status" "an explicit invalid repo must refuse"
+  assert_contains "$(cat "$out")" 'explicit repo is not a git clone' \
+    "the explicit repo refusal was not reported"
+  assert_absent "$control" "an invalid explicit repo must refuse before relaunch"
+  assert_absent "$home/state/remote-dev-sessions/adi2.session" \
+    "an invalid explicit repo must not write a continuity record"
+  pass "an explicit invalid repo cannot bypass the equivalence gate"
+}
+
+test_line_breaking_options_refuse_before_relaunch() {
+  local home repo status out control
+  home=$(make_home line-breaking-option)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project $'alpha\nbranch=forged')
+  expect_code 2 "$status" "a line-breaking project must be invalid use"
+  assert_contains "$(cat "$out")" 'must not contain carriage returns or newlines' \
+    "the line-breaking option refusal was not reported"
+  assert_absent "$control" "a line-breaking option must refuse before relaunch"
+  assert_absent "$home/state/remote-dev-sessions/adi2.session" \
+    "a line-breaking option must not write a continuity record"
+  pass "record-affecting options reject line breaks before relaunch"
+}
+
 test_a_stale_base_refuses() {
   local home repo status out
   home=$(make_home stale)
@@ -977,6 +1020,8 @@ test_remote_missing_task_relaunches_through_the_control_plane
 test_uncertain_remote_endpoint_refuses_to_relaunch
 test_check_runs_the_gates_without_launching_or_recording
 test_a_duplicate_branch_refuses
+test_explicit_invalid_repo_refuses_before_launch
+test_line_breaking_options_refuse_before_relaunch
 test_a_stale_base_refuses
 test_a_branch_already_landed_refuses
 test_recover_is_idempotent_and_inherits_the_recorded_target

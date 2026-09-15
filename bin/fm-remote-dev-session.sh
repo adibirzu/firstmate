@@ -136,6 +136,11 @@ if [ -n "$TARGET_ID" ]; then
     *[!A-Za-z0-9._-]*) die "target id must be letters, digits, dot, underscore, or dash: $TARGET_ID" ;;
   esac
 fi
+for option in "$PROJECT" "$BACKEND_FLAG" "$SESSION_FLAG" "$BRANCH" "$REPO"; do
+  case "$option" in
+    *$'\r'*|*$'\n'*) die "option values must not contain carriage returns or newlines" ;;
+  esac
+done
 
 case "$ACTION" in
   open|recover|check|attach|status)
@@ -451,6 +456,12 @@ prelaunch_gate() {  # <id> <project>
   local id=$1 project=$2 repo branch default_ref remote recorded state rc=0
   local meta="$STATE/$id.meta"
   repo=${REPO:-}
+  if [ -n "$repo" ]; then
+    if [ ! -d "$repo" ] || ! "$GIT" -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+      printf 'fm-remote-dev-session: explicit repo is not a git clone: %s\n' "$repo" >&2
+      return 1
+    fi
+  fi
   if [ -z "$repo" ]; then
     repo=$(fm_rds_meta_value "$meta" worktree || true)
   fi
