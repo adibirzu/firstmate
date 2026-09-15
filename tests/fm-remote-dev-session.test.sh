@@ -138,6 +138,7 @@ write_meta() {  # <home> <id> <backend> <repo> [extra...]
     "kind=ship"
     "spawn_gen=s123.456"
     "backend=$backend"
+    "remote_host=adi2-ts"
   )
   if [ "$backend" = herdr ]; then
     lines+=("herdr_session=fm-remote" "herdr_workspace_id=wK" "herdr_tab_id=wK:t2" "herdr_pane_id=wK:p2")
@@ -319,6 +320,30 @@ test_task_selector_refuses_a_secondmate_record() {
   assert_contains "$(cat "$out")" 'use --secondmate' \
     "the secondmate selector guidance was not reported"
   pass "task selection cannot bypass remote secondmate backend rules"
+}
+
+test_remote_task_without_endpoint_placement_refuses() {
+  local home repo status out control
+  home=$(make_home task-no-remote-placement)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  {
+    printf 'kind=ship\n'
+    printf 'project=alpha\n'
+    printf 'worktree=%s\n' "$repo"
+  } > "$home/state/t1.meta"
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  expect_code 1 "$status" "a local task must refuse a remote station"
+  assert_contains "$(cat "$out")" 'no remote endpoint placement' \
+    "the missing remote placement refusal was not reported"
+  assert_absent "$control" "a local task must not relaunch through the control plane"
+  assert_absent "$home/state/remote-dev-sessions/adi2.session" \
+    "a local task must not write a remote continuity record"
+  pass "remote task selection requires authoritative endpoint placement"
 }
 
 test_unregistered_remote_station_refuses() {
@@ -931,6 +956,7 @@ test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
 test_remote_secondmate_refuses_the_tmux_backend
 test_task_selector_refuses_a_secondmate_record
+test_remote_task_without_endpoint_placement_refuses
 test_unregistered_remote_station_refuses
 test_station_prefix_requires_the_resolved_secondmate_route
 test_conflicting_target_selectors_refuse

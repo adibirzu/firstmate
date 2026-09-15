@@ -586,6 +586,13 @@ else
   [ -f "$STATE/$TARGET_ID.meta" ] || fail "no task record for $TARGET_ID at $STATE/$TARGET_ID.meta"
   [ "$(fm_rds_meta_value "$STATE/$TARGET_ID.meta" kind 2>/dev/null || true)" != secondmate ] \
     || fail "$TARGET_ID is a second mate; use --secondmate"
+  if [ "$STATION_LOCAL" -eq 0 ]; then
+    task_remote_host=$(fm_rds_meta_value "$STATE/$TARGET_ID.meta" remote_host 2>/dev/null || true)
+    [ -n "$task_remote_host" ] \
+      || fail "$TARGET_ID has no remote endpoint placement; use --secondmate"
+    [ "$task_remote_host" = "$STATION_HOST" ] \
+      || fail "$TARGET_ID is placed on $task_remote_host, not station $STATION_HOST"
+  fi
   [ -n "$PROJECT" ] || PROJECT=$(fm_rds_meta_value "$STATE/$TARGET_ID.meta" project 2>/dev/null || true)
   PROJECT=${PROJECT##*/}
 fi
