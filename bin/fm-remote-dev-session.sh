@@ -30,6 +30,12 @@
 # a mate, `fm-control relaunch` for a task). It refuses duplicate or stale work
 # before launch and never forces, stashes, or discards anything.
 #
+# A dead task endpoint relaunches through `fm-control relaunch` with a
+# deterministic continuation note carrying the task id, the intended branch and
+# its head SHA, the handoff path the replacement continues in, and an explicit
+# fetch/sync-before-edit instruction. An unresolvable note refuses the relaunch
+# instead of sending a worker in with no context.
+#
 # Backend selection is explicit. herdr is the default and the only backend a
 # remote second mate uses (docs/remote-secondmates.md). tmux is reachable only by
 # `--backend tmux` or a local config/remote-dev-backend value, and a herdr
@@ -69,7 +75,7 @@ LOCAL_NAMES=${FM_RDS_LOCAL_NAMES:-local mini}
 JQ=${FM_RDS_JQ:-jq}
 SESSION_DEFAULT=$(fm_rds_default_session)
 
-usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { printf 'fm-remote-dev-session: %s\n' "$1" >&2; exit 2; }
 fail() { printf 'fm-remote-dev-session: %s\n' "$1" >&2; exit 1; }
 
@@ -454,6 +460,63 @@ prelaunch_gate() {  # <id> <project>
   esac
 }
 
+# --- task continuation note ----------------------------------------------------
+#
+# A task relaunch through fm-control requires a progress note, because the
+# replacement inherits the local copy but none of the conversation. The note is
+# deterministic: the same task, branch, head, and handoff path always render
+# the same bytes. It carries the task id, the intended branch and its head
+# SHA, the handoff path the replacement continues in, and an explicit
+# fetch/sync-before-edit instruction. An unresolvable branch, head, or handoff
+# path refuses the relaunch instead of sending a worker in with no context.
+
+continuation_note() {  # <id> <project>
+  local id=$1 project=$2 meta repo recorded branch ref head default_ref remote defbranch sync_line
+  meta="$STATE/$id.meta"
+  repo=${REPO:-}
+  if [ -z "$repo" ]; then
+    repo=$(fm_rds_meta_value "$meta" worktree || true)
+  fi
+  [ -n "$repo" ] || repo="$PROJECTS/$project"
+  recorded=$(recorded_branch_of "$id" "$project")
+  branch=${BRANCH:-$recorded}
+  if [ -z "$branch" ]; then
+    printf 'fm-remote-dev-session: no branch resolved for %s; refusing a relaunch without a continuation note\n' "$id" >&2
+    return 1
+  fi
+  if [ ! -d "$repo" ]; then
+    printf 'fm-remote-dev-session: no handoff path for %s at %s; refusing a relaunch without a continuation note\n' "$id" "$repo" >&2
+    return 1
+  fi
+  head=
+  if ref=$(fm_rds_resolve_branch_ref "$repo" '' "$branch" 2>/dev/null); then
+    head=$("$GIT" -C "$repo" rev-parse --verify "$ref" 2>/dev/null || true)
+  fi
+  default_ref=$(default_ref_of "$repo" 2>/dev/null || true)
+  if [ -z "$head" ]; then
+    if [ -n "$default_ref" ]; then
+      head=$("$GIT" -C "$repo" rev-parse --verify "$default_ref" 2>/dev/null || true)
+    fi
+    if [ -z "$head" ]; then
+      printf 'fm-remote-dev-session: no head SHA resolved for %s; refusing a relaunch without a continuation note\n' "$id" >&2
+      return 1
+    fi
+  fi
+  if [ -n "$default_ref" ]; then
+    remote=${default_ref%%/*}
+    [ "$remote" != "$default_ref" ] || remote=origin
+    defbranch=${default_ref#*/}
+    sync_line="Before editing, fetch the default branch with \`git fetch $remote $defbranch\` and sync this checkout onto $default_ref, so no edit builds on a stale base."
+  else
+    sync_line="Before editing, fetch the default branch and sync this checkout onto it, so no edit builds on a stale base."
+  fi
+  printf 'Remote development session continuation for task %s.\n' "$id"
+  printf 'Branch: %s\n' "$branch"
+  printf 'Head: %s\n' "$head"
+  printf 'Handoff path: %s\n' "$repo"
+  printf '%s\n' "$sync_line"
+}
+
 # --- outcome ----------------------------------------------------------------
 
 emit_outcome() {  # <action>
@@ -580,7 +643,9 @@ case "$liveness" in
         "$SPAWN" "$TARGET_ID" --secondmate >/dev/null 2>&1 \
           || fail "relaunching $TARGET_ID through fm-spawn failed"
       else
-        "$CONTROL" "$TARGET_ID" relaunch >/dev/null 2>&1 \
+        note=$(continuation_note "$TARGET_ID" "$PROJECT") \
+          || fail "relaunching $TARGET_ID refused: the continuation note could not be written"
+        "$CONTROL" "$TARGET_ID" relaunch --note "$note" >/dev/null 2>&1 \
           || fail "relaunching $TARGET_ID through fm-control failed"
       fi
     fi

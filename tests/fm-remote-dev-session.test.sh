@@ -203,6 +203,68 @@ test_dead_task_endpoint_relaunches_through_the_control_plane() {
   pass "a dead task endpoint relaunches through the control plane, never a raw process"
 }
 
+test_dead_task_relaunch_carries_the_deterministic_continuation_note() {
+  local home repo status out control head note1 note2
+  home=$(make_home herdr-note)
+  repo=$(make_repo "$home" alpha)
+  use_branch "$repo" fm/t1
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+  head=$(git -C "$repo" rev-parse --verify refs/heads/fm/t1)
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  expect_code 0 "$status" "relaunch exit"
+  assert_grep 't1 relaunch --note' "$control" "the relaunch did not carry the continuation note"
+  assert_grep 'continuation for task t1' "$control" "the note lost the task id"
+  assert_grep 'Branch: fm/t1' "$control" "the note lost the branch"
+  assert_grep "Head: $head" "$control" "the note lost the head SHA"
+  assert_grep "Handoff path: $repo" "$control" "the note lost the handoff path"
+  assert_grep 'Before editing' "$control" "the note lost the sync-before-edit instruction"
+  assert_grep 'git fetch' "$control" "the instruction names no fetch"
+
+  # The note is deterministic: a second relaunch renders the same bytes.
+  note1=$(grep -F -A4 'Remote development session continuation' "$control" | head -5)
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  expect_code 0 "$status" "second relaunch exit"
+  note2=$(grep -F -A4 'Remote development session continuation' "$control" | tail -5)
+  assert_equals "$note1" "$note2" "the continuation note was not deterministic"
+  pass "a dead task relaunch carries the deterministic continuation note"
+}
+
+test_stale_base_refuses_before_a_dead_endpoint_relaunches() {
+  local home repo status out control
+  home=$(make_home stale-dead)
+  repo=$(make_repo "$home" alpha)
+  git -C "$repo" checkout -q -b fm/work
+  printf 'work\n' > "$repo/work.txt"
+  git -C "$repo" add work.txt
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm work
+  git -C "$repo" checkout -q main
+  printf 'more\n' > "$repo/main2.txt"
+  git -C "$repo" add main2.txt
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm main2
+  git -C "$repo" push -q origin main
+  git -C "$repo" checkout -q fm/work
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  expect_code 4 "$status" "a stale base must refuse even with a dead endpoint"
+  assert_absent "$control" "a stale refusal must never reach the control plane"
+  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a stale refusal must not write a record"
+  pass "a stale base refuses before a dead endpoint relaunches"
+}
+
 test_dead_secondmate_endpoint_relaunches_through_fm_spawn() {
   local home status out control spawn meta
   home=$(make_home mate-dead)
@@ -576,6 +638,8 @@ test_a_task_without_a_record_refuses() {
 
 test_herdr_open_attaches_live_task_and_records_references
 test_dead_task_endpoint_relaunches_through_the_control_plane
+test_dead_task_relaunch_carries_the_deterministic_continuation_note
+test_stale_base_refuses_before_a_dead_endpoint_relaunches
 test_dead_secondmate_endpoint_relaunches_through_fm_spawn
 test_a_readiness_gap_refuses_with_the_doctor_text
 test_repair_rechecks_read_only_and_never_trusts_the_repair

@@ -6,6 +6,8 @@ This doc owns the continuity contract: the guarded command, the durable record, 
 
 The command never launches a raw process.
 It reattaches a live recorded endpoint, or relaunches one through the ordinary record paths - `bin/fm-spawn.sh <id> --secondmate` for a mate and `bin/fm-control.sh <id> relaunch` for a task.
+A task relaunch carries a deterministic continuation note with the task id, the intended branch and its head SHA, the handoff path the replacement continues in, and an explicit fetch/sync-before-edit instruction.
+An unresolvable note refuses the relaunch instead of sending a worker in with no context.
 It never forces, stashes, or discards anything.
 
 ## Command
