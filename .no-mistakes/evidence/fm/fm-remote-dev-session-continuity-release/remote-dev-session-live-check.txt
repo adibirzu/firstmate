@@ -1,0 +1,1 @@
+fm-remote-dev-session: no safe secondmate registry at /Volumes/ExternalNVME/.fm-pools/firstmate-3730267688/.treehouse/firstmate-8bf1b0/2/firstmate/data/secondmates.md

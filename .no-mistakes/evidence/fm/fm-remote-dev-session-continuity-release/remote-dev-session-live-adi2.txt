@@ -1,0 +1,13 @@
+Live read-only verification run from the target worktree against the authorized
+primary Firstmate home on 2026-09-15:
+
+$ FM_HOME=/Volumes/ExternalNVME/GitHub/firstmate bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote
+remote-dev-session: backend=herdr session=fm-remote station=adi2 check=ok
+attach: herdr --remote adi2-ts --session fm-remote
+
+$ FM_HOME=/Volumes/ExternalNVME/GitHub/firstmate bin/fm-remote-dev-session.sh check adi2 --secondmate infra-remote --backend tmux
+fm-remote-dev-session: remote second mates require the herdr backend
+exit status: 1
+
+The opt-in live guard then passed with the same inputs:
+ok - live remote development session check passes for adi2
