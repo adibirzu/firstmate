@@ -378,6 +378,12 @@ endpoint_liveness() {  # <id>
   case "$state" in
     working|parked|blocked) return 0 ;;
     done|failed) return 1 ;;
+    unknown)
+      case "$line" in
+        *'source: remote-endpoint'*'alive on '*) return 0 ;;
+        *) return 2 ;;
+      esac
+      ;;
     *) return 2 ;;
   esac
 }
