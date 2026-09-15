@@ -67,8 +67,9 @@ The gate is read-only and never rewrites a branch.
 
 ## Continuity record
 
-Each station's references persist at `state/remote-dev-sessions/<station>.session`, schema `fm-remote-dev-session.v1`, one `key=value` per line:
-`station`, `local`, `host`, `backend`, `session`, `workspace`, `window`, `tab`, `pane`, `task_id`, `project`, `branch`, `worktree`, `spawn_gen`, `return_channel`, `attach_command`, and `updated`.
+Each station's references persist at `state/remote-dev-sessions/<station>.session`, one `key=value` per line:
+`schema`, `station`, `local`, `host`, `backend`, `session`, `workspace`, `window`, `tab`, `pane`, `task_id`, `project`, `branch`, `worktree`, `spawn_gen`, `return_channel`, `attach_command`, and `updated`.
+The schema field is always `fm-remote-dev-session.v1`.
 The record is a cached projection for reconnect; `state/<id>.meta` remains the endpoint authority that `bin/fm-spawn.sh` owns.
 A malformed or wrong-schema record refuses instead of being half-trusted.
 The record is rewritten on every `open` and `recover`, so a restart or reconnect always reads current references.
