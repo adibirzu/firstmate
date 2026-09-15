@@ -23,16 +23,19 @@ bin/fm-remote-dev-session.sh list [--json]
 ```
 
 `open` runs the readiness gate and the pre-launch gate, reattaches or relaunches, then writes the continuity record and prints the attach command.
-`recover` is the idempotent reconnect: it inherits the recorded target and repeats `open` without needing the flags again.
+`recover` is the idempotent reconnect: it inherits the recorded target when none is selected and repeats `open` without needing the flags again.
+Whenever a valid record exists, `recover` also retains its recorded backend and session, including with an explicit target; only explicit `--backend` or `--session` flags replace those route fields.
 `attach` prints the recorded attach command, or runs it with `--exec`.
 `status` prints one station's record; `list` prints every record.
 `check` runs the gates and prints the verdict without launching or writing a record.
 
 A station is one SSH host or the local host, resolved from `data/secondmates.md` exactly as `bin/fm-station-idle.sh` resolves it: a remote route whose host is `<station>` or `<station>-<suffix>`.
+A selected remote second mate or task must resolve to that exact route, so a station-prefix match cannot silently attach to a different registered host.
 A remote station's readiness and launch go over the existing SSH/`bin/fm-on.sh` route; no new remote write surface exists.
 
 A remote station is normally targeted with `--secondmate`, because an individual worker is never placed remotely ([remote-secondmates.md](remote-secondmates.md)).
-A `--task` target reads this home's task record and resolves its endpoint through `bin/fm-crew-state.sh`; a live endpoint is attached, and a dead one is relaunched only through `bin/fm-control.sh`, which refuses an endpoint it cannot prove local rather than starting a raw process.
+A `--task` target reads this home's task record and must have recorded remote endpoint placement on the selected station; ordinary local tasks refuse and are never given a fabricated remote route.
+It resolves the placed endpoint through `bin/fm-crew-state.sh`; live evidence attaches it, a remote host's confirmed `dead` or `missing` verdict relaunches it only through `bin/fm-control.sh`, and uncertain or unreadable liveness refuses rather than guessing.
 
 ## Backend selection
 
@@ -68,7 +71,8 @@ The gate is read-only and never rewrites a branch.
 Each station's references persist at `state/remote-dev-sessions/<station>.session`, schema `fm-remote-dev-session.v1`, one `key=value` per line:
 `station`, `local`, `host`, `backend`, `session`, `workspace`, `window`, `tab`, `pane`, `task_id`, `project`, `branch`, `worktree`, `spawn_gen`, `return_channel`, `attach_command`, and `updated`.
 The record is a cached projection for reconnect; `state/<id>.meta` remains the endpoint authority that `bin/fm-spawn.sh` owns.
-A malformed or wrong-schema record refuses instead of being half-trusted.
+The reader accepts only the complete schema key set, with the schema first and no duplicate or unknown fields; the shared writer refuses carriage returns and newlines in every field before it writes.
+Any malformed record refuses instead of being half-trusted.
 The record is rewritten on every `open` and `recover`, so a restart or reconnect always reads current references.
 
 ## Attach and reconnect
