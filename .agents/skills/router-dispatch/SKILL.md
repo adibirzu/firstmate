@@ -20,7 +20,7 @@ It routes a task descriptor through `llm-router-axi`, resolves a matched subscri
 
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
-`llm-router-axi select` is the mechanical owner of arbitrary-profile selection, `llm-router-axi route chain` owns in-run step-down, and `llm-router-axi classify-evidence` owns the depletion classifier.
+`llm-router-axi select` is the mechanical owner of arbitrary-profile selection, `llm-router-axi route chain` owns in-run step-down, `llm-router-axi classify-evidence` owns the subscription-exhaustion vocabulary, and `bin/fm-model-fallback.sh` owns the hosted-region opt-in refusal signature.
 `bin/fm-dispatch-select.mjs` is a thin forwarding shim over those verbs, kept only so existing callers keep their command line.
 `quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends, selects, ranks, or infers a route.
 Do not add a daemon, opaque composite score, hard-coded model-specific policy, or producer-side route recommendation.
@@ -152,7 +152,7 @@ A blocked credential report must name `harness`, `model`, authentication surface
 ## When the tools are absent
 
 `bin/fm-router-lib.sh` owns tool resolution and the install hint.
-Both tools are now required for the dispatch path: `llm-router-axi` owns selection, the step-down chain, the depletion classifier, and the machine-capacity verdict, and there is no in-repo fallback left.
+Both tools are now required for the dispatch path: `llm-router-axi` owns selection, the step-down chain, the subscription-exhaustion vocabulary of the depletion classifier, and the machine-capacity verdict, and there is no in-repo fallback left.
 When either is not on `PATH`, stop and report the missing tool rather than dispatching by hand.
 Both are unpublished on npm, so build and install each from its GitHub main clone: `git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`; `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
 `bin/fm-capacity-lib.sh` declines a spawn rather than running unguarded when the router is absent.

@@ -33,6 +33,11 @@
       "why": "Use comparable strong coding profiles while fresh capacity evidence and the configured reserve permit them."
     },
     {
+      "when": "The task handles sensitive data that must stay on local infrastructure, is a long-duration run, or paid-quota headroom is low and the work fits a fast local lane.",
+      "use": { "harness": "opencode", "model": "vllm/qwen3.8-flash" },
+      "why": "The adi1 LiteLLM qwen3.8-Flash lane keeps sensitive or long-running work off paid vendor quota. Confirm the model id against the LiteLLM catalog before copying this."
+    },
+    {
       "when": "The captain asks for OpenRouter Auto Router, or remaining native seats are empty and OpenRouter should pick the model for this turn.",
       "use": { "harness": "opencode", "model": "openrouter/auto" },
       "why": "OpenRouter Auto Router is the model id openrouter/auto. Firstmate forwards that slug as --model on opencode. There is no extra Auto Router fee; you pay the selected model. LiteLLM catalogs may expose the same router as or-auto."

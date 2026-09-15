@@ -27,9 +27,11 @@
 #      waiting out) must never be read as live evidence, so an endpoint
 #      fm-control deliberately stopped is never relaunched from its own
 #      after-the-fact status note. Only what remains is classified through
-#      `llm-router-axi classify-evidence`, whose subscription vocabulary is
-#      the single owner of depletion signatures. No evidence, no fallback - a
-#      healthy or ambiguous worker is never relaunched by this script.
+#      `llm-router-axi classify-evidence` plus this script's hosted-region
+#      opt-in refusal signature below: the router owns the
+#      subscription-exhaustion vocabulary, this script owns the refusal
+#      anchors, and either firing means depletion. No evidence, no fallback -
+#      a healthy or ambiguous worker is never relaunched by this script.
 #   3. Asks `llm-router-axi route chain --harness <h> --model <m> --json` for
 #      the next move: the entry after the recorded model is next; a model
 #      absent from its chain steps to the chain head; the chain's last entry
@@ -38,10 +40,12 @@
 #   4. When the lane is exhausted and the router policy's fallbackLanes names
 #      a later lane, moves there and starts that lane's own chain head (or
 #      its default model when that lane has no chain).
-#   5. When the depleted harness carries a telemetry-backed routing provider,
-#      records the verified failure through `llm-router-axi record` so future
-#      dispatches avoid the account during the cooldown; that bookkeeping
-#      failure never blocks the relaunch itself.
+#   5. For router-classified subscription exhaustion, when the depleted harness
+#      carries a telemetry-backed routing provider, records the verified
+#      failure through `llm-router-axi record` so future dispatches avoid the
+#      account during the cooldown. A hosted-region opt-in refusal is specific
+#      to the model, so it never cools down the provider; bookkeeping failure
+#      never blocks the relaunch itself.
 #   6. Relaunches in place with --model <next> and a progress note naming the
 #      depletion signature and the automatic step-down. The effort axis is
 #      deliberately reset so the replacement model launches on its own
@@ -194,19 +198,50 @@ if [ -n "$EVIDENCE_RAW" ]; then
 $EVIDENCE_RAW
 EOF_EVIDENCE
 fi
+# Hosted-region opt-in refusal (this script is the single owner of this
+# signature; the router's subscription vocabulary does not cover it). A worker
+# whose model answers but refuses to serve without an explicit opt-in to
+# China-hosted inference (e.g. `latest version only available hosted in China,
+# requires explicit opt in`) is unavailable, not up against a working ceiling,
+# so it triggers the same in-lane fallback without provider-wide cooldown. The
+# match requires the complete failure wording in one failed status event,
+# case-insensitive, so task content cannot combine partial anchors into a false
+# refusal.
+REFUSAL_SIGNATURE='hosted-region opt-in refusal'
+REFUSAL_CLASSIFIED=0
+evidence_has_refusal() {  # reads $EVIDENCE_TEXT
+  local evidence_line lowered
+  while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
+    lowered=$(printf '%s' "$evidence_line" | tr '[:upper:]' '[:lower:]')
+    case "$lowered" in
+      failed:*'latest version only available hosted in china,'*'requires explicit opt in'*|failed:*'latest version only available hosted in china,'*'requires explicit opt-in'*)
+        return 0
+        ;;
+    esac
+  done <<EOF_REFUSAL
+${EVIDENCE_TEXT:-}
+EOF_REFUSAL
+  return 1
+}
+
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | "$ROUTER" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')
 case "$CLASSIFICATION" in
   classification=depleted*) ;;
   *)
-    if [ "$VERB" = plan ]; then
-      echo "action=none"
-      echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
+    if evidence_has_refusal; then
+      CLASSIFICATION=$(printf 'classification=depleted\nsignature="%s"\n' "$REFUSAL_SIGNATURE")
+      REFUSAL_CLASSIFIED=1
     else
-      die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
+      if [ "$VERB" = plan ]; then
+        echo "action=none"
+        echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
+      else
+        die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
+      fi
+      exit 0
     fi
-    exit 0
     ;;
 esac
 SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
@@ -240,7 +275,7 @@ advance_fallback_cursor() {
   FALLBACK_CURSOR=$cursor_end
 }
 
-if [ "$VERB" = apply ]; then
+if [ "$VERB" = apply ] && [ "$REFUSAL_CLASSIFIED" -eq 0 ]; then
   PROVIDER=$(fm_meta_get "$META" provider)
   if [ -z "$PROVIDER" ]; then
     PROVIDER=$(native_provider_of "$HARNESS") || PROVIDER=

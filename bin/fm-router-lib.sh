@@ -3,7 +3,8 @@
 # tool resolution.
 #
 # The two axi tools own the dispatch selector, the in-run step-down chain, the
-# depletion classifier, and the machine-capacity gauges. This file resolves
+# subscription-exhaustion vocabulary of the depletion classifier, and the
+# machine-capacity gauges. This file resolves
 # those executables plus the operator-facing install hint so every caller agrees
 # on the names, the env overrides, and the "tool absent" contract.
 #
