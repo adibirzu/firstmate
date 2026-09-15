@@ -110,7 +110,7 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 `state/.watch-triage.log` remains only the watcher's bounded absorbed-wake debug log and carries no lifecycle semantics.
 
 The default 300-second grace is unchanged.
-Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
+Only the watcher process touches `state/.last-watcher-beat`, and only from inside its own loop where a stage has returned, so no helper process can make a wedged watcher appear healthy; [`turnend-guard.md`](turnend-guard.md) "Guard grace and the poll cadence" owns the touch contract.
 
 ## Regression coverage
 
