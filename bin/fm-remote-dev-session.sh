@@ -381,6 +381,7 @@ endpoint_liveness() {  # <id>
     unknown)
       case "$line" in
         *'source: remote-endpoint'*'alive on '*) return 0 ;;
+        *'source: remote-endpoint'*'remote endpoint dead on '*|*'source: remote-endpoint'*'remote endpoint missing on '*) return 1 ;;
         *) return 2 ;;
       esac
       ;;

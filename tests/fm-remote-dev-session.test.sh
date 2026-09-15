@@ -378,6 +378,78 @@ test_idle_remote_secondmate_attaches_without_relaunch() {
   pass "a confirmed-alive idle remote secondmate attaches instead of relaunching"
 }
 
+test_remote_dead_secondmate_relaunches_through_fm_spawn() {
+  local home status out control spawn meta
+  home=$(make_home mate-remote-dead)
+  write_registry "$home" "$REMOTE_RECORD"
+  meta="$home/state/infra-remote.meta"
+  {
+    printf 'window=fm-remote:wK:p2\n'
+    printf 'endpoint_task_id=infra-remote\n'
+    printf 'worktree=/home/adi/.firstmate-infra\n'
+    printf 'project=infra-remote\n'
+    printf 'kind=secondmate\n'
+    printf 'spawn_gen=s999\n'
+    printf 'backend=herdr\n'
+    printf 'herdr_workspace_id=wK\nherdr_tab_id=wK:t2\nherdr_pane_id=wK:p2\n'
+  } > "$meta"
+  out="$home/out.txt"
+  control="$home/control.log"
+  spawn="$home/spawn.log"
+
+  status=$(run_cmd "$home" "$out" \
+    FM_TEST_CREW_STATE='state: unknown · source: remote-endpoint · remote endpoint dead on adi2-ts' \
+    FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
+    open adi2 --secondmate infra-remote)
+  expect_code 0 "$status" "remote dead secondmate relaunch exit"
+  assert_contains "$(cat "$out")" 'action=launched' "a remote-host-confirmed dead second mate was not relaunched"
+  assert_contains "$(cat "$spawn")" 'infra-remote --secondmate' "the second mate did not relaunch through fm-spawn"
+  assert_absent "$control" "a second mate relaunch must not go through fm-control"
+  pass "a remote host's own dead verdict for a second mate relaunches through fm-spawn"
+}
+
+test_remote_missing_task_relaunches_through_the_control_plane() {
+  local home repo status out control spawn
+  home=$(make_home task-remote-missing)
+  repo=$(make_repo "$home" alpha)
+  use_branch "$repo" fm/t1
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+  spawn="$home/spawn.log"
+
+  status=$(run_cmd "$home" "$out" \
+    FM_TEST_CREW_STATE='state: unknown · source: remote-endpoint · remote endpoint missing on adi2-ts' \
+    FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
+    open adi2 --task t1 --project alpha)
+  expect_code 0 "$status" "remote missing task relaunch exit"
+  assert_contains "$(cat "$out")" 'action=launched' "a remote-host-confirmed missing task endpoint was not relaunched"
+  assert_contains "$(cat "$control")" 't1 relaunch' "the control plane was not the relaunch path"
+  assert_absent "$spawn" "a task relaunch must not go through fm-spawn"
+  pass "a remote host's own missing verdict for a task relaunches through the control plane"
+}
+
+test_uncertain_remote_endpoint_refuses_to_relaunch() {
+  local home repo status out control
+  home=$(make_home task-remote-uncertain)
+  repo=$(make_repo "$home" alpha)
+  use_branch "$repo" fm/t1
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 herdr "$repo"
+  out="$home/out.txt"
+  control="$home/control.log"
+
+  status=$(run_cmd "$home" "$out" \
+    FM_TEST_CREW_STATE='state: unknown · source: remote-endpoint · unknown-remote: adi2-ts unreachable or endpoint unreadable (not proof of death)' \
+    FM_TEST_CONTROL_LOG="$control" \
+    open adi2 --task t1 --project alpha)
+  expect_code 1 "$status" "an uncertain remote endpoint must refuse"
+  assert_absent "$control" "an uncertain remote endpoint must never relaunch"
+  assert_contains "$(cat "$out")" 'unknown' "the uncertain remote endpoint was not reported"
+  pass "an uncertain remote endpoint refuses instead of relaunching or attaching"
+}
+
 test_check_runs_the_gates_without_launching_or_recording() {
   local home repo status out control spawn
   home=$(make_home check)
@@ -615,6 +687,9 @@ test_tmux_readiness_gap_refuses
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
 test_idle_remote_secondmate_attaches_without_relaunch
+test_remote_dead_secondmate_relaunches_through_fm_spawn
+test_remote_missing_task_relaunches_through_the_control_plane
+test_uncertain_remote_endpoint_refuses_to_relaunch
 test_check_runs_the_gates_without_launching_or_recording
 test_a_duplicate_branch_refuses
 test_a_stale_base_refuses
