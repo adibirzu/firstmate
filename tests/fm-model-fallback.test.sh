@@ -417,4 +417,57 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   pass "over the real handoff path, fallback preserves the worktree and work while stepping the model down"
 }
 
+# --- hosted-region opt-in refusal ----------------------------------------------
+#
+# The refusal below is firstmate-owned, never router vocabulary: the step-down
+# must fire even when the router reports no subscription depletion, while
+# partial wording on either anchor alone must stay quiet.
+
+REFUSAL_LINE='failed: model deepseek-v4.1-flash is deprecated: latest version only available hosted in China, requires explicit opt in'
+
+{
+  setup_case refusal-plan plan-f1 "$STEP_CHAIN" "$REFUSAL_LINE" none
+  out=$("$FALLBACK" plan-f1 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "refusal plan should succeed, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "the refusal steps down the same chain"
+  assert_contains "$out" "to_model=gemini-3.6-flash-high" "the refusal moves to the next model in the dispatched lane"
+  assert_contains "$out" "hosted-region opt-in refusal" "plan names the refusal signature"
+  pass "the hosted-region opt-in refusal classifies as depletion even when the router reports none"
+}
+
+{
+  setup_case refusal-apply apply-f1 "$STEP_CHAIN" "$REFUSAL_LINE" none
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-f1 apply 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "refusal apply should succeed, rc=$rc: $out"
+  handoff_args=$(cat "$FM_FAKE_HANDOFF_LOG")
+  assert_contains "$handoff_args" "--model gemini-3.6-flash-high" "refusal apply carries the next model"
+  route_calls=$(cat "$CASE_DIR/route.calls")
+  assert_contains "$route_calls" "gemini-3.7-flash-high" "the step-down walks from the dispatched model, never re-opening class choice"
+  status_log=$(cat "$CASE_HOME/state/apply-f1.status")
+  assert_contains "$status_log" "hosted-region opt-in refusal" "the switch stays visible in status reporting"
+  pass "the refusal auto-moves in place within the dispatched lane with the same visibility and cursor semantics"
+}
+
+{
+  setup_case refusal-near-miss plan-f2 "$STEP_CHAIN" 'working: the vendor asks every user to opt in to the new beta program' none
+  out=$("$FALLBACK" plan-f2 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "near-miss plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "opt-in wording without the hosted-region anchor plans nothing"
+  setup_case refusal-near-miss-2 plan-f3 "$STEP_CHAIN" 'working: the model card notes weights hosted in China for the open release' none
+  out=$("$FALLBACK" plan-f3 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "near-miss plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "hosted-region wording without the opt-in anchor plans nothing"
+  pass "partial refusal wording never triggers a step-down on its own"
+}
+
+{
+  setup_case refusal-router-wins plan-f4 "$STEP_CHAIN" "$REFUSAL_LINE" depleted
+  out=$("$FALLBACK" plan-f4 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "router-depleted plan should succeed, rc=$rc: $out"
+  assert_contains "$out" 'signature="Error 429 - Resource Exhausted"' "the router's own signature wins when both fire"
+  pass "an already-classified depletion keeps the router's signature"
+}
+
 printf 'All fm-model-fallback tests passed.\n'

@@ -516,7 +516,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 
 Depletion is answered by code, not improvisation: `bin/fm-model-fallback.sh <task-id> plan|apply` owns the whole response mechanically.
 At the supervision status-event boundary, `bin/fm-watch.sh` invokes `apply` automatically for ship and scout tasks; without fresh classified depletion evidence, `apply` refuses and does not relaunch the worker.
-Its depletion detector is `llm-router-axi classify-evidence`, the single owner of the subscription-exhaustion vocabulary.
+Its depletion detector is `llm-router-axi classify-evidence`, the single owner of the subscription-exhaustion vocabulary, plus the hosted-region opt-in refusal signature owned by `bin/fm-model-fallback.sh`.
 Its step-down chain is `llm-router-axi route chain`, which walks the router policy's `modelFallback`, `modelFallbackCycles`, and `fallbackLanes`; `bin/fm-model-fallback.sh` executes the returned move through `bin/fm-runtime-handoff.sh`, which preserves the worktree, branch, commits, and uncommitted changes in place.
 `apply` classifies worker-written status-file text after the byte cursor recorded in the task's `fallback_cursor=` meta key, excluding its own exact automatic-fallback visibility event while retaining that event in the log, so one piece of evidence can never cause two step-downs.
 Before classification, `apply` drops every line whose leading verb is the declared-pause verb (`bin/fm-classify-lib.sh`'s `status_is_paused`), so depletion words inside firstmate's own after-the-fact `paused:` bookkeeping never relaunch an endpoint stopped on purpose.

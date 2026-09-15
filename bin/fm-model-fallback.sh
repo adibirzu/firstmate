@@ -27,9 +27,11 @@
 #      waiting out) must never be read as live evidence, so an endpoint
 #      fm-control deliberately stopped is never relaunched from its own
 #      after-the-fact status note. Only what remains is classified through
-#      `llm-router-axi classify-evidence`, whose subscription vocabulary is
-#      the single owner of depletion signatures. No evidence, no fallback - a
-#      healthy or ambiguous worker is never relaunched by this script.
+#      `llm-router-axi classify-evidence` plus this script's hosted-region
+#      opt-in refusal signature below: the router owns the
+#      subscription-exhaustion vocabulary, this script owns the refusal
+#      anchors, and either firing means depletion. No evidence, no fallback -
+#      a healthy or ambiguous worker is never relaunched by this script.
 #   3. Asks `llm-router-axi route chain --harness <h> --model <m> --json` for
 #      the next move: the entry after the recorded model is next; a model
 #      absent from its chain steps to the chain head; the chain's last entry
@@ -194,19 +196,45 @@ if [ -n "$EVIDENCE_RAW" ]; then
 $EVIDENCE_RAW
 EOF_EVIDENCE
 fi
+# Hosted-region opt-in refusal (this script is the single owner of this
+# signature; the router's subscription vocabulary does not cover it). A worker
+# whose model answers but refuses to serve without an explicit opt-in to
+# China-hosted inference (e.g. `latest version only available hosted in China,
+# requires explicit opt in`) is unavailable, not up against a working ceiling,
+# so it depletes exactly like quota exhaustion. The match requires both stable
+# anchors, case-insensitive - `hosted in china` and `opt in`/`opt-in` - and
+# never fires on volatile model-name or version wording alone, so either
+# anchor on its own stays quiet.
+REFUSAL_SIGNATURE='hosted-region opt-in refusal'
+evidence_has_refusal() {  # reads $EVIDENCE_TEXT
+  local lowered
+  lowered=$(printf '%s' "${EVIDENCE_TEXT:-}" | tr '[:upper:]' '[:lower:]')
+  case "$lowered" in
+    *'hosted in china'*)
+      case "$lowered" in
+        *'opt in'*|*'opt-in'*) return 0 ;;
+      esac ;;
+  esac
+  return 1
+}
+
 CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
   | "$ROUTER" classify-evidence 2>/dev/null \
   || printf 'classification=none\n')
 case "$CLASSIFICATION" in
   classification=depleted*) ;;
   *)
-    if [ "$VERB" = plan ]; then
-      echo "action=none"
-      echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
+    if evidence_has_refusal; then
+      CLASSIFICATION=$(printf 'classification=depleted\nsignature="%s"\n' "$REFUSAL_SIGNATURE")
     else
-      die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
+      if [ "$VERB" = plan ]; then
+        echo "action=none"
+        echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
+      else
+        die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
+      fi
+      exit 0
     fi
-    exit 0
     ;;
 esac
 SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
