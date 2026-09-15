@@ -90,6 +90,7 @@ config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitig
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/code-review  optional JSON policy for bin/fm-review.sh's deterministic-first code review (size threshold, risk patterns, Stage 2 mode/provider/model); LOCAL, gitignored; absent = built-in defaults; inherited by secondmate homes like every other config/ file; see docs/code-review.md
+config/remote-dev-backend  remote development session backend override; LOCAL, gitignored, and NOT inherited (absent = herdr, "tmux" = explicit fallback); see docs/remote-dev-sessions.md
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
@@ -132,6 +133,7 @@ state/               runtime records and signals; gitignored
   station-idle-<station>.check.sh  generated per-station idle-window poll shim and its .check-trust binding; present only after bin/fm-station-idle.sh arm <station>; its dedupe record .station-idle-<station> is what keeps a proven idle window from being reported on every poll (docs/remote-secondmates.md "Idle-window update gate")
   mail.check.sh      generated received-mail poll shim and its .check-trust binding; present only after bin/fm-mail-check.sh arm; report record .mail-check (mail schema: docs/configuration.md "Mail plane")
   .mail-seen .mail-woken .mail-retry .mail-retry-pos .mail-turn .mail-seen.lock  mail-plane poll cursor, emission journal, transient-fetch retry set, retry-scan position, contended-slot turn flag, and overlapping-poll lock; written only by bin/fm-mail.sh (mail schema: docs/configuration.md "Mail plane")
+  remote-dev-sessions/<station>.session  durable per-station remote development session continuity record (host, backend, session, workspace/window, tab/pane, task id, project, branch, worktree, spawn generation, return channel); written only by bin/fm-remote-dev-session.sh, surfaced by bin/fm-fleet-snapshot.sh and bin/fm-fleet-view.sh; docs/remote-dev-sessions.md owns the schema
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (section 13)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
