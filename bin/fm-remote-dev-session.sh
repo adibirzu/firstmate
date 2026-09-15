@@ -236,9 +236,7 @@ resolve_station() {  # <station>
     fi
   done < "$REG"
   if [ "$matches" -eq 0 ]; then
-    # A station with no registered home is still reachable by its own name as an
-    # SSH alias, exactly as the idle-window probe treats it.
-    STATION_HOST=$station
+    fail "no registered remote station for $station"
   fi
   return 0
 }
@@ -525,6 +523,14 @@ esac
 # is a no-op for the operator.
 load_record_if_present
 if [ -z "$TARGET_ID" ] && [ "$ACTION" = recover ] && [ -f "$RECORD_PATH" ]; then
+  if [ -z "$BACKEND_FLAG" ]; then
+    RESOLVED_BACKEND=$(record_field backend || true)
+  fi
+  if [ -z "$SESSION_FLAG" ]; then
+    RESOLVED_SESSION=$(record_field session || true)
+  fi
+  ATTACH_COMMAND=$(fm_rds_attach_command "$RESOLVED_BACKEND" "$STATION_LOCAL" "$STATION_HOST" "$RESOLVED_SESSION") \
+    || fail "continuity record has an invalid attach target"
   recorded_id=$(record_field task_id || true)
   if [ -n "$recorded_id" ]; then
     if [ -f "$STATE/$recorded_id.meta" ] && [ "$(fm_rds_meta_value "$STATE/$recorded_id.meta" kind || true)" = secondmate ]; then

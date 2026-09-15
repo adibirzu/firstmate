@@ -45,13 +45,13 @@ assert_contains "$(cat "$out")" 'check=ok' "the live station did not pass the re
 assert_contains "$(cat "$out")" 'attach:' "the live check did not render an attach command"
 assert_contains "$(cat "$out")" "station=$STATION" "the live check did not name the station"
 
-# The tmux fallback renders an equivalent stable reference without launching.
 status=0
 "$ROOT/bin/fm-remote-dev-session.sh" check "$STATION" --secondmate "$MATE" --backend tmux >"$out" 2>&1 || status=$?
-if [ "$status" -ne 0 ]; then
-  fail "live tmux check failed for station $STATION: $(cat "$out")"
+if [ "$status" -eq 0 ]; then
+  fail "live tmux check unexpectedly accepted remote secondmate $MATE on station $STATION"
 fi
-assert_contains "$(cat "$out")" 'tmux attach -t' "the live tmux check did not render the tmux attach command"
+assert_contains "$(cat "$out")" 'require the herdr backend' \
+  "the live tmux check did not reject the incompatible backend"
 
 rm -f "$out"
 pass "live remote development session check passes for $STATION"

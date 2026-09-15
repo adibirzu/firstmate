@@ -110,7 +110,7 @@ fm_rds_record_write() {  # <path> <key=value>...
 # returns non-zero for an absent, malformed, duplicate-key, or wrong-schema
 # record. The schema line must appear first.
 fm_rds_record_read() {  # <path>
-  local path=$1 line key value seen='' first=1
+  local path=$1 line key value required seen='' first=1
   if [ ! -f "$path" ] || [ -L "$path" ]; then
     return 1
   fi
@@ -136,6 +136,12 @@ fm_rds_record_read() {  # <path>
     printf '%s=%s\n' "$key" "$value"
   done < "$path"
   [ "$first" -eq 0 ] || return 1
+  for required in $FM_RDS_KEYS; do
+    case "$seen" in
+      *$'\n'"$required"$'\n'*) ;;
+      *) return 1 ;;
+    esac
+  done
   return 0
 }
 

@@ -159,10 +159,7 @@ test_snapshot_omits_malformed_remote_dev_session_records() {
   home=$(make_home invalid-remote-dev-session)
   mkdir -p "$home/state/remote-dev-sessions"
   record="$home/state/remote-dev-sessions/adi2.session"
-  printf '%s\n' \
-    'schema=fm-remote-dev-session.v1' \
-    'station=adi2' \
-    'station=other' > "$record"
+  printf '%s\n' 'schema=fm-remote-dev-session.v1' > "$record"
 
   out=$(FM_HOME="$home" "$SNAPSHOT" --json)
   printf '%s' "$out" | jq -e '.remote_dev_sessions == []' >/dev/null \

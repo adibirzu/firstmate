@@ -306,6 +306,21 @@ test_remote_secondmate_refuses_the_tmux_backend() {
   pass "remote secondmates refuse the incompatible tmux backend"
 }
 
+test_unregistered_remote_station_refuses() {
+  local home repo status out
+  home=$(make_home station-unregistered)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 tmux "$repo"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" open unknown-station --task t1 --backend tmux)
+  expect_code 1 "$status" "an unregistered remote station must refuse"
+  assert_contains "$(cat "$out")" 'no registered remote station' \
+    "the unregistered station refusal was not reported"
+  pass "unregistered remote stations refuse instead of using arbitrary SSH aliases"
+}
+
 test_tmux_backend_is_explicit_and_renders_an_equivalent_attach() {
   local home repo status out rec
   home=$(make_home tmux)
@@ -613,6 +628,29 @@ test_recover_is_idempotent_and_inherits_the_recorded_target() {
   pass "recover is idempotent and inherits the recorded target"
 }
 
+test_recover_preserves_recorded_backend_and_session() {
+  local home repo status out rec
+  home=$(make_home recover-recorded-route)
+  repo=$(make_repo "$home" alpha)
+  write_registry "$home" "$REMOTE_RECORD"
+  write_meta "$home" t1 tmux "$repo"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    open adi2 --task t1 --project alpha --backend tmux --session custom-session)
+  expect_code 0 "$status" "first tmux open exit"
+  printf 'herdr\n' > "$home/config/remote-dev-backend"
+  status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
+    recover adi2)
+  expect_code 0 "$status" "recover exit"
+  rec="$home/state/remote-dev-sessions/adi2.session"
+  assert_grep 'backend=tmux' "$rec" "recover replaced the recorded backend"
+  assert_grep 'session=custom-session' "$rec" "recover replaced the recorded session"
+  assert_contains "$(cat "$out")" 'tmux attach -t custom-session' \
+    "recover did not render the recorded tmux session"
+  pass "recover preserves its recorded backend and session without overrides"
+}
+
 test_status_and_attach_read_the_record() {
   local home repo status out rec
   home=$(make_home read)
@@ -639,6 +677,22 @@ test_status_and_attach_read_the_record() {
   status=$(run_cmd "$home" "$out" status adi2)
   expect_code 1 "$status" "a malformed record must refuse"
   pass "status and attach read the durable record and a malformed record refuses"
+}
+
+test_incomplete_record_refuses_status() {
+  local home status out record
+  home=$(make_home incomplete-record)
+  write_registry "$home" "$REMOTE_RECORD"
+  mkdir -p "$home/state/remote-dev-sessions"
+  record="$home/state/remote-dev-sessions/adi2.session"
+  printf '%s\n' 'schema=fm-remote-dev-session.v1' > "$record"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" status adi2)
+  expect_code 1 "$status" "an incomplete record must refuse"
+  assert_contains "$(cat "$out")" 'continuity record is malformed' \
+    "the incomplete record refusal was not reported"
+  pass "status refuses continuity records missing required fields"
 }
 
 test_attach_refuses_a_tampered_command() {
@@ -737,6 +791,7 @@ test_tmux_backend_is_explicit_and_renders_an_equivalent_attach
 test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
 test_remote_secondmate_refuses_the_tmux_backend
+test_unregistered_remote_station_refuses
 test_unknown_backend_refuses
 test_unknown_liveness_refuses_to_relaunch
 test_idle_remote_secondmate_attaches_without_relaunch
@@ -748,7 +803,9 @@ test_a_duplicate_branch_refuses
 test_a_stale_base_refuses
 test_a_branch_already_landed_refuses
 test_recover_is_idempotent_and_inherits_the_recorded_target
+test_recover_preserves_recorded_backend_and_session
 test_status_and_attach_read_the_record
+test_incomplete_record_refuses_status
 test_attach_refuses_a_tampered_command
 test_list_reports_records
 test_invalid_use_refuses
