@@ -584,6 +584,8 @@ if [ "$TARGET_KIND" = secondmate ]; then
   [ -n "$PROJECT" ] || PROJECT=$TARGET_ID
 else
   [ -f "$STATE/$TARGET_ID.meta" ] || fail "no task record for $TARGET_ID at $STATE/$TARGET_ID.meta"
+  [ "$(fm_rds_meta_value "$STATE/$TARGET_ID.meta" kind 2>/dev/null || true)" != secondmate ] \
+    || fail "$TARGET_ID is a second mate; use --secondmate"
   [ -n "$PROJECT" ] || PROJECT=$(fm_rds_meta_value "$STATE/$TARGET_ID.meta" project 2>/dev/null || true)
   PROJECT=${PROJECT##*/}
 fi

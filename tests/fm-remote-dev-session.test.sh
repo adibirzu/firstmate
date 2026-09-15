@@ -307,6 +307,20 @@ test_remote_secondmate_refuses_the_tmux_backend() {
   pass "remote secondmates refuse the incompatible tmux backend"
 }
 
+test_task_selector_refuses_a_secondmate_record() {
+  local home status out
+  home=$(make_home mate-task-selector)
+  write_registry "$home" "$REMOTE_RECORD"
+  printf 'kind=secondmate\n' > "$home/state/infra-remote.meta"
+  out="$home/out.txt"
+
+  status=$(run_cmd "$home" "$out" check adi2 --task infra-remote --backend tmux)
+  expect_code 1 "$status" "a secondmate record must refuse the task selector"
+  assert_contains "$(cat "$out")" 'use --secondmate' \
+    "the secondmate selector guidance was not reported"
+  pass "task selection cannot bypass remote secondmate backend rules"
+}
+
 test_unregistered_remote_station_refuses() {
   local home repo status out
   home=$(make_home station-unregistered)
@@ -916,6 +930,7 @@ test_tmux_backend_is_explicit_and_renders_an_equivalent_attach
 test_tmux_config_fallback_never_replaces_a_failed_herdr
 test_tmux_readiness_gap_refuses
 test_remote_secondmate_refuses_the_tmux_backend
+test_task_selector_refuses_a_secondmate_record
 test_unregistered_remote_station_refuses
 test_station_prefix_requires_the_resolved_secondmate_route
 test_conflicting_target_selectors_refuse
