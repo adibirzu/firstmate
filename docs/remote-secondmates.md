@@ -9,6 +9,7 @@ The remote second-mate agent itself always runs on the [Herdr backend](herdr-bac
 The user's interactive Herdr session remains `default` and is not a remote-secondmate prerequisite.
 Herdr's remote-session server belongs to the host's own GUI login session rather than to the SSH connection, so the agent's endpoint survives every disconnection the primary's supervision depends on.
 Local second mates are unaffected and keep their ordinary backend and session selection, as do the workers a remote second mate supervises inside its own home.
+Watching or reconnecting to a station's development session from the primary is owned by [`remote-dev-sessions.md`](remote-dev-sessions.md).
 
 ## Prerequisites
 

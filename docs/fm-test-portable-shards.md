@@ -5,47 +5,72 @@
 
 ## Verification inputs
 
-The current candidate timings came from the 2026-08-20 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
-The proof ran 24 candidates with four workers and no failures.
+The parallel lanes are balanced on CI-measured per-script maxima, not on the local concurrent proof.
+The 2026-08-20 proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) still owns the *membership* of the proven-isolated set; it is a poor balance source because a hosted runner is far slower than the proof machine.
+Several of its durations are low by 3-16x: `tests/fm-lint.test.sh` measured 9766 ms there and up to 160345 ms in CI, `tests/fm-pr-merge.test.sh` 6290 ms against 118197 ms, and `tests/fm-captain-hold-lifecycle.test.sh` 35095 ms against 302454 ms.
+
+These are the slowest `duration_ms` per script across the `fm-test-timing-portable-parallel-*` artifacts of four green `adibirzu/firstmate` main runs on 2026-09-14 and 2026-09-15 - [34862039579](https://github.com/adibirzu/firstmate/actions/runs/34862039579), [34864676099](https://github.com/adibirzu/firstmate/actions/runs/34864676099), [34891809040](https://github.com/adibirzu/firstmate/actions/runs/34891809040), and [34931366868](https://github.com/adibirzu/firstmate/actions/runs/34931366868) - plus [34962817564](https://github.com/adibirzu/firstmate/actions/runs/34962817564), whose shard 1 was cancelled at its job cap.
+That cancelled shard uploaded no artifact, so its per-script values are read from the job log's `FM_TEST_END` lines; it is the slow-runner case the balance has to survive, so its maxima are kept.
 
 | duration_ms | script |
 |---:|---|
-| 45356 | `tests/fm-backend-herdr.test.sh` |
-| 35415 | `tests/fm-x-mode.test.sh` |
-| 35095 | `tests/fm-captain-hold-lifecycle.test.sh` |
-| 27529 | `tests/fm-arm-pretool-check.test.sh` |
-| 20922 | `tests/fm-test-run.test.sh` |
-| 17558 | `tests/fm-crew-state.test.sh` |
-| 16582 | `tests/fm-cd-pretool-check.test.sh` |
-| 9766 | `tests/fm-lint.test.sh` |
-| 9562 | `tests/fm-herdr-lab.test.sh` |
-| 6768 | `tests/fm-grok-harness.test.sh` |
-| 6290 | `tests/fm-pr-merge.test.sh` |
-| 5569 | `tests/fm-composer-ghost.test.sh` |
-| 4563 | `tests/fm-send-popup-settle.test.sh` |
-| 4021 | `tests/fm-tmux-submit-busy.test.sh` |
-| 3544 | `tests/fm-composer-lib.test.sh` |
-| 3025 | `tests/fm-send-strict.test.sh` |
-| 2753 | `tests/fm-send-settle.test.sh` |
-| 2166 | `tests/fm-review-diff.test.sh` |
-| 1315 | `tests/fm-brief.test.sh` |
-| 975 | `tests/fm-spawn-batch.test.sh` |
-| 598 | `tests/fm-pi-primary-types.test.sh` |
-| 513 | `tests/fm-ensure-agents-md.test.sh` |
-| 331 | `tests/fm-supervision-instructions.test.sh` |
-| 99 | `tests/fm-transition-lib.test.sh` |
+| 302454 | `tests/fm-captain-hold-lifecycle.test.sh` |
+| 160345 | `tests/fm-lint.test.sh` |
+| 118197 | `tests/fm-pr-merge.test.sh` |
+| 113352 | `tests/fm-test-run.test.sh` |
+| 51012 | `tests/fm-backend-herdr.test.sh` |
+| 31953 | `tests/fm-arm-pretool-check.test.sh` |
+| 28468 | `tests/fm-x-mode.test.sh` |
+| 19879 | `tests/fm-grok-harness.test.sh` |
+| 17306 | `tests/fm-cd-pretool-check.test.sh` |
+| 16263 | `tests/fm-crew-state.test.sh` |
+| 7655 | `tests/fm-herdr-lab.test.sh` |
+| 5620 | `tests/fm-send-popup-settle.test.sh` |
+| 4919 | `tests/fm-composer-lib.test.sh` |
+| 4124 | `tests/fm-send-strict.test.sh` |
+| 3980 | `tests/fm-pi-primary-types.test.sh` |
+| 2974 | `tests/fm-review-diff.test.sh` |
+| 2765 | `tests/fm-composer-ghost.test.sh` |
+| 2586 | `tests/fm-spawn-batch.test.sh` |
+| 2529 | `tests/fm-tmux-submit-busy.test.sh` |
+| 2176 | `tests/fm-send-settle.test.sh` |
+| 1918 | `tests/fm-brief.test.sh` |
+| 904 | `tests/fm-ensure-agents-md.test.sh` |
+| 306 | `tests/fm-supervision-instructions.test.sh` |
+| 100 | `tests/fm-transition-lib.test.sh` |
+
+Refresh these the same way as the serial hints, against the parallel artifact names:
+
+```sh
+for run in <fork-run-id> <fork-run-id> <fork-run-id>; do
+  gh run download "$run" -R adibirzu/firstmate --pattern 'fm-test-timing-portable-parallel-*' -D "/tmp/fm-par/$run"
+done
+jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-par/*/*/*.json \
+  | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
+  | LC_ALL=C sort -k2 -rn
+bin/fm-test-run.sh --check-coverage
+```
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment from those measured durations.
+The two parallel lanes use longest-processing-time assignment from those measured maxima.
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-parallel-1` | 11 | 134295 ms (~134.3 s) |
-| `portable-parallel-2` | 13 | 126020 ms (~126.0 s) |
-| imbalance | | 8275 ms |
+| `portable-parallel-1` | 13 | 450741 ms (~7.51 min) |
+| `portable-parallel-2` | 11 | 451044 ms (~7.52 min) |
+| imbalance | | 303 ms |
 
 `bin/fm-test-run.sh` contains the exact ordered memberships in `list_portable_parallel_1` and `list_portable_parallel_2`.
+
+`tests/fm-pi-primary-types.test.sh` must stay in shard 1.
+Only the shard 1 CI job installs `@earendil-works/pi-coding-agent` and passes `--fail-on-gate-skip 'Pi extension typecheck prerequisite not found'`, so in shard 2 that script would gate-skip silently instead of running.
+Any future rebalance either keeps it in shard 1 or moves the install and the gate-skip flag with it.
+
+Balancing on the proof's local durations was not a cosmetic error.
+Against the maxima above, the previous partition put 653541 ms (~10.89 min) on shard 1 and 248244 ms (~4.14 min) on shard 2: shard 1 exceeded its own 10-minute job cap while shard 2's runner finished in about four minutes and sat idle.
+That shard ran 9m10s on [34931366868](https://github.com/adibirzu/firstmate/actions/runs/34931366868) and was cancelled at the cap on [34962817564](https://github.com/adibirzu/firstmate/actions/runs/34962817564) partway through `tests/fm-lint.test.sh`, after a branch added shell files for that script's ShellCheck sweep to cover.
+Rebalancing restores roughly 1.3x tripwire margin on both runners without changing which scripts run.
 
 ## Portable serial remainder
 
@@ -137,7 +162,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 | Lane | Bound | Rationale |
 |---|---|---|
-| portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
+| portable parallel 1/2 | job `timeout-minutes: 10` | Each balanced shard carries about 7.5 minutes of conservative CI-measured weight, leaving roughly 1.3x hang-tripwire margin. Balancing these on the local isolation proof instead put shard 1 at ~10.9 minutes and cancelled it at the cap, so refresh the maxima above from CI artifacts whenever the proven-isolated set changes. |
 | portable serial 1-6 | job `timeout-minutes: 20` | Each balanced shard carries about 16.6 minutes of conservative assignment weight and the recent worst observed shard is about 15.5 minutes, leaving roughly 1.2-1.4x hang-tripwire margin for job setup and runner-speed spread. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
