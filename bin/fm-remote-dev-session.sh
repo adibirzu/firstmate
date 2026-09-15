@@ -377,8 +377,8 @@ endpoint_liveness() {  # <id>
   state=$(printf '%s\n' "$line" | sed -n 's/^state: *\([a-z-]*\).*/\1/p' | head -1)
   case "$state" in
     working|parked|blocked) return 0 ;;
-    '') return 2 ;;
-    *) return 1 ;;
+    done|failed) return 1 ;;
+    *) return 2 ;;
   esac
 }
 
