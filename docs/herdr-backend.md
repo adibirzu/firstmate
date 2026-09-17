@@ -443,9 +443,11 @@ If the recorded tab belongs to a different session than the one `open` was given
 Session targeting is always explicit: `--session`, then `FM_FLEET_VIEW_SESSION`, then local gitignored `config/fleet-view-session`, then the real `default` session.
 Every verb touches only its own recorded tab, in the session that recorded it, and the surface never calls a server-global or session-lifecycle operation.
 
-Regeneration is explicit only: an operator, or any caller that wants an up-to-date view, re-runs `open` (or `refresh`) directly.
-There is no watcher, poll loop, or background process, and nothing in firstmate calls this primitive automatically today.
-Wiring automatic regeneration into the supervision heartbeat and after each task completion, as recommended by the fleet-view decision set, is tracked as the pending decision `fm-fleet-view-decision-view-regeneration-trigger` and is not implemented here.
+Regeneration happens in two places, both riding work that is already happening and neither adding a daemon, service, poll loop, or state source.
+The supervision heartbeat in `bin/fm-watch.sh` calls `refresh --best-effort` once per due heartbeat, and the successful task-completion path in `bin/fm-teardown.sh` calls it once after its backlog transition.
+Both go through the same non-disruptive `refresh --best-effort` form, owned by `bin/fm-fleet-live.sh`'s header: it refreshes only an already-recorded tab, in the session that recorded it, under `FM_FLEET_LIVE_TIMEOUT` (default 5 seconds), and every failure or absence - no record, no Herdr or jq, a mismatched session, a dead pane, or a hung refresh - is a silent no-op that prints nothing and returns zero.
+It never opens a tab the captain did not ask for, never writes a wake or status line, and never delays or fails the supervision cycle that carries it.
+An operator can still re-run `open` or `refresh` directly, and the lab smoke test drives the real binary through the same verbs.
 Production and convergence stay display-only, and an optional release manifest is consumed through the documented, schema-agnostic seam described in `bin/fm-fleet-view.sh`'s header.
 
 ## Regression entry points

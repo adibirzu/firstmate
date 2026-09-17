@@ -2014,6 +2014,64 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+# A completed task is a boundary the live fleet view rides: teardown must invoke
+# the one-owner best-effort refresh exactly once, as 'refresh --best-effort'.
+# FM_FLEET_LIVE_BIN is the documented test seam for that entry point, so this
+# proves the wiring without a real Herdr.
+test_teardown_invokes_the_fleet_view_refresh() {
+  local case_dir rc log stub
+  case_dir=$(make_case fleet-refresh)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unpushed work"
+  log="$case_dir/refresh-calls.log"
+  stub="$case_dir/fleet-live-stub.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_LIVE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$stub"
+
+  set +e
+  FM_FLEET_LIVE_BIN="$stub" FM_FLEET_LIVE_STUB_LOG="$log" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "fleet-refresh: teardown should succeed"
+  [ -s "$log" ] || fail "fleet-refresh: a successful task completion did not invoke the fleet-view refresh"
+  grep -Fx "refresh --best-effort" "$log" >/dev/null \
+    || fail "fleet-refresh: the refresh was not invoked as 'refresh --best-effort': $(cat "$log")"
+  pass "a successful task completion invokes the best-effort fleet-view refresh"
+}
+
+# The refresh is non-disruptive: its own failure must never change teardown's
+# result or leak output into the teardown run.
+test_teardown_ignores_a_fleet_view_refresh_failure() {
+  local case_dir rc stub
+  case_dir=$(make_case fleet-refresh-fails)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unpushed work"
+  stub="$case_dir/fleet-live-stub.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+echo "boom" >&2
+exit 7
+SH
+  chmod +x "$stub"
+
+  set +e
+  FM_FLEET_LIVE_BIN="$stub" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "fleet-refresh-fails: a failing refresh must not fail teardown"
+  ! grep -q "boom" "$case_dir/stdout" || fail "fleet-refresh-fails: refresh stderr leaked into teardown stdout"
+  ! grep -q "boom" "$case_dir/stderr" || fail "fleet-refresh-fails: refresh stderr leaked into teardown stderr"
+  pass "a failing fleet-view refresh never changes a successful task completion"
+}
+
 # Mark the case's home as a secondmate home bound to a parent: teardown and
 # fm-pr-check run with FM_HOME="$case_dir/home" so the parent-channel
 # publishers resolve that binding while the task state stays in $case_dir/state.
@@ -3892,6 +3950,12 @@ EOF
 # regression: no Herdr or live harness is required.
 test_endpoint_process_tree_reaps_setsid_descendant() {
   local case_dir rc root_pid survivor_pid survived=0 child_cwd i=0
+  # The escaped-child fixture needs setsid(1), which macOS does not ship; the
+  # Linux run keeps the full coverage. Skip the Darwin run of this case.
+  if ! command -v setsid >/dev/null 2>&1; then
+    pass "the endpoint process-tree reap removes a setsid descendant; skipped where setsid is unavailable ($(uname))"
+    return
+  fi
   case_dir=$(make_case endpoint-tree-reap)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
@@ -4039,6 +4103,8 @@ test_no_mistakes_origin_remote_allows
 test_teardown_returns_worktree_under_project_pool_home
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_teardown_invokes_the_fleet_view_refresh
+test_teardown_ignores_a_fleet_view_refresh_failure
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes

@@ -2638,6 +2638,13 @@ EOF
   # base cadence. A surfaced non-heartbeat wake also resets the streak in wake().
   hb=$(heartbeat_interval)
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
+    # Ride the existing heartbeat to keep the live fleet view current. This is
+    # a single guarded line into the one owner of the refresh contract
+    # (bin/fm-fleet-live.sh's header): `refresh --best-effort` refreshes only an
+    # already-recorded view tab, never opens one, and is a silent, bounded no-op
+    # on any failure or absence, so it can never delay or fail this cycle. No
+    # new daemon, poll loop, or state source is introduced here.
+    "${FM_FLEET_LIVE_BIN:-$SCRIPT_DIR/fm-fleet-live.sh}" refresh --best-effort >/dev/null 2>&1 || true
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,
