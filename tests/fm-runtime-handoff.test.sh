@@ -587,8 +587,8 @@ setup_case() {
   fi
   meta=$(cat "$CASE_HOME/state/task-pv3.meta")
   assert_contains "$meta" "harness=opencode" "same adapter recorded"
-  assert_contains "$meta" "provider=claude" "keeping the recorded adapter keeps its borrowed provider"
-  pass "a same-harness relaunch preserves the recorded routing provider"
+  assert_contains "$meta" "provider=opencode" "a native opencode target re-declares its own provider"
+  pass "a same-harness relaunch to native opencode re-declares opencode's own provider"
 }
 
 {
@@ -597,13 +597,13 @@ setup_case() {
   rm -f "$CASE_HOME/state/task-pv4.meta.bak"
   export FM_FAKE_WINDOW_PRESENT=1
   export FM_FAKE_PANE_CMD=bash
-  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv4 --harness opencode --skip-exit 2>&1); then
+  if out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-pv4 --harness pi --skip-exit 2>&1); then
     :
   else
     fail "cross-harness handoff into a non-native adapter should succeed: $out"
   fi
   meta=$(cat "$CASE_HOME/state/task-pv4.meta")
-  assert_contains "$meta" "harness=opencode" "target adapter recorded"
+  assert_contains "$meta" "harness=pi" "target adapter recorded"
   case "$meta" in
     *provider=*) fail "no provable provider exists for the target; none may be invented: $meta" ;;
   esac
