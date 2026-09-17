@@ -51,7 +51,8 @@ When the launcher has no Herdr workspace to inherit, the adapter maintains one d
 The primary home label is `firstmate`.
 A primary home running a berthed session labels that workspace `firstmate@<berth>`, so concurrent per-project sessions in one home stay visibly separate (see [configuration](configuration.md#session-berths-configberths)).
 The `@` separator keeps a berth distinguishable from the legacy `firstmate-<id>` secondmate workspaces noted below, which are never migrated automatically.
-A secondmate home label is `2ndmate-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker.
+A secondmate home label is `2m-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker.
+Workspaces created before the short label carry the legacy `2ndmate-<secondmate-id>` form; they are never renamed or migrated, and every label matcher keeps accepting them.
 A secondmate launched by the primary receives a narrowly scoped home override during container creation.
 
 Attach to the selected named Herdr session and switch to the relevant home workspace to watch its task tabs.
@@ -72,7 +73,7 @@ That covers a missing or unusable socket identity, a closed or unreadable launch
 
 Firstmate running outside Herdr entirely has no launcher workspace to inherit, so its workers use this home's own labeled workspace, created on first use.
 That path needs the home label to identify exactly one workspace: two workspaces sharing it are an unresolvable placement and refuse rather than adopting either.
-Avoid naming a personal workspace `firstmate` or `2ndmate-<id>` for that reason, and because the adapter cannot distinguish that label collision from its own container.
+Avoid naming a personal workspace `firstmate`, `2m-<id>`, or legacy `2ndmate-<id>` for that reason, and because the adapter cannot distinguish that label collision from its own container.
 An older secondmate workspace using `firstmate-<id>` is not migrated automatically; rename it manually before expecting new tasks or recovery to use it.
 Recovery and list-live still scan the first workspace matching the home label, because they address panes they already recorded rather than choosing where new work goes.
 
@@ -82,18 +83,27 @@ Closing its last tab can remove the workspace, and the next spawn recreates it.
 
 ## Session naming
 
-Each new task tab Firstmate creates is labelled with the captain-visible display name `<prefix>-[<host>-]<project>-<task-id>`, composed by `bin/fm-herdr-name-lib.sh` so the fleet is readable on any connected machine.
+Each new task tab Firstmate creates is labelled with the captain-visible display name `<prefix>-[<host>-][<owner>-]<project>-<task-id>`, composed by `bin/fm-herdr-name-lib.sh` so the fleet is readable on any connected machine.
+`<owner>` is the launching firstmate home's workspace label (`firstmate`, `2m-<id>`), so one tab names the ship under work, the firstmate running it, and the work itself; an absent owner keeps the legacy owner-less shape byte-identical, and a mate-launched task renders e.g. `adix-adi1-2m-lifeos-adi1-usage-axi-add-quota-window`.
 The prefix comes from local gitignored `config/herdr-session-prefix` and defaults to `adix`; it is inherited by secondmate homes so one branding prefix names the whole fleet.
 `<host>` is inserted only when the home has an explicit host token: `FM_HERDR_HOST`, or local gitignored `config/herdr-session-host`.
 An unconfigured home therefore renders the plain `<prefix>-<project>-<task-id>`, and a host-configured home renders `<prefix>-<host>-<project>-<task-id>`.
 `config/herdr-session-host` is local and deliberately not inherited, because which machine a home runs on is a property of that machine.
 A remote secondmate's initial launch seeds its own home's `config/herdr-session-host` with the route's registry host token when that file is absent, never clobbering an operator override, so the mate's own tab and every crewmate or scout it later spawns from that home share one host segment.
 `<project>` is the registered project name (`firstmate` for a firstmate-repo task, the secondmate id for a secondmate agent), and `<task-id>` is the task id with one leading `fm-` stripped.
-An adjacent duplicate segment collapses, so a secondmate agent (whose project equals its own id) renders `<prefix>-<id>` rather than repeating itself.
+An adjacent duplicate segment collapses, so a primary-home firstmate-repo task (owner and project both `firstmate`) renders `<prefix>-firstmate-<task>`, and a secondmate agent (whose project equals its own id) renders `<prefix>-<owner>-<id>` rather than repeating itself.
 
 The name is additive display only.
 Identity, endpoint resolution, supervision, teardown, and recovery keep using the recorded `state/<id>.meta` endpoint, so `bin/fm-fleet-view.sh` and `bin/fm-crew-state.sh` are unchanged.
 Only a freshly created tab takes the new name: an adopted endpoint keeps the label it was created with, a legacy `fm-<id>` tab is still matched and used as the husk-replacement alias, and an existing presentation journal reuses the label recorded in it, so no live session is renamed or restarted.
+The same holds for the short mate workspace label: a live `2ndmate-<id>` workspace keeps serving its recorded tasks (identity stays in `state/<id>.meta`, never in the label) until its tabs drain, and only newly created workspaces take the `2m-<id>` form.
+
+### Label width
+
+Herdr renders each sidebar token with a fixed cell budget and right-truncates the overflow with an ellipsis, so label order is load-bearing: the fixed fleet head (prefix, owner) precedes the variable work tail, and a truncated label still names the fleet and the owning firstmate.
+Measured against the real 0.9.0 client in an isolated lab session: the sidebar defaults to 26 columns (`ui.sidebar_width`, 18 minimum, 36 maximum, auto-scaling with workspace names), the default agents row is `state_icon, machine, workspace, tab` with the agent name on its own second row, and the default spaces row is `state_icon, workspace`.
+A 19-cell `2ndmate-lifeos-adi1` workspace already rendered as `2ndmate-lifeos-ad…` in the indented agents view while the 14-cell `2m-lifeos-adi1` form fits whole; the tab strip above the panes renders full tab labels with room to spare, which is where the longer `<prefix>-<owner>-<project>-<task>` form reads completely.
+`tests/fm-herdr-name-lib.test.sh` pins this degradation order by simulating Herdr's right-truncation at both measured budgets.
 
 ### Colour
 
