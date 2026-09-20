@@ -21,9 +21,9 @@
 # register   Record a built-in source: its adapter, its canonical id, and the
 #            exact argv to execute. argv is stored one argument per line and
 #            executed directly, so there is no shell surface and no argument
-#            splitting. An interpreter `-c` string whose `$(...)` nesting
-#            reaches FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX is refused at register
-#            and start, so stored argv cannot become recursive parser input.
+#            splitting. A known shell argv whose `$(...)` nesting reaches
+#            FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX is refused at register and
+#            start, so stored argv cannot become recursive parser input.
 #            Built-in adapters register sources; nothing here parses user text.
 # register-extension
 #            Resolve an explicitly enabled home-local process-event-adapter/1
@@ -450,7 +450,7 @@ cmd_register() {
     case "$arg" in *$'\n'*) die "argv elements cannot contain newlines" ;; esac
   done
   if fm_procevent_argv_feeds_shell_parser "$@"; then
-    die "argv must not pass command substitutions to an interpreter -c string"
+    die "argv must not pass deeply nested command substitutions to a shell"
   fi
   [ -f "$(adapter_script "$adapter")" ] || die "no installed adapter for: $adapter"
   state_root_bind create || die "cannot safely prepare the process-event state root"
@@ -763,7 +763,7 @@ cmd_start() {
   esac
   if fm_procevent_argv_feeds_shell_parser "${ARGV[@]}"; then
     fm_procevent_source_lock_release "$id"
-    die "registration argv must not pass command substitutions to an interpreter -c string: $id"
+    die "registration argv must not pass deeply nested command substitutions to a shell: $id"
   fi
   exec 7<"$(source_file "$id")" || {
     fm_procevent_source_lock_release "$id"

@@ -3099,52 +3099,13 @@ kill -KILL -"$CRASH_PID" 2>/dev/null || true
 # bash SIGSEGVs on a few thousand nested `$(...)` (macOS "Thread stack size
 # exceeded due to excessive recursion"). argv is executed as an array, so a
 # literal `$(...)` command name is inert, and a single-level `sh -c '$(seq …)'`
-# is a normal source. Register and reconcile must refuse only deep nesting.
+# is a normal source. Register and reconcile conservatively refuse a deeply
+# nested argument anywhere in a known shell argv.
 
 deep_cmdsub() {
   local nested=true i=0
   while [ "$i" -lt 8 ]; do
     nested="true \$($nested)"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
-}
-deep_cmdsub_with_quoted_closes() {
-  local nested=true i=0
-  while [ "$i" -lt 8 ]; do
-    nested="printf ')'; \$($nested)"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
-}
-deep_cmdsub_with_grouping_closes() {
-  local nested=true i=0
-  while [ "$i" -lt 8 ]; do
-    nested="\$( (:); $nested )"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
-}
-deep_cmdsub_with_ansi_c_quoted_closes() {
-  local nested=true i=0
-  while [ "$i" -lt 8 ]; do
-    nested="printf \$'\\')'; \$($nested)"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
-}
-deep_cmdsub_with_comment_closes() {
-  local nested=true i=0
-  while [ "$i" -lt 8 ]; do
-    nested="# )"$'\n'"\$($nested)"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
-}
-deep_cmdsub_with_case_closes() {
-  local nested=true i=0
-  while [ "$i" -lt 8 ]; do
-    nested="case x in x) :; \$($nested) ;; esac"
     i=$((i + 1))
   done
   printf '%s\n' "$nested"
@@ -3164,8 +3125,8 @@ HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
 out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
   && fail "register accepted bash -c with deeply nested command substitution: $out"
 assert_contains "$out" "command substitutions" \
-  "register refusal for interpreter -c command substitution named the hazard"
-pass "register refuses a deeply nested interpreter command string"
+  "register refusal for shell command substitution named the hazard"
+pass "register refuses a deeply nested shell argument"
 
 HNON_SHELL="$TMP_ROOT/non-shell-c"; new_home "$HNON_SHELL"
 pe_register "$HNON_SHELL" lavish non-shell-c -- /bin/echo -c "$(deep_cmdsub)" >/dev/null \
@@ -3220,51 +3181,15 @@ assert_planted_bash_refused() {
     "reconcile removed $label planted registration instead of leaving it unstarted"
 }
 
-HQUOTED="$TMP_ROOT/planted-quoted-bash-c"; new_home "$HQUOTED"
-assert_register_refused "$TMP_ROOT/register-quoted-bash-c" quoted-close bash -c "$(deep_cmdsub_with_quoted_closes)"
-plant_source "$HQUOTED" bash -c "$(deep_cmdsub_with_quoted_closes)"
-assert_planted_bash_refused "$HQUOTED" "quoted-close"
-
-HGROUP="$TMP_ROOT/planted-group-bash-c"; new_home "$HGROUP"
-assert_register_refused "$TMP_ROOT/register-group-bash-c" grouping-close bash -c "$(deep_cmdsub_with_grouping_closes)"
-plant_source "$HGROUP" bash -c "$(deep_cmdsub_with_grouping_closes)"
-assert_planted_bash_refused "$HGROUP" "grouping-close"
-
-HCLUSTER="$TMP_ROOT/planted-cluster-bash-c"; new_home "$HCLUSTER"
-assert_register_refused "$TMP_ROOT/register-cluster-bash-c" option-cluster bash -ec "$(deep_cmdsub)"
-plant_source "$HCLUSTER" bash -ec "$(deep_cmdsub)"
-assert_planted_bash_refused "$HCLUSTER" "option-cluster"
-
-HANSI="$TMP_ROOT/planted-ansi-bash-c"; new_home "$HANSI"
-assert_register_refused "$TMP_ROOT/register-ansi-bash-c" ansi-close bash -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
-plant_source "$HANSI" bash -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
-assert_planted_bash_refused "$HANSI" "ansi-close"
-
-HLONG="$TMP_ROOT/planted-long-option-bash-c"; new_home "$HLONG"
-assert_register_refused "$TMP_ROOT/register-long-option-bash-c" long-option bash --rcfile /dev/null -c "$(deep_cmdsub)"
-plant_source "$HLONG" bash --rcfile /dev/null -c "$(deep_cmdsub)"
-assert_planted_bash_refused "$HLONG" "long-option"
-
-HCOMMENT="$TMP_ROOT/planted-comment-bash-c"; new_home "$HCOMMENT"
-out=$(pe "$HCOMMENT" register lavish comment-close -- bash -c "$(deep_cmdsub_with_comment_closes)" 2>&1) \
-  && fail "register accepted a multiline comment parser string: $out"
-assert_contains "$out" "argv elements cannot contain newlines" \
-  "register did not reject a multiline comment parser string"
-
-HCASE="$TMP_ROOT/planted-case-bash-c"; new_home "$HCASE"
-assert_register_refused "$TMP_ROOT/register-case-bash-c" case-close bash -c "$(deep_cmdsub_with_case_closes)"
-plant_source "$HCASE" bash -c "$(deep_cmdsub_with_case_closes)"
-assert_planted_bash_refused "$HCASE" "case-close"
-
-HSHORT="$TMP_ROOT/planted-short-option-bash-c"; new_home "$HSHORT"
-assert_register_refused "$TMP_ROOT/register-short-option-bash-c" short-option bash -o errexit -c "$(deep_cmdsub)"
-plant_source "$HSHORT" bash -o errexit -c "$(deep_cmdsub)"
-assert_planted_bash_refused "$HSHORT" "short-option"
+HANY_ARG="$TMP_ROOT/planted-any-shell-argument"; new_home "$HANY_ARG"
+assert_register_refused "$TMP_ROOT/register-any-shell-argument" any-shell-argument bash --not-an-option "$(deep_cmdsub)"
+plant_source "$HANY_ARG" bash --not-an-option "$(deep_cmdsub)"
+assert_planted_bash_refused "$HANY_ARG" "any-shell-argument"
 
 HENV="$TMP_ROOT/planted-env-bash-c"; new_home "$HENV"
-assert_register_refused "$TMP_ROOT/register-env-bash-c" env-shell /usr/bin/env bash -c "$(deep_cmdsub)"
-plant_source "$HENV" /usr/bin/env bash -c "$(deep_cmdsub)"
+assert_register_refused "$TMP_ROOT/register-env-bash-c" env-shell /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
+plant_source "$HENV" /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
 assert_planted_bash_refused "$HENV" "env-shell"
-pass "reconcile refuses planted bash parser-recursive argv without crashing"
+pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'

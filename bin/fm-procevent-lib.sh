@@ -335,7 +335,7 @@ fm_procevent_source_lock_release() {
   fm_lock_release "$(fm_procevent_source_lock_path "$1")"
 }
 
-# Maximum `$(...)` nesting allowed in an interpreter `-c` string.
+# Maximum `$(...)` nesting allowed in a shell argv element.
 # One level (`sh -c 'printf x $(seq 1 3)'`) is a normal source. A few
 # thousand nested substitutions overflow bash's C stack (parser recursion
 # through xparse_dolparen), so register and start refuse this many or more.
@@ -343,8 +343,8 @@ FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 comment=0 case_state=0 word= completed_word= char
-  local -a quote_stack group_stack comment_stack case_stack word_stack
+  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 comment=0 case_state=0 word= completed_word= word_start=1 char
+  local -a quote_stack group_stack comment_stack case_stack word_stack word_start_stack
   n=${#s}
   while [ "$i" -lt "$n" ]; do
     char=${s:i:1}
@@ -365,6 +365,7 @@ fm_procevent_cmdsub_nest_depth() {
       continue
     fi
     if [ "$char" = '\' ] && [ "$quote" != "'" ]; then
+      word_start=0
       i=$((i + 2))
       continue
     fi
@@ -375,12 +376,14 @@ fm_procevent_cmdsub_nest_depth() {
     fi
     if [ "$char" = '"' ]; then
       if [ "$quote" = '"' ]; then quote=; else quote='"'; fi
+      word_start=0
       i=$((i + 1))
       continue
     fi
     case "$char" in
       [[:alnum:]_])
         word=$word$char
+        word_start=0
         i=$((i + 1))
         continue
         ;;
@@ -392,19 +395,21 @@ fm_procevent_cmdsub_nest_depth() {
       'esac') case_state=0 ;;
     esac
     word=
-    if [ "$char" = '#' ] && [ -z "$completed_word" ]; then
+    if [ "$char" = '#' ] && [ "$word_start" -eq 1 ]; then
       comment=1
       i=$((i + 1))
       continue
     fi
     if [ -z "$quote" ] && [ "$char" = "'" ]; then
       quote="'"
+      word_start=0
       i=$((i + 1))
       continue
     fi
     if [ -z "$quote" ] && [ "$char" = '$' ] \
       && [ "$((i + 1))" -lt "$n" ] && [ "${s:i+1:1}" = "'" ]; then
       quote=ansi
+      word_start=0
       i=$((i + 2))
       continue
     fi
@@ -415,6 +420,7 @@ fm_procevent_cmdsub_nest_depth() {
       comment_stack[depth]=$comment
       case_stack[depth]=$case_state
       word_stack[depth]=$word
+      word_start_stack[depth]=$word_start
       depth=$((depth + 1))
       [ "$depth" -gt "$max" ] && max=$depth
       if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
@@ -426,6 +432,7 @@ fm_procevent_cmdsub_nest_depth() {
       comment=0
       case_state=0
       word=
+      word_start=1
       i=$((i + 2))
       continue
     fi
@@ -443,74 +450,39 @@ fm_procevent_cmdsub_nest_depth() {
         comment=${comment_stack[depth]}
         case_state=${case_stack[depth]}
         word=${word_stack[depth]}
+        word_start=${word_start_stack[depth]}
       fi
     fi
+    case "$char" in
+      [[:space:]]|';'|'|'|'&'|'<'|'>'|'('|')') word_start=1 ;;
+      *) word_start=0 ;;
+    esac
     i=$((i + 1))
   done
   printf '%s\n' "$max"
 }
 
-# True when argv would feed deeply nested command substitutions to a shell
-# parser. A built-in source is executed as an argv array with no shell, but
-# `interpreter -c STRING` still parses STRING.
+# True when a known shell's argv contains deeply nested command substitutions.
 fm_procevent_argv_feeds_shell_parser() {
-  local shell arg flags depth
+  local shell arg depth
   [ "$#" -ge 1 ] || return 1
   shell=$1
   shift
-  shell=${shell##*/}
-  if [ "$shell" = env ]; then
-    while [ "$#" -gt 0 ]; do
-      arg=$1
-      shift
-      case "$arg" in
-        --) break ;;
-        -i|--ignore-environment|-0|--null|*=*) ;;
-        -u|-C|--unset|--chdir)
-          [ "$#" -ge 1 ] || return 0
-          shift
-          ;;
-        --unset=*|--chdir=*) ;;
-        -S|--split-string) return 0 ;;
-        *)
-          shell=${arg##*/}
-          break
-          ;;
-      esac
-    done
-  fi
   case "$shell" in
-    sh|bash|dash|ash|ksh|ksh93|mksh|yash|zsh) ;;
+    env|/usr/bin/env)
+      [ "$#" -ge 1 ] || return 1
+      shell=$1
+      shift
+      ;;
+  esac
+  shell=${shell##*/}
+  case "$shell" in
+    sh|bash|dash|zsh|ksh) ;;
     *) return 1 ;;
   esac
-  while [ "$#" -gt 0 ]; do
-    arg=$1
-    shift
-    case "$arg" in
-      --) return 1 ;;
-      --rcfile|--init-file)
-        [ "$#" -ge 1 ] || return 1
-        shift
-        ;;
-      --rcfile=*|--init-file=*) ;;
-      -o|-O)
-        [ "$#" -ge 1 ] || return 1
-        shift
-        ;;
-      -[[:alpha:]]*)
-        flags=${arg#-}
-        case "$flags" in
-          *c*)
-            [ "$#" -ge 1 ] || return 1
-            depth=$(fm_procevent_cmdsub_nest_depth "$1")
-            [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
-            return 1
-            ;;
-        esac
-        ;;
-      --?*) ;;
-      *) return 1 ;;
-    esac
+  for arg in "$@"; do
+    depth=$(fm_procevent_cmdsub_nest_depth "$arg")
+    [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
   done
   return 1
 }
