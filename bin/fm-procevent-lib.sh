@@ -364,6 +364,20 @@ fm_procevent_cmdsub_nest_depth() {
       fi
       continue
     fi
+    if [ "$quote" = '"' ]; then
+      if [ "$char" = '\' ]; then
+        i=$((i + 2))
+        continue
+      elif [ "$char" = '"' ]; then
+        quote=
+        i=$((i + 1))
+        continue
+      elif [ "$char" != '$' ] || [ "$((i + 1))" -ge "$n" ] \
+        || [ "${s:i+1:1}" != '(' ]; then
+        i=$((i + 1))
+        continue
+      fi
+    fi
     if [ "$char" = '\' ] && [ "$quote" != "'" ]; then
       word_start=0
       i=$((i + 2))

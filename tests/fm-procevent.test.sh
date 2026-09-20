@@ -3120,6 +3120,15 @@ deep_arithmetic() {
   printf '%s\n' "$nested"
 }
 
+deep_quoted_close() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested=": \")\"; \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
 sibling_cmdsub() {
   local nested= i=0
   while [ "$i" -lt 8 ]; do
@@ -3216,6 +3225,11 @@ HENV="$TMP_ROOT/planted-env-bash-c"; new_home "$HENV"
 assert_register_refused "$TMP_ROOT/register-env-bash-c" env-shell /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
 plant_source "$HENV" /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
 assert_planted_bash_refused "$HENV" "env-shell"
+
+HQUOTED="$TMP_ROOT/planted-quoted-close"; new_home "$HQUOTED"
+assert_register_refused "$TMP_ROOT/register-quoted-close" quoted-close bash --not-an-option "$(deep_quoted_close)"
+plant_source "$HQUOTED" bash --not-an-option "$(deep_quoted_close)"
+assert_planted_bash_refused "$HQUOTED" "quoted-close"
 pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'
