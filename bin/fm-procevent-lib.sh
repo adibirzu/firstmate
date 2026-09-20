@@ -341,12 +341,31 @@ fm_procevent_source_lock_release() {
 # through xparse_dolparen), so register and start refuse this many or more.
 FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
-# Print the maximum `$(` nesting depth in a string. Quote and escape unaware
-# on purpose: this is a conservative bound on parser recursion, not a parser.
+# Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0
+  local s=$1 i=0 n depth=0 max=0 quote= char
   n=${#s}
   while [ "$i" -lt "$n" ]; do
+    char=${s:i:1}
+    if [ "$char" = '\\' ] && [ "$quote" != "'" ]; then
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$quote" = "'" ]; then
+      [ "$char" = "'" ] && quote=
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$char" = '"' ]; then
+      if [ "$quote" = '"' ]; then quote=; else quote='"'; fi
+      i=$((i + 1))
+      continue
+    fi
+    if [ -z "$quote" ] && [ "$char" = "'" ]; then
+      quote="'"
+      i=$((i + 1))
+      continue
+    fi
     # shellcheck disable=SC2016 # Compare against literal command-substitution opener bytes.
     if [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '$(' ]; then
       depth=$((depth + 1))
@@ -370,8 +389,15 @@ fm_procevent_cmdsub_nest_depth() {
 # parser. A built-in source is executed as an argv array with no shell, but
 # `interpreter -c STRING` still parses STRING.
 fm_procevent_argv_feeds_shell_parser() {
-  local saw_c=0 arg depth
+  local shell saw_c=0 arg depth
   [ "$#" -ge 1 ] || return 1
+  shell=$1
+  shell=${shell##*/}
+  case "$shell" in
+    sh|bash|dash|ash|ksh|ksh93|mksh|yash|zsh) ;;
+    *) return 1 ;;
+  esac
+  shift
   for arg in "$@"; do
     if [ "$saw_c" -eq 1 ]; then
       depth=$(fm_procevent_cmdsub_nest_depth "$arg")

@@ -3121,6 +3121,14 @@ deep_cmdsub() {
   done
   printf '%s\n' "$nested"
 }
+deep_cmdsub_with_quoted_closes() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="printf ')'; \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 argv_parser /bin/echo '$(true)' \
   && fail "a non-interpreter argv with \$(...) was treated as parser input"
@@ -3134,6 +3142,8 @@ argv_parser /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' \
   && fail "the oversized-output fixture's sh -c \$(seq) was treated as parser input"
 argv_parser bash -c "$(deep_cmdsub)" \
   || fail "an 8-deep nested \$(...) -c string was not detected as parser input"
+argv_parser bash -c "$(deep_cmdsub_with_quoted_closes)" \
+  || fail "quoted close delimiters hid an 8-deep nested \$(...) -c string"
 pass "argv parser-input detection allows one-level \$(...) and refuses deep nesting"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
@@ -3142,6 +3152,11 @@ out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
 assert_contains "$out" "command substitutions" \
   "register refusal for interpreter -c command substitution named the hazard"
 pass "register refuses an interpreter -c string with deeply nested command substitutions"
+
+HNON_SHELL="$TMP_ROOT/non-shell-c"; new_home "$HNON_SHELL"
+pe_register "$HNON_SHELL" lavish non-shell-c -- /bin/echo -c "$(deep_cmdsub)" >/dev/null \
+  || fail "register treated a non-shell -c data argument as parser input"
+pass "register permits a non-shell -c data argument with literal \$(...)"
 
 HINERT="$TMP_ROOT/inert-dollar"; new_home "$HINERT"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
@@ -3163,13 +3178,7 @@ mkdir -p "$HPLANT/state/procevent"
   printf 'argv:\n'
   printf 'bash\n'
   printf -- '-c\n'
-  nested='true'
-  i=0
-  while [ "$i" -lt 80 ]; do
-    nested="true \$($nested)"
-    i=$((i + 1))
-  done
-  printf '%s\n' "$nested"
+  deep_cmdsub_with_quoted_closes
 } > "$HPLANT/state/procevent/planted.source"
 chmod 0600 "$HPLANT/state/procevent/planted.source"
 fm_test_track_procevent_home "$HPLANT"
