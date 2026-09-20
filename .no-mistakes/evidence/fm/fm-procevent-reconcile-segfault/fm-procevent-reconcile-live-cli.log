@@ -1,0 +1,7 @@
+SCENARIO: public register refuses a known-shell argv with depth-8 command substitutions
+error: argv must not pass deeply nested command substitutions to a shell
+register_exit=1
+SCENARIO: public reconcile leaves the persisted unsafe registration unstarted and reports uncertainty
+reconciled: published=0 started=0 stopped=0 uncertain=1
+reconcile_exit=0
+persisted_registration=present
