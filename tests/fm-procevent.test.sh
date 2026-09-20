@@ -3111,6 +3111,15 @@ deep_cmdsub() {
   printf '%s\n' "$nested"
 }
 
+deep_arithmetic() {
+  local nested=1 i=0
+  while [ "$i" -lt 8 ]; do
+    nested="\$(( $nested ))"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3119,6 +3128,8 @@ pe_register "$HSAFE" lavish shallow-shell-argv -- bash -c '$(true)' >/dev/null \
   || fail "register rejected a single-level bash command substitution"
 pe_register "$HSAFE" lavish output-shell-argv -- /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' >/dev/null \
   || fail "register treated the oversized-output fixture as deep parser input"
+pe_register "$HSAFE" lavish arithmetic-shell-argv -- bash -c "$(deep_arithmetic)" >/dev/null \
+  || fail "register treated nested arithmetic expansion as command substitution"
 pass "register permits inert and shallow parser-safe argv"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
@@ -3126,6 +3137,10 @@ out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
   && fail "register accepted bash -c with deeply nested command substitution: $out"
 assert_contains "$out" "command substitutions" \
   "register refusal for shell command substitution named the hazard"
+out=$(pe "$HNEST" register lavish nested-in-arithmetic -- bash -c "\$(( $(deep_cmdsub) ))" 2>&1) \
+  && fail "register accepted nested command substitution inside arithmetic expansion: $out"
+assert_contains "$out" "command substitutions" \
+  "register refusal for arithmetic-embedded command substitution named the hazard"
 pass "register refuses a deeply nested shell argument"
 
 HNON_SHELL="$TMP_ROOT/non-shell-c"; new_home "$HNON_SHELL"
