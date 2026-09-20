@@ -344,7 +344,7 @@ FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 comment=0 case_state=0 word= completed_word= word_start=1 char
+  local s=$1 i=0 n depth=0 max=0 quote='' group_depth=0 comment=0 case_state=0 word='' completed_word='' word_start=1 char=''
   local -a quote_stack group_stack comment_stack case_stack word_stack word_start_stack
   n=${#s}
   while [ "$i" -lt "$n" ]; do
@@ -355,7 +355,7 @@ fm_procevent_cmdsub_nest_depth() {
       continue
     fi
     if [ "$quote" = ansi ]; then
-      if [ "$char" = '\' ]; then
+      if [ "$char" = $'\\' ]; then
         i=$((i + 2))
       elif [ "$char" = "'" ]; then
         quote=
@@ -366,7 +366,7 @@ fm_procevent_cmdsub_nest_depth() {
       continue
     fi
     if [ "$quote" = '"' ]; then
-      if [ "$char" = '\' ]; then
+      if [ "$char" = $'\\' ]; then
         i=$((i + 2))
         continue
       elif [ "$char" = '"' ]; then
@@ -379,7 +379,7 @@ fm_procevent_cmdsub_nest_depth() {
         continue
       fi
     fi
-    if [ "$char" = '\' ] && [ "$quote" != "'" ]; then
+    if [ "$char" = $'\\' ] && [ "$quote" != "'" ]; then
       word_start=0
       i=$((i + 2))
       continue
@@ -428,7 +428,7 @@ fm_procevent_cmdsub_nest_depth() {
       i=$((i + 2))
       continue
     fi
-    if [ "$((i + 2))" -lt "$n" ] && [ "${s:i:3}" = '$((' ]; then
+    if [ "$((i + 2))" -lt "$n" ] && [ "${s:i:3}" = "\$((" ]; then
       group_depth=$((group_depth + 1))
       i=$((i + 2))
       continue

@@ -3130,7 +3130,7 @@ deep_quoted_close() {
 }
 
 sibling_cmdsub() {
-  local nested= i=0
+  local nested='' i=0
   while [ "$i" -lt 8 ]; do
     nested="$nested \$(printf x)"
     i=$((i + 1))
@@ -3142,8 +3142,10 @@ HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
   || fail "register treated a non-interpreter argv as parser input"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish shallow-shell-argv -- bash -c '$(true)' >/dev/null \
   || fail "register rejected a single-level bash command substitution"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish output-shell-argv -- /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' >/dev/null \
   || fail "register treated the oversized-output fixture as deep parser input"
 pe_register "$HSAFE" lavish arithmetic-shell-argv -- bash -c "$(deep_arithmetic)" >/dev/null \
