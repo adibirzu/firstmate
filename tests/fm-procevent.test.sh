@@ -3101,18 +3101,6 @@ kill -KILL -"$CRASH_PID" 2>/dev/null || true
 # literal `$(...)` command name is inert, and a single-level `sh -c '$(seq …)'`
 # is a normal source. Register and reconcile must refuse only deep nesting.
 
-HELPER_HOME="$TMP_ROOT/argv-helper"
-mkdir -p "$HELPER_HOME/state"
-argv_parser() {
-  FM_HOME="$HELPER_HOME" bash -c '
-    root=$1
-    shift
-    . "$root/bin/fm-pr-lib.sh"
-    . "$root/bin/fm-wake-lib.sh"
-    . "$root/bin/fm-procevent-lib.sh"
-    fm_procevent_argv_feeds_shell_parser "$@"
-  ' _ "$ROOT" "$@"
-}
 deep_cmdsub() {
   local nested=true i=0
   while [ "$i" -lt 8 ]; do
@@ -3137,33 +3125,31 @@ deep_cmdsub_with_grouping_closes() {
   done
   printf '%s\n' "$nested"
 }
+deep_cmdsub_with_ansi_c_quoted_closes() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="printf \$'\\')'; \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
-argv_parser /bin/echo '$(true)' \
-  && fail "a non-interpreter argv with \$(...) was treated as parser input"
-argv_parser bash -c 'echo hi' \
-  && fail "bash -c without command substitution was treated as parser input"
-# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
-argv_parser bash -c '$(true)' \
-  && fail "a single-level bash -c \$(...) was treated as parser input"
-# shellcheck disable=SC2016 # Match the oversized-output fixture's literal -c string.
-argv_parser /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' \
-  && fail "the oversized-output fixture's sh -c \$(seq) was treated as parser input"
-argv_parser bash -c "$(deep_cmdsub)" \
-  || fail "an 8-deep nested \$(...) -c string was not detected as parser input"
-argv_parser bash -c "$(deep_cmdsub_with_quoted_closes)" \
-  || fail "quoted close delimiters hid an 8-deep nested \$(...) -c string"
-argv_parser bash -c "$(deep_cmdsub_with_grouping_closes)" \
-  || fail "grouping close delimiters hid an 8-deep nested \$(...) -c string"
-argv_parser bash -ec "$(deep_cmdsub)" \
-  || fail "a bash short-option cluster containing c hid an 8-deep nested \$(...) string"
-pass "argv parser-input detection allows one-level \$(...) and refuses deep nesting"
+pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
+  || fail "register treated a non-interpreter argv as parser input"
+pe_register "$HSAFE" lavish shallow-shell-argv -- bash -c '$(true)' >/dev/null \
+  || fail "register rejected a single-level bash command substitution"
+pe_register "$HSAFE" lavish output-shell-argv -- /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' >/dev/null \
+  || fail "register treated the oversized-output fixture as deep parser input"
+pass "register permits inert and shallow parser-safe argv"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
 out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
   && fail "register accepted bash -c with deeply nested command substitution: $out"
 assert_contains "$out" "command substitutions" \
   "register refusal for interpreter -c command substitution named the hazard"
-pass "register refuses an interpreter -c string with deeply nested command substitutions"
+pass "register refuses a deeply nested interpreter command string"
 
 HNON_SHELL="$TMP_ROOT/non-shell-c"; new_home "$HNON_SHELL"
 pe_register "$HNON_SHELL" lavish non-shell-c -- /bin/echo -c "$(deep_cmdsub)" >/dev/null \
@@ -3183,17 +3169,28 @@ sleep 0.2
 pass "a literal \$(...) argv element is stored and executed as a command name, not parsed"
 
 plant_bash_source() {
-  local home=$1 option=$2 command=$3
+  local home=$1 argc
+  shift
+  argc=$((1 + $#))
   mkdir -p "$home/state/procevent"
   {
-  printf 'adapter=lavish\n'
-  printf 'argc=3\n'
-  printf 'argv:\n'
-  printf 'bash\n'
-    printf '%s\n' "$option" "$command"
+    printf 'adapter=lavish\n'
+    printf 'argc=%s\n' "$argc"
+    printf 'argv:\n'
+    printf 'bash\n'
+    printf '%s\n' "$@"
   } > "$home/state/procevent/planted.source"
   chmod 0600 "$home/state/procevent/planted.source"
   fm_test_track_procevent_home "$home"
+}
+assert_bash_register_refused() {
+  local home=$1 label=$2 out
+  shift 2
+  new_home "$home"
+  out=$(pe "$home" register lavish "register-$label" -- bash "$@" 2>&1) \
+    && fail "register accepted $label bash argv with nested \$(...): $out"
+  assert_contains "$out" "command substitutions" \
+    "register refusal for $label parser-recursive argv named the hazard"
 }
 assert_planted_bash_refused() {
   local home=$1 label=$2 status=0
@@ -3209,16 +3206,29 @@ assert_planted_bash_refused() {
 }
 
 HQUOTED="$TMP_ROOT/planted-quoted-bash-c"; new_home "$HQUOTED"
+assert_bash_register_refused "$TMP_ROOT/register-quoted-bash-c" quoted-close -c "$(deep_cmdsub_with_quoted_closes)"
 plant_bash_source "$HQUOTED" -c "$(deep_cmdsub_with_quoted_closes)"
 assert_planted_bash_refused "$HQUOTED" "quoted-close"
 
 HGROUP="$TMP_ROOT/planted-group-bash-c"; new_home "$HGROUP"
+assert_bash_register_refused "$TMP_ROOT/register-group-bash-c" grouping-close -c "$(deep_cmdsub_with_grouping_closes)"
 plant_bash_source "$HGROUP" -c "$(deep_cmdsub_with_grouping_closes)"
 assert_planted_bash_refused "$HGROUP" "grouping-close"
 
 HCLUSTER="$TMP_ROOT/planted-cluster-bash-c"; new_home "$HCLUSTER"
+assert_bash_register_refused "$TMP_ROOT/register-cluster-bash-c" option-cluster -ec "$(deep_cmdsub)"
 plant_bash_source "$HCLUSTER" -ec "$(deep_cmdsub)"
 assert_planted_bash_refused "$HCLUSTER" "option-cluster"
+
+HANSI="$TMP_ROOT/planted-ansi-bash-c"; new_home "$HANSI"
+assert_bash_register_refused "$TMP_ROOT/register-ansi-bash-c" ansi-close -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
+plant_bash_source "$HANSI" -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
+assert_planted_bash_refused "$HANSI" "ansi-close"
+
+HLONG="$TMP_ROOT/planted-long-option-bash-c"; new_home "$HLONG"
+assert_bash_register_refused "$TMP_ROOT/register-long-option-bash-c" long-option --rcfile /dev/null -c "$(deep_cmdsub)"
+plant_bash_source "$HLONG" --rcfile /dev/null -c "$(deep_cmdsub)"
+assert_planted_bash_refused "$HLONG" "long-option"
 pass "reconcile refuses planted bash parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'

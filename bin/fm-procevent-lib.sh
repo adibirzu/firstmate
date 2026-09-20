@@ -348,7 +348,18 @@ fm_procevent_cmdsub_nest_depth() {
   n=${#s}
   while [ "$i" -lt "$n" ]; do
     char=${s:i:1}
-    if [ "$char" = '\\' ] && [ "$quote" != "'" ]; then
+    if [ "$quote" = ansi ]; then
+      if [ "$char" = '\' ]; then
+        i=$((i + 2))
+      elif [ "$char" = "'" ]; then
+        quote=
+        i=$((i + 1))
+      else
+        i=$((i + 1))
+      fi
+      continue
+    fi
+    if [ "$char" = '\' ] && [ "$quote" != "'" ]; then
       i=$((i + 2))
       continue
     fi
@@ -365,6 +376,12 @@ fm_procevent_cmdsub_nest_depth() {
     if [ -z "$quote" ] && [ "$char" = "'" ]; then
       quote="'"
       i=$((i + 1))
+      continue
+    fi
+    if [ -z "$quote" ] && [ "$char" = '$' ] \
+      && [ "$((i + 1))" -lt "$n" ] && [ "${s:i+1:1}" = "'" ]; then
+      quote=ansi
+      i=$((i + 2))
       continue
     fi
     # shellcheck disable=SC2016 # Compare against literal command-substitution opener bytes.
@@ -416,6 +433,11 @@ fm_procevent_argv_feeds_shell_parser() {
     shift
     case "$arg" in
       --) return 1 ;;
+      --rcfile|--init-file)
+        [ "$#" -ge 1 ] || return 1
+        shift
+        ;;
+      --rcfile=*|--init-file=*) ;;
       -[[:alpha:]]*)
         flags=${arg#-}
         case "$flags" in
