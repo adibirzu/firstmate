@@ -3120,6 +3120,15 @@ deep_arithmetic() {
   printf '%s\n' "$nested"
 }
 
+sibling_cmdsub() {
+  local nested= i=0
+  while [ "$i" -lt 8 ]; do
+    nested="$nested \$(printf x)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3130,6 +3139,8 @@ pe_register "$HSAFE" lavish output-shell-argv -- /bin/sh -c 'printf "x%.0s" $(se
   || fail "register treated the oversized-output fixture as deep parser input"
 pe_register "$HSAFE" lavish arithmetic-shell-argv -- bash -c "$(deep_arithmetic)" >/dev/null \
   || fail "register treated nested arithmetic expansion as command substitution"
+pe_register "$HSAFE" lavish sibling-shell-argv -- bash -c "$(sibling_cmdsub)" >/dev/null \
+  || fail "register treated sibling command substitutions as nested"
 pass "register permits inert and shallow parser-safe argv"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
