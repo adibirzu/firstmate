@@ -3133,6 +3133,22 @@ deep_cmdsub_with_ansi_c_quoted_closes() {
   done
   printf '%s\n' "$nested"
 }
+deep_cmdsub_with_comment_closes() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="# )"$'\n'"\$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+deep_cmdsub_with_case_closes() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="case x in x) :; \$($nested) ;; esac"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
 
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
@@ -3168,27 +3184,26 @@ wait_for "$HINERT/state/procevent/inert-src.runner" || true
 sleep 0.2
 pass "a literal \$(...) argv element is stored and executed as a command name, not parsed"
 
-plant_bash_source() {
+plant_source() {
   local home=$1 argc
   shift
-  argc=$((1 + $#))
+  argc=$#
   mkdir -p "$home/state/procevent"
   {
     printf 'adapter=lavish\n'
     printf 'argc=%s\n' "$argc"
     printf 'argv:\n'
-    printf 'bash\n'
     printf '%s\n' "$@"
   } > "$home/state/procevent/planted.source"
   chmod 0600 "$home/state/procevent/planted.source"
   fm_test_track_procevent_home "$home"
 }
-assert_bash_register_refused() {
+assert_register_refused() {
   local home=$1 label=$2 out
   shift 2
   new_home "$home"
-  out=$(pe "$home" register lavish "register-$label" -- bash "$@" 2>&1) \
-    && fail "register accepted $label bash argv with nested \$(...): $out"
+  out=$(pe "$home" register lavish "register-$label" -- "$@" 2>&1) \
+    && fail "register accepted $label argv with nested \$(...): $out"
   assert_contains "$out" "command substitutions" \
     "register refusal for $label parser-recursive argv named the hazard"
 }
@@ -3206,29 +3221,50 @@ assert_planted_bash_refused() {
 }
 
 HQUOTED="$TMP_ROOT/planted-quoted-bash-c"; new_home "$HQUOTED"
-assert_bash_register_refused "$TMP_ROOT/register-quoted-bash-c" quoted-close -c "$(deep_cmdsub_with_quoted_closes)"
-plant_bash_source "$HQUOTED" -c "$(deep_cmdsub_with_quoted_closes)"
+assert_register_refused "$TMP_ROOT/register-quoted-bash-c" quoted-close bash -c "$(deep_cmdsub_with_quoted_closes)"
+plant_source "$HQUOTED" bash -c "$(deep_cmdsub_with_quoted_closes)"
 assert_planted_bash_refused "$HQUOTED" "quoted-close"
 
 HGROUP="$TMP_ROOT/planted-group-bash-c"; new_home "$HGROUP"
-assert_bash_register_refused "$TMP_ROOT/register-group-bash-c" grouping-close -c "$(deep_cmdsub_with_grouping_closes)"
-plant_bash_source "$HGROUP" -c "$(deep_cmdsub_with_grouping_closes)"
+assert_register_refused "$TMP_ROOT/register-group-bash-c" grouping-close bash -c "$(deep_cmdsub_with_grouping_closes)"
+plant_source "$HGROUP" bash -c "$(deep_cmdsub_with_grouping_closes)"
 assert_planted_bash_refused "$HGROUP" "grouping-close"
 
 HCLUSTER="$TMP_ROOT/planted-cluster-bash-c"; new_home "$HCLUSTER"
-assert_bash_register_refused "$TMP_ROOT/register-cluster-bash-c" option-cluster -ec "$(deep_cmdsub)"
-plant_bash_source "$HCLUSTER" -ec "$(deep_cmdsub)"
+assert_register_refused "$TMP_ROOT/register-cluster-bash-c" option-cluster bash -ec "$(deep_cmdsub)"
+plant_source "$HCLUSTER" bash -ec "$(deep_cmdsub)"
 assert_planted_bash_refused "$HCLUSTER" "option-cluster"
 
 HANSI="$TMP_ROOT/planted-ansi-bash-c"; new_home "$HANSI"
-assert_bash_register_refused "$TMP_ROOT/register-ansi-bash-c" ansi-close -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
-plant_bash_source "$HANSI" -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
+assert_register_refused "$TMP_ROOT/register-ansi-bash-c" ansi-close bash -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
+plant_source "$HANSI" bash -c "$(deep_cmdsub_with_ansi_c_quoted_closes)"
 assert_planted_bash_refused "$HANSI" "ansi-close"
 
 HLONG="$TMP_ROOT/planted-long-option-bash-c"; new_home "$HLONG"
-assert_bash_register_refused "$TMP_ROOT/register-long-option-bash-c" long-option --rcfile /dev/null -c "$(deep_cmdsub)"
-plant_bash_source "$HLONG" --rcfile /dev/null -c "$(deep_cmdsub)"
+assert_register_refused "$TMP_ROOT/register-long-option-bash-c" long-option bash --rcfile /dev/null -c "$(deep_cmdsub)"
+plant_source "$HLONG" bash --rcfile /dev/null -c "$(deep_cmdsub)"
 assert_planted_bash_refused "$HLONG" "long-option"
+
+HCOMMENT="$TMP_ROOT/planted-comment-bash-c"; new_home "$HCOMMENT"
+out=$(pe "$HCOMMENT" register lavish comment-close -- bash -c "$(deep_cmdsub_with_comment_closes)" 2>&1) \
+  && fail "register accepted a multiline comment parser string: $out"
+assert_contains "$out" "argv elements cannot contain newlines" \
+  "register did not reject a multiline comment parser string"
+
+HCASE="$TMP_ROOT/planted-case-bash-c"; new_home "$HCASE"
+assert_register_refused "$TMP_ROOT/register-case-bash-c" case-close bash -c "$(deep_cmdsub_with_case_closes)"
+plant_source "$HCASE" bash -c "$(deep_cmdsub_with_case_closes)"
+assert_planted_bash_refused "$HCASE" "case-close"
+
+HSHORT="$TMP_ROOT/planted-short-option-bash-c"; new_home "$HSHORT"
+assert_register_refused "$TMP_ROOT/register-short-option-bash-c" short-option bash -o errexit -c "$(deep_cmdsub)"
+plant_source "$HSHORT" bash -o errexit -c "$(deep_cmdsub)"
+assert_planted_bash_refused "$HSHORT" "short-option"
+
+HENV="$TMP_ROOT/planted-env-bash-c"; new_home "$HENV"
+assert_register_refused "$TMP_ROOT/register-env-bash-c" env-shell /usr/bin/env bash -c "$(deep_cmdsub)"
+plant_source "$HENV" /usr/bin/env bash -c "$(deep_cmdsub)"
+assert_planted_bash_refused "$HENV" "env-shell"
 pass "reconcile refuses planted bash parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'

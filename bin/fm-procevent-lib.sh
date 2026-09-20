@@ -343,11 +343,16 @@ FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 char
-  local -a quote_stack group_stack
+  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 comment=0 case_state=0 word= completed_word= char
+  local -a quote_stack group_stack comment_stack case_stack word_stack
   n=${#s}
   while [ "$i" -lt "$n" ]; do
     char=${s:i:1}
+    if [ "$comment" -eq 1 ]; then
+      [ "$char" = $'\n' ] && comment=0
+      i=$((i + 1))
+      continue
+    fi
     if [ "$quote" = ansi ]; then
       if [ "$char" = '\' ]; then
         i=$((i + 2))
@@ -373,6 +378,25 @@ fm_procevent_cmdsub_nest_depth() {
       i=$((i + 1))
       continue
     fi
+    case "$char" in
+      [[:alnum:]_])
+        word=$word$char
+        i=$((i + 1))
+        continue
+        ;;
+    esac
+    completed_word=$word
+    case "$completed_word" in
+      case) case_state=1 ;;
+      in) [ "$case_state" -eq 1 ] && case_state=2 ;;
+      'esac') case_state=0 ;;
+    esac
+    word=
+    if [ "$char" = '#' ] && [ -z "$completed_word" ]; then
+      comment=1
+      i=$((i + 1))
+      continue
+    fi
     if [ -z "$quote" ] && [ "$char" = "'" ]; then
       quote="'"
       i=$((i + 1))
@@ -388,6 +412,9 @@ fm_procevent_cmdsub_nest_depth() {
     if [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '$(' ]; then
       quote_stack[depth]=$quote
       group_stack[depth]=$group_depth
+      comment_stack[depth]=$comment
+      case_stack[depth]=$case_state
+      word_stack[depth]=$word
       depth=$((depth + 1))
       [ "$depth" -gt "$max" ] && max=$depth
       if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
@@ -396,6 +423,9 @@ fm_procevent_cmdsub_nest_depth() {
       fi
       quote=
       group_depth=0
+      comment=0
+      case_state=0
+      word=
       i=$((i + 2))
       continue
     fi
@@ -404,10 +434,15 @@ fm_procevent_cmdsub_nest_depth() {
     elif [ "$char" = ')' ]; then
       if [ "$group_depth" -gt 0 ]; then
         group_depth=$((group_depth - 1))
+      elif [ "$case_state" -eq 2 ]; then
+        case_state=3
       elif [ "$depth" -gt 0 ]; then
         depth=$((depth - 1))
         quote=${quote_stack[depth]}
         group_depth=${group_stack[depth]}
+        comment=${comment_stack[depth]}
+        case_state=${case_stack[depth]}
+        word=${word_stack[depth]}
       fi
     fi
     i=$((i + 1))
@@ -422,12 +457,32 @@ fm_procevent_argv_feeds_shell_parser() {
   local shell arg flags depth
   [ "$#" -ge 1 ] || return 1
   shell=$1
+  shift
   shell=${shell##*/}
+  if [ "$shell" = env ]; then
+    while [ "$#" -gt 0 ]; do
+      arg=$1
+      shift
+      case "$arg" in
+        --) break ;;
+        -i|--ignore-environment|-0|--null|*=*) ;;
+        -u|-C|--unset|--chdir)
+          [ "$#" -ge 1 ] || return 0
+          shift
+          ;;
+        --unset=*|--chdir=*) ;;
+        -S|--split-string) return 0 ;;
+        *)
+          shell=${arg##*/}
+          break
+          ;;
+      esac
+    done
+  fi
   case "$shell" in
     sh|bash|dash|ash|ksh|ksh93|mksh|yash|zsh) ;;
     *) return 1 ;;
   esac
-  shift
   while [ "$#" -gt 0 ]; do
     arg=$1
     shift
@@ -438,6 +493,10 @@ fm_procevent_argv_feeds_shell_parser() {
         shift
         ;;
       --rcfile=*|--init-file=*) ;;
+      -o|-O)
+        [ "$#" -ge 1 ] || return 1
+        shift
+        ;;
       -[[:alpha:]]*)
         flags=${arg#-}
         case "$flags" in
