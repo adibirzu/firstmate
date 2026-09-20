@@ -814,6 +814,76 @@ test_downtime_marker_does_not_follow_symlink() {
   pass "watch-arm: downtime marker publication does not follow symlinks"
 }
 
+test_racy_concurrent_arms_settle_to_one_watcher() {
+  local dir state fakebin rounds round out1 out2 a1 a2 i pid1 pid2 status1 status2
+  dir=$(make_case racy-concurrent-arms)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+
+  # Two arms firing at once with no watcher yet held is the "racy arm" case
+  # bin/fm-watch.sh's self-eviction comment names: one child wins the
+  # singleton, the other's own child closes with no wake at all. Repeating
+  # this several times over one home stands in for "under load."
+  rounds=3
+  round=0
+  while [ "$round" -lt "$rounds" ]; do
+    out1="$dir/round-$round-arm1.out"
+    out2="$dir/round-$round-arm2.out"
+    PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=5 \
+      "$WATCH_ARM" > "$out1" 2>&1 &
+    a1=$!
+    PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=5 \
+      "$WATCH_ARM" > "$out2" 2>&1 &
+    a2=$!
+
+    i=0
+    while [ "$i" -lt 100 ]; do
+      grep -qE '^watcher: (started|attached) pid=' "$out1" 2>/dev/null \
+        && grep -qE '^watcher: (started|attached) pid=' "$out2" 2>/dev/null \
+        && break
+      sleep 0.05
+      i=$((i + 1))
+    done
+    grep -qE '^watcher: (started|attached) pid=' "$out1" \
+      || fail "round $round: first racing arm never confirmed a live watcher: $(cat "$out1")"
+    grep -qE '^watcher: (started|attached) pid=' "$out2" \
+      || fail "round $round: second racing arm never confirmed a live watcher: $(cat "$out2")"
+
+    pid1=$(sed -n 's/^watcher: [a-z]* pid=\([0-9]*\).*/\1/p' "$out1" | tail -1)
+    pid2=$(sed -n 's/^watcher: [a-z]* pid=\([0-9]*\).*/\1/p' "$out2" | tail -1)
+    [ -n "$pid1" ] && [ "$pid1" = "$pid2" ] \
+      || fail "round $round: racing arms disagree on the singleton watcher (arm1=$pid1 arm2=$pid2)"
+    is_live_non_zombie "$pid1" \
+      || fail "round $round: the confirmed watcher pid $pid1 is not actually alive"
+
+    printf 'done: round %s fixture\n' "$round" > "$state/round-$round.status"
+    wait_for_exit "$a1" 120; status1=$?
+    wait_for_exit "$a2" 120; status2=$?
+
+    ! grep -qF 'watcher: FAILED' "$out1" \
+      || fail "round $round: an empty/attached cycle was misclassified as a failure: $(cat "$out1")"
+    ! grep -qF 'watcher: FAILED' "$out2" \
+      || fail "round $round: an empty/attached cycle was misclassified as a failure: $(cat "$out2")"
+    grep -q '^signal:' "$out1" || fail "round $round: first arm did not report the real wake: $(cat "$out1")"
+    grep -q '^signal:' "$out2" || fail "round $round: second arm did not report the real wake: $(cat "$out2")"
+    expect_code 0 "$status1" "round $round: racing arm 1 must close cleanly on a delivered wake"
+    expect_code 0 "$status2" "round $round: racing arm 2 must close cleanly on a delivered wake"
+    is_live_non_zombie "$pid1" \
+      && fail "round $round: the watcher survived past the wake it was supposed to deliver and exit on"
+
+    # Drain and acknowledge before the next round: an unacknowledged wake
+    # leaves recovery pending, so the next round's fresh watchers would race
+    # their own "check: rearm-resurface" self-wake instead of exercising a
+    # clean racy-start empty cycle.
+    ack_wakes "$state" || fail "round $round: could not acknowledge the delivered wake"
+
+    round=$((round + 1))
+  done
+  pass "watch-arm: repeated racy concurrent arms settle to exactly one watcher and never misreport a failure"
+}
+
 test_attached_arm_reports_the_delivered_wake
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
@@ -827,4 +897,5 @@ test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing
+test_racy_concurrent_arms_settle_to_one_watcher
 test_downtime_marker_does_not_follow_symlink
