@@ -338,7 +338,8 @@ fm_procevent_source_lock_release() {
 # Maximum `$(...)` nesting allowed in a shell argv element.
 # One level (`sh -c 'printf x $(seq 1 3)'`) is a normal source. A few
 # thousand nested substitutions overflow bash's C stack (parser recursion
-# through xparse_dolparen), so register and start refuse this many or more.
+# through xparse_dolparen), so registration and every start path refuse this
+# many or more.
 FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.

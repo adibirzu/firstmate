@@ -23,7 +23,8 @@
 #            executed directly, so there is no shell surface and no argument
 #            splitting. A known shell argv whose `$(...)` nesting reaches
 #            FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX is refused at register and
-#            start, so stored argv cannot become recursive parser input.
+#            every start path, so stored argv cannot become recursive parser
+#            input.
 #            Built-in adapters register sources; nothing here parses user text.
 # register-extension
 #            Resolve an explicitly enabled home-local process-event-adapter/1
