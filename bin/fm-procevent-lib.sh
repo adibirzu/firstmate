@@ -343,7 +343,8 @@ FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0 quote= char
+  local s=$1 i=0 n depth=0 max=0 quote= group_depth=0 char
+  local -a quote_stack group_stack
   n=${#s}
   while [ "$i" -lt "$n" ]; do
     char=${s:i:1}
@@ -368,17 +369,29 @@ fm_procevent_cmdsub_nest_depth() {
     fi
     # shellcheck disable=SC2016 # Compare against literal command-substitution opener bytes.
     if [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '$(' ]; then
+      quote_stack[depth]=$quote
+      group_stack[depth]=$group_depth
       depth=$((depth + 1))
       [ "$depth" -gt "$max" ] && max=$depth
       if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
         printf '%s\n' "$max"
         return 0
       fi
+      quote=
+      group_depth=0
       i=$((i + 2))
       continue
     fi
-    if [ "${s:i:1}" = ')' ] && [ "$depth" -gt 0 ]; then
-      depth=$((depth - 1))
+    if [ "$char" = '(' ]; then
+      group_depth=$((group_depth + 1))
+    elif [ "$char" = ')' ]; then
+      if [ "$group_depth" -gt 0 ]; then
+        group_depth=$((group_depth - 1))
+      elif [ "$depth" -gt 0 ]; then
+        depth=$((depth - 1))
+        quote=${quote_stack[depth]}
+        group_depth=${group_stack[depth]}
+      fi
     fi
     i=$((i + 1))
   done
@@ -389,7 +402,7 @@ fm_procevent_cmdsub_nest_depth() {
 # parser. A built-in source is executed as an argv array with no shell, but
 # `interpreter -c STRING` still parses STRING.
 fm_procevent_argv_feeds_shell_parser() {
-  local shell saw_c=0 arg depth
+  local shell arg flags depth
   [ "$#" -ge 1 ] || return 1
   shell=$1
   shell=${shell##*/}
@@ -398,14 +411,24 @@ fm_procevent_argv_feeds_shell_parser() {
     *) return 1 ;;
   esac
   shift
-  for arg in "$@"; do
-    if [ "$saw_c" -eq 1 ]; then
-      depth=$(fm_procevent_cmdsub_nest_depth "$arg")
-      [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
-      saw_c=0
-    fi
+  while [ "$#" -gt 0 ]; do
+    arg=$1
+    shift
     case "$arg" in
-      -c|-ic|-lc|-ilc|-lic|-cil|-cli|-icl|-lci) saw_c=1 ;;
+      --) return 1 ;;
+      -[[:alpha:]]*)
+        flags=${arg#-}
+        case "$flags" in
+          *c*)
+            [ "$#" -ge 1 ] || return 1
+            depth=$(fm_procevent_cmdsub_nest_depth "$1")
+            [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
+            return 1
+            ;;
+        esac
+        ;;
+      --?*) ;;
+      *) return 1 ;;
     esac
   done
   return 1

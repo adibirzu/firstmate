@@ -3129,6 +3129,14 @@ deep_cmdsub_with_quoted_closes() {
   done
   printf '%s\n' "$nested"
 }
+deep_cmdsub_with_grouping_closes() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="\$( (:); $nested )"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 argv_parser /bin/echo '$(true)' \
   && fail "a non-interpreter argv with \$(...) was treated as parser input"
@@ -3144,6 +3152,10 @@ argv_parser bash -c "$(deep_cmdsub)" \
   || fail "an 8-deep nested \$(...) -c string was not detected as parser input"
 argv_parser bash -c "$(deep_cmdsub_with_quoted_closes)" \
   || fail "quoted close delimiters hid an 8-deep nested \$(...) -c string"
+argv_parser bash -c "$(deep_cmdsub_with_grouping_closes)" \
+  || fail "grouping close delimiters hid an 8-deep nested \$(...) -c string"
+argv_parser bash -ec "$(deep_cmdsub)" \
+  || fail "a bash short-option cluster containing c hid an 8-deep nested \$(...) string"
 pass "argv parser-input detection allows one-level \$(...) and refuses deep nesting"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
@@ -3170,28 +3182,43 @@ wait_for "$HINERT/state/procevent/inert-src.runner" || true
 sleep 0.2
 pass "a literal \$(...) argv element is stored and executed as a command name, not parsed"
 
-HPLANT="$TMP_ROOT/planted-bash-c"; new_home "$HPLANT"
-mkdir -p "$HPLANT/state/procevent"
-{
+plant_bash_source() {
+  local home=$1 option=$2 command=$3
+  mkdir -p "$home/state/procevent"
+  {
   printf 'adapter=lavish\n'
   printf 'argc=3\n'
   printf 'argv:\n'
   printf 'bash\n'
-  printf -- '-c\n'
-  deep_cmdsub_with_quoted_closes
-} > "$HPLANT/state/procevent/planted.source"
-chmod 0600 "$HPLANT/state/procevent/planted.source"
-fm_test_track_procevent_home "$HPLANT"
-status=0
-out=$(pe "$HPLANT" reconcile) || status=$?
-[ "$status" -ne 139 ] && [ "$status" -ne 11 ] \
-  || fail "reconcile died with a segmentation fault on planted bash -c argv (status=$status)"
-assert_contains "$out" "started=0" \
-  "reconcile started a planted interpreter -c source whose string contains nested \$(...)"
-assert_contains "$out" "uncertain=1" \
-  "reconcile did not count the planted interpreter -c source as uncertain"
-assert_present "$HPLANT/state/procevent/planted.source" \
-  "reconcile removed the planted registration instead of leaving it unstarted"
-pass "reconcile refuses planted bash -c argv with nested \$(...) without crashing"
+    printf '%s\n' "$option" "$command"
+  } > "$home/state/procevent/planted.source"
+  chmod 0600 "$home/state/procevent/planted.source"
+  fm_test_track_procevent_home "$home"
+}
+assert_planted_bash_refused() {
+  local home=$1 label=$2 status=0
+  out=$(pe "$home" reconcile) || status=$?
+  [ "$status" -ne 139 ] && [ "$status" -ne 11 ] \
+    || fail "reconcile died with a segmentation fault on $label planted bash argv (status=$status)"
+  assert_contains "$out" "started=0" \
+    "reconcile started $label planted interpreter argv with nested \$(...)"
+  assert_contains "$out" "uncertain=1" \
+    "reconcile did not count $label planted interpreter argv as uncertain"
+  assert_present "$home/state/procevent/planted.source" \
+    "reconcile removed $label planted registration instead of leaving it unstarted"
+}
+
+HQUOTED="$TMP_ROOT/planted-quoted-bash-c"; new_home "$HQUOTED"
+plant_bash_source "$HQUOTED" -c "$(deep_cmdsub_with_quoted_closes)"
+assert_planted_bash_refused "$HQUOTED" "quoted-close"
+
+HGROUP="$TMP_ROOT/planted-group-bash-c"; new_home "$HGROUP"
+plant_bash_source "$HGROUP" -c "$(deep_cmdsub_with_grouping_closes)"
+assert_planted_bash_refused "$HGROUP" "grouping-close"
+
+HCLUSTER="$TMP_ROOT/planted-cluster-bash-c"; new_home "$HCLUSTER"
+plant_bash_source "$HCLUSTER" -ec "$(deep_cmdsub)"
+assert_planted_bash_refused "$HCLUSTER" "option-cluster"
+pass "reconcile refuses planted bash parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'
