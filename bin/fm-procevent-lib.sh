@@ -335,6 +335,56 @@ fm_procevent_source_lock_release() {
   fm_lock_release "$(fm_procevent_source_lock_path "$1")"
 }
 
+# Maximum `$(...)` nesting allowed in an interpreter `-c` string.
+# One level (`sh -c 'printf x $(seq 1 3)'`) is a normal source. A few
+# thousand nested substitutions overflow bash's C stack (parser recursion
+# through xparse_dolparen), so register and start refuse this many or more.
+FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
+
+# Print the maximum `$(` nesting depth in a string. Quote and escape unaware
+# on purpose: this is a conservative bound on parser recursion, not a parser.
+fm_procevent_cmdsub_nest_depth() {
+  local s=$1 i=0 n depth=0 max=0
+  n=${#s}
+  while [ "$i" -lt "$n" ]; do
+    # shellcheck disable=SC2016 # Compare against literal command-substitution opener bytes.
+    if [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '$(' ]; then
+      depth=$((depth + 1))
+      [ "$depth" -gt "$max" ] && max=$depth
+      if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
+        printf '%s\n' "$max"
+        return 0
+      fi
+      i=$((i + 2))
+      continue
+    fi
+    if [ "${s:i:1}" = ')' ] && [ "$depth" -gt 0 ]; then
+      depth=$((depth - 1))
+    fi
+    i=$((i + 1))
+  done
+  printf '%s\n' "$max"
+}
+
+# True when argv would feed deeply nested command substitutions to a shell
+# parser. A built-in source is executed as an argv array with no shell, but
+# `interpreter -c STRING` still parses STRING.
+fm_procevent_argv_feeds_shell_parser() {
+  local saw_c=0 arg depth
+  [ "$#" -ge 1 ] || return 1
+  for arg in "$@"; do
+    if [ "$saw_c" -eq 1 ]; then
+      depth=$(fm_procevent_cmdsub_nest_depth "$arg")
+      [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
+      saw_c=0
+    fi
+    case "$arg" in
+      -c|-ic|-lc|-ilc|-lic|-cil|-cli|-icl|-lci) saw_c=1 ;;
+    esac
+  done
+  return 1
+}
+
 fm_procevent_registration_publish_locked() {  # <state> <adapter> <source-id> <argv...>
   local state=$1 adapter=$2 id=$3 reg dest tmp arg identity
   shift 3
@@ -344,6 +394,7 @@ fm_procevent_registration_publish_locked() {  # <state> <adapter> <source-id> <a
   for arg in "$@"; do
     case "$arg" in *$'\n'*) return 1 ;; esac
   done
+  fm_procevent_argv_feeds_shell_parser "$@" && return 1
   reg=$(fm_procevent_registry_dir "$state")
   (umask 077; mkdir -p "$reg") || return 1
   [ -d "$reg" ] && [ ! -L "$reg" ] || return 1

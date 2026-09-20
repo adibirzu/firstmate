@@ -3094,4 +3094,95 @@ kill -0 -"$CRASH_PID" 2>/dev/null \
 pass "a group whose leader died to something else is still refused, not signalled"
 kill -KILL -"$CRASH_PID" 2>/dev/null || true
 
+# --- nested command substitution must not reach a shell parser --------------
+#
+# bash SIGSEGVs on a few thousand nested `$(...)` (macOS "Thread stack size
+# exceeded due to excessive recursion"). argv is executed as an array, so a
+# literal `$(...)` command name is inert, and a single-level `sh -c '$(seq …)'`
+# is a normal source. Register and reconcile must refuse only deep nesting.
+
+HELPER_HOME="$TMP_ROOT/argv-helper"
+mkdir -p "$HELPER_HOME/state"
+argv_parser() {
+  FM_HOME="$HELPER_HOME" bash -c '
+    root=$1
+    shift
+    . "$root/bin/fm-pr-lib.sh"
+    . "$root/bin/fm-wake-lib.sh"
+    . "$root/bin/fm-procevent-lib.sh"
+    fm_procevent_argv_feeds_shell_parser "$@"
+  ' _ "$ROOT" "$@"
+}
+deep_cmdsub() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="true \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+argv_parser /bin/echo '$(true)' \
+  && fail "a non-interpreter argv with \$(...) was treated as parser input"
+argv_parser bash -c 'echo hi' \
+  && fail "bash -c without command substitution was treated as parser input"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+argv_parser bash -c '$(true)' \
+  && fail "a single-level bash -c \$(...) was treated as parser input"
+# shellcheck disable=SC2016 # Match the oversized-output fixture's literal -c string.
+argv_parser /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' \
+  && fail "the oversized-output fixture's sh -c \$(seq) was treated as parser input"
+argv_parser bash -c "$(deep_cmdsub)" \
+  || fail "an 8-deep nested \$(...) -c string was not detected as parser input"
+pass "argv parser-input detection allows one-level \$(...) and refuses deep nesting"
+
+HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
+out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
+  && fail "register accepted bash -c with deeply nested command substitution: $out"
+assert_contains "$out" "command substitutions" \
+  "register refusal for interpreter -c command substitution named the hazard"
+pass "register refuses an interpreter -c string with deeply nested command substitutions"
+
+HINERT="$TMP_ROOT/inert-dollar"; new_home "$HINERT"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+pe_register "$HINERT" lavish inert-src -- '$(echo hi)' >/dev/null \
+  || fail "register refused a literal \$(...) command name that is not parser input"
+out=$(pe "$HINERT" reconcile)
+assert_contains "$out" "started=1" "reconcile did not start a source whose argv is an inert \$(...) name"
+# The started runner execs a non-existent command name and exits; wait for that
+# so sweep-home is not racing a live claim.
+wait_for "$HINERT/state/procevent/inert-src.runner" || true
+sleep 0.2
+pass "a literal \$(...) argv element is stored and executed as a command name, not parsed"
+
+HPLANT="$TMP_ROOT/planted-bash-c"; new_home "$HPLANT"
+mkdir -p "$HPLANT/state/procevent"
+{
+  printf 'adapter=lavish\n'
+  printf 'argc=3\n'
+  printf 'argv:\n'
+  printf 'bash\n'
+  printf -- '-c\n'
+  nested='true'
+  i=0
+  while [ "$i" -lt 80 ]; do
+    nested="true \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+} > "$HPLANT/state/procevent/planted.source"
+chmod 0600 "$HPLANT/state/procevent/planted.source"
+fm_test_track_procevent_home "$HPLANT"
+status=0
+out=$(pe "$HPLANT" reconcile) || status=$?
+[ "$status" -ne 139 ] && [ "$status" -ne 11 ] \
+  || fail "reconcile died with a segmentation fault on planted bash -c argv (status=$status)"
+assert_contains "$out" "started=0" \
+  "reconcile started a planted interpreter -c source whose string contains nested \$(...)"
+assert_contains "$out" "uncertain=1" \
+  "reconcile did not count the planted interpreter -c source as uncertain"
+assert_present "$HPLANT/state/procevent/planted.source" \
+  "reconcile removed the planted registration instead of leaving it unstarted"
+pass "reconcile refuses planted bash -c argv with nested \$(...) without crashing"
+
 printf '\nall procevent tests passed\n'
