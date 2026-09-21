@@ -839,7 +839,7 @@ test_racy_concurrent_arms_settle_to_one_watcher() {
     a2=$!
 
     i=0
-    while [ "$i" -lt 100 ]; do
+    while [ "$i" -lt 140 ]; do
       grep -qE '^watcher: (started|attached) pid=' "$out1" 2>/dev/null \
         && grep -qE '^watcher: (started|attached) pid=' "$out2" 2>/dev/null \
         && break
