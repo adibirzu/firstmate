@@ -16,6 +16,7 @@ Watching or reconnecting to a station's development session from the primary is 
 Configure an SSH alias in the primary account's normal OpenSSH configuration.
 Use ordinary public-key authentication, strict host-key verification, and a dedicated remote account where practical.
 Do not enable agent forwarding for Firstmate.
+A host whose default SSH landing is not POSIX (for example commandopc, which lands in Windows PowerShell) needs a separate alias that reaches a real shell first; [commandopc-wsl-ssh.md](commandopc-wsl-ssh.md) records that machine's route and its restart caveat.
 `fm-on.sh` also disables agent forwarding, forwarding setup, and configured `SendEnv` patterns on every call, and arms bounded SSH dead-peer detection so a vanished host (a reboot, a dropped link) fails within a bounded window instead of hanging indefinitely; its [script header](../bin/fm-on.sh) owns the keepalive defaults and environment overrides.
 
 Clone Firstmate on the remote host at an absolute code-root path.

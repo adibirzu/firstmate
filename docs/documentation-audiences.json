@@ -397,6 +397,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/commandopc-wsl-ssh.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/configuration.md",
       "audience": "operator-current"
     },
