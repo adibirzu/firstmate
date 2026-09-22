@@ -19,6 +19,8 @@ Do not enable agent forwarding for Firstmate.
 `fm-on.sh` also disables agent forwarding, forwarding setup, and configured `SendEnv` patterns on every call, and arms bounded SSH dead-peer detection so a vanished host (a reboot, a dropped link) fails within a bounded window instead of hanging indefinitely; its [script header](../bin/fm-on.sh) owns the keepalive defaults and environment overrides.
 
 Clone Firstmate on the remote host at an absolute code-root path.
+For a bare Linux host, `bin/fm-station-bootstrap.sh <ssh-alias>` performs the whole code-root, entrypoint, toolchain, harness, and router-policy build-out idempotently and ends at the doctor; its header owns the exact steps.
+The alias must already land in a POSIX shell, which the script verifies and never creates.
 Expose that clone's fixed entrypoint on the account's non-interactive SSH `PATH`, for example:
 
 ```sh
