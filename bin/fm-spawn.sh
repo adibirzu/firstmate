@@ -1326,9 +1326,14 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # `routed <id> remote=<mate> host=<alias>` instead of `spawned ...`.
 # Secondmate spawns, reuse-worktree relaunches, and items that are not Queued
 # are never overflowable, and when no remote home takes the work the refusal
-# stands exactly as before.
+# stands exactly as before. A refusal caused by broken local tooling (router
+# or jq absent, or the capacity command itself failing) is never overflowed:
+# FM_CAPACITY_GUARD_REASON distinguishes that from the router's genuine
+# ok=false verdict, so a broken capacity toolchain surfaces its own diagnostic
+# instead of silently rerouting every spawn to a remote home.
 if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
-  if [ "$REUSE_WORKTREE" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
+  if [ "$FM_CAPACITY_GUARD_REASON" = capacity ] \
+    && [ "$REUSE_WORKTREE" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
     && fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND" 2>/dev/null \
     && fm_backlog_row_probe "$DATA" "$ID" 2>/dev/null \
     && [ "$FM_BACKLOG_ROW_STATE" = "queued no no" ] \

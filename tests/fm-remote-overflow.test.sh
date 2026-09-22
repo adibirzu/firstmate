@@ -155,6 +155,70 @@ SH
   pass "overflow stays off under FM_OVERFLOW=0"
 }
 
+# --- project scope ------------------------------------------------------------
+# A remote only qualifies for a repo-bound task when its seeded `projects:`
+# field (bin/fm-remote-home-seed.sh) lists that repo; it has never cloned any
+# other project and could never work it (docs/remote-secondmates.md).
+
+REMOTE_SCOPE_OTHER='- a-mate - overflow mate (host: a-host; root: /remote/firstmate; home: /remote/home-a; scope: overflow; projects: other-project; added 2026-09-13)'
+REMOTE_SCOPE_DEMO='- b-mate - overflow mate (host: b-host; root: /remote/firstmate; home: /remote/home-b; scope: overflow; projects: demo-project; added 2026-09-13)'
+
+make_scope_data() {  # <name> <task-id> <repo> [registry-line...] -> prints data dir
+  local name=$1 id=$2 repo=$3 dir line
+  shift 3
+  dir="$TMP_ROOT/$name"
+  mkdir -p "$dir/data"
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$dir/data/backlog.md"
+  cat > "$dir/.tasks.toml" <<EOF
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+EOF
+  : > "$dir/data/secondmates.md"
+  for line in "$@"; do
+    printf '%s\n' "$line" >> "$dir/data/secondmates.md"
+  done
+  if [ -n "$repo" ]; then
+    tasks-axi add "$id" "scope test $id" --kind ship --repo "$repo" --file "$dir/data/backlog.md" >/dev/null
+  else
+    tasks-axi add "$id" "scope test $id" --kind ship --file "$dir/data/backlog.md" >/dev/null
+  fi
+  printf '%s\n' "$dir/data"
+}
+
+{
+  data=$(make_scope_data scope-match t-scope-1 demo-project "$REMOTE_SCOPE_OTHER" "$REMOTE_SCOPE_DEMO")
+  stub="$TMP_ROOT/fm-on-scope-match"; write_fm_on_stub "$stub"
+  out=$(DATA="$data" FM_OVERFLOW_FM_ON="$stub" FM_TEST_CAP_A_MATE=0 FM_TEST_CAP_B_MATE=0 \
+    bash -c '. "$1"; fm_overflow_pick "$2"' _ "$LIB" t-scope-1) \
+    || fail "pick should succeed when the project-scoped remote has headroom"
+  [ "$out" = "b-mate b-host" ] \
+    || fail "pick must skip a-mate (projects: other-project) and choose the scoped b-mate, got: $out"
+  pass "overflow skips a remote whose seeded projects exclude the task's repo"
+}
+
+{
+  data=$(make_scope_data scope-none t-scope-2 demo-project "$REMOTE_SCOPE_OTHER")
+  stub="$TMP_ROOT/fm-on-scope-none"; write_fm_on_stub "$stub"
+  if DATA="$data" FM_OVERFLOW_FM_ON="$stub" FM_TEST_CAP_A_MATE=0 \
+    bash -c '. "$1"; fm_overflow_pick "$2"' _ "$LIB" t-scope-2 >/dev/null 2>&1; then
+    fail "pick must fail when every candidate's seeded projects exclude the task's repo"
+  fi
+  pass "overflow reports no pick when no remote's project scope includes the task's repo"
+}
+
+{
+  data=$(make_scope_data scope-unset t-scope-3 "" "$REMOTE_SCOPE_OTHER")
+  stub="$TMP_ROOT/fm-on-scope-unset"; write_fm_on_stub "$stub"
+  out=$(DATA="$data" FM_OVERFLOW_FM_ON="$stub" FM_TEST_CAP_A_MATE=0 \
+    bash -c '. "$1"; fm_overflow_pick "$2"' _ "$LIB" t-scope-3) \
+    || fail "pick should still succeed on headroom alone when the task names no repo"
+  [ "$out" = "a-mate a-host" ] \
+    || fail "a task with no recorded repo must never be scope-restricted, got: $out"
+  pass "overflow never scope-restricts a task with no recorded repo"
+}
+
 # --- handoff -----------------------------------------------------------------
 
 {
@@ -250,6 +314,32 @@ run_spawn_refused() {  # <home> <id> <out-file> -> exit status
     || fail "the fallback must say the work stays local, got: $out"
   [ ! -s "$TMP_ROOT/spawn-full.log" ] || fail "no handoff may run without headroom"
   pass "with no remote headroom the spawn refusal stands and stays local"
+}
+
+# A refusal caused by broken local tooling (no llm-router-axi on PATH) is not a
+# genuine over-capacity verdict, so it must never be offered to a remote home:
+# it would silently mask a broken capacity toolchain behind "routed ...".
+{
+  home=$(make_spawn_home spawn-tooling t-overflow-3)
+  SPAWN_FM_ON="$TMP_ROOT/fm-on-spawn-tooling"; write_fm_on_stub "$SPAWN_FM_ON"
+  SPAWN_HANDOFF="$TMP_ROOT/handoff-spawn-tooling"; write_handoff_stub "$SPAWN_HANDOFF" 0
+  : > "$TMP_ROOT/spawn-tooling.log"
+  export FM_TEST_CAP_A_MATE=0 FM_TEST_HANDOFF_LOG="$TMP_ROOT/spawn-tooling.log"
+  FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_LLM_ROUTER_AXI="$TMP_ROOT/no-such-router" \
+    FM_OVERFLOW_FM_ON="$SPAWN_FM_ON" FM_OVERFLOW_HANDOFF="$SPAWN_HANDOFF" \
+    "$SPAWN" t-overflow-3 projects/nowhere --mode no-mistakes --yolo off \
+    >"$TMP_ROOT/spawn-tooling.out" 2>&1; rc=$?
+  out=$(cat "$TMP_ROOT/spawn-tooling.out")
+  [ "$rc" -eq 1 ] || fail "a tooling-failure refusal must still exit non-zero, rc=$rc out: $out"
+  printf '%s\n' "$out" | grep -F 'llm-router-axi is not installed' >/dev/null \
+    || fail "a tooling-failure refusal must surface its own diagnostic, got: $out"
+  case "$out" in
+    *routed*) fail "a tooling failure must never be routed to a remote home, got: $out" ;;
+    *"stays queued locally"*) fail "a tooling failure is not an overflow-eligible refusal and must not print the overflow fallback, got: $out" ;;
+  esac
+  [ ! -s "$TMP_ROOT/spawn-tooling.log" ] || fail "no remote handoff may run for a tooling failure"
+  pass "a tooling-failure refusal never triggers remote overflow"
 }
 
 printf 'All fm-remote-overflow tests passed.\n'

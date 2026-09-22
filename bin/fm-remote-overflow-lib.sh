@@ -19,6 +19,15 @@
 #     in alphabetical id order; the first whose host reports headroom wins.
 #     Alphabetical is the documented tie-break: it is deterministic, needs no
 #     cross-host load comparison, and is trivially testable.
+#   - A candidate is skipped, without ever being probed, when the task names a
+#     repo (`tasks-axi show <id>`'s `repo:` field) and that remote's seeded
+#     `projects:` field (bin/fm-remote-home-seed.sh, docs/remote-secondmates.md)
+#     does not list it: that remote has never cloned the project, so it could
+#     never work the task. A task with no recorded repo, or a repo this
+#     process cannot read, is never scope-restricted - the caller already
+#     judged this handoff in-scope (bin/fm-backlog-handoff.sh's own scope
+#     contract), and this check only ever narrows an unambiguous mismatch, it
+#     never substitutes for that judgment.
 #   - A probe that times out or errors means "no headroom there", never a
 #     crash and never permission to assume headroom. The Mac's own thresholds
 #     are never loosened to force a local launch instead.
@@ -52,9 +61,14 @@
 #       Print one remote secondmate id per line, alphabetical, from $DATA.
 #   fm_overflow_probe <id>
 #       Return 0 when that remote home's host reports capacity headroom.
-#   fm_overflow_pick
-#       Print `<id> <host>` for the first remote home with headroom, or
-#       return 1 when no remote home qualifies.
+#   fm_overflow_task_repo <id>
+#       Print the task's `repo:` field, empty when unset or unreadable.
+#   fm_overflow_projects_match <projects-field> <repo>
+#       Return 0 when <repo> is empty, or is listed in the comma-separated
+#       <projects-field>; return 1 on an unambiguous non-empty mismatch.
+#   fm_overflow_pick <task-id>
+#       Print `<id> <host>` for the first project-scope-eligible remote home
+#       with headroom, or return 1 when no remote home qualifies.
 #   fm_overflow_try <id>
 #       Move Queued item <id> to the picked remote home. On success print
 #       `routed <id> remote=<mate> host=<alias>` to stdout and return 0;
@@ -66,6 +80,14 @@ _FM_OVERFLOW_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_FM_OVERFLOW_LIB_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$_FM_OVERFLOW_LIB_DIR/fm-timeout-lib.sh"
+if ! declare -F fm_tasks_axi_backend >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-tasks-axi-lib.sh
+  . "$_FM_OVERFLOW_LIB_DIR/fm-tasks-axi-lib.sh"
+fi
+if ! declare -F fm_backlog_row_show >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-backlog-transition-lib.sh
+  . "$_FM_OVERFLOW_LIB_DIR/fm-backlog-transition-lib.sh"
+fi
 
 fm_overflow_enabled() {
   case "${FM_OVERFLOW:-}" in 0|off|no|OFF|NO) return 1 ;; esac
@@ -126,11 +148,50 @@ fm_overflow_probe() {  # <secondmate-id>
   [ "$rc" -eq 0 ]
 }
 
-fm_overflow_pick() {  # prints "<id> <host>"
-  local id host
+# Print the task's `repo:` field from `tasks-axi show <id>`, empty when the
+# task has none recorded or when the row cannot be read at all (unknown data
+# directory, incompatible backend, missing task). A read failure is
+# deliberately silent here: fm_overflow_projects_match treats an empty repo as
+# unscoped, which is exactly today's pre-scoping behavior, never a new refusal.
+fm_overflow_task_repo() {  # <task-id>
+  local id=$1 data out repo
+  case "$id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  data=$(fm_backlog_data_absolute "${DATA:-}" 2>/dev/null) || return 1
+  out=$(fm_backlog_row_show "$data" "$id" 2>/dev/null) || return 1
+  repo=$(printf '%s\n' "$out" | sed -n 's/^  repo: *//p' | head -1)
+  repo=${repo#\"}
+  repo=${repo%\"}
+  case "$repo" in ''|-) return 0 ;; esac
+  printf '%s\n' "$repo"
+}
+
+# <projects-field> is the registry's raw comma-separated `projects:` value
+# (bin/fm-home-seed.sh's join_projects: ", "-joined, so items are trimmed
+# here). An empty repo is never scope-restricted; a non-empty repo matches
+# only when it is literally listed, so a --no-projects remote (empty field)
+# never matches any repo-scoped task, since it has cloned no project to work
+# one in.
+fm_overflow_projects_match() {  # <projects-field> <repo>
+  local rest=$1 repo=$2 item
+  [ -n "$repo" ] || return 0
+  while [ -n "$rest" ]; do
+    item=${rest%%,*}
+    case "$rest" in *,*) rest=${rest#*,} ;; *) rest= ;; esac
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [ "$item" = "$repo" ] && return 0
+  done
+  return 1
+}
+
+fm_overflow_pick() {  # <task-id> -> prints "<id> <host>"
+  local task_id=${1:-} repo id host projects
   fm_overflow_enabled || return 1
+  repo=$(fm_overflow_task_repo "$task_id" 2>/dev/null) || repo=
   while IFS= read -r id || [ -n "$id" ]; do
     [ -n "$id" ] || continue
+    projects=$(secondmate_registry_field "${DATA:-}/secondmates.md" "$id" projects 2>/dev/null || true)
+    fm_overflow_projects_match "$projects" "$repo" || continue
     fm_overflow_probe "$id" || continue
     host=$(secondmate_registry_field "${DATA:-}/secondmates.md" "$id" host 2>/dev/null || true)
     [ -n "$host" ] || continue
@@ -143,7 +204,7 @@ fm_overflow_pick() {  # prints "<id> <host>"
 fm_overflow_try() {  # <task-id>
   local id=$1 pick mate host handoff handoff_out rc
   case "$id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-  pick=$(fm_overflow_pick) || return 1
+  pick=$(fm_overflow_pick "$id") || return 1
   mate=${pick%% *}
   host=${pick#* }
   [ -n "$mate" ] && [ -n "$host" ] || return 1

@@ -31,7 +31,14 @@
 #   fm_capacity_guard <config> <label>
 #       Return 0 when the router admits another agent, 1 otherwise. <config> is
 #       accepted for call-site compatibility and no longer read; <label> names
-#       the refused work in the diagnostic.
+#       the refused work in the diagnostic. Sets FM_CAPACITY_GUARD_REASON to
+#       "capacity" when the refusal is the router's genuine ok=false verdict
+#       (a real over-ceiling or over-load-per-core reading), or "tooling" when
+#       the refusal instead means the verdict itself could not be produced
+#       (llm-router-axi absent, jq absent, or the capacity command failing).
+#       Left empty on admission. A caller that only reroutes genuine
+#       over-capacity refusals (bin/fm-remote-overflow-lib.sh) reads this
+#       rather than treating every non-zero return alike.
 #   fm_capacity_router_bin
 #       Print the resolved llm-router-axi executable, empty when absent.
 
@@ -40,17 +47,22 @@ _FM_CAPACITY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-router-lib.sh
 . "$_FM_CAPACITY_LIB_DIR/fm-router-lib.sh"
 
+# shellcheck disable=SC2034 # output global, read by the sourcing caller.
+FM_CAPACITY_GUARD_REASON=
+
 fm_capacity_router_bin() {
   fm_router_axi_bin
 }
 
 fm_capacity_guard() {  # <config> <label>
   local label=${2:-work}
+  FM_CAPACITY_GUARD_REASON=
   [ -z "${FM_CAPACITY_NO_GUARD:-}" ] || return 0
 
   local router
   router=$(fm_capacity_router_bin)
   if [ -z "$router" ]; then
+    FM_CAPACITY_GUARD_REASON=tooling
     echo "error: llm-router-axi is not installed, so machine capacity cannot be checked before spawning $label." >&2
     echo "  Install it with: $(fm_router_axi_install_hint)" >&2
     echo "  This check declines new work rather than risk saturating the machine; nothing already running is affected." >&2
@@ -58,18 +70,22 @@ fm_capacity_guard() {  # <config> <label>
   fi
 
   if ! command -v jq >/dev/null 2>&1; then
+    FM_CAPACITY_GUARD_REASON=tooling
     echo "error: jq is not installed, so the llm-router-axi capacity verdict cannot be read; declining $label." >&2
     return 1
   fi
 
   local json ok
   if ! json=$("$router" capacity --json 2>/dev/null); then
+    FM_CAPACITY_GUARD_REASON=tooling
     echo "error: llm-router-axi could not measure this machine; declining $label rather than spawning blind." >&2
     return 1
   fi
   ok=$(printf '%s' "$json" | jq -r '.ok // false' 2>/dev/null)
   [ "$ok" = true ] && return 0
 
+  # shellcheck disable=SC2034 # output global, read by the sourcing caller.
+  FM_CAPACITY_GUARD_REASON=capacity
   echo "machine capacity declines $label:" >&2
   printf '%s' "$json" | jq -r '.reasons[]? | "  - " + .' >&2
   echo "  Nothing already running is affected. Raise the router policy thresholds" >&2
