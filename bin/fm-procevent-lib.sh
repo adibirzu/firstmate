@@ -335,6 +335,197 @@ fm_procevent_source_lock_release() {
   fm_lock_release "$(fm_procevent_source_lock_path "$1")"
 }
 
+# Maximum `$(...)` nesting allowed in a shell argv element.
+# One level (`sh -c 'printf x $(seq 1 3)'`) is a normal source. A few
+# thousand nested substitutions overflow bash's C stack (parser recursion
+# through xparse_dolparen), so registration and every start path refuse this
+# many or more.
+FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
+
+# Print the maximum parser-relevant `$(` nesting depth in a string.
+fm_procevent_cmdsub_nest_depth() {
+  local s=$1 i=0 n depth=0 max=0 quote='' group_depth=0 comment=0 case_state=0 word='' completed_word='' word_start=1 char='' arith_open=0 arith_ptr=0
+  local -a quote_stack group_stack comment_stack case_stack word_stack word_start_stack arith_close_at arith_open_stack arith_ptr_stack
+  n=${#s}
+  while [ "$i" -lt "$n" ]; do
+    char=${s:i:1}
+    if [ "$comment" -eq 1 ]; then
+      [ "$char" = $'\n' ] && comment=0
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = ansi ]; then
+      if [ "$char" = $'\\' ]; then
+        i=$((i + 2))
+      elif [ "$char" = "'" ]; then
+        quote=
+        i=$((i + 1))
+      else
+        i=$((i + 1))
+      fi
+      continue
+    fi
+    if [ "$quote" = '"' ]; then
+      if [ "$char" = $'\\' ]; then
+        i=$((i + 2))
+        continue
+      elif [ "$char" = '"' ]; then
+        quote=
+        i=$((i + 1))
+        continue
+      elif [ "$char" != '$' ] || [ "$((i + 1))" -ge "$n" ] \
+        || [ "${s:i+1:1}" != '(' ]; then
+        i=$((i + 1))
+        continue
+      fi
+    fi
+    if [ "$char" = $'\\' ] && [ "$quote" != "'" ]; then
+      word_start=0
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$quote" = "'" ]; then
+      [ "$char" = "'" ] && quote=
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$char" = '"' ]; then
+      if [ "$quote" = '"' ]; then quote=; else quote='"'; fi
+      word_start=0
+      i=$((i + 1))
+      continue
+    fi
+    case "$char" in
+      [[:alnum:]_])
+        word=$word$char
+        word_start=0
+        i=$((i + 1))
+        continue
+        ;;
+    esac
+    completed_word=$word
+    case "$completed_word" in
+      case) case_state=$((case_state + 1)) ;;
+      'esac') [ "$case_state" -gt 0 ] && case_state=$((case_state - 1)) ;;
+    esac
+    word=
+    if [ "$char" = '#' ] && [ "$word_start" -eq 1 ]; then
+      comment=1
+      i=$((i + 1))
+      continue
+    fi
+    if [ -z "$quote" ] && [ "$char" = "'" ]; then
+      quote="'"
+      word_start=0
+      i=$((i + 1))
+      continue
+    fi
+    if [ -z "$quote" ] && [ "$char" = '$' ] \
+      && [ "$((i + 1))" -lt "$n" ] && [ "${s:i+1:1}" = "'" ]; then
+      quote=ansi
+      word_start=0
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$((i + 2))" -lt "$n" ] && [ "${s:i:3}" = "\$((" ]; then
+      arith_close_at[arith_ptr]=$group_depth
+      arith_ptr=$((arith_ptr + 1))
+      arith_open=$((arith_open + 1))
+      group_depth=$((group_depth + 1))
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$word_start" -eq 1 ] && [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '((' ]; then
+      arith_close_at[arith_ptr]=$group_depth
+      arith_ptr=$((arith_ptr + 1))
+      arith_open=$((arith_open + 1))
+      group_depth=$((group_depth + 1))
+      i=$((i + 1))
+      continue
+    fi
+    # shellcheck disable=SC2016 # Compare against literal command/process-substitution opener bytes.
+    if [ "$((i + 1))" -lt "$n" ] \
+      && { [ "${s:i:2}" = '$(' ] \
+        || { [ "$arith_open" -eq 0 ] && { [ "${s:i:2}" = '<(' ] || [ "${s:i:2}" = '>(' ]; }; }; }; then
+      quote_stack[depth]=$quote
+      group_stack[depth]=$group_depth
+      comment_stack[depth]=$comment
+      case_stack[depth]=$case_state
+      word_stack[depth]=$word
+      word_start_stack[depth]=$word_start
+      arith_open_stack[depth]=$arith_open
+      arith_ptr_stack[depth]=$arith_ptr
+      depth=$((depth + 1))
+      [ "$depth" -gt "$max" ] && max=$depth
+      if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
+        printf '%s\n' "$max"
+        return 0
+      fi
+      quote=
+      group_depth=0
+      comment=0
+      case_state=0
+      word=
+      word_start=1
+      arith_open=0
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$char" = '(' ]; then
+      group_depth=$((group_depth + 1))
+    elif [ "$char" = ')' ]; then
+      if [ "$group_depth" -gt 0 ]; then
+        group_depth=$((group_depth - 1))
+        if [ "$arith_open" -gt 0 ] \
+          && [ "$group_depth" -eq "${arith_close_at[arith_ptr - 1]}" ]; then
+          arith_open=$((arith_open - 1))
+          arith_ptr=$((arith_ptr - 1))
+        fi
+      elif [ "$case_state" -eq 0 ] && [ "$depth" -gt 0 ]; then
+        depth=$((depth - 1))
+        quote=${quote_stack[depth]}
+        group_depth=${group_stack[depth]}
+        comment=${comment_stack[depth]}
+        case_state=${case_stack[depth]}
+        word=${word_stack[depth]}
+        word_start=${word_start_stack[depth]}
+        arith_open=${arith_open_stack[depth]}
+        arith_ptr=${arith_ptr_stack[depth]}
+      fi
+    fi
+    case "$char" in
+      [[:space:]]|';'|'|'|'&'|'<'|'>'|'('|')') word_start=1 ;;
+      *) word_start=0 ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '%s\n' "$max"
+}
+# True when a known shell's argv contains deeply nested command substitutions.
+fm_procevent_argv_feeds_shell_parser() {
+  local shell arg depth
+  [ "$#" -ge 1 ] || return 1
+  shell=$1
+  shift
+  case "$shell" in
+    env|/usr/bin/env)
+      [ "$#" -ge 1 ] || return 1
+      shell=$1
+      shift
+      ;;
+  esac
+  shell=${shell##*/}
+  case "$shell" in
+    sh|bash|dash|zsh|ksh) ;;
+    *) return 1 ;;
+  esac
+  for arg in "$@"; do
+    depth=$(fm_procevent_cmdsub_nest_depth "$arg")
+    [ "$depth" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ] && return 0
+  done
+  return 1
+}
+
 fm_procevent_registration_publish_locked() {  # <state> <adapter> <source-id> <argv...>
   local state=$1 adapter=$2 id=$3 reg dest tmp arg identity
   shift 3
@@ -344,6 +535,7 @@ fm_procevent_registration_publish_locked() {  # <state> <adapter> <source-id> <a
   for arg in "$@"; do
     case "$arg" in *$'\n'*) return 1 ;; esac
   done
+  fm_procevent_argv_feeds_shell_parser "$@" && return 1
   reg=$(fm_procevent_registry_dir "$state")
   (umask 077; mkdir -p "$reg") || return 1
   [ -d "$reg" ] && [ ! -L "$reg" ] || return 1
