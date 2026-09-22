@@ -816,9 +816,12 @@ test_downtime_marker_does_not_follow_symlink() {
 
 test_racy_concurrent_arms_settle_to_one_watcher() {
   local dir state fakebin rounds round out1 out2 a1 a2 i pid1 pid2 status1 status2
+  local cycle_log cycle_log_lines_before raced_child_closed_empty
   dir=$(make_case racy-concurrent-arms)
   state="$dir/state"
   fakebin="$dir/fakebin"
+  cycle_log="$state/.watch-cycle-exits.log"
+  raced_child_closed_empty=0
 
   # Two arms firing at once with no watcher yet held is the "racy arm" case
   # bin/fm-watch.sh's self-eviction comment names: one child wins the
@@ -829,6 +832,9 @@ test_racy_concurrent_arms_settle_to_one_watcher() {
   while [ "$round" -lt "$rounds" ]; do
     out1="$dir/round-$round-arm1.out"
     out2="$dir/round-$round-arm2.out"
+    cycle_log_lines_before=0
+    [ -f "$cycle_log" ] \
+      && cycle_log_lines_before=$(wc -l < "$cycle_log" 2>/dev/null | tr -d '[:space:]')
     PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=5 \
       "$WATCH_ARM" > "$out1" 2>&1 &
@@ -879,8 +885,25 @@ test_racy_concurrent_arms_settle_to_one_watcher() {
     # clean racy-start empty cycle.
     ack_wakes "$state" || fail "round $round: could not acknowledge the delivered wake"
 
+    # The identical "started|attached" output and exit code above cannot tell
+    # apart a losing arm that attached before ever spawning a child (the
+    # pre-check at bin/fm-watch-arm.sh's "healthy_watcher" gate) from one whose
+    # own owned child actually raced, closed with no wake, and was reclassified
+    # as a clean successor attach instead of "watcher: FAILED" - the exact
+    # regression this test targets. The durable per-cycle ledger the arm itself
+    # appends distinguishes them: only the targeted path records an owned
+    # ("origin=started") cycle whose empty close ("reason=unexpected-clean-exit")
+    # resolved to a live successor ("successor=attached:").
+    if [ -f "$cycle_log" ]; then
+      tail -n "+$((cycle_log_lines_before + 1))" "$cycle_log" 2>/dev/null \
+        | grep -qE 'origin=started.*reason=unexpected-clean-exit.*successor=attached:' \
+        && raced_child_closed_empty=1
+    fi
+
     round=$((round + 1))
   done
+  [ "$raced_child_closed_empty" -eq 1 ] \
+    || fail "no racing round exercised an owned child's empty cycle close being reclassified as a clean attach"
   pass "watch-arm: repeated racy concurrent arms settle to exactly one watcher and never misreport a failure"
 }
 
