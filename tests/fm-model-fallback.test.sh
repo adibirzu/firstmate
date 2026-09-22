@@ -114,6 +114,9 @@ SH
 
 # install_fake_router <case-dir> <classify-output-file> <chain-json-file>:
 # a fake llm-router-axi that answers the verbs fm-model-fallback.sh calls.
+# When <case-dir>/triage.json exists the `triage` verb answers from it; the
+# default answers nothing at all, so an absent triage answer is the same bare
+# miss as a router outage.
 install_fake_router() {
   local dir=$1 classify=$2 chain=$3
   cat > "$dir/llm-router-axi" <<SH
@@ -127,6 +130,9 @@ case "\${1:-}" in
   route)
     printf '%s\n' "\$*" >> "$dir/route.calls"
     cat "$chain"; exit 0 ;;
+  triage)
+    if [ -f "$dir/triage.json" ]; then cat "$dir/triage.json"; fi
+    exit 0 ;;
   record)
     printf '%s\n' "\$*" >> "$dir/record.calls"; exit 0 ;;
   capacity)
@@ -345,6 +351,53 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   [ "$rc" -eq 1 ] || fail "consumed exhausted evidence must not re-block, rc=$rc: $out"
   assert_contains "$out" "no depletion evidence" "second exhausted apply respects the cursor"
   pass "full exhaustion consumes evidence before blocking, and never blocks twice on it"
+}
+
+# --- advisory triage token ---------------------------------------------------
+#
+# `triage` is advisory only: it reclassifies the same evidence into a closed
+# defect class for one status-line token, never gates or changes the step-down,
+# and a missing or unreadable answer is a bare miss that leaves the fallback
+# exactly as it would have been without it.
+
+{
+  setup_case triage-jevy apply-t1 "$STEP_CHAIN" "$DEPLETED_LINE" depleted
+  printf '%s\n' '{"source":"jev","defect":{"value":"rate_limit","confidence":0.64}}' > "$CASE_DIR/triage.json"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-t1 apply >/dev/null 2>&1 \
+    || fail "jevy triage apply should succeed"
+  status_log=$(cat "$CASE_HOME/state/apply-t1.status")
+  assert_contains "$status_log" "triage: rate_limit via jev" "a Jev-triaged defect is recorded in the status line"
+  handoff_args=$(cat "$FM_FAKE_HANDOFF_LOG")
+  assert_contains "$handoff_args" "--model gemini-3.6-flash-high" "triage never changed the step-down lane"
+  pass "an advisory Jev triage token is appended without changing the fallback lane"
+}
+
+{
+  setup_case triage-fallback apply-t2 "$STEP_CHAIN" "$DEPLETED_LINE" depleted
+  printf '%s\n' '{"source":"fallback","reason":"no key or no network","defect":{"value":"quota_exhausted","confidence":0.71}}' > "$CASE_DIR/triage.json"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-t2 apply >/dev/null 2>&1 \
+    || fail "fallback triage apply should succeed"
+  status_log=$(cat "$CASE_HOME/state/apply-t2.status")
+  assert_contains "$status_log" "triage: quota_exhausted via fallback" "a heuristic-triaged defect is recorded as via fallback"
+  pass "an advisory fallback triage token is appended when Jev is unavailable"
+}
+
+{
+  setup_case triage-bad apply-t3 "$STEP_CHAIN" "$DEPLETED_LINE" depleted
+  printf '%s\n' 'this is not json' > "$CASE_DIR/triage.json"
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-t3 apply 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -eq 0 ] || fail "an unreadable triage answer must not fail the fallback, rc=$rc: $out"
+  status_log=$(cat "$CASE_HOME/state/apply-t3.status")
+  grep -q 'triage:' "$CASE_HOME/state/apply-t3.status" \
+    && fail "an unreadable triage answer must record no token"
+  assert_contains "$status_log" "working: automatic model fallback gemini-3.7-flash-high -> gemini-3.6-flash-high" "the fallback proceeds unchanged"
+  pass "an unavailable triage answer is a bare miss that leaves the fallback unchanged"
 }
 
 # A task meta shared with an armed merge poll carries the canonical

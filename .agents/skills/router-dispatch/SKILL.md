@@ -34,14 +34,18 @@ The routing doctrine is the human-editable policy file `~/.config/llm-router-axi
 For a task described by kind, difficulty, and surface, ask the router for the decision and hand its flags to `fm-spawn.sh`:
 
 ```sh
-llm-router-axi route --kind ship --difficulty medium --surface backend --flags
+TASK_ARG=$(fm_router_route_task_arg "data/$ID/brief.md") && \
+  llm-router-axi route --kind ship --difficulty medium --surface backend $TASK_ARG --flags
 # -> --harness opencode --model opencode-go/deepseek-v4.1-flash --effort medium
 ```
+
+`fm_router_route_task_arg` (bin/fm-router-lib.sh) composes the `--task` flag from the brief's `## Captain's intent` section into a mode-0600 temp file, and prints nothing when the brief or section is missing, so the route line above is byte-identical with or without it.
 
 - `--kind` is `ship`, `scout`, `review`, `architecture`, or `admin`.
 - `--difficulty` is `easy`, `medium`, or `hard`.
 - `--surface` is `backend`, `frontend`, `docs`, `infra`, or `mixed`.
 - `--json` emits the decision with `provider`, `pool`, `reason`, ordered `fallbacks[]`, and `capacity{ok,measured}`; `--usage-json <path>` routes from a fixture.
+- `--task` feeds the router's Jev shadow hook only: it carries the captain's intent for dispatch-vs-Jev descriptor-agreement evidence (`docs/configuration.md` "Jev shadow mode") and never affects the routing decision, which is always computed from the supplied descriptor. It must be the captain's intent only, never `## Firstmate spec`, secrets, or `.env` values.
 - The router reads telemetry from `usage-axi --json --full`, resolves provider identity including `opencode` pools, and refuses a route the machine-capacity thresholds reject.
 - The router refuses when no candidate has current dispatch capacity; stop and report that rather than choosing around the refusal.
 

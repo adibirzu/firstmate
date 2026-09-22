@@ -314,6 +314,28 @@ Both tools are unpublished on npm; build and install each from its GitHub main c
 `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
 The behavior lanes do not float on main: `bin/fm-install-router-axi-tools.sh` is the single owner of the pinned CI and local lane install, building both tools at verified commits into `~/.local` (the location a spawn's sanitized remote-job PATH resolves) and exposing a cache key for the CI build cache, while `bin/fm-test-run.sh` runs it as its `--lane`, `--family`, and `--all` preflight.
 This posture is primary-authoritative and shared by every home because they all run on one physical machine.
+
+## Jev shadow mode (llm-router-axi policy)
+
+`llm-router-axi` can shadow its dispatch routing with a read-only Jev classification so firstmate gathers agreement evidence before anything routes real traffic through Jev.
+The router decides from the supplied descriptor exactly as before; Jev output is recorded next to it and never changes the decision.
+
+Shadow mode is configured in `~/.config/llm-router-axi/policy.json` (`jev.shadow.enabled: true`), which is OFF by default.
+`LLM_ROUTER_JEV_SHADOW=off` is the environment kill switch and always wins over the config.
+The Jev key comes only from `TYPESAFE_API_KEY` (a this-Mac-only value in `~/.claude/.env`, never passed on a command line or into this repo), and shadow rows are appended to the ledger at `~/.local/state/llm-router-axi/shadow-ledger.jsonl`.
+Both the key and the ledger are operator-local; none of it is inherited into secondmate homes.
+
+Firstmate feeds the shadow hook through llm-router-axi's `route --task` flag, which carries the task's `## Captain's intent` section and is recorded only when shadow is enabled.
+`bin/fm-router-lib.sh` owns the `fm_router_captain_intent` and `fm_router_route_task_arg` helpers that compose the flag from a generated brief; `--task` never changes the routing decision and never carries `## Firstmate spec`, secrets, or `.env` values.
+The `router-dispatch` skill is the single dispatch call site; bin scripts never call the dispatch `route` verb (the only in-run router caller, `bin/fm-model-fallback.sh`, uses `route chain`, a different subcommand).
+
+`llm-router-axi triage` is advisory only: a status-line `triage: <class> via jev|fallback` token on a model-fallback event.
+It never gates or changes routing, and an unavailable answer is a bare miss that leaves the fallback unchanged.
+`bin/fm-fleet-snapshot.sh` prints a live `jev_shadow` summary object when shadow is enabled and omits the field silently otherwise.
+
+Slice boundaries are enforced by the router itself: `classify-evidence` and `triage` are read-only, and `shadow report --json` lives in `~/.local/bin/llm-router-axi v0.1.0`.
+Nothing routes real traffic through Jev until the router's `docs/when-to-route.md` verdict exists and the captain says go.
+
 ## Stow pass horizon (config/stow-pass-horizon)
 
 `config/stow-pass-horizon` is an optional local, gitignored presence flag that opts this home in to the pass-count decay horizon in the internal [`/stow` skill](../.agents/skills/stow/SKILL.md).
