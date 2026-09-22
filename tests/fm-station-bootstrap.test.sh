@@ -174,8 +174,11 @@ SH
 
 run_bootstrap() { # <fixture> [extra args...]; prints output, returns status
   local fix=$1; shift
+  local run_home=${RUN_BOOTSTRAP_HOME:-$TMP_ROOT/$fix/localhome}
+  mkdir -p "$run_home"
   FM_SSH_BIN="$TMP_ROOT/$fix/fake-ssh" FM_SSH_CONNECT_TIMEOUT=5 \
     FM_FIX_HOME="$TMP_ROOT/$fix/home" FM_FIX_BIN="$TMP_ROOT/$fix/bin" \
+    HOME="$run_home" \
     "$BOOTSTRAP" testalias --fork "$FORK" "$@"
 }
 
@@ -227,7 +230,7 @@ JQ_PROBE=$(FM_SSH_BIN="$TMP_ROOT/bare/fake-ssh" FM_FIX_HOME="$TMP_ROOT/bare/home
 assert_not_equals "" "$JQ_PROBE" "jq resolves on the host"
 POLICY="$TMP_ROOT/bare/home/.config/llm-router-axi/policy.json"
 assert_present "$POLICY" "router policy is written"
-assert_grep '"enabled": true' "$POLICY" "policy enables jev shadow"
+assert_grep '"enabled":true' "$POLICY" "policy enables jev shadow"
 
 # 5. Rerun is idempotent: everything skipped, nothing reinstalled.
 OUT=$(run_bootstrap bare 2>&1); RC=$?
@@ -268,7 +271,7 @@ LOCAL_HOME="$TMP_ROOT/mirror-local"
 mkdir -p "$LOCAL_HOME/.config/llm-router-axi"
 printf '{"version":1,"marker":"local-shape","candidateGroups":{"workers":[]},"jev":{"shadow":{"enabled":false}}}\n' \
   > "$LOCAL_HOME/.config/llm-router-axi/policy.json"
-OUT=$(HOME="$LOCAL_HOME" run_bootstrap mirror 2>&1); RC=$?
+OUT=$(RUN_BOOTSTRAP_HOME="$LOCAL_HOME" run_bootstrap mirror 2>&1); RC=$?
 expect_code 0 "$RC" "mirror run exits 0"
 MIRRORED="$TMP_ROOT/mirror/home/.config/llm-router-axi/policy.json"
 assert_grep '"marker": "local-shape"' "$MIRRORED" "mirrored policy keeps the local shape"

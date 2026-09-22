@@ -20,8 +20,10 @@
 #      documented installers, and opencode as the verified harness lane when
 #      no verified harness CLI resolves yet.
 #   6. install llm-router-axi and usage-axi from their GitHub clones, write
-#      the router policy mirroring this machine's shape with jev shadow on,
-#      and prove the router degrades to source fallback with no key present.
+#      the router policy mirroring this machine's shape with jev shadow on
+#      when the remote's policy differs, skipped cleanly when it already
+#      matches, and prove the router degrades to source fallback with no key
+#      present.
 #   7. run fm-remote-doctor.sh --fix then read-only, and print both outputs.
 #
 # Reporting is plain readable step output for the operator, not wake-event
@@ -309,8 +311,15 @@ if [ "$DRY_RUN" -eq 0 ]; then
       say "policy: minimal default (no local policy to mirror); router defaults apply"
     fi
     # shellcheck disable=SC2016 # $HOME expands on the target host, not here.
-    "${SSH_BASE[@]}" -- "$ALIAS" 'mkdir -p "$HOME/.config/llm-router-axi" && cat > "$HOME/.config/llm-router-axi/policy.json"' < "$POLICY_TMP" >/dev/null 2>&1 \
-      || die "policy transfer to $ALIAS failed" 1
+    REMOTE_POLICY=$(probe 'cat "$HOME/.config/llm-router-axi/policy.json" 2>/dev/null' || true)
+    if [ "$REMOTE_POLICY" = "$(cat "$POLICY_TMP")" ]; then
+      skipped "${REMOTE_HOME}/.config/llm-router-axi/policy.json already matches the desired policy"
+    else
+      # shellcheck disable=SC2016 # $HOME expands on the target host, not here.
+      "${SSH_BASE[@]}" -- "$ALIAS" 'mkdir -p "$HOME/.config/llm-router-axi" && cat > "$HOME/.config/llm-router-axi/policy.json"' < "$POLICY_TMP" >/dev/null 2>&1 \
+        || die "policy transfer to $ALIAS failed" 1
+      changed "wrote ${REMOTE_HOME}/.config/llm-router-axi/policy.json"
+    fi
     rm -f -- "$POLICY_TMP"
     trap - EXIT
     if probe 'llm-router-axi policy validate' >/dev/null 2>&1; then
