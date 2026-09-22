@@ -271,9 +271,13 @@ if [ "$VERB" = apply ] && [ -n "$EVIDENCE_TEXT" ]; then
   if [ -n "$TRIAGE_JSON" ]; then
     TRIAGE_DEFECT=$(printf '%s' "$TRIAGE_JSON" | jq -r '.defect.value // empty' 2>/dev/null || true)
     TRIAGE_SOURCE=$(printf '%s' "$TRIAGE_JSON" | jq -r '.source // "fallback"' 2>/dev/null || true)
+    case "$TRIAGE_SOURCE" in
+      jev|fallback) ;;
+      *) TRIAGE_SOURCE=fallback ;;
+    esac
     case "$TRIAGE_DEFECT" in
       rate_limit|quota_exhausted|auth|region_refused|tool_error|test_failure|timeout|unknown)
-        TRIAGE_TOKEN="triage: $TRIAGE_DEFECT via ${TRIAGE_SOURCE:-fallback}"
+        TRIAGE_TOKEN="triage: $TRIAGE_DEFECT via $TRIAGE_SOURCE"
         ;;
     esac
   fi

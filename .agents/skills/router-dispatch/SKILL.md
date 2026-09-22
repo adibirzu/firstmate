@@ -34,12 +34,14 @@ The routing doctrine is the human-editable policy file `~/.config/llm-router-axi
 For a task described by kind, difficulty, and surface, ask the router for the decision and hand its flags to `fm-spawn.sh`:
 
 ```sh
-TASK_ARG=$(fm_router_route_task_arg "data/$ID/brief.md") && \
-  llm-router-axi route --kind ship --difficulty medium --surface backend $TASK_ARG --flags
+TASK_ARG=$(fm_router_route_task_arg "data/$ID/brief.md")
+TASK_FILE=${TASK_ARG#--task }
+llm-router-axi route --kind ship --difficulty medium --surface backend $TASK_ARG --flags
 # -> --harness opencode --model opencode-go/deepseek-v4.1-flash --effort medium
+[ -z "$TASK_FILE" ] || rm -f -- "$TASK_FILE"
 ```
 
-`fm_router_route_task_arg` (bin/fm-router-lib.sh) composes the `--task` flag from the brief's `## Captain's intent` section into a mode-0600 temp file, and prints nothing when the brief or section is missing, so the route line above is byte-identical with or without it.
+`fm_router_route_task_arg` (bin/fm-router-lib.sh) composes the `--task` flag from the brief's `## Captain's intent` section into a mode-0600 temp file, and prints nothing when the brief or section is missing, so the route line above is byte-identical with or without it. The temp file is single-use: the caller removes it right after the `route` call, whether or not that call succeeds.
 
 - `--kind` is `ship`, `scout`, `review`, `architecture`, or `admin`.
 - `--difficulty` is `easy`, `medium`, or `hard`.

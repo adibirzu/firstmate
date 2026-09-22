@@ -21,7 +21,9 @@
 #   fm_router_captain_intent  print a brief's `## Captain's intent` body,
 #                             nothing when the brief or section is missing
 #   fm_router_route_task_arg  print `--task <tempfile>` carrying the brief's
-#                             captain intent, or nothing when there is none
+#                             captain intent, or nothing when there is none;
+#                             the caller removes the tempfile right after its
+#                             one `route` call, success or failure
 #
 # Resolution is PATH-only, plus an absolute path passed through the override.
 # Firstmate never vendors a private copy of either tool. Both are unpublished on
@@ -91,7 +93,7 @@ fm_router_captain_intent() {  # <brief-file> -> the `## Captain's intent` body o
   done < "$brief"
 }
 
-fm_router_route_task_arg() {  # <brief-file> -> `--task <tempfile>` or nothing
+fm_router_route_task_arg() {  # <brief-file> -> `--task <tempfile>` or nothing; caller removes the tempfile after its one route call
   local brief=${1:-} content tmp
   [ -n "$brief" ] || return 0
   content=$(fm_router_captain_intent "$brief") || return 0
