@@ -461,7 +461,7 @@ fm_procevent_cmdsub_nest_depth() {
     elif [ "$char" = ')' ]; then
       if [ "$group_depth" -gt 0 ]; then
         group_depth=$((group_depth - 1))
-      elif [ "$case_state" -eq 2 ]; then
+      elif [ "$case_state" -ne 0 ]; then
         case_state=3
       elif [ "$depth" -gt 0 ]; then
         depth=$((depth - 1))

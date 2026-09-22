@@ -3138,6 +3138,15 @@ sibling_cmdsub() {
   printf '%s\n' "$nested"
 }
 
+deep_case_clause_close() {
+  local nested=true i=0
+  while [ "$i" -lt 7 ]; do
+    nested="true \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "\$(case x in a) : ;; b) : ;; esac; $nested)"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3232,6 +3241,11 @@ HQUOTED="$TMP_ROOT/planted-quoted-close"; new_home "$HQUOTED"
 assert_register_refused "$TMP_ROOT/register-quoted-close" quoted-close bash --not-an-option "$(deep_quoted_close)"
 plant_source "$HQUOTED" bash --not-an-option "$(deep_quoted_close)"
 assert_planted_bash_refused "$HQUOTED" "quoted-close"
+
+HCASECLAUSE="$TMP_ROOT/planted-case-clause-close"; new_home "$HCASECLAUSE"
+assert_register_refused "$TMP_ROOT/register-case-clause-close" case-clause-close bash --not-an-option "$(deep_case_clause_close)"
+plant_source "$HCASECLAUSE" bash --not-an-option "$(deep_case_clause_close)"
+assert_planted_bash_refused "$HCASECLAUSE" "case-clause-close"
 pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'
