@@ -435,6 +435,14 @@ fm_procevent_cmdsub_nest_depth() {
       i=$((i + 2))
       continue
     fi
+    if [ "$word_start" -eq 1 ] && [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '((' ]; then
+      arith_close_at[arith_ptr]=$group_depth
+      arith_ptr=$((arith_ptr + 1))
+      arith_open=$((arith_open + 1))
+      group_depth=$((group_depth + 1))
+      i=$((i + 1))
+      continue
+    fi
     # shellcheck disable=SC2016 # Compare against literal command/process-substitution opener bytes.
     if [ "$((i + 1))" -lt "$n" ] \
       && { [ "${s:i:2}" = '$(' ] \

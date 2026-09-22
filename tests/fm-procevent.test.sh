@@ -3175,6 +3175,15 @@ arith_process_substitution_comparison() {
   printf '$(( %s ))\n' "$nested"
 }
 
+bare_arith_process_substitution_comparison() {
+  local nested=9 i=8
+  while [ "$i" -ge 1 ]; do
+    nested="$i>($nested)"
+    i=$((i - 1))
+  done
+  printf 'if ((%s)); then :; fi\n' "$nested"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3191,6 +3200,8 @@ pe_register "$HSAFE" lavish sibling-shell-argv -- bash -c "$(sibling_cmdsub)" >/
   || fail "register treated sibling command substitutions as nested"
 pe_register "$HSAFE" lavish arith-comparison-shell-argv -- bash -c "$(arith_process_substitution_comparison)" >/dev/null \
   || fail "register treated arithmetic > comparisons as nested process substitution"
+pe_register "$HSAFE" lavish bare-arith-comparison-shell-argv -- bash -c "$(bare_arith_process_substitution_comparison)" >/dev/null \
+  || fail "register treated bare ((...)) arithmetic > comparisons as nested process substitution"
 pass "register permits inert and shallow parser-safe argv"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
