@@ -291,6 +291,7 @@ The setting is home-local and not inherited; `bin/fm-watch.sh`'s `heartbeat_inte
 
 Every spawn - crewmate, scout, and secondmate, in every home - is admitted only when the machine still has room for another agent.
 `bin/fm-spawn.sh` calls `bin/fm-capacity-lib.sh`, a thin adapter over `llm-router-axi capacity`, before it creates anything, and a refusal prints each signal the router measured against the value it wanted.
+A refused fresh ship or scout spawn is first offered to a remote secondmate home with headroom through the existing remote handoff, and only stays queued locally when no remote home takes it; `bin/fm-remote-overflow-lib.sh`'s header owns that decision.
 A relaunch (`bin/fm-control.sh relaunch`, driven by `bin/fm-secondmate-restart.sh`) consults the same guard before stopping the running agent, so a capacity refusal leaves the existing agent alive instead of stranding a bare shell after the stop.
 Run `bin/fm-capacity.sh` at any time to see the same reading without attempting a spawn, or `bin/fm-capacity.sh check` for a script-friendly exit status.
 

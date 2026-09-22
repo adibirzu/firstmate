@@ -337,6 +337,7 @@ Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in sec
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
 Every spawn is also admitted by the machine-capacity check, which refuses when the machine has no room for another agent and prints what it measured; `llm-router-axi` owns the gauges and thresholds and `docs/configuration.md` "Machine capacity (llm-router-axi policy)" owns that contract.
 A capacity refusal is a stop-and-report result: relay the measured numbers to the captain and never loosen or disable those limits without the captain's explicit word, and never restore headroom by stopping live work, which hard rule 3 forbids.
+A refused fresh ship or scout spawn may instead report itself routed to a remote home; relay which machine took it from that line, exactly as printed.
 When the configured tasks-axi backlog gate applies, the spawn itself moves the work item to In flight and refuses rather than dispatching work this home has no item for, so recording the dispatch is never a separate step to remember; a manual-backend home retains the hand-editing contract in `docs/configuration.md`.
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.

@@ -225,7 +225,10 @@
 #   here and never refuses a spawn; bin/fm-test-run.sh enforces it with
 #   `capacity --for suite` before starting a full suite, because that rule
 #   serializes suite starts, not agent launches. The guard only declines NEW
-#   work and never touches anything already running.
+#   work and never touches anything already running. A refused fresh ship or
+#   scout spawn is offered to a remote secondmate home with headroom through
+#   the existing remote handoff (bin/fm-remote-overflow-lib.sh owns that
+#   decision); only when no remote home takes it does the refusal stand.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -467,6 +470,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-remote-overflow-lib.sh
+. "$SCRIPT_DIR/fm-remote-overflow-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -566,7 +571,7 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
-    --handoff-brief) want_value=handoff-brief ;;
+    --handoff-brief) want_value="handoff-brief" ;;
     --handoff-brief=*) HANDOFF_BRIEF=${a#--handoff-brief=} ;;
     *) POS+=("$a") ;;
   esac
@@ -1314,8 +1319,32 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # and before any backend, worktree, or metadata mutation, so a refusal leaves
 # nothing half-created. It reads machine state and declines; it never touches
 # work that is already running. A batch re-execs this script per pair, so each
-# pair is admitted against the machine as the previous pair left it.
-fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
+# pair is admitted against the machine as the previous pair left it. A refused
+# FRESH ship or scout spawn is first offered to a remote secondmate home with
+# headroom (bin/fm-remote-overflow-lib.sh): the queued item moves to that
+# home's backlog through the existing remote handoff and the spawn reports
+# `routed <id> remote=<mate> host=<alias>` instead of `spawned ...`.
+# Secondmate spawns, reuse-worktree relaunches, and items that are not Queued
+# are never overflowable, and when no remote home takes the work the refusal
+# stands exactly as before. A refusal caused by broken local tooling (router
+# or jq absent, or the capacity command itself failing) is never overflowed:
+# FM_CAPACITY_GUARD_REASON distinguishes that from the router's genuine
+# ok=false verdict, so a broken capacity toolchain surfaces its own diagnostic
+# instead of silently rerouting every spawn to a remote home.
+if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
+  if [ "$FM_CAPACITY_GUARD_REASON" = capacity ] \
+    && [ "$REUSE_WORKTREE" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
+    && fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND" 2>/dev/null \
+    && fm_backlog_row_probe "$DATA" "$ID" 2>/dev/null \
+    && [ "$FM_BACKLOG_ROW_STATE" = "queued no no" ] \
+    && [ -n "$(fm_overflow_remote_ids)" ]; then
+    if fm_overflow_try "$ID"; then
+      exit 0
+    fi
+    echo "overflow: task $ID stays queued locally; no remote secondmate home took it" >&2
+  fi
+  exit 1
+fi
 # Role partition: spawning NEW work is MAIN-owned. A reuse-worktree relaunch of an
 # existing task is legitimate recovery (fm-control or fm-runtime-handoff drive it
 # through this same entrypoint), so only a fresh spawn refuses the branch actor
