@@ -37,20 +37,26 @@
 #      absent from its chain steps to the chain head; the chain's last entry
 #      means this runtime lane is exhausted unless the router policy's
 #      modelFallbackCycles returns it to the chain head.
-#   4. When the lane is exhausted and the router policy's fallbackLanes names
+#   4. On apply, asks `llm-router-axi triage` for one advisory defect class
+#      over the same evidence and appends `triage: <class> via jev|fallback`
+#      to the status line. Triage is purely advisory: it never gates or
+#      changes the step-down (its closed classes reuse the classify-evidence
+#      vocabulary, so it cannot contradict it), and an unavailable answer is
+#      a bare miss that lets the fallback proceed unchanged.
+#   5. When the lane is exhausted and the router policy's fallbackLanes names
 #      a later lane, moves there and starts that lane's own chain head (or
 #      its default model when that lane has no chain).
-#   5. For router-classified subscription exhaustion, when the depleted harness
+#   6. For router-classified subscription exhaustion, when the depleted harness
 #      carries a telemetry-backed routing provider, records the verified
 #      failure through `llm-router-axi record` so future dispatches avoid the
 #      account during the cooldown. A hosted-region opt-in refusal is specific
 #      to the model, so it never cools down the provider; bookkeeping failure
 #      never blocks the relaunch itself.
-#   6. Relaunches in place with --model <next> and a progress note naming the
+#   7. Relaunches in place with --model <next> and a progress note naming the
 #      depletion signature and the automatic step-down. The effort axis is
 #      deliberately reset so the replacement model launches on its own
 #      default instead of inheriting an axis tuned for the depleted model.
-#   7. Appends one `working:` status line recording the switch, then advances
+#   8. Appends one `working:` status line recording the switch, then advances
 #      the fallback cursor past the consumed evidence under the task's meta
 #      lock, so the same evidence can never trigger a second step-down.
 #
@@ -246,6 +252,38 @@ case "$CLASSIFICATION" in
 esac
 SIGNATURE=$(printf '%s\n' "$CLASSIFICATION" | sed -n 's/^signature=//p')
 
+# --- advisory triage (apply only) -------------------------------------------
+#
+# `triage` reclassifies the same depletion evidence into the closed defect
+# classes (rate_limit, quota_exhausted, auth, region_refused, tool_error,
+# test_failure, timeout, unknown) for one advisory token in the status line
+# (docs/configuration.md "Jev shadow mode"). It is never a decision input:
+# classify-evidence above stays the sole owner of whether depletion happened,
+# and the route chain below stays the sole owner of what happens next. A
+# missing router answer, malformed JSON, or an unsettled class falls out to a
+# bare miss - the fallback proceeds exactly as it would have without triage,
+# because a router outage must never stall a depletion response.
+TRIAGE_TOKEN=
+if [ "$VERB" = apply ] && [ -n "$EVIDENCE_TEXT" ]; then
+  TRIAGE_JSON=$(printf '%s\n' "$EVIDENCE_TEXT" \
+    | "$ROUTER" triage --evidence - --json 2>/dev/null \
+    || true)
+  if [ -n "$TRIAGE_JSON" ]; then
+    TRIAGE_DEFECT=$(printf '%s' "$TRIAGE_JSON" | jq -r '.defect.value // empty' 2>/dev/null || true)
+    TRIAGE_SOURCE=$(printf '%s' "$TRIAGE_JSON" | jq -r '.source // "fallback"' 2>/dev/null || true)
+    case "$TRIAGE_SOURCE" in
+      jev|fallback) ;;
+      *) TRIAGE_SOURCE=fallback ;;
+    esac
+    case "$TRIAGE_DEFECT" in
+      rate_limit|quota_exhausted|auth|region_refused|tool_error|test_failure|timeout|unknown)
+        TRIAGE_TOKEN="triage: $TRIAGE_DEFECT via $TRIAGE_SOURCE"
+        ;;
+    esac
+  fi
+  [ -n "$TRIAGE_TOKEN" ] || log "advisory triage unavailable for $ID; falling through on the router's classification alone"
+fi
+
 advance_fallback_cursor() {
   local cursor_end=$1 new_cursor_line lock update_ok
   new_cursor_line="fallback_cursor=$cursor_end"
@@ -319,8 +357,8 @@ if [ "$ACTION" = exhausted ]; then
   exhausted_reason="every model in the '$HARNESS' chain is depleted and no fallbackLanes successor exists"
   echo "reason=${ROUTER_REASON:-$exhausted_reason}"
   if [ "$VERB" = apply ]; then
-    printf 'blocked: model fallback exhausted for %s (%s); needs a routing decision\n' \
-      "$HARNESS" "$(printf '%s' "$CHAIN" | tr '\n' ' ')" >> "$STATUS"
+    printf 'blocked: model fallback exhausted for %s (%s); needs a routing decision%s\n' \
+      "$HARNESS" "$(printf '%s' "$CHAIN" | tr '\n' ' ')" "${TRIAGE_TOKEN:+; $TRIAGE_TOKEN}" >> "$STATUS"
     advance_fallback_cursor "$(wc -c < "$STATUS" | tr -d ' ')"
   fi
   exit 3
@@ -354,8 +392,8 @@ fi
 
 # The downgrade is logged, never silent: one status line names both models and
 # the evidence that forced the switch.
-printf 'working: automatic model fallback %s -> %s%s on depletion evidence (%s); auto-step-down logged per standing quota rule\n' \
-  "${CURRENT_MODEL:-default}" "${NEXT_MODEL:-default}" "${NEXT_HARNESS:+ on $NEXT_HARNESS}" "$SIGNATURE" >> "$STATUS" || true
+printf 'working: automatic model fallback %s -> %s%s on depletion evidence (%s); auto-step-down logged per standing quota rule%s\n' \
+  "${CURRENT_MODEL:-default}" "${NEXT_MODEL:-default}" "${NEXT_HARNESS:+ on $NEXT_HARNESS}" "$SIGNATURE" "${TRIAGE_TOKEN:+; $TRIAGE_TOKEN}" >> "$STATUS" || true
 
 # Consume exactly the evidence this response acted on.
 advance_fallback_cursor "$EVIDENCE_END"

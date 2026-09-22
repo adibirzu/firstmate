@@ -258,6 +258,9 @@ esac
 # shellcheck source=bin/fm-landed-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-landed-lib.sh"  # FM_LANDED_JQ_DEFS: the shared landed selector
+# shellcheck source=bin/fm-router-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-router-lib.sh"  # fm_router_axi_bin: tool resolution for the jev_shadow read
 
 usage() {
   cat <<'EOF'
@@ -2054,6 +2057,24 @@ secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE
 remote_dev_sessions_json > "$REMOTE_DEV_SESSIONS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: remote dev session read failed" >&2; exit 1; }
 
+# Jev shadow-mode summary (docs/configuration.md "Jev shadow mode"): a compact
+# read of `llm-router-axi shadow report` when shadow is enabled. This is a
+# read-only self-report, never a decision input, and it must degrade silently:
+# an absent tool, shadow disabled, or a report failure omits the field instead
+# of failing or emptying the snapshot.
+JEV_SHADOW_JSON=null
+if JEV_ROUTER=$(fm_router_axi_bin) && [ -n "$JEV_ROUTER" ]; then
+  JEV_REPORT=$("$JEV_ROUTER" shadow report --json 2>/dev/null) || JEV_REPORT=
+  if [ -n "$JEV_REPORT" ]; then
+    JEV_SHADOW_JSON=$(printf '%s\n' "$JEV_REPORT" | jq -c '{
+      samples:(.window.shadow // 0),
+      recorded:(.window.recorded // 0),
+      allFieldsAgree:(.descriptorAgreement.all.rate // null),
+      routeAgree:(.routeAgreement.rate // null)
+    }' 2>/dev/null) || JEV_SHADOW_JSON=null
+  fi
+fi
+
 jq -n \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
@@ -2062,6 +2083,7 @@ jq -n \
   --arg data "$DATA" \
   --arg config "$CONFIG" \
   --arg projects "$PROJECTS" \
+  --argjson jev_shadow "$JEV_SHADOW_JSON" \
   --slurpfile backlog "$BACKLOG_JSON_FILE" \
   --slurpfile tasks "$TASKS_JSON_FILE" \
   --slurpfile main_inventory "$MAIN_INVENTORY_JSON_FILE" \
@@ -2094,4 +2116,5 @@ jq -n \
      secondmate_guidance:{
        note:"For kind=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
      }
-   }'
+   }
+   + (if $jev_shadow != null then {jev_shadow:$jev_shadow} else {} end)'
