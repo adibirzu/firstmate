@@ -144,6 +144,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-check-shim-lib.sh`   | Single owner of writing and registering a custom watcher check shim and its rollback contract |
 | `fm-station-idle.sh`     | Read-only per-station idle-window probe and its watcher check for gating disruptive herdr/firstmate updates |
 | `fm-tool-update-check.sh` | Report watched tooling with an update available, and updates installed but left inert by PATH order |
+| `fm-nm-update-window.sh` | Update one host's no-mistakes install to a target version over `--beta`, waiting for a genuinely quiet moment and never forcing past active runs |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication, merge-notification identity, and retirement |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated PR/MR-poll sidecars           |
 | `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll |
