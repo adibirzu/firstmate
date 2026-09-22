@@ -433,8 +433,9 @@ fm_procevent_cmdsub_nest_depth() {
       i=$((i + 2))
       continue
     fi
-    # shellcheck disable=SC2016 # Compare against literal command-substitution opener bytes.
-    if [ "$((i + 1))" -lt "$n" ] && [ "${s:i:2}" = '$(' ]; then
+    # shellcheck disable=SC2016 # Compare against literal command/process-substitution opener bytes.
+    if [ "$((i + 1))" -lt "$n" ] \
+      && { [ "${s:i:2}" = '$(' ] || [ "${s:i:2}" = '<(' ] || [ "${s:i:2}" = '>(' ]; }; then
       quote_stack[depth]=$quote
       group_stack[depth]=$group_depth
       comment_stack[depth]=$comment

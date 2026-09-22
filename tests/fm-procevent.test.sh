@@ -3147,6 +3147,15 @@ deep_case_clause_close() {
   printf '%s\n' "\$(case x in a) : ;; b) : ;; esac; $nested)"
 }
 
+deep_process_substitution() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="<($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "true $nested"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3246,6 +3255,11 @@ HCASECLAUSE="$TMP_ROOT/planted-case-clause-close"; new_home "$HCASECLAUSE"
 assert_register_refused "$TMP_ROOT/register-case-clause-close" case-clause-close bash --not-an-option "$(deep_case_clause_close)"
 plant_source "$HCASECLAUSE" bash --not-an-option "$(deep_case_clause_close)"
 assert_planted_bash_refused "$HCASECLAUSE" "case-clause-close"
+
+HPROCSUB="$TMP_ROOT/planted-process-substitution"; new_home "$HPROCSUB"
+assert_register_refused "$TMP_ROOT/register-process-substitution" process-substitution bash --not-an-option "$(deep_process_substitution)"
+plant_source "$HPROCSUB" bash --not-an-option "$(deep_process_substitution)"
+assert_planted_bash_refused "$HPROCSUB" "process-substitution"
 pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'
