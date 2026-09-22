@@ -43,7 +43,7 @@ DISTRO="${FM_WSL_DISTRO:-Ubuntu-24.04}"
 PORT="${FM_WSL_SSH_PORT:-2221}"
 
 usage() {
-  sed -n '1,/^set -u/p' "${BASH_SOURCE[0]}" | sed -n '2,/^set -u/p' | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 && /^set -u$/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
 }
 
 valid_ipv4() { # <value> -> 0 when dotted-quad

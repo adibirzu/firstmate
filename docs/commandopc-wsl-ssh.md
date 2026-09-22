@@ -24,4 +24,5 @@ The pre-existing portproxy rules, the Hermes install and its firewall rule, the 
 WSL2 NAT reassigns the distro's private address on (almost) every Windows restart, which strands the portproxy rule at the previous address with no error at rule scope.
 After any commandopc restart, or whenever the alias stops answering, re-point the one rule with `bin/fm-commandopc-wsl-portproxy-refresh.sh`; its header owns the exact converge and `--check` contract.
 Mirrored WSL networking would remove this drift, but it changes host-wide networking behavior, so it stays an explicit future decision rather than a silent default.
-Bootstrap and seeding on this route remain owned by `fm-station-bootstrap-script` and secondmate-provisioning respectively.
+Further bootstrap and any seeding on this route remain separate follow-up work outside this task.
+Seeding itself stays owned by secondmate-provisioning.
