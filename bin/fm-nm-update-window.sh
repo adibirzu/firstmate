@@ -112,7 +112,7 @@ vercmp() {
     af=${af:-0}
     bf=${bf:-0}
     [ "$af" -gt "$bf" ] 2>/dev/null && { printf '1\n'; return 0; }
-    [ "$af" -lt "$bf" ] 2>/dev/null && { printf '-1\n'; return 0; }
+    [ "$af" -lt "$bf" ] 2>/dev/null && { printf '%s\n' '-1'; return 0; }
   done
   printf '0\n'
 }
