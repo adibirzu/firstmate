@@ -344,8 +344,8 @@ FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX=8
 
 # Print the maximum parser-relevant `$(` nesting depth in a string.
 fm_procevent_cmdsub_nest_depth() {
-  local s=$1 i=0 n depth=0 max=0 quote='' group_depth=0 comment=0 case_state=0 word='' completed_word='' word_start=1 char=''
-  local -a quote_stack group_stack comment_stack case_stack word_stack word_start_stack
+  local s=$1 i=0 n depth=0 max=0 quote='' group_depth=0 comment=0 case_state=0 word='' completed_word='' word_start=1 char='' arith_open=0 arith_ptr=0
+  local -a quote_stack group_stack comment_stack case_stack word_stack word_start_stack arith_close_at arith_open_stack arith_ptr_stack
   n=${#s}
   while [ "$i" -lt "$n" ]; do
     char=${s:i:1}
@@ -405,9 +405,8 @@ fm_procevent_cmdsub_nest_depth() {
     esac
     completed_word=$word
     case "$completed_word" in
-      case) case_state=1 ;;
-      in) [ "$case_state" -eq 1 ] && case_state=2 ;;
-      'esac') case_state=0 ;;
+      case) case_state=$((case_state + 1)) ;;
+      'esac') [ "$case_state" -gt 0 ] && case_state=$((case_state - 1)) ;;
     esac
     word=
     if [ "$char" = '#' ] && [ "$word_start" -eq 1 ]; then
@@ -429,19 +428,25 @@ fm_procevent_cmdsub_nest_depth() {
       continue
     fi
     if [ "$((i + 2))" -lt "$n" ] && [ "${s:i:3}" = "\$((" ]; then
+      arith_close_at[arith_ptr]=$group_depth
+      arith_ptr=$((arith_ptr + 1))
+      arith_open=$((arith_open + 1))
       group_depth=$((group_depth + 1))
       i=$((i + 2))
       continue
     fi
     # shellcheck disable=SC2016 # Compare against literal command/process-substitution opener bytes.
     if [ "$((i + 1))" -lt "$n" ] \
-      && { [ "${s:i:2}" = '$(' ] || [ "${s:i:2}" = '<(' ] || [ "${s:i:2}" = '>(' ]; }; then
+      && { [ "${s:i:2}" = '$(' ] \
+        || { [ "$arith_open" -eq 0 ] && { [ "${s:i:2}" = '<(' ] || [ "${s:i:2}" = '>(' ]; }; }; }; then
       quote_stack[depth]=$quote
       group_stack[depth]=$group_depth
       comment_stack[depth]=$comment
       case_stack[depth]=$case_state
       word_stack[depth]=$word
       word_start_stack[depth]=$word_start
+      arith_open_stack[depth]=$arith_open
+      arith_ptr_stack[depth]=$arith_ptr
       depth=$((depth + 1))
       [ "$depth" -gt "$max" ] && max=$depth
       if [ "$max" -ge "$FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX" ]; then
@@ -454,6 +459,7 @@ fm_procevent_cmdsub_nest_depth() {
       case_state=0
       word=
       word_start=1
+      arith_open=0
       i=$((i + 2))
       continue
     fi
@@ -462,9 +468,12 @@ fm_procevent_cmdsub_nest_depth() {
     elif [ "$char" = ')' ]; then
       if [ "$group_depth" -gt 0 ]; then
         group_depth=$((group_depth - 1))
-      elif [ "$case_state" -ne 0 ]; then
-        case_state=3
-      elif [ "$depth" -gt 0 ]; then
+        if [ "$arith_open" -gt 0 ] \
+          && [ "$group_depth" -eq "${arith_close_at[arith_ptr - 1]}" ]; then
+          arith_open=$((arith_open - 1))
+          arith_ptr=$((arith_ptr - 1))
+        fi
+      elif [ "$case_state" -eq 0 ] && [ "$depth" -gt 0 ]; then
         depth=$((depth - 1))
         quote=${quote_stack[depth]}
         group_depth=${group_stack[depth]}
@@ -472,6 +481,8 @@ fm_procevent_cmdsub_nest_depth() {
         case_state=${case_stack[depth]}
         word=${word_stack[depth]}
         word_start=${word_start_stack[depth]}
+        arith_open=${arith_open_stack[depth]}
+        arith_ptr=${arith_ptr_stack[depth]}
       fi
     fi
     case "$char" in

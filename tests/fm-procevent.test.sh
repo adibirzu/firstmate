@@ -3156,6 +3156,25 @@ deep_process_substitution() {
   printf '%s\n' "true $nested"
 }
 
+deep_nested_case_in_case() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="case p$i in x) case q$i in y) : ;; esac ;; z) \$($nested) ;; esac"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+arith_process_substitution_comparison() {
+  local nested=9 i=8
+  while [ "$i" -ge 1 ]; do
+    nested="$i>($nested)"
+    i=$((i - 1))
+  done
+  # shellcheck disable=SC2016 # Literal arithmetic-expansion bytes under test, not expansions.
+  printf '$(( %s ))\n' "$nested"
+}
+
 HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
 # shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
 pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
@@ -3170,6 +3189,8 @@ pe_register "$HSAFE" lavish arithmetic-shell-argv -- bash -c "$(deep_arithmetic)
   || fail "register treated nested arithmetic expansion as command substitution"
 pe_register "$HSAFE" lavish sibling-shell-argv -- bash -c "$(sibling_cmdsub)" >/dev/null \
   || fail "register treated sibling command substitutions as nested"
+pe_register "$HSAFE" lavish arith-comparison-shell-argv -- bash -c "$(arith_process_substitution_comparison)" >/dev/null \
+  || fail "register treated arithmetic > comparisons as nested process substitution"
 pass "register permits inert and shallow parser-safe argv"
 
 HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
@@ -3260,6 +3281,11 @@ HPROCSUB="$TMP_ROOT/planted-process-substitution"; new_home "$HPROCSUB"
 assert_register_refused "$TMP_ROOT/register-process-substitution" process-substitution bash --not-an-option "$(deep_process_substitution)"
 plant_source "$HPROCSUB" bash --not-an-option "$(deep_process_substitution)"
 assert_planted_bash_refused "$HPROCSUB" "process-substitution"
+
+HCASEINCASE="$TMP_ROOT/planted-nested-case-in-case"; new_home "$HCASEINCASE"
+assert_register_refused "$TMP_ROOT/register-nested-case-in-case" nested-case-in-case bash --not-an-option "$(deep_nested_case_in_case)"
+plant_source "$HCASEINCASE" bash --not-an-option "$(deep_nested_case_in_case)"
+assert_planted_bash_refused "$HCASEINCASE" "nested-case-in-case"
 pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 printf '\nall procevent tests passed\n'
