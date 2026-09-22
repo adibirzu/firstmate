@@ -72,6 +72,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-treehouse-lib.sh`    | Shared per-project worktree-pool placement and the worktree/object-store same-filesystem invariant |
 | `fm-capacity.sh`         | Report the llm-router-axi machine-capacity reading and the usage-axi measurement      |
 | `fm-capacity-lib.sh`     | Spawn admission through the llm-router-axi capacity verdict                          |
+| [`fm-remote-overflow-lib.sh`](../bin/fm-remote-overflow-lib.sh) | Offer a capacity-refused fresh ship/scout spawn to a remote secondmate home with headroom, through the existing backlog handoff |
 | `fm-router-lib.sh`       | Resolve usage-axi / llm-router-axi and the one-line install hint                     |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
