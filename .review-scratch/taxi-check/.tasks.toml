@@ -1,4 +1,0 @@
-backend = "markdown"
-
-[markdown]
-path = "backlog.md"
