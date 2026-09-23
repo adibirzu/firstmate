@@ -1,0 +1,31 @@
+ok - empty fleet snapshot and view use explicit absence markers
+ok - fixture snapshot covers task rows, backlog rows, pointers, and stable ordering
+ok - home-summary excludes kind=secondmate from unowned_current and terminal_in_flight
+ok - undated captain holds age after a configurable threshold, decided only from structured fields
+ok - captain-hold buckets are total, mutually exclusive, and never decided by prose
+ok - main_inventory discloses orphan/unstructured and clears when inventory is consistent
+ok - backlog normalization preserves strict roles and resolves every blocker compatibly
+ok - snapshot event hints follow reconciled current state
+ok - durable fold keeps an open decision past a later unrelated event
+ok - a live secondmate endpoint preserves unrelated open decisions
+ok - durable captain-held transfer closes the duplicate live status decision
+ok - durable fold clears a decision only on a keyed resolution
+ok - a completed scout's stale decision surfaces as a report pointer, not pending
+ok - a scout still parked at a decision stays pending (terminal clear does not over-fire)
+ok - snapshot includes durable scout reports after teardown
+ok - snapshot parses tasks-axi rows and respects operational overrides
+ok - fleet view renders stations, child agents, links, and explicit fallbacks
+ok - fleet view renders secondmate endpoint liveness and explicit empty state
+ok - fleet view distinguishes a timed-out remote home from unknown
+ok - fleet view renders a stale cached remote home from its cached ledger
+ok - fleet view reports an invalid remote ledger with an explicit reason
+ok - fleet view renders every invalidity kind non-fatally with its specific reason
+/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-fleet-ledgers.rwF8k1/collect.sh: line 26: 75198 Killed: 9                  fetch_one "$id" "$home" "$cache" "$fetch" "$status" "$out_dir/$slot.fetch.err"
+/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-fleet-ledgers.rwF8k1/collect.sh: line 26: 75202 Killed: 9                  probe_one "$id" "$out_dir/$slot.endpoint" "$out_dir/$slot.endpoint.err"
+ok - fleet view reports a per-home timeout distinctly from the collection backstop
+ok - fleet view marks a stale remote ledger stale instead of fresh
+ok - fleet view prefers the live mate-endpoint probe over unknown
+/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T//fm-fleet-ledgers.aa9UcJ/collect.sh: line 26: 83006 Killed: 9                  fetch_one "$id" "$home" "$cache" "$fetch" "$status" "$out_dir/$slot.fetch.err"
+ok - fleet view keeps the live probe result when its own home's ledger fetch times out
+ok - snapshot degrades a malformed remote reason type non-fatally without dropping its readable children
+ok - view consumes an optional release manifest through a documented, schema-agnostic seam

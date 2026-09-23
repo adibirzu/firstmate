@@ -1,0 +1,288 @@
+==================================================================
+SCENARIO 1: probe wins over a wedged/timed-out ledger fetch
+==================================================================
+--- fm-fleet-view.sh Stations table (probe-race host) ---
+| Station | Home | State | Endpoint | Convergence | Children | Decisions | Holds | Queued | Landed | Production | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| host-probe-fetch-fail | ledger-probe-race | timeout (structured home ledger read timed out after 2s and no valid cached cop…) | present/alive | unknown/unknown 0s | 0 | 0 | 0 | 0 | 0 | unknown | structured home ledger read timed out after 2s and no valid cached copy is available |
+| Station | Project | Task | State | Model | Branch | No-mistakes | PR | Merge |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Station | Backend | Session | Workspace/Window | Tab/Pane | Task | Project | Branch | Attach |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+==================================================================
+SCENARIO 2: malformed (.reason non-string) remote ledger degrades
+non-fatally and keeps its readable children, alongside a healthy sibling
+==================================================================
+snapshot exit code: 0
+--- secondmate_current.records for ledger-ok / ledger-badreason ---
+{
+  "id": "ledger-badreason",
+  "current": {
+    "state": "unknown",
+    "reason": "structured home state invalid: 123"
+  },
+  "provenance": "partial-structured",
+  "active_children": [
+    {
+      "id": "remote-ship",
+      "kind": "ship",
+      "state": "working",
+      "repo": "alpha",
+      "source": "run-step",
+      "doing": "fixing",
+      "usage": {
+        "harness": "pi",
+        "model": "m"
+      }
+    }
+  ],
+  "counts": {
+    "active_children": 1,
+    "decisions_open": 0,
+    "holds": 0,
+    "queued": 0,
+    "landed": 0,
+    "endpoints": 1
+  }
+}
+{
+  "id": "ledger-ok",
+  "current": {
+    "state": "no_active_work",
+    "reason": null
+  },
+  "provenance": "complete",
+  "active_children": [],
+  "counts": {
+    "active_children": 0,
+    "decisions_open": 0,
+    "holds": 0,
+    "queued": 0,
+    "landed": 0,
+    "endpoints": 0
+  }
+}
+--- FULL record dump for debugging ---
+{
+  "id": "ledger-badreason",
+  "home": "/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-bad",
+  "host": "host-badreason",
+  "remote": true,
+  "registered": true,
+  "spawn_gen": null,
+  "current": {
+    "state": "unknown",
+    "reason": "structured home state invalid: 123"
+  },
+  "invalidity": {
+    "kind": "orphan_in_flight",
+    "ids": [
+      "remote-ship"
+    ]
+  },
+  "reconcile_inventory": {
+    "kind": "orphan_in_flight",
+    "ids": [
+      "remote-ship"
+    ]
+  },
+  "station_endpoint": {
+    "exists": true,
+    "agent_alive": "alive"
+  },
+  "provenance": {
+    "selected": "structured-home",
+    "structured_home": "/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-bad",
+    "summary_source": "remote-ledger",
+    "summary_valid": false,
+    "trust": "partial-structured",
+    "parent_event_role": "historical-only"
+  },
+  "freshness": {
+    "status": "fresh",
+    "observed_at": "2026-09-22T12:00:00Z",
+    "age_seconds": 0
+  },
+  "active_children": [
+    {
+      "id": "remote-ship",
+      "kind": "ship",
+      "state": "working",
+      "repo": "alpha",
+      "source": "run-step",
+      "doing": "fixing",
+      "usage": {
+        "harness": "pi",
+        "model": "m"
+      }
+    }
+  ],
+  "decisions_open": [],
+  "holds": [],
+  "queued": [],
+  "landed": [],
+  "endpoints": [
+    {
+      "id": "remote-ship",
+      "state": "working",
+      "source": "run-step",
+      "endpoint": {
+        "exists": true,
+        "agent_alive": "alive"
+      }
+    }
+  ],
+  "counts": {
+    "active_children": 1,
+    "decisions_open": 0,
+    "holds": 0,
+    "queued": 0,
+    "landed": 0,
+    "endpoints": 1
+  },
+  "omitted": [],
+  "parent_event": {
+    "raw": "",
+    "note": "",
+    "age_seconds": null,
+    "open_activities": [],
+    "open_decisions": [],
+    "activity_scan": {
+      "records": [],
+      "available": true,
+      "input_truncated": false,
+      "retained_truncated": false,
+      "reasons": [],
+      "lines_in_window": 0,
+      "records_in_window": 0
+    },
+    "reconciliation": {
+      "provenance": "parent-status-keyed-fold",
+      "trust": "untrusted-supplement",
+      "activities": [],
+      "decisions": [],
+      "contradiction": false,
+      "inconclusive": false
+    }
+  },
+  "terminal_evidence": {
+    "provenance": "parent-direct-report-terminal",
+    "trust": "untrusted-supplement",
+    "captured": false,
+    "observed_at": "2026-09-23T05:54:01Z",
+    "freshness": "not-collected",
+    "reason": "no useful contradiction check",
+    "lines": 0,
+    "bytes": 0,
+    "event_note_seen": false,
+    "contradiction": false
+  },
+  "contradiction": false
+}
+{
+  "id": "ledger-ok",
+  "home": "/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-ok",
+  "host": "host-ok",
+  "remote": true,
+  "registered": true,
+  "spawn_gen": null,
+  "current": {
+    "state": "no_active_work",
+    "reason": null
+  },
+  "invalidity": {
+    "kind": null,
+    "ids": []
+  },
+  "reconcile_inventory": {
+    "kind": null,
+    "ids": []
+  },
+  "station_endpoint": {
+    "exists": null,
+    "agent_alive": "unknown"
+  },
+  "provenance": {
+    "selected": "structured-home",
+    "structured_home": "/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-ok",
+    "summary_source": "remote-ledger",
+    "summary_valid": true,
+    "trust": "complete",
+    "parent_event_role": "historical-only"
+  },
+  "freshness": {
+    "status": "fresh",
+    "observed_at": "2026-09-01T22:00:00Z",
+    "age_seconds": 0
+  },
+  "active_children": [],
+  "decisions_open": [],
+  "holds": [],
+  "queued": [],
+  "landed": [],
+  "endpoints": [],
+  "counts": {
+    "active_children": 0,
+    "decisions_open": 0,
+    "holds": 0,
+    "queued": 0,
+    "landed": 0,
+    "endpoints": 0
+  },
+  "omitted": [],
+  "parent_event": {
+    "raw": "",
+    "note": "",
+    "age_seconds": null,
+    "open_activities": [],
+    "open_decisions": [],
+    "activity_scan": {
+      "records": [],
+      "available": true,
+      "input_truncated": false,
+      "retained_truncated": false,
+      "reasons": [],
+      "lines_in_window": 0,
+      "records_in_window": 0
+    },
+    "reconciliation": {
+      "provenance": "parent-status-keyed-fold",
+      "trust": "untrusted-supplement",
+      "activities": [],
+      "decisions": [],
+      "contradiction": false,
+      "inconclusive": false
+    }
+  },
+  "terminal_evidence": {
+    "provenance": "parent-direct-report-terminal",
+    "trust": "untrusted-supplement",
+    "captured": false,
+    "observed_at": "2026-09-23T05:54:01Z",
+    "freshness": "not-collected",
+    "reason": "no useful contradiction check",
+    "lines": 0,
+    "bytes": 0,
+    "event_note_seen": false,
+    "contradiction": false
+  },
+  "contradiction": false
+}
+--- data/secondmates.md ---
+- ledger-ok - fixture (host: host-ok; root: /remote/root; home: /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-ok; scope: fixture; projects: sample; added 2026-09-01)
+- ledger-badreason - fixture (host: host-badreason; root: /remote/root; home: /private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-bad; scope: fixture; projects: sample; added 2026-09-01)
+--- state meta files ---
+kind=secondmate
+mode=secondmate
+harness=pi
+remote_host=host-ok
+remote_root=/remote/root
+home=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-ok
+---
+kind=secondmate
+mode=secondmate
+harness=pi
+remote_host=host-badreason
+remote_root=/remote/root
+home=/private/var/folders/j8/ztw_4_wx3691gww5x_1n9r4c0000gn/T/fm-fleet-manual.xpLdlJ/badreason-bad
