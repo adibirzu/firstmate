@@ -6,10 +6,15 @@
 # structured contract for humans.
 #
 # The view covers the whole registered fleet: the local home and every local or
-# remote secondmate home, plus every child agent each home reports. It reads only
-# fields the snapshot already carries (schema fm-fleet-snapshot.v1) and the
+# remote secondmate home, plus every child agent each home reports, plus every
+# Herdr session/agent on every host from the read-only fm-fleet-herdr-collect.sh
+# contract (schema fm-fleet-herdr.v1) - including sessions firstmate did not
+# dispatch or no longer tracks, labeled unmanaged rather than omitted. It reads
+# only fields the snapshot already carries (schema fm-fleet-snapshot.v1) and the
 # remote home-summary contract (fm-secondmate-home-summary.v1); it never
-# computes a summary and never invents a second state source.
+# computes a summary and never invents a second state source. The Herdr section
+# is best-effort and bounded (FM_FLEET_VIEW_HERDR_TIMEOUT, default 60s); when
+# collection fails it renders an explicit unavailable line.
 #
 # Every rendered row keeps missing data explicit: a field the contract does not
 # carry renders "-" and an unknown value renders "unknown", never a blank cell.
@@ -76,7 +81,23 @@ esac
 
 command -v jq >/dev/null 2>&1 || { echo "fm-fleet-view: jq not found" >&2; exit 1; }
 
+# shellcheck source=bin/fm-timeout-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
 SNAPSHOT=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --json) || exit $?
+
+# Every Herdr session/agent on every host, managed and unmanaged, from the
+# read-only fm-fleet-herdr-collect.sh contract. Best-effort and bounded so a
+# dark station cannot stall the terminal view; absence renders as an explicit
+# unavailable line, never a silent omission.
+FM_VIEW_HERDR_TIMEOUT=${FM_FLEET_VIEW_HERDR_TIMEOUT:-60}
+case "$FM_VIEW_HERDR_TIMEOUT" in ''|*[!0-9]*|0) FM_VIEW_HERDR_TIMEOUT=60 ;; esac
+HERDR_JSON=$(fm_run_timed "$FM_VIEW_HERDR_TIMEOUT" "${FM_FLEET_VIEW_HERDR_BIN:-$SCRIPT_DIR/fm-fleet-herdr-collect.sh}" --json 2>/dev/null) || HERDR_JSON=''
+case "$HERDR_JSON" in
+  *'"schema":"fm-fleet-herdr.v1"'*|*'"schema": "fm-fleet-herdr.v1"'*) ;;
+  *) HERDR_JSON=null ;;
+esac
 
 FM_VIEW_HOME=$(printf '%s\n' "$SNAPSHOT" | jq -r '.fm_home // empty' 2>/dev/null)
 DATA_DIR="${FM_DATA_OVERRIDE:-${FM_VIEW_HOME:+$FM_VIEW_HOME/data}}"
@@ -105,10 +126,11 @@ case "$MANIFEST_JSON" in
   *) MANIFEST_JSON=null ;;
 esac
 
-printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson manifest "$MANIFEST_JSON" '
+printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson manifest "$MANIFEST_JSON" --argjson herdr "$HERDR_JSON" '
   (.secondmate_current.records // []) as $rows
   | (.backlog.records // []) as $brecs
   | (.tasks // []) as $tasks
+  | ($herdr // null) as $herdr
   | def dash($v): if $v == null or ($v | tostring) == "" then "-" else ($v | tostring) end;
   def base($p): if $p == null or ($p | tostring) == "" then "-" else (($p | tostring) | sub("/+$"; "") | split("/") | last) end;
   def short($v; $n): if $v == null then "-" else (($v | tostring) | gsub("\\s+"; " ") | if length > $n then .[:$n] + "…" else . end) end;
@@ -177,6 +199,38 @@ printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson
                       nm_of(.state; .source); "-"; "-") ] )
     | (if length == 0 then ["| - | - | - | - | - | - | - | - | - |"] else . end)[]
   ),
+  "",
+  "## Unmanaged Herdr Sessions",
+  "Seen on-host by the read-only Herdr collector, including sessions firstmate",
+  "did not dispatch or no longer tracks. Managed rows name their tracked task;",
+  "unmanaged rows are observed only, never touched.",
+  "| Host | Session | Agent | Status | Pane | Task | Managed | Cwd |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- |",
+  def herdr_row($hh; $sn; $agent; $status; $pane; $task; $mgmt; $cwd):
+    "| \(dash($hh)) | \(dash($sn)) | \(dash($agent)) | \(dash($status)) | "
+    + "\(dash($pane)) | \(dash($task)) | \($mgmt) | \(short($cwd; 60)) |";
+  def herdr_rows:
+    [ ($herdr.hosts // [])[]
+      | .host as $hh
+      | if .ok != true then
+          "| \(dash($hh)) | - | - | - | - | - | - | \(short(.error // "unreachable"; 60)) |"
+        else
+          (.sessions[]?
+           | .name as $sn
+           | ([ ((.agents // [])[] | select(.managed != true)
+                  | herdr_row($hh; $sn; .agent; .status; .pane_id; .matched_task_id; "unmanaged"; .cwd)),
+                 ((.agents // [])[] | select(.managed == true)
+                  | herdr_row($hh; $sn; .agent; .status; .pane_id; .matched_task_id; "managed"; .cwd)),
+                 ((.plain_panes // [])[]
+                  | herdr_row($hh; $sn; "shell"; "unknown"; .pane_id; "-"; "unmanaged"; .cwd)) ]
+              | .[]))
+        end ];
+  ( if $herdr == null or (($herdr.hosts // []) | length) == 0 then
+      ["| - | - | - | - | - | - | - | Herdr session collection unavailable |"]
+    else
+      (herdr_rows
+       | if length == 0 then ["| - | - | - | - | - | - | - | No unmanaged sessions reported |"] else . end)[]
+    end ),
   "",
   "## Remote Development Sessions",
   "| Station | Backend | Session | Workspace/Window | Tab/Pane | Task | Project | Branch | Attach |",

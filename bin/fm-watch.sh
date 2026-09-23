@@ -2645,6 +2645,11 @@ EOF
     # on any failure or absence, so it can never delay or fail this cycle. No
     # new daemon, poll loop, or state source is introduced here.
     "${FM_FLEET_LIVE_BIN:-$SCRIPT_DIR/fm-fleet-live.sh}" refresh --best-effort >/dev/null 2>&1 || true
+    # Same boundary republishes the Pulse fleet page (managed plus unmanaged,
+    # all hosts) through its own best-effort form, which never prints, never
+    # fails, and writes only generated fleet.json/fleet.html. No new daemon,
+    # poll loop, or state source is introduced here either.
+    "${FM_FLEET_PULSE_BIN:-$SCRIPT_DIR/fm-fleet-pulse.sh}" publish --best-effort >/dev/null 2>&1 || true
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,

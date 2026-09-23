@@ -3,9 +3,13 @@
 #
 # This command does not render fleet state itself. It ensures one dedicated
 # Herdr tab exists in a named Herdr session and runs bin/fm-fleet-view.sh in
-# that tab's pane, so the rendered view (which already covers the local home and
-# every local or remote secondmate home plus their child agents) is visible in
-# the current Herdr session. It never parses state, never computes a summary,
+# that tab's pane, so the consolidated view is visible in the current Herdr
+# session: the local home and every local or remote secondmate home plus their
+# child agents, and every Herdr session/agent on every host from the read-only
+# fm-fleet-herdr-collect.sh contract, with sessions firstmate did not dispatch
+# or no longer tracks labeled unmanaged rather than omitted. `open` therefore
+# shows the consolidated managed-plus-unmanaged view directly in the working
+# session's own terminal; it never parses state, never computes a summary,
 # and never arms a watcher, poll, or background loop; refresh is an idempotent
 # idempotent re-run driven by the caller, matching the held fleet-view decision
 # to regenerate on work already happening rather than adding a daemon. The two

@@ -651,6 +651,14 @@ SH
 # Run teardown with PATH mocking. Args: case_dir [extra args...]
 run_teardown() {
   local case_dir=$1; shift
+  # The Pulse republish rides teardown best-effort; tests stub it no-op by
+  # default so no test runs the real publisher (an explicit FM_FLEET_PULSE_BIN
+  # from the caller still wins for the wiring tests that assert the call).
+  if [ -z "${FM_FLEET_PULSE_BIN:-}" ]; then
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$case_dir/fleet-pulse-noop.sh"
+    chmod +x "$case_dir/fleet-pulse-noop.sh"
+    FM_FLEET_PULSE_BIN="$case_dir/fleet-pulse-noop.sh"
+  fi
   # FM_DATA_OVERRIDE is pinned to the case dir because teardown closes this
   # home's backlog item itself; without it $DATA would resolve to the real
   # repo's own home and a test could mutate live records.
@@ -658,6 +666,7 @@ run_teardown() {
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_FLEET_PULSE_BIN="$FM_FLEET_PULSE_BIN" \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
     "$TEARDOWN" task-x1 "$@"
 }
@@ -2019,7 +2028,7 @@ test_local_only_force_overrides_unpushed() {
 # FM_FLEET_LIVE_BIN is the documented test seam for that entry point, so this
 # proves the wiring without a real Herdr.
 test_teardown_invokes_the_fleet_view_refresh() {
-  local case_dir rc log stub
+  local case_dir rc log stub pulse_log pulse_stub
   case_dir=$(make_case fleet-refresh)
   write_meta "$case_dir" local-only ship
   wt_commit "$case_dir" "unpushed work"
@@ -2031,9 +2040,18 @@ printf '%s\n' "$*" >> "${FM_FLEET_LIVE_STUB_LOG:?}"
 exit 0
 SH
   chmod +x "$stub"
+  pulse_log="$case_dir/pulse-calls.log"
+  pulse_stub="$case_dir/fleet-pulse-stub.sh"
+  cat > "$pulse_stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_PULSE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$pulse_stub"
 
   set +e
   FM_FLEET_LIVE_BIN="$stub" FM_FLEET_LIVE_STUB_LOG="$log" \
+    FM_FLEET_PULSE_BIN="$pulse_stub" FM_FLEET_PULSE_STUB_LOG="$pulse_log" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
@@ -2042,13 +2060,15 @@ SH
   [ -s "$log" ] || fail "fleet-refresh: a successful task completion did not invoke the fleet-view refresh"
   grep -Fx "refresh --best-effort" "$log" >/dev/null \
     || fail "fleet-refresh: the refresh was not invoked as 'refresh --best-effort': $(cat "$log")"
+  grep -Fx "publish --best-effort" "$pulse_log" >/dev/null \
+    || fail "fleet-refresh: the Pulse republish was not invoked as 'publish --best-effort': $(cat "$pulse_log" 2>/dev/null)"
   pass "a successful task completion invokes the best-effort fleet-view refresh"
 }
 
 # The refresh is non-disruptive: its own failure must never change teardown's
 # result or leak output into the teardown run.
 test_teardown_ignores_a_fleet_view_refresh_failure() {
-  local case_dir rc stub
+  local case_dir rc stub pulse_stub
   case_dir=$(make_case fleet-refresh-fails)
   write_meta "$case_dir" local-only ship
   wt_commit "$case_dir" "unpushed work"
@@ -2059,9 +2079,12 @@ echo "boom" >&2
 exit 7
 SH
   chmod +x "$stub"
+  pulse_stub="$case_dir/fleet-pulse-stub.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$pulse_stub"
+  chmod +x "$pulse_stub"
 
   set +e
-  FM_FLEET_LIVE_BIN="$stub" \
+  FM_FLEET_LIVE_BIN="$stub" FM_FLEET_PULSE_BIN="$pulse_stub" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e

@@ -3801,6 +3801,9 @@ if [ -d "$STATE" ]; then
   # `refresh --best-effort` refreshes only an already-recorded view tab, never
   # opens one, and is a silent, bounded no-op on any failure or absence.
   "${FM_FLEET_LIVE_BIN:-$SCRIPT_DIR/fm-fleet-live.sh}" refresh --best-effort >/dev/null 2>&1 || true
+  # A completed task also changes the published Pulse fleet page, so republish
+  # it on this same boundary through its own silent best-effort form.
+  "${FM_FLEET_PULSE_BIN:-$SCRIPT_DIR/fm-fleet-pulse.sh}" publish --best-effort >/dev/null 2>&1 || true
 fi
 # A completed ship or scout is a task boundary: queue a compact for this home's
 # own long-lived agent, which the watcher delivers at the next idle moment. A
