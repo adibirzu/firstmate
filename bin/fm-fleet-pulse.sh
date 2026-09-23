@@ -127,7 +127,7 @@ done
 # re-exec so it runs the work directly instead of recursing again.
 if [ "$BEST_EFFORT" -eq 1 ] && [ "${FM_FLEET_PULSE_BEST_EFFORT_CHILD:-0}" -ne 1 ]; then
   FM_FLEET_PULSE_BEST_EFFORT_CHILD=1 fm_run_timed "$BEST_EFFORT_TIMEOUT" \
-    "$0" publish --best-effort ${OUT_ARG:+--out "$OUT_ARG"} >/dev/null 2>&1
+    "$0" publish --best-effort ${OUT_ARG:+--out "$OUT_ARG"} --timeout "$HERDR_TIMEOUT" >/dev/null 2>&1
   exit 0
 fi
 
