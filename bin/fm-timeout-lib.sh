@@ -86,6 +86,45 @@ fm_run_bash_timeout() {
   return "$command_rc"
 }
 
+fm_run_bash_timeout_foreground() {  # <seconds> <command...>
+  local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc
+  shift
+  command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-fg-command.XXXXXX" 2>/dev/null) || return 124
+  deadline_status="${command_status}.deadline"
+  (
+    "$@"
+    command_rc=$?
+    printf '%s\n' "$command_rc" > "$command_status"
+    exit "$command_rc"
+  ) &
+  child_pid=$!
+  (
+    sleep "$seconds"
+    printf 'expired\n' > "$deadline_status"
+    kill -TERM "$child_pid" 2>/dev/null || true
+    sleep 0.2
+    kill -KILL "$child_pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+
+  if wait "$child_pid" 2>/dev/null; then
+    command_rc=0
+  else
+    command_rc=$?
+  fi
+  if [ -s "$deadline_status" ]; then
+    wait "$watchdog_pid" 2>/dev/null || true
+    command_rc=124
+  else
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    recorded_rc=$(cat "$command_status" 2>/dev/null || true)
+    case "$recorded_rc" in ''|*[!0-9]*) ;; *) command_rc=$recorded_rc ;; esac
+  fi
+  rm -f "$command_status" "$deadline_status" 2>/dev/null || true
+  return "$command_rc"
+}
+
 fm_run_external_timeout() {
   local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
   shift 2
@@ -136,6 +175,30 @@ fm_run_timed() {  # <seconds> <command...>
         "$seconds" "$@"
       ;;
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
+    *) return 124 ;;
+  esac
+}
+
+# fm_run_timed_foreground <seconds> <command...>
+#   Same contract as fm_run_timed (rc 124 means the bound fired), but never
+#   isolates the command into a new process group/session. Use this instead
+#   of fm_run_timed when already running inside an outer fm_run_timed bound:
+#   nesting a second group-isolating bound would put the command in a
+#   subtree the outer bound's group-wide kill cannot reach, orphaning it
+#   instead of terminating it on the outer expiry. Because it stays in the
+#   caller's group, an inner fm_run_timed_foreground command that outlives
+#   its own bound is still reaped when the outer bound eventually fires.
+fm_run_timed_foreground() {  # <seconds> <command...>
+  local seconds=$1
+  shift
+  case "$(fm_timeout_mechanism)" in
+    timeout) timeout -f -k 1 "$seconds" "$@" ;;
+    gtimeout) gtimeout -f -k 1 "$seconds" "$@" ;;
+    perl)
+      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", $pid; select undef, undef, undef, 0.2; kill "KILL", $pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' \
+        "$seconds" "$@"
+      ;;
+    bash) fm_run_bash_timeout_foreground "$seconds" "$@" ;;
     *) return 124 ;;
   esac
 }

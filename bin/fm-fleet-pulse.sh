@@ -149,14 +149,16 @@ pulse_fail() {  # <message>
 # that step into yet another, independent process group of its own (every
 # fm_run_timed mechanism deliberately does this so its kill never hits
 # unrelated processes) - one the outer kill cannot reach - orphaning a hung
-# snapshot/collector subprocess instead of terminating it. Run the step
-# directly in that case, so it stays inside the outer bound's group and is
-# reaped along with everything else when that bound fires.
+# snapshot/collector subprocess instead of terminating it. Use
+# fm_run_timed_foreground in that case: it stays inside the outer bound's
+# group (so it is still reaped if it outlives its own bound), while still
+# honoring the caller's requested per-step timeout (e.g. --timeout) instead
+# of silently discarding it.
 pulse_run_step() {  # <timeout-seconds> <command...>
   local step_timeout=$1
   shift
   if [ "${FM_FLEET_PULSE_BEST_EFFORT_CHILD:-0}" -eq 1 ]; then
-    "$@"
+    fm_run_timed_foreground "$step_timeout" "$@"
   else
     fm_run_timed "$step_timeout" "$@"
   fi

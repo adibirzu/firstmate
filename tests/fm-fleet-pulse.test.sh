@@ -172,6 +172,55 @@ SH
   pass "best-effort publish terminates a hung snapshot subprocess when the outer bound fires"
 }
 
+# Companion to test_best_effort_terminates_hung_snapshot_subprocess above:
+# that test pins the outer FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT as the last-resort
+# bound. This one pins that a caller-supplied --timeout on the collector step
+# is actually honored rather than silently discarded - before the fix,
+# pulse_run_step ran the best-effort child's step unbounded, so only the much
+# larger outer bound (here 30s) ever fired.
+test_best_effort_honors_the_requested_step_timeout() {
+  command -v pgrep >/dev/null 2>&1 || { echo "skip: pgrep not found"; return 0; }
+  local dir fakebin nonce rc t0 t1 elapsed waited
+  dir=$TMP_ROOT/step-timeout
+  mkdir -p "$dir/state"
+  fakebin=$(fm_fakebin "$dir")
+  nonce=$(( (($$ * 7919) + RANDOM) % 900000 + 100000 ))
+  cat > "$fakebin/fast-snap.sh" <<'SH'
+#!/usr/bin/env bash
+echo '{"schema":"fm-fleet-snapshot.v1","generated":"t","fm_home":"/h","tasks":[],"backlog":{"records":[]},"main_inventory":{"valid":true,"reason":""},"secondmate_current":{"records":[]},"remote_dev_sessions":[],"jev_shadow":null}'
+SH
+  chmod +x "$fakebin/fast-snap.sh"
+  cat > "$fakebin/hang-herdr.sh" <<SH
+#!/usr/bin/env bash
+exec sleep $nonce
+SH
+  chmod +x "$fakebin/hang-herdr.sh"
+
+  t0=$(date +%s)
+  FM_FLEET_SNAPSHOT_BIN="$fakebin/fast-snap.sh" \
+    FM_FLEET_HERDR_BIN="$fakebin/hang-herdr.sh" \
+    FM_FLEET_PULSE_PUBLISH=0 FM_STATE_OVERRIDE="$dir/state" \
+    FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT=30 \
+    "$PUBLISH" publish --best-effort --out "$dir/out" --timeout 2 >/dev/null 2>&1
+  rc=$?
+  t1=$(date +%s)
+  elapsed=$(( t1 - t0 ))
+  [ "$rc" -eq 0 ] || fail "best-effort publish with --timeout against a hung collector must still return zero"
+  [ "$elapsed" -le 10 ] || fail "publish --best-effort --timeout 2 must honor the requested bound, not the 30s outer default, took ${elapsed}s"
+
+  waited=0
+  while [ "$waited" -lt 30 ]; do
+    pgrep -f "sleep $nonce" >/dev/null 2>&1 || break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if pgrep -f "sleep $nonce" >/dev/null 2>&1; then
+    kill -KILL "$(pgrep -f "sleep $nonce")" 2>/dev/null || true
+    fail "hung collector subprocess must be terminated once the requested --timeout fires"
+  fi
+  pass "best-effort publish honors the caller's --timeout for the collector step"
+}
+
 test_dashboard_copy_opt_in_and_out() {
   local dir fakebin
   dir=$TMP_ROOT/dash
@@ -225,5 +274,6 @@ test_publish_merges_snapshot_herdr_and_lanes
 test_publish_degrades_without_herdr
 test_best_effort_is_silent_and_zero
 test_best_effort_terminates_hung_snapshot_subprocess
+test_best_effort_honors_the_requested_step_timeout
 test_dashboard_copy_opt_in_and_out
 test_render_script_parses
