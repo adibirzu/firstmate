@@ -13,6 +13,12 @@
 #
 # Every rendered row keeps missing data explicit: a field the contract does not
 # carry renders "-" and an unknown value renders "unknown", never a blank cell.
+# The Stations Endpoint column prefers the snapshot's live station_endpoint
+# (probed mate endpoint, else parent endpoint, else ledger endpoint evidence)
+# and falls back to the parent-side child endpoint only when the record carries
+# no station endpoint at all. The Stations Note column carries the record's
+# own reason verbatim (invalidity detail, read failure, or main-inventory
+# inconsistency) or "-" when there is none; it never replaces the row's data.
 # Branch is not carried by the snapshot contract, so it renders "-". Production
 # is display-only and is never inferred from a branch; it renders "unknown"
 # unless a release manifest supplies it (see the Release Manifest section and
@@ -113,6 +119,16 @@ printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson
   def endpoint_cell($t):
     "\(if $t.endpoint.exists == null then "unknown" elif $t.endpoint.exists then "present" else "absent" end)/\(dash($t.endpoint.agent_alive))";
   def endpoint_of_id($id): ( [ $tasks[] | select(.id == $id) | endpoint_cell(.) ] | .[0] // "unknown" );
+  def station_endpoint_of($r; $id):
+    if (($r.station_endpoint // null) == null
+        or ((($r.station_endpoint.exists // null) == null)
+            and ((($r.station_endpoint.agent_alive // "unknown") | tostring) == "unknown")))
+    then endpoint_of_id($id)
+    else endpoint_cell({endpoint: $r.station_endpoint}) end;
+  def note_of($r):
+    if ((($r.current.reason // "") | tostring) != "") then short($r.current.reason; 120)
+    elif $r.invalidity.kind != null then "invalid: \($r.invalidity.kind)"
+    else "-" end;
   def station_state($r):
     if ($r.current.reason // "") == "" then dash($r.current.state)
     else "\(dash($r.current.state)) (\(short($r.current.reason; 70)))" end;
@@ -132,22 +148,23 @@ printf '%s\n' "$SNAPSHOT" | jq -r --arg manifest_path "$MANIFEST_PATH" --argjson
   "branch; they render as \"-\"/\"unknown\".",
   "",
   "## Stations",
-  "| Station | Home | State | Endpoint | Convergence | Children | Decisions | Holds | Queued | Landed | Production |",
-  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  "| Station | Home | State | Endpoint | Convergence | Children | Decisions | Holds | Queued | Landed | Production | Note |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ("| local | main | \(if .main_inventory.valid then "ok" else "inventory-invalid" end) | - | local-backlog \(.generated) | "
     + "\([ $tasks[] | select(.kind != "secondmate") ] | length) | "
     + "\([ $brecs[] | select(.captain_actionable == true) ] | length) | "
     + "\([ $brecs[] | select(.hold_kind == "captain") ] | length) | "
     + "\([ $brecs[] | select(.state == "queued") ] | length) | "
-    + "\([ $brecs[] | select(.state == "done") ] | length) | unknown |"),
+    + "\([ $brecs[] | select(.state == "done") ] | length) | unknown | "
+    + "\(if ((.main_inventory.reason // "") | tostring) == "" then "-" else short(.main_inventory.reason; 120) end) |"),
   ( $rows[]
-    | "| \(station_of(.)) | \(dash(.id)) | \(station_state(.)) | \(endpoint_of_id(.id)) | \(convergence(.)) | "
+    | "| \(station_of(.)) | \(dash(.id)) | \(station_state(.)) | \(station_endpoint_of(.; .id)) | \(convergence(.)) | "
     + "\(.counts.active_children // 0) | \(.counts.decisions_open // 0) | \(.counts.holds // 0) | "
-    + "\(.counts.queued // 0) | \(.counts.landed // 0) | unknown |" ),
+    + "\(.counts.queued // 0) | \(.counts.landed // 0) | unknown | \(note_of(.)) |" ),
   ( $tasks[]
     | select(.kind == "secondmate")
     | select(.id as $i | (registered_ids | index($i)) == null)
-    | "| local | \(dash(.id)) | \(dash(.current_state.state)) | \(endpoint_cell(.)) | unregistered-local | - | - | - | - | - | unknown |" ),
+    | "| local | \(dash(.id)) | \(dash(.current_state.state)) | \(endpoint_cell(.)) | unregistered-local | - | - | - | - | - | unknown | - |" ),
   "",
   "## Child Agents",
   "| Station | Project | Task | State | Model | Branch | No-mistakes | PR | Merge |",
