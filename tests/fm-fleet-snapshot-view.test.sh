@@ -1066,10 +1066,16 @@ write_remote_ledger_summary() {  # <home> <generated-epoch>
 
 # make_remote_ssh <dir>: a fake SSH transport that answers per host so one run
 # can exercise every cross-home read outcome:
-#   host-slow - a live but slow home that consumes the per-home budget
-#   host-fail - a live read that produces nothing
-#   host-bad  - a ledger that is not a valid summary
-#   host-ok   - a healthy ledger at $FM_TEST_HEALTHY_LEDGER
+#   host-slow             - a live but slow home that consumes the per-home budget
+#   host-fail             - a live read that produces nothing
+#   host-bad              - a ledger that is not a valid summary
+#   host-ok               - a healthy ledger at $FM_TEST_HEALTHY_LEDGER
+#   host-probe-fetch-fail - probe answers alive immediately while the ledger
+#                           fetch itself wedges past the per-home timeout, so
+#                           fetch_one and probe_one race exactly as they do
+#                           against a real busy-but-alive host
+#   host-badreason        - a shape-valid ledger whose .reason is not a string
+#                           at $FM_TEST_BADREASON_LEDGER
 make_remote_ssh() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
@@ -1100,6 +1106,13 @@ case "${1:-}" in
       printf 'alive\n'; exit 0
     fi
     cat "${FM_TEST_HEALTHY_LEDGER:?}"; exit 0 ;;
+  host-probe-fetch-fail)
+    last=""; for arg in "$@"; do last=$arg; done
+    if printf '%s' "$last" | base64 -d 2>/dev/null | grep -q "fm-remote-secondmate-control"; then
+      printf 'alive\n'; exit 0
+    fi
+    sleep 30; exit 1 ;;
+  host-badreason) cat "${FM_TEST_BADREASON_LEDGER:?}"; exit 0 ;;
   *) exit 1 ;;
 esac
 SH
@@ -1123,6 +1136,22 @@ write_remote_ledger_invalid_summary() {  # <dest> <kind> <reason> <state> <epoch
     decisions_open:[],holds:[],queued:[],landed:[],
     endpoints:[{id:"remote-ship",state:"working",source:"run-step",endpoint:{exists:true,agent_alive:"alive"}}],
     counts:{active_children:1,decisions_open:0,holds:0,queued:0,landed:0,endpoints:1},omitted:[]
+  }' > "$dest/state/home-summary.json"
+}
+
+# write_remote_ledger_malformed_reason <dest> <epoch>: an otherwise shape-valid
+# invalid ledger whose .reason is a number instead of a string, simulating a
+# malformed remote producer rather than the empty/missing cases above.
+write_remote_ledger_malformed_reason() {  # <dest> <epoch>
+  local dest=$1
+  mkdir -p "$dest/state"
+  jq -n --arg home "$dest" --argjson epoch "$2" '{
+    schema:"fm-secondmate-home-summary.v1",
+    hold_classifier_schema:"fm-captain-hold-buckets.v1",
+    generated:"2026-09-22T12:00:00Z",generated_epoch:$epoch,home:$home,
+    valid:false,reason:123,invalidity:{kind:"orphan_in_flight",ids:["remote-ship"]},state:"unknown",
+    active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
+    counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
   }' > "$dest/state/home-summary.json"
 }
 
@@ -1315,6 +1344,52 @@ test_view_prefers_live_probe_endpoint() {
   pass "fleet view prefers the live mate-endpoint probe over unknown"
 }
 
+test_view_prefers_probe_over_timed_out_fetch() {
+  local home fb view row
+  home=$(make_home view-probe-race)
+  register_remote_secondmate "$home" ledger-probe-race host-probe-fetch-fail "$TMP_ROOT/view-probe-race-home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_SNAPSHOT_SECONDMATE_HOST_TIMEOUT=2 FM_SNAPSHOT_SECONDMATE_TIMEOUT=60 "$VIEW")
+  row=$(printf '%s\n' "$view" | grep '| host-probe-fetch-fail |')
+  [ -n "$row" ] || fail "host-probe-fetch-fail must render its own row: $view"
+  assert_contains "$row" "| timeout (" \
+    "a home whose ledger fetch times out must still render timeout, not unknown: $row"
+  assert_contains "$row" "timed out after 2s" \
+    "the timeout reason must still name its own allowance: $row"
+  assert_contains "$row" "| present/alive |" \
+    "a probe that answers alive while the fetch times out must win over unknown, not be dropped: $row"
+  pass "fleet view keeps the live probe result when its own home's ledger fetch times out"
+}
+
+test_snapshot_degrades_nonfatally_on_malformed_reason_type() {
+  local home fb ok_home bad_home snap rc
+  home=$(make_home snapshot-badreason)
+  ok_home="$TMP_ROOT/snapshot-badreason-ok"
+  bad_home="$TMP_ROOT/snapshot-badreason-bad"
+  write_remote_ledger_summary "$ok_home" "$(date +%s)"
+  write_remote_ledger_malformed_reason "$bad_home" "$(date +%s)"
+  register_remote_secondmate "$home" ledger-ok host-ok "$ok_home"
+  register_remote_secondmate "$home" ledger-badreason host-badreason "$bad_home"
+  fb=$(make_remote_ssh "$home")
+  snap=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$ok_home/state/home-summary.json" \
+    FM_TEST_BADREASON_LEDGER="$bad_home/state/home-summary.json" \
+    "$SNAPSHOT" --json)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a remote ledger with a non-string .reason must not crash the whole snapshot: rc=$rc out=$snap"
+  printf '%s' "$snap" | jq -e '
+    (.secondmate_current.records[] | select(.id == "ledger-ok") | .current.state) == "no_active_work"
+  ' >/dev/null || fail "a malformed sibling ledger must never take down an unrelated healthy home: $snap"
+  printf '%s' "$snap" | jq -e '
+    (.secondmate_current.records[] | select(.id == "ledger-badreason") | .current.reason
+      | contains("missing, unreadable, or invalid"))
+  ' >/dev/null || fail "a non-string .reason must degrade to the generic invalid-ledger reason, not crash: $snap"
+  pass "snapshot degrades a malformed remote reason type non-fatally instead of crashing"
+}
+
 test_view_reads_release_manifest_seam() {
   local home alt view
   home=$(make_home view-manifest)
@@ -1360,4 +1435,6 @@ test_view_renders_invalid_remote_homes_nonfatally
 test_view_reports_per_home_timeout_distinctly
 test_view_marks_stale_remote_ledger
 test_view_prefers_live_probe_endpoint
+test_view_prefers_probe_over_timed_out_fetch
+test_snapshot_degrades_nonfatally_on_malformed_reason_type
 test_view_reads_release_manifest_seam
