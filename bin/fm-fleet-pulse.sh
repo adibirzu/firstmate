@@ -142,7 +142,27 @@ pulse_fail() {  # <message>
   exit 1
 }
 
-SNAPSHOT=$(fm_run_timed "$SNAPSHOT_TIMEOUT" "$SNAPSHOT_BIN" --json 2>/dev/null) || SNAPSHOT=''
+# Bound a collection step. Inside the --best-effort re-exec (see above), this
+# process is already running under the outer FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT
+# bound, which isolates it into its own process group so it can kill the whole
+# group on expiry. Wrapping a step here in a SECOND fm_run_timed would isolate
+# that step into yet another, independent process group of its own (every
+# fm_run_timed mechanism deliberately does this so its kill never hits
+# unrelated processes) - one the outer kill cannot reach - orphaning a hung
+# snapshot/collector subprocess instead of terminating it. Run the step
+# directly in that case, so it stays inside the outer bound's group and is
+# reaped along with everything else when that bound fires.
+pulse_run_step() {  # <timeout-seconds> <command...>
+  local step_timeout=$1
+  shift
+  if [ "${FM_FLEET_PULSE_BEST_EFFORT_CHILD:-0}" -eq 1 ]; then
+    "$@"
+  else
+    fm_run_timed "$step_timeout" "$@"
+  fi
+}
+
+SNAPSHOT=$(pulse_run_step "$SNAPSHOT_TIMEOUT" "$SNAPSHOT_BIN" --json 2>/dev/null) || SNAPSHOT=''
 [ -n "$SNAPSHOT" ] || pulse_fail "fleet snapshot failed"
 printf '%s' "$SNAPSHOT" | jq -e '.schema == "fm-fleet-snapshot.v1"' >/dev/null 2>&1 \
   || pulse_fail "fleet snapshot returned an unexpected schema"
@@ -150,7 +170,7 @@ printf '%s' "$SNAPSHOT" | jq -e '.schema == "fm-fleet-snapshot.v1"' >/dev/null 2
 # The Herdr collector degrades, never fails the page: an unreachable station
 # becomes an ok:false host record inside its own contract, and a total
 # collector failure still leaves the managed fleet renderable.
-HERDR=$(fm_run_timed "$HERDR_TIMEOUT" "$HERDR_BIN_COLLECT" --json 2>/dev/null) || HERDR=''
+HERDR=$(pulse_run_step "$HERDR_TIMEOUT" "$HERDR_BIN_COLLECT" --json 2>/dev/null) || HERDR=''
 if [ -z "$HERDR" ] || ! printf '%s' "$HERDR" | jq -e '.schema == "fm-fleet-herdr.v1"' >/dev/null 2>&1; then
   HERDR='{"schema":"fm-fleet-herdr.v1","generated":null,"host":"local","hosts":[],"error":"herdr collection unavailable"}'
 fi

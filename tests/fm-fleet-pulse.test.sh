@@ -116,6 +116,62 @@ test_best_effort_is_silent_and_zero() {
   pass "best-effort publish is a silent zero-exit no-op on failure"
 }
 
+# The outer FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT bound (above) only stops
+# blocking the caller if it actually reaches into the process it wraps. Before
+# this fix, the snapshot step re-wrapped itself in its own nested
+# fm_run_timed, which isolates into a SEPARATE process group every mechanism
+# fm-timeout-lib.sh provides (that isolation is deliberate, so a bound's kill
+# never hits unrelated processes) - one the outer bound's kill cannot reach.
+# A hung snapshot binary then survived, reparented to init, after the caller
+# had already resumed. This pins that the outer bound terminates the hung
+# subprocess, not just unblocks the caller.
+test_best_effort_terminates_hung_snapshot_subprocess() {
+  command -v pgrep >/dev/null 2>&1 || { echo "skip: pgrep not found"; return 0; }
+  local dir fakebin nonce rc t0 t1 elapsed waited
+  dir=$TMP_ROOT/hang
+  mkdir -p "$dir/state"
+  fakebin=$(fm_fakebin "$dir")
+  # A large, effectively-unique sleep duration doubles as the process-table
+  # marker: nothing else on the box is expected to run "sleep <nonce>", and it
+  # would never finish naturally within this test's lifetime, so any survivor
+  # found after the bound fires is unambiguously the leak this pins.
+  nonce=$(( (($$ * 7919) + RANDOM) % 900000 + 100000 ))
+  cat > "$fakebin/hang-snap.sh" <<SH
+#!/usr/bin/env bash
+exec sleep $nonce
+SH
+  chmod +x "$fakebin/hang-snap.sh"
+  cat > "$fakebin/fake-herdr.sh" <<'SH'
+#!/usr/bin/env bash
+echo '{"schema":"fm-fleet-herdr.v1","generated":1,"host":"local","hosts":[]}'
+SH
+  chmod +x "$fakebin/fake-herdr.sh"
+
+  t0=$(date +%s)
+  FM_FLEET_SNAPSHOT_BIN="$fakebin/hang-snap.sh" \
+    FM_FLEET_HERDR_BIN="$fakebin/fake-herdr.sh" \
+    FM_FLEET_PULSE_PUBLISH=0 FM_STATE_OVERRIDE="$dir/state" \
+    FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT=2 \
+    "$PUBLISH" publish --best-effort --out "$dir/out" >/dev/null 2>&1
+  rc=$?
+  t1=$(date +%s)
+  elapsed=$(( t1 - t0 ))
+  [ "$rc" -eq 0 ] || fail "best-effort publish against a hung snapshot must still return zero"
+  [ "$elapsed" -le 15 ] || fail "best-effort publish must return within its outer bound, took ${elapsed}s"
+
+  waited=0
+  while [ "$waited" -lt 30 ]; do
+    pgrep -f "sleep $nonce" >/dev/null 2>&1 || break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if pgrep -f "sleep $nonce" >/dev/null 2>&1; then
+    pkill -KILL -f "sleep $nonce" 2>/dev/null || true
+    fail "hung snapshot subprocess must be terminated once the outer best-effort bound fires, not merely orphaned"
+  fi
+  pass "best-effort publish terminates a hung snapshot subprocess when the outer bound fires"
+}
+
 test_dashboard_copy_opt_in_and_out() {
   local dir fakebin
   dir=$TMP_ROOT/dash
@@ -168,5 +224,6 @@ open('$dir/render.js', 'w').write(scripts[-1])
 test_publish_merges_snapshot_herdr_and_lanes
 test_publish_degrades_without_herdr
 test_best_effort_is_silent_and_zero
+test_best_effort_terminates_hung_snapshot_subprocess
 test_dashboard_copy_opt_in_and_out
 test_render_script_parses
