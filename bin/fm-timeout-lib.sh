@@ -86,6 +86,26 @@ fm_run_bash_timeout() {
   return "$command_rc"
 }
 
+fm_signal_process_tree() {  # <pid> <signal>: signal pid and its current descendants.
+  # The foreground fallback below cannot isolate its wrapped command into its
+  # own process group (staying in the caller's group is its whole contract),
+  # so a group-wide kill is not available. Walk pgrep -P instead: the wrapped
+  # command is frequently a script (e.g. fm-fleet-herdr-collect.sh) that forks
+  # its own subprocess rather than exec'ing into it, and signaling only the
+  # top-level pid leaves that grandchild running, orphaned.
+  local pid=$1 sig=$2 children child
+  if command -v pgrep >/dev/null 2>&1; then
+    children=$(pgrep -P "$pid" 2>/dev/null || true)
+  else
+    children=
+  fi
+  kill -"$sig" "$pid" 2>/dev/null || true
+  for child in $children; do
+    case "$child" in ''|*[!0-9]*) continue ;; esac
+    fm_signal_process_tree "$child" "$sig"
+  done
+}
+
 fm_run_bash_timeout_foreground() {  # <seconds> <command...>
   local seconds=$1 deadline_status child_pid watchdog_pid command_rc monitor_was_on=0
   shift
@@ -111,9 +131,9 @@ fm_run_bash_timeout_foreground() {  # <seconds> <command...>
     set +m
     sleep "$seconds"
     printf 'expired\n' > "$deadline_status"
-    kill -TERM "$child_pid" 2>/dev/null || true
+    fm_signal_process_tree "$child_pid" TERM
     sleep 0.2
-    kill -KILL "$child_pid" 2>/dev/null || true
+    fm_signal_process_tree "$child_pid" KILL
   ) &
   watchdog_pid=$!
   [ "$monitor_was_on" -eq 1 ] || set +m
