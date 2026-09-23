@@ -114,6 +114,7 @@ test_bash_foreground_timeout_returns_promptly_on_the_healthy_path() {
 
   local t0 t1 elapsed out rc
   t0=$(date +%s)
+  # shellcheck disable=SC2016  # single quotes are deliberate: expansion is deferred to the child bash -c shell.
   out=$("$runner" 20 bash -c '
     set -u
     . "$1"
