@@ -87,16 +87,14 @@ fm_run_bash_timeout() {
 }
 
 fm_run_bash_timeout_foreground() {  # <seconds> <command...>
-  local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc
+  local seconds=$1 deadline_status child_pid watchdog_pid command_rc
   shift
-  command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-fg-command.XXXXXX" 2>/dev/null) || return 124
-  deadline_status="${command_status}.deadline"
-  (
-    "$@"
-    command_rc=$?
-    printf '%s\n' "$command_rc" > "$command_status"
-    exit "$command_rc"
-  ) &
+  deadline_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-fg-deadline.XXXXXX" 2>/dev/null) || return 124
+  # Run the command directly as the background job (no wrapping subshell), so
+  # child_pid is the real command's pid: signaling it on expiry has to reach
+  # the actual process, not a shell wrapper whose children survive its own
+  # death untouched.
+  "$@" &
   child_pid=$!
   (
     sleep "$seconds"
@@ -118,10 +116,8 @@ fm_run_bash_timeout_foreground() {  # <seconds> <command...>
   else
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
-    recorded_rc=$(cat "$command_status" 2>/dev/null || true)
-    case "$recorded_rc" in ''|*[!0-9]*) ;; *) command_rc=$recorded_rc ;; esac
   fi
-  rm -f "$command_status" "$deadline_status" 2>/dev/null || true
+  rm -f "$deadline_status" 2>/dev/null || true
   return "$command_rc"
 }
 
