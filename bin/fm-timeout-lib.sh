@@ -87,7 +87,7 @@ fm_run_bash_timeout() {
 }
 
 fm_run_bash_timeout_foreground() {  # <seconds> <command...>
-  local seconds=$1 deadline_status child_pid watchdog_pid command_rc
+  local seconds=$1 deadline_status child_pid watchdog_pid command_rc monitor_was_on=0
   shift
   deadline_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-fg-deadline.XXXXXX" 2>/dev/null) || return 124
   # Run the command directly as the background job (no wrapping subshell), so
@@ -96,7 +96,19 @@ fm_run_bash_timeout_foreground() {  # <seconds> <command...>
   # death untouched.
   "$@" &
   child_pid=$!
+  # Give the watchdog its own process group (monitor mode, as fm_run_bash_timeout
+  # does for its watchdog) so cancelling it on the healthy/early-finish path also
+  # reaches its own `sleep` grandchild. `sleep "$seconds"` is not this subshell's
+  # last statement, so bash forks it instead of exec'ing into it; a plain `kill
+  # "$watchdog_pid"` only reaches the subshell wrapper and leaves that sleep
+  # orphaned, holding the caller's `$(...)` pipe open until it finishes on its
+  # own. The wrapped command above must NOT get the same isolation - staying in
+  # the caller's process group is this function's whole contract, so an outer
+  # fm_run_timed bound can still reach it.
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
   (
+    set +m
     sleep "$seconds"
     printf 'expired\n' > "$deadline_status"
     kill -TERM "$child_pid" 2>/dev/null || true
@@ -104,6 +116,7 @@ fm_run_bash_timeout_foreground() {  # <seconds> <command...>
     kill -KILL "$child_pid" 2>/dev/null || true
   ) &
   watchdog_pid=$!
+  [ "$monitor_was_on" -eq 1 ] || set +m
 
   if wait "$child_pid" 2>/dev/null; then
     command_rc=0
@@ -114,7 +127,7 @@ fm_run_bash_timeout_foreground() {  # <seconds> <command...>
     wait "$watchdog_pid" 2>/dev/null || true
     command_rc=124
   else
-    kill "$watchdog_pid" 2>/dev/null || true
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
   fi
   rm -f "$deadline_status" 2>/dev/null || true

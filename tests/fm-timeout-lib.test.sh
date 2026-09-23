@@ -44,3 +44,47 @@ test_bash_foreground_timeout_kills_the_actual_command() {
 }
 
 test_bash_foreground_timeout_kills_the_actual_command
+
+# Every real fm_run_timed_foreground caller invokes it through command
+# substitution (e.g. fm-fleet-pulse.sh's pulse_run_step:
+# SNAPSHOT=$(pulse_run_step ... fm_run_timed_foreground "$step_timeout" ...)).
+# On the common healthy path - the wrapped command finishes well inside the
+# bound - that substitution must return promptly, not stall until the full
+# requested bound. Regression: the watchdog's internal `sleep "$seconds"` is
+# not its subshell's last statement, so bash forks it rather than exec'ing
+# into it; cancelling the watchdog with a plain `kill "$watchdog_pid"` then
+# only reaches the subshell wrapper, leaving that sleep orphaned. Because it
+# inherited the write end of the command substitution's pipe, bash cannot see
+# EOF - and so cannot return - until the orphaned sleep itself exits at the
+# full bound.
+test_bash_foreground_timeout_returns_promptly_on_the_healthy_path() {
+  local runner
+  if command -v timeout >/dev/null 2>&1; then
+    runner=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    runner=gtimeout
+  else
+    echo "skip: no real timeout/gtimeout to bound this test"
+    return 0
+  fi
+
+  local t0 t1 elapsed out rc
+  t0=$(date +%s)
+  out=$("$runner" 20 bash -c '
+    set -u
+    . "$1"
+    out=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash fm_run_timed_foreground 60 sleep 0.3)
+    printf "%s\n" "$?"
+  ' _ "$ROOT/bin/fm-timeout-lib.sh")
+  rc=$?
+  t1=$(date +%s)
+  elapsed=$(( t1 - t0 ))
+
+  [ "$rc" -ne 124 ] || fail "the outer 20s bound fired: the command substitution stalled instead of returning promptly on the healthy path"
+  [ "$rc" -eq 0 ] || fail "unexpected outer failure (rc=$rc) running the fm_run_timed_foreground healthy-path repro"
+  [ "$out" = 0 ] || fail "fm_run_timed_foreground must report the wrapped command's own rc (0) on the healthy path, got '$out'"
+  [ "$elapsed" -le 5 ] || fail "bash-fallback foreground timeout inside \$(...) must return promptly when the wrapped command finishes quickly, took ${elapsed}s"
+  pass "bash-fallback foreground timeout inside \$(...) returns promptly on the healthy path, not stalled to the full bound"
+}
+
+test_bash_foreground_timeout_returns_promptly_on_the_healthy_path
