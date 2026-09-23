@@ -758,6 +758,39 @@ test_view_renders_snapshot() {
   pass "fleet view renders stations, child agents, links, and explicit fallbacks"
 }
 
+test_view_renders_unmanaged_herdr_sessions() {
+  local home fakebin collector view
+  home=$(make_home view-unmanaged)
+  write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  collector="$fakebin/fake-herdr-collect.sh"
+  cat > "$collector" <<EOF
+#!/usr/bin/env bash
+cat <<'JSON'
+{"schema":"fm-fleet-herdr.v1","generated":1,"host":"local","hosts":[
+{"host":"local","ok":true,"source":"local","error":null,"sessions":[
+{"name":"default","running":true,"agents":[
+{"agent":"claude","status":"idle","cwd":"$home/projects/alpha-worktree","pane_id":"wM:p1","tab_id":"wM:t1","workspace_id":"wM","title":"Ship Task","matched_task_id":"ship-task","matched_home":"main","matched_harness":"claude","managed":true},
+{"agent":"cursor","status":"idle","cwd":"/side/project","pane_id":"wX:p1","tab_id":"wX:t1","workspace_id":"wX","title":"Side quest","matched_task_id":null,"matched_home":null,"matched_harness":null,"managed":false}],
+"plain_panes":[{"cwd":"/tmp","pane_id":"wS:p9","tab_id":"wS:t9","title":"shell","managed":false,"matched_task_id":null}]}]},
+{"host":"adi1","ok":false,"source":"remote-secondmate:dark","error":"remote collection timed out or unreachable","sessions":[]}]}
+JSON
+EOF
+  chmod +x "$collector"
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_FLEET_VIEW_HERDR_BIN="$collector" "$VIEW")
+  assert_contains "$view" "## Unmanaged Herdr Sessions" \
+    "view must carry the unmanaged Herdr section"
+  assert_contains "$view" "| local | default | cursor | idle | wX:p1 | - | unmanaged | /side/project |" \
+    "view must render unmatched agents as unmanaged, never omitted"
+  assert_contains "$view" "| local | default | claude | idle | wM:p1 | ship-task | managed | " \
+    "view must render matched agents as managed with their task"
+  assert_contains "$view" "| local | default | shell | unknown | wS:p9 | - | unmanaged | /tmp |" \
+    "view must render agent-less panes as unmanaged shells"
+  assert_contains "$view" "| adi1 | - | - | - | - | - | - | remote collection timed out or unreachable |" \
+    "view must render unreachable stations with their reason, never silently"
+  pass "fleet view renders managed and unmanaged Herdr sessions with explicit reasons"
+}
+
 test_view_renders_dead_secondmate_agent_status() {
   local home fakebin view
   home=$(make_home dead-secondmate)
@@ -1436,6 +1469,7 @@ test_parked_scout_decision_stays_pending
 test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
+test_view_renders_unmanaged_herdr_sessions
 test_view_renders_dead_secondmate_agent_status
 test_view_reports_timed_out_secondmate_home_distinctly
 test_view_reports_stale_cached_remote_home

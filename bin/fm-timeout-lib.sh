@@ -86,6 +86,74 @@ fm_run_bash_timeout() {
   return "$command_rc"
 }
 
+fm_signal_process_tree() {  # <pid> <signal>: signal pid and its current descendants.
+  # The foreground fallback below cannot isolate its wrapped command into its
+  # own process group (staying in the caller's group is its whole contract),
+  # so a group-wide kill is not available. Walk pgrep -P instead: the wrapped
+  # command is frequently a script (e.g. fm-fleet-herdr-collect.sh) that forks
+  # its own subprocess rather than exec'ing into it, and signaling only the
+  # top-level pid leaves that grandchild running, orphaned.
+  local pid=$1 sig=$2 children child
+  if command -v pgrep >/dev/null 2>&1; then
+    children=$(pgrep -P "$pid" 2>/dev/null || true)
+  else
+    children=
+  fi
+  kill -"$sig" "$pid" 2>/dev/null || true
+  for child in $children; do
+    case "$child" in ''|*[!0-9]*) continue ;; esac
+    fm_signal_process_tree "$child" "$sig"
+  done
+}
+
+fm_run_bash_timeout_foreground() {  # <seconds> <command...>
+  local seconds=$1 deadline_status child_pid watchdog_pid command_rc monitor_was_on=0
+  shift
+  deadline_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-fg-deadline.XXXXXX" 2>/dev/null) || return 124
+  # Run the command directly as the background job (no wrapping subshell), so
+  # child_pid is the real command's pid: signaling it on expiry has to reach
+  # the actual process, not a shell wrapper whose children survive its own
+  # death untouched.
+  "$@" &
+  child_pid=$!
+  # Give the watchdog its own process group (monitor mode, as fm_run_bash_timeout
+  # does for its watchdog) so cancelling it on the healthy/early-finish path also
+  # reaches its own `sleep` grandchild. `sleep "$seconds"` is not this subshell's
+  # last statement, so bash forks it instead of exec'ing into it; a plain `kill
+  # "$watchdog_pid"` only reaches the subshell wrapper and leaves that sleep
+  # orphaned, holding the caller's `$(...)` pipe open until it finishes on its
+  # own. The wrapped command above must NOT get the same isolation - staying in
+  # the caller's process group is this function's whole contract, so an outer
+  # fm_run_timed bound can still reach it.
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m
+  (
+    set +m
+    sleep "$seconds"
+    printf 'expired\n' > "$deadline_status"
+    fm_signal_process_tree "$child_pid" TERM
+    sleep 0.2
+    fm_signal_process_tree "$child_pid" KILL
+  ) &
+  watchdog_pid=$!
+  [ "$monitor_was_on" -eq 1 ] || set +m
+
+  if wait "$child_pid" 2>/dev/null; then
+    command_rc=0
+  else
+    command_rc=$?
+  fi
+  if [ -s "$deadline_status" ]; then
+    wait "$watchdog_pid" 2>/dev/null || true
+    command_rc=124
+  else
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+  fi
+  rm -f "$deadline_status" 2>/dev/null || true
+  return "$command_rc"
+}
+
 fm_run_external_timeout() {
   local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
   shift 2
@@ -136,6 +204,30 @@ fm_run_timed() {  # <seconds> <command...>
         "$seconds" "$@"
       ;;
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
+    *) return 124 ;;
+  esac
+}
+
+# fm_run_timed_foreground <seconds> <command...>
+#   Same contract as fm_run_timed (rc 124 means the bound fired), but never
+#   isolates the command into a new process group/session. Use this instead
+#   of fm_run_timed when already running inside an outer fm_run_timed bound:
+#   nesting a second group-isolating bound would put the command in a
+#   subtree the outer bound's group-wide kill cannot reach, orphaning it
+#   instead of terminating it on the outer expiry. Because it stays in the
+#   caller's group, an inner fm_run_timed_foreground command that outlives
+#   its own bound is still reaped when the outer bound eventually fires.
+fm_run_timed_foreground() {  # <seconds> <command...>
+  local seconds=$1
+  shift
+  case "$(fm_timeout_mechanism)" in
+    timeout) timeout -f -k 1 "$seconds" "$@" ;;
+    gtimeout) gtimeout -f -k 1 "$seconds" "$@" ;;
+    perl)
+      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", $pid; select undef, undef, undef, 0.2; kill "KILL", $pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' \
+        "$seconds" "$@"
+      ;;
+    bash) fm_run_bash_timeout_foreground "$seconds" "$@" ;;
     *) return 124 ;;
   esac
 }

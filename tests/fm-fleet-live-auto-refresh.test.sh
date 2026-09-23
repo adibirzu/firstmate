@@ -116,9 +116,9 @@ test_best_effort_refuses_non_refresh_verbs() {
 reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
 
 test_heartbeat_invokes_the_automatic_refresh() {
-  local dir state fakebin out stub log pid i
+  local dir state fakebin out stub log pid i pulse_stub pulse_log
   dir=$(make_case heartbeat-refresh); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; log="$dir/refresh-calls.log"
+  out="$dir/watch.out"; log="$dir/refresh-calls.log"; pulse_log="$dir/pulse-calls.log"
   stub="$dir/fleet-live-stub.sh"
   cat > "$stub" <<'SH'
 #!/usr/bin/env bash
@@ -126,9 +126,17 @@ printf '%s\n' "$*" >> "${FM_FLEET_LIVE_STUB_LOG:?}"
 exit 0
 SH
   chmod +x "$stub"
+  pulse_stub="$dir/fleet-pulse-stub.sh"
+  cat > "$pulse_stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_PULSE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$pulse_stub"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 \
-    FM_FLEET_LIVE_BIN="$stub" FM_FLEET_LIVE_STUB_LOG="$log" "$WATCH" > "$out" 2>&1 &
+    FM_FLEET_LIVE_BIN="$stub" FM_FLEET_LIVE_STUB_LOG="$log" \
+    FM_FLEET_PULSE_BIN="$pulse_stub" FM_FLEET_PULSE_STUB_LOG="$pulse_log" "$WATCH" > "$out" 2>&1 &
   pid=$!
   i=0
   while [ "$i" -lt 100 ]; do
@@ -144,16 +152,48 @@ SH
   pass "the supervision heartbeat invokes the best-effort fleet-view refresh"
 }
 
+test_heartbeat_republishes_the_pulse_page() {
+  local dir state fakebin out pid i pulse_stub pulse_log
+  dir=$(make_case heartbeat-pulse); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; pulse_log="$dir/pulse-calls.log"
+  pulse_stub="$dir/fleet-pulse-stub.sh"
+  cat > "$pulse_stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_PULSE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$pulse_stub"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 \
+    FM_FLEET_PULSE_BIN="$pulse_stub" FM_FLEET_PULSE_STUB_LOG="$pulse_log" "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    [ -s "$pulse_log" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$pid"
+  [ -s "$pulse_log" ] || fail "the supervision heartbeat never invoked the Pulse republish: $(cat "$out" 2>/dev/null)"
+  grep -Fx "publish --best-effort" "$pulse_log" >/dev/null \
+    || fail "the heartbeat did not call the publish entry point as 'publish --best-effort': $(cat "$pulse_log")"
+  pass "the supervision heartbeat republishes the Pulse fleet page best-effort"
+}
+
 test_heartbeat_without_a_record_makes_no_herdr_call() {
-  local dir state fakebin out pid i
+  local dir state fakebin out pid i pulse_stub
   dir=$(make_case heartbeat-no-record); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"
   write_fake_herdr "$fakebin"
+  pulse_stub="$dir/fleet-pulse-stub.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$pulse_stub"
+  chmod +x "$pulse_stub"
   : > "$dir/calls.log"; : > "$dir/runs.log"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 \
     FAKE_HERDR_CALLS="$dir/calls.log" FAKE_HERDR_PANE=pane1 FAKE_HERDR_RUNS="$dir/runs.log" \
-    "$WATCH" > "$out" 2>&1 &
+    FM_FLEET_PULSE_BIN="$pulse_stub" "$WATCH" > "$out" 2>&1 &
   pid=$!
   i=0
   while [ "$i" -lt 100 ]; do
@@ -174,4 +214,5 @@ test_best_effort_herdr_missing_is_a_silent_noop
 test_best_effort_refreshes_a_recorded_tab
 test_best_effort_refuses_non_refresh_verbs
 test_heartbeat_invokes_the_automatic_refresh
+test_heartbeat_republishes_the_pulse_page
 test_heartbeat_without_a_record_makes_no_herdr_call
