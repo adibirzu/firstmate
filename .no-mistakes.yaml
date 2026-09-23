@@ -22,16 +22,19 @@ document:
     evidence destination, and unique safety facts, then review the complete
     branch diff again after every documentation or lint fix.
 
-# Pin lint to the same owner CI invokes instead of leaving it to no-mistakes'
+# Refuse the push first when any commit in the pull-request range has an author
+# or committer identity other than the operator's global Git identity.
+# Then run the same lint owner CI invokes instead of leaving no-mistakes to its
 # default handling, which does not invoke the repository's canonical lint gate.
+# `bin/fm-commit-identity-check.sh` owns the identity-range mechanics.
 # `bin/fm-lint.sh` owns the context-sensitive ShellCheck modes and GitHub
 # workflow lint via pinned actionlint in `bin/fm-lint-workflows.sh`.
-# Invocation wiring is asserted by `tests/fm-lint.test.sh` and
-# `tests/fm-lint-workflows.test.sh`.
+# Invocation wiring is asserted by `tests/fm-commit-identity-check.test.sh`,
+# `tests/fm-lint.test.sh`, and `tests/fm-lint-workflows.test.sh`.
 #
 # Keep commands.test absent; the firstmate-coding-guidelines skill owns this policy.
 commands:
-  lint: 'bin/fm-lint.sh'
+  lint: 'bin/fm-commit-identity-check.sh && bin/fm-lint.sh'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.
