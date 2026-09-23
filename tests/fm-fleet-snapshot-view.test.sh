@@ -1066,10 +1066,16 @@ write_remote_ledger_summary() {  # <home> <generated-epoch>
 
 # make_remote_ssh <dir>: a fake SSH transport that answers per host so one run
 # can exercise every cross-home read outcome:
-#   host-slow - a live but slow home that consumes the per-home budget
-#   host-fail - a live read that produces nothing
-#   host-bad  - a ledger that is not a valid summary
-#   host-ok   - a healthy ledger at $FM_TEST_HEALTHY_LEDGER
+#   host-slow             - a live but slow home that consumes the per-home budget
+#   host-fail             - a live read that produces nothing
+#   host-bad              - a ledger that is not a valid summary
+#   host-ok               - a healthy ledger at $FM_TEST_HEALTHY_LEDGER
+#   host-probe-fetch-fail - probe answers alive immediately while the ledger
+#                           fetch itself wedges past the per-home timeout, so
+#                           fetch_one and probe_one race exactly as they do
+#                           against a real busy-but-alive host
+#   host-badreason        - a shape-valid ledger whose .reason is not a string
+#                           at $FM_TEST_BADREASON_LEDGER
 make_remote_ssh() {  # <dir>
   local fb="$1/fakebin"
   mkdir -p "$fb"
@@ -1088,11 +1094,71 @@ case "${1:-}" in
   host-fail) exit 1 ;;
   host-bad) printf 'this is not a valid summary\n'; exit 0 ;;
   host-ok) cat "${FM_TEST_HEALTHY_LEDGER:?}"; exit 0 ;;
+  host-orphan) cat "${FM_TEST_ORPHAN_LEDGER:?}"; exit 0 ;;
+  host-stuck) cat "${FM_TEST_STUCK_LEDGER:?}"; exit 0 ;;
+  host-raw) cat "${FM_TEST_RAW_LEDGER:?}"; exit 0 ;;
+  host-probe)
+    # fm-on.sh ships the remote command as one trailing base64 argv blob
+    # (fm-remote-entrypoint.sh <proto> <root> <home> <argv>); decode only that
+    # blob, never the whole argv, so surrounding plaintext cannot corrupt it.
+    last=""; for arg in "$@"; do last=$arg; done
+    if printf '%s' "$last" | base64 -d 2>/dev/null | grep -q "fm-remote-secondmate-control"; then
+      printf 'alive\n'; exit 0
+    fi
+    cat "${FM_TEST_HEALTHY_LEDGER:?}"; exit 0 ;;
+  host-probe-fetch-fail)
+    last=""; for arg in "$@"; do last=$arg; done
+    if printf '%s' "$last" | base64 -d 2>/dev/null | grep -q "fm-remote-secondmate-control"; then
+      printf 'alive\n'; exit 0
+    fi
+    sleep 30; exit 1 ;;
+  host-badreason) cat "${FM_TEST_BADREASON_LEDGER:?}"; exit 0 ;;
   *) exit 1 ;;
 esac
 SH
   chmod +x "$fb/fake-ssh"
   printf '%s\n' "$fb"
+}
+
+# write_remote_ledger_invalid_summary <dest> <kind> <reason> <state> <epoch>:
+# an invalid but shape-valid ledger with one readable child, so the view must
+# render the specific reason beside the data instead of dropping the row.
+write_remote_ledger_invalid_summary() {  # <dest> <kind> <reason> <state> <epoch>
+  local dest=$1
+  mkdir -p "$dest/state"
+  jq -n --arg home "$dest" --arg kind "$2" --arg reason "$3" --arg state "$4" --argjson epoch "$5" '{
+    schema:"fm-secondmate-home-summary.v1",
+    hold_classifier_schema:"fm-captain-hold-buckets.v1",
+    generated:"2026-09-22T12:00:00Z",generated_epoch:$epoch,home:$home,
+    valid:false,reason:$reason,invalidity:{kind:$kind,ids:["remote-ship"]},state:$state,
+    active_children:[{id:"remote-ship",kind:"ship",state:"working",repo:"alpha",source:"run-step",doing:"fixing",
+      usage:{harness:"pi",model:"m"}}],
+    decisions_open:[],holds:[],queued:[],landed:[],
+    endpoints:[{id:"remote-ship",state:"working",source:"run-step",endpoint:{exists:true,agent_alive:"alive"}}],
+    counts:{active_children:1,decisions_open:0,holds:0,queued:0,landed:0,endpoints:1},omitted:[]
+  }' > "$dest/state/home-summary.json"
+}
+
+# write_remote_ledger_malformed_reason <dest> <epoch>: an otherwise shape-valid
+# invalid ledger whose .reason is a number instead of a string, simulating a
+# malformed remote producer rather than the empty/missing cases above. Carries
+# one readable child so a fix that discards the whole document (instead of
+# only degrading the unreadable .reason field) is distinguishable from one
+# that keeps every child the ledger actually reports.
+write_remote_ledger_malformed_reason() {  # <dest> <epoch>
+  local dest=$1
+  mkdir -p "$dest/state"
+  jq -n --arg home "$dest" --argjson epoch "$2" '{
+    schema:"fm-secondmate-home-summary.v1",
+    hold_classifier_schema:"fm-captain-hold-buckets.v1",
+    generated:"2026-09-22T12:00:00Z",generated_epoch:$epoch,home:$home,
+    valid:false,reason:123,invalidity:{kind:"orphan_in_flight",ids:["remote-ship"]},state:"unknown",
+    active_children:[{id:"remote-ship",kind:"ship",state:"working",repo:"alpha",source:"run-step",doing:"fixing",
+      usage:{harness:"pi",model:"m"}}],
+    decisions_open:[],holds:[],queued:[],landed:[],
+    endpoints:[{id:"remote-ship",state:"working",source:"run-step",endpoint:{exists:true,agent_alive:"alive"}}],
+    counts:{active_children:1,decisions_open:0,holds:0,queued:0,landed:0,endpoints:1},omitted:[]
+  }' > "$dest/state/home-summary.json"
 }
 
 # register_remote_secondmate <home> <id> <host> <remote-home>: record a remote
@@ -1156,8 +1222,8 @@ test_view_reports_stale_cached_remote_home() {
     FM_TEST_HEALTHY_LEDGER="$stale_home/state/home-summary.json" "$VIEW")
   assert_contains "$view" "| host-fail | ledger-stale | no_active_work |" \
     "a failed live read with a valid cached copy must render the cached state: $view"
-  assert_contains "$view" "remote-ledger-cache/cached" \
-    "a cached read must disclose its source and freshness: $view"
+  assert_contains "$view" "remote-ledger-cache/stale" \
+    "a days-old cached read must disclose its source and its staleness, never render as current: $view"
   assert_contains "$view" "| host-fail | ledger-stale | no_active_work |" \
     "a stale cached home must never render blank: $view"
   pass "fleet view renders a stale cached remote home from its cached ledger"
@@ -1181,6 +1247,156 @@ test_view_reports_invalid_remote_ledger_loudly() {
   assert_not_contains "$view" "| host-bad | ledger-bad | - |" \
     "an invalid ledger must never render as an absent row: $view"
   pass "fleet view reports an invalid remote ledger with an explicit reason"
+}
+
+test_view_renders_invalid_remote_homes_nonfatally() {
+  local home fb view snap now
+  home=$(make_home view-invalid-kind)
+  now=$(date +%s)
+  write_remote_ledger_invalid_summary "$TMP_ROOT/view-orphan-home" \
+    orphan_in_flight "in-flight backlog item has no child metadata: remote-ship" unknown "$now"
+  write_remote_ledger_invalid_summary "$TMP_ROOT/view-stuck-home" \
+    child_current_unavailable "child current state unavailable: remote-ship" unknown "$now"
+  write_remote_ledger_invalid_summary "$TMP_ROOT/view-raw-home" \
+    unstructured_current "unstructured current backlog row" active_child_work "$now"
+  register_remote_secondmate "$home" ledger-orphan host-orphan "$TMP_ROOT/view-orphan-home"
+  register_remote_secondmate "$home" ledger-stuck host-stuck "$TMP_ROOT/view-stuck-home"
+  register_remote_secondmate "$home" ledger-raw host-raw "$TMP_ROOT/view-raw-home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_ORPHAN_LEDGER="$TMP_ROOT/view-orphan-home/state/home-summary.json" \
+    FM_TEST_STUCK_LEDGER="$TMP_ROOT/view-stuck-home/state/home-summary.json" \
+    FM_TEST_RAW_LEDGER="$TMP_ROOT/view-raw-home/state/home-summary.json" "$VIEW")
+  assert_contains "$view" "structured home state invalid: in-flight backlog item has no child metadata: remote-ship" \
+    "an orphan in-flight home must name its specific reason: $view"
+  assert_contains "$view" "structured home state invalid: child current state unavailable: remote-ship" \
+    "a child-unavailable home must name its specific reason: $view"
+  assert_contains "$view" "structured home state invalid: unstructured current backlog row" \
+    "an unstructured-row home must name its specific reason: $view"
+  assert_contains "$view" "| host-orphan | alpha | remote-ship | working |" \
+    "an invalid home must still render every readable child: $view"
+  assert_contains "$view" "| host-stuck | alpha | remote-ship | working |" \
+    "a child-unavailable home must still render every readable child: $view"
+  assert_contains "$view" "| host-raw | alpha | remote-ship | working |" \
+    "an unstructured-row home must still render every readable child: $view"
+  snap=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_ORPHAN_LEDGER="$TMP_ROOT/view-orphan-home/state/home-summary.json" \
+    FM_TEST_STUCK_LEDGER="$TMP_ROOT/view-stuck-home/state/home-summary.json" \
+    FM_TEST_RAW_LEDGER="$TMP_ROOT/view-raw-home/state/home-summary.json" "$SNAPSHOT" --json)
+  printf '%s' "$snap" | jq -e '
+    ([.secondmate_current.records[]
+      | select(.id == "ledger-orphan" or .id == "ledger-stuck" or .id == "ledger-raw")
+      | select(.provenance.trust == "partial-structured"
+        and (.active_children | length) == 1
+        and (.current.reason | contains("structured home state invalid: ")))] | length) == 3
+  ' >/dev/null || fail "every invalid home must stay partial-structured with its child and specific reason: $snap"
+  pass "fleet view renders every invalidity kind non-fatally with its specific reason"
+}
+
+test_view_reports_per_home_timeout_distinctly() {
+  local home fb view
+  home=$(make_home view-host-timeout)
+  write_remote_ledger_summary "$TMP_ROOT/view-host-timeout-ok" "$(date +%s)"
+  register_remote_secondmate "$home" ledger-slow-home host-slow "$TMP_ROOT/view-host-timeout-slow"
+  register_remote_secondmate "$home" ledger-fast host-ok "$TMP_ROOT/view-host-timeout-ok"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$TMP_ROOT/view-host-timeout-ok/state/home-summary.json" \
+    FM_SNAPSHOT_SECONDMATE_HOST_TIMEOUT=2 FM_SNAPSHOT_SECONDMATE_TIMEOUT=60 "$VIEW")
+  assert_contains "$view" "| host-slow | ledger-slow-home | timeout (" \
+    "a home wedged past its own allowance must render timeout, not unknown: $view"
+  assert_contains "$view" "timed out after 2s" \
+    "a per-home timeout must name its own allowance: $view"
+  assert_contains "$view" "| host-ok | ledger-fast | no_active_work |" \
+    "a healthy home must be unaffected by another home's per-home timeout: $view"
+  pass "fleet view reports a per-home timeout distinctly from the collection backstop"
+}
+
+test_view_marks_stale_remote_ledger() {
+  local home fb view
+  home=$(make_home view-stale-fresh)
+  write_remote_ledger_summary "$TMP_ROOT/view-stale-fresh-home" 1000
+  register_remote_secondmate "$home" ledger-old host-ok "$TMP_ROOT/view-stale-fresh-home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$TMP_ROOT/view-stale-fresh-home/state/home-summary.json" "$VIEW")
+  assert_contains "$view" "| host-ok | ledger-old | no_active_work |" \
+    "a stale but valid ledger must still render its state: $view"
+  assert_contains "$view" "remote-ledger/stale " \
+    "a days-old ledger must never render as fresh: $view"
+  assert_not_contains "$view" "remote-ledger/fresh " \
+    "a days-old ledger must not claim freshness: $view"
+  pass "fleet view marks a stale remote ledger stale instead of fresh"
+}
+
+test_view_prefers_live_probe_endpoint() {
+  local home fb view
+  home=$(make_home view-probe)
+  write_remote_ledger_summary "$TMP_ROOT/view-probe-home" "$(date +%s)"
+  register_remote_secondmate "$home" ledger-probe host-probe "$TMP_ROOT/view-probe-home"
+  register_remote_secondmate "$home" ledger-noprobe host-ok "$TMP_ROOT/view-probe-home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$TMP_ROOT/view-probe-home/state/home-summary.json" "$VIEW")
+  assert_contains "$view" "| host-probe | ledger-probe | no_active_work | present/alive |" \
+    "a reachable home must show its live probed endpoint, not unknown: $view"
+  assert_contains "$view" "| host-ok | ledger-noprobe | no_active_work | unknown/unknown |" \
+    "without probe evidence the endpoint must stay honestly unknown: $view"
+  pass "fleet view prefers the live mate-endpoint probe over unknown"
+}
+
+test_view_prefers_probe_over_timed_out_fetch() {
+  local home fb view row
+  home=$(make_home view-probe-race)
+  register_remote_secondmate "$home" ledger-probe-race host-probe-fetch-fail "$TMP_ROOT/view-probe-race-home"
+  fb=$(make_remote_ssh "$home")
+  view=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_SNAPSHOT_SECONDMATE_HOST_TIMEOUT=2 FM_SNAPSHOT_SECONDMATE_TIMEOUT=60 "$VIEW")
+  row=$(printf '%s\n' "$view" | grep '| host-probe-fetch-fail |')
+  [ -n "$row" ] || fail "host-probe-fetch-fail must render its own row: $view"
+  assert_contains "$row" "| timeout (" \
+    "a home whose ledger fetch times out must still render timeout, not unknown: $row"
+  assert_contains "$row" "timed out after 2s" \
+    "the timeout reason must still name its own allowance: $row"
+  assert_contains "$row" "| present/alive |" \
+    "a probe that answers alive while the fetch times out must win over unknown, not be dropped: $row"
+  pass "fleet view keeps the live probe result when its own home's ledger fetch times out"
+}
+
+test_snapshot_degrades_nonfatally_on_malformed_reason_type() {
+  local home fb ok_home bad_home snap rc
+  home=$(make_home snapshot-badreason)
+  ok_home="$TMP_ROOT/snapshot-badreason-ok"
+  bad_home="$TMP_ROOT/snapshot-badreason-bad"
+  write_remote_ledger_summary "$ok_home" "$(date +%s)"
+  write_remote_ledger_malformed_reason "$bad_home" "$(date +%s)"
+  register_remote_secondmate "$home" ledger-ok host-ok "$ok_home"
+  register_remote_secondmate "$home" ledger-badreason host-badreason "$bad_home"
+  fb=$(make_remote_ssh "$home")
+  snap=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    FM_SSH_BIN="$fb/fake-ssh" \
+    FM_TEST_HEALTHY_LEDGER="$ok_home/state/home-summary.json" \
+    FM_TEST_BADREASON_LEDGER="$bad_home/state/home-summary.json" \
+    "$SNAPSHOT" --json)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a remote ledger with a non-string .reason must not crash the whole snapshot: rc=$rc out=$snap"
+  printf '%s' "$snap" | jq -e '
+    (.secondmate_current.records[] | select(.id == "ledger-ok") | .current.state) == "no_active_work"
+  ' >/dev/null || fail "a malformed sibling ledger must never take down an unrelated healthy home: $snap"
+  printf '%s' "$snap" | jq -e '
+    (.secondmate_current.records[] | select(.id == "ledger-badreason")) as $r
+    | ($r.current.reason == "structured home state invalid: 123")
+      and ($r.provenance.trust == "partial-structured")
+      and ($r.active_children == [{id:"remote-ship",kind:"ship",state:"working",repo:"alpha",source:"run-step",doing:"fixing",usage:{harness:"pi",model:"m"}}])
+      and ($r.counts.active_children == 1)
+  ' >/dev/null || fail "a non-string .reason must degrade only that field, keeping the ledger's readable children and counts intact: $snap"
+  pass "snapshot degrades a malformed remote reason type non-fatally without dropping its readable children"
 }
 
 test_view_reads_release_manifest_seam() {
@@ -1224,4 +1440,10 @@ test_view_renders_dead_secondmate_agent_status
 test_view_reports_timed_out_secondmate_home_distinctly
 test_view_reports_stale_cached_remote_home
 test_view_reports_invalid_remote_ledger_loudly
+test_view_renders_invalid_remote_homes_nonfatally
+test_view_reports_per_home_timeout_distinctly
+test_view_marks_stale_remote_ledger
+test_view_prefers_live_probe_endpoint
+test_view_prefers_probe_over_timed_out_fetch
+test_snapshot_degrades_nonfatally_on_malformed_reason_type
 test_view_reads_release_manifest_seam
