@@ -30,6 +30,12 @@
 # for the supervision heartbeat (bin/fm-watch.sh) and the successful
 # task-completion path (bin/fm-teardown.sh), next to the existing live-view
 # refresh calls. It never prints, never fails, and never opens anything.
+# Unlike the live-view sibling (a cheap local rerender bounded to 5s), this
+# command does real network-bound collection, so it owns its own outer bound
+# the same way: a --best-effort invocation re-execs itself once under
+# FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT (default 60s), so the heartbeat and
+# teardown call sites can never be blocked by the ~390s worst case of the
+# snapshot and collector sub-timeouts stacking sequentially.
 #
 # Lane column: local tasks render "routed" when their meta carries provider= or
 # account= (dispatched under a provider account through the router) and
@@ -47,8 +53,13 @@
 #                              dashboard static dir override
 #   FM_FLEET_SNAPSHOT_BIN      snapshot override (tests point at fixtures)
 #   FM_FLEET_HERDR_BIN         collector override (tests point at fixtures)
+#   FM_FLEET_PULSE_SNAPSHOT_TIMEOUT
+#                              bound for the fleet snapshot (default 300)
 #   FM_FLEET_PULSE_HERDR_TIMEOUT
 #                              bound for the collector fan-out (default 90)
+#   FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT
+#                              outer bound for the whole --best-effort run
+#                              (default 60)
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,8 +68,12 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 SNAPSHOT_BIN="${FM_FLEET_SNAPSHOT_BIN:-$SCRIPT_DIR/fm-fleet-snapshot.sh}"
 HERDR_BIN_COLLECT="${FM_FLEET_HERDR_BIN:-$SCRIPT_DIR/fm-fleet-herdr-collect.sh}"
+SNAPSHOT_TIMEOUT=${FM_FLEET_PULSE_SNAPSHOT_TIMEOUT:-300}
+case "$SNAPSHOT_TIMEOUT" in ''|*[!0-9]*|0) SNAPSHOT_TIMEOUT=300 ;; esac
 HERDR_TIMEOUT=${FM_FLEET_PULSE_HERDR_TIMEOUT:-90}
 case "$HERDR_TIMEOUT" in ''|*[!0-9]*|0) HERDR_TIMEOUT=90 ;; esac
+BEST_EFFORT_TIMEOUT=${FM_FLEET_PULSE_BEST_EFFORT_TIMEOUT:-60}
+case "$BEST_EFFORT_TIMEOUT" in ''|*[!0-9]*|0) BEST_EFFORT_TIMEOUT=60 ;; esac
 PUBLISH_DASHBOARD=${FM_FLEET_PULSE_PUBLISH:-1}
 DASHBOARD_DIR=${FM_FLEET_PULSE_DASHBOARD_DIR:-$HOME/.claude/LIFEOS/PULSE/Observability/out}
 
@@ -103,6 +118,19 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# A --best-effort run does the real network-bound collection below (the
+# snapshot and collector sub-timeouts can stack up to their sum), so it must
+# own an outer bound the way the live-view sibling's best-effort refresh does,
+# or a degraded-connectivity cycle can stall the heartbeat/teardown caller for
+# minutes. Re-exec once under that bound rather than growing a second
+# unbounded code path; FM_FLEET_PULSE_BEST_EFFORT_CHILD marks the bounded
+# re-exec so it runs the work directly instead of recursing again.
+if [ "$BEST_EFFORT" -eq 1 ] && [ "${FM_FLEET_PULSE_BEST_EFFORT_CHILD:-0}" -ne 1 ]; then
+  FM_FLEET_PULSE_BEST_EFFORT_CHILD=1 fm_run_timed "$BEST_EFFORT_TIMEOUT" \
+    "$0" publish --best-effort ${OUT_ARG:+--out "$OUT_ARG"} >/dev/null 2>&1
+  exit 0
+fi
+
 command -v jq >/dev/null 2>&1 || {
   [ "$BEST_EFFORT" -eq 1 ] || echo "fm-fleet-pulse: jq not found" >&2
   if [ "$BEST_EFFORT" -eq 1 ]; then exit 0; else exit 1; fi
@@ -114,7 +142,7 @@ pulse_fail() {  # <message>
   exit 1
 }
 
-SNAPSHOT=$(fm_run_timed 300 "$SNAPSHOT_BIN" --json 2>/dev/null) || SNAPSHOT=''
+SNAPSHOT=$(fm_run_timed "$SNAPSHOT_TIMEOUT" "$SNAPSHOT_BIN" --json 2>/dev/null) || SNAPSHOT=''
 [ -n "$SNAPSHOT" ] || pulse_fail "fleet snapshot failed"
 printf '%s' "$SNAPSHOT" | jq -e '.schema == "fm-fleet-snapshot.v1"' >/dev/null 2>&1 \
   || pulse_fail "fleet snapshot returned an unexpected schema"
@@ -187,7 +215,7 @@ pulse_tail() {
 <script>
 (function(){
 var el=function(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
-var esc=function(s){return String(s==null?"-":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");};
+var esc=function(s){return String(s==null?"-":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");};
 var dash=function(v){return (v==null||v==="")?"-":esc(v);};
 var data=null;
 try{data=JSON.parse(document.getElementById("fleet-data").textContent);}catch(e){return;}

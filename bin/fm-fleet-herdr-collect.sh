@@ -220,7 +220,7 @@ fm_collect_local_json() {  # <match-map-json>
 # side runs this same file, so the schema and read-only contract are single.
 fm_collect_remote_json() {  # <id> <host>
   local id=$1 host=$2 out rc session_json
-  out=$(fm_run_timed "$TIMEOUT" "$ON_BIN" "$id" fm-fleet-herdr-collect.sh --json --local-only 2>/dev/null) || out=''
+  out=$(fm_run_timed "$TIMEOUT" "$ON_BIN" "$id" fm-fleet-herdr-collect.sh --json --local-only 2>/dev/null)
   rc=$?
   if [ "$rc" -eq 124 ] || [ -z "$out" ]; then
     jq -n --arg host "$host" --arg id "$id" \
