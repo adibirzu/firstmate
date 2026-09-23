@@ -22,7 +22,9 @@
 # ~/.claude/LIFEOS/PULSE/Observability/out, where Pulse's observability module
 # serves fleet.html with no rebuild and no-cache headers) unless
 # FM_FLEET_PULSE_PUBLISH=0. The dashboard copy is generated content only; it
-# installs no code into Pulse and needs no Pulse restart.
+# installs no code into Pulse and needs no Pulse restart. Every supervising
+# home publishes the same dashboard filenames, so the freshest heartbeat wins;
+# each copy is self-describing (generated stamp and home inside).
 #
 # Refresh wiring: `publish --best-effort` is the silent automatic-trigger form
 # for the supervision heartbeat (bin/fm-watch.sh) and the successful
