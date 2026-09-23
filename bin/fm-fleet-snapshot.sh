@@ -1434,7 +1434,6 @@ length == 1 and (.[0] |
   and (.holds | type) == "array" and (.queued | type) == "array"
   and (.landed | type) == "array" and (.endpoints | type) == "array"
   and (.counts | type) == "object" and (.omitted | type) == "array"
-  and ((.reason | type) == "string" or (.reason | type) == "null")
 )
 JQ
   snapshot_cache_prepare || true
@@ -2030,7 +2029,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
           else {exists:null,agent_alive:"unknown"} end;
         {id:$id,home:$home,host:($host | if . == "" then null else . end),remote:$remote,registered:$registered,
          spawn_gen:($spawn_gen | if . == "" then null else . end),
-         current:{state:$state,reason:(if $summary_valid then null else "structured home state invalid: " + ($summary.reason // "unknown reason") end)},invalidity:$summary.invalidity,
+         current:{state:$state,reason:(if $summary_valid then null else "structured home state invalid: " + (($summary.reason // "unknown reason") | tostring) end)},invalidity:$summary.invalidity,
          reconcile_inventory:$summary.invalidity,
          station_endpoint:station_endpoint,
          provenance:{selected:"structured-home",structured_home:$home,summary_source:$summary_source,summary_valid:$summary_valid,

@@ -1141,7 +1141,10 @@ write_remote_ledger_invalid_summary() {  # <dest> <kind> <reason> <state> <epoch
 
 # write_remote_ledger_malformed_reason <dest> <epoch>: an otherwise shape-valid
 # invalid ledger whose .reason is a number instead of a string, simulating a
-# malformed remote producer rather than the empty/missing cases above.
+# malformed remote producer rather than the empty/missing cases above. Carries
+# one readable child so a fix that discards the whole document (instead of
+# only degrading the unreadable .reason field) is distinguishable from one
+# that keeps every child the ledger actually reports.
 write_remote_ledger_malformed_reason() {  # <dest> <epoch>
   local dest=$1
   mkdir -p "$dest/state"
@@ -1150,8 +1153,11 @@ write_remote_ledger_malformed_reason() {  # <dest> <epoch>
     hold_classifier_schema:"fm-captain-hold-buckets.v1",
     generated:"2026-09-22T12:00:00Z",generated_epoch:$epoch,home:$home,
     valid:false,reason:123,invalidity:{kind:"orphan_in_flight",ids:["remote-ship"]},state:"unknown",
-    active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
-    counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
+    active_children:[{id:"remote-ship",kind:"ship",state:"working",repo:"alpha",source:"run-step",doing:"fixing",
+      usage:{harness:"pi",model:"m"}}],
+    decisions_open:[],holds:[],queued:[],landed:[],
+    endpoints:[{id:"remote-ship",state:"working",source:"run-step",endpoint:{exists:true,agent_alive:"alive"}}],
+    counts:{active_children:1,decisions_open:0,holds:0,queued:0,landed:0,endpoints:1},omitted:[]
   }' > "$dest/state/home-summary.json"
 }
 
@@ -1384,10 +1390,13 @@ test_snapshot_degrades_nonfatally_on_malformed_reason_type() {
     (.secondmate_current.records[] | select(.id == "ledger-ok") | .current.state) == "no_active_work"
   ' >/dev/null || fail "a malformed sibling ledger must never take down an unrelated healthy home: $snap"
   printf '%s' "$snap" | jq -e '
-    (.secondmate_current.records[] | select(.id == "ledger-badreason") | .current.reason
-      | contains("missing, unreadable, or invalid"))
-  ' >/dev/null || fail "a non-string .reason must degrade to the generic invalid-ledger reason, not crash: $snap"
-  pass "snapshot degrades a malformed remote reason type non-fatally instead of crashing"
+    (.secondmate_current.records[] | select(.id == "ledger-badreason")) as $r
+    | ($r.current.reason == "structured home state invalid: 123")
+      and ($r.provenance.trust == "partial-structured")
+      and ($r.active_children == [{id:"remote-ship",kind:"ship",state:"working",repo:"alpha",source:"run-step",doing:"fixing",usage:{harness:"pi",model:"m"}}])
+      and ($r.counts.active_children == 1)
+  ' >/dev/null || fail "a non-string .reason must degrade only that field, keeping the ledger's readable children and counts intact: $snap"
+  pass "snapshot degrades a malformed remote reason type non-fatally without dropping its readable children"
 }
 
 test_view_reads_release_manifest_seam() {
