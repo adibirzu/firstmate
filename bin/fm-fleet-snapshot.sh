@@ -1434,6 +1434,7 @@ length == 1 and (.[0] |
   and (.holds | type) == "array" and (.queued | type) == "array"
   and (.landed | type) == "array" and (.endpoints | type) == "array"
   and (.counts | type) == "object" and (.omitted | type) == "array"
+  and ((.reason | type) == "string" or (.reason | type) == "null")
 )
 JQ
   snapshot_cache_prepare || true
@@ -2067,17 +2068,20 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
         --arg spawn_gen "$sampled_spawn_gen" \
         --arg provenance "$provenance" --arg freshness "$freshness" --arg event_raw "$event_raw" --arg event_note "$event_note" \
         --arg current_state "$current_state_value" \
-        --argjson parent_exists "$parent_endpoint_exists" --arg parent_alive "$parent_endpoint_alive" \
+        --arg probe "$probe_word" --argjson parent_exists "$parent_endpoint_exists" --arg parent_alive "$parent_endpoint_alive" \
         --argjson registered "$registered" --argjson event_age "$event_age" --argjson activities "$activities" --argjson activity_scan "$activity_scan" \
         --argjson decisions "$decisions" --argjson terminal "$terminal" '
         {id:$id,home:($home | if . == "" then null else . end),host:($host | if . == "" then null else . end),remote:$remote,registered:$registered,
          spawn_gen:($spawn_gen | if . == "" then null else . end),
          current:{state:$current_state,reason:$reason},invalidity:null,
          reconcile_inventory:null,
-         station_endpoint:{exists:$parent_exists,
-           agent_alive:(if $parent_alive == "alive" then "alive"
-                        elif $parent_alive == "dead" then "dead"
-                        else "unknown" end)},
+         station_endpoint:(if $probe == "alive" then {exists:true,agent_alive:"alive"}
+           elif $probe == "dead" then {exists:true,agent_alive:"dead"}
+           elif $probe == "missing" then {exists:false,agent_alive:"dead"}
+           else {exists:$parent_exists,
+                 agent_alive:(if $parent_alive == "alive" then "alive"
+                              elif $parent_alive == "dead" then "dead"
+                              else "unknown" end)} end),
          provenance:{selected:$provenance,structured_home:($home | if . == "" then null else . end),parent_event_role:"fallback-only-not-current"},
          freshness:{status:$freshness,observed_at:$observed,age_seconds:$event_age},
          active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[],
