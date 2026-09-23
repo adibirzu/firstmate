@@ -442,7 +442,11 @@ EOF
 # Bounded and silent: prints nothing when no decision is open, which is the
 # common case.
 print_open_decisions_section() {
-  local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
+  # The former 4 KiB ceiling covered only a few dozen ordinary decisions and
+  # made a realistically large fleet depend on the trailing omission notice.
+  # Keep the existing counted disclosure as the final backstop, but size the
+  # primary view to carry hundreds of ordinary entries in one drain.
+  local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=32768
   local output='' used=0 shown=0 omitted=0 bytes
 
   if [ -n "$snapshot" ]; then
