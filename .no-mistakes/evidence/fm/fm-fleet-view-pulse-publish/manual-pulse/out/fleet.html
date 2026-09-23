@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="120">
+<title>Fleet - every worker on every station</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:16px 20px;background:#0e1116;color:#d7dce2}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#8b93a1;font-size:12px;margin-bottom:16px}
+h2{font-size:15px;margin:22px 0 8px;color:#fff}.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:8px}
+.ok{background:#123f22;color:#7ee2a8}.warn{background:#4a2f10;color:#f5b96b}.bad{background:#4d1717;color:#f28b8b}
+table{border-collapse:collapse;width:100%;font-size:12px;margin-bottom:6px}
+th,td{border:1px solid #26303d;padding:5px 8px;text-align:left;vertical-align:top}
+th{background:#161c25;color:#9aa4b2}td.mono,th.mono{font-family:ui-monospace,monospace;font-size:11px}
+a{color:#6cb8f0}.note{color:#8b93a1;font-size:11px}.jev{background:#141b25;border:1px solid #26303d;border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:8px}
+.station{margin-top:18px;border-top:2px solid #26303d;padding-top:6px}
+</style>
+</head>
+<body>
+<h1>Fleet - every worker on every station <span class="pill ok" id="fresh">heartbeat-fed</span></h1>
+<div class="sub" id="meta">loading…</div>
+<div class="jev" id="jev"></div>
+<div id="fleet"></div>
+<script id="fleet-data" type="application/json">
+{"schema":"fm-fleet-pulse.v1","generated":"2026-09-23T08:39:57Z","snapshot":{"schema":"fm-fleet-snapshot.v1","generated":"2026-09-23T09:00:00Z","fm_home":"/h","tasks":[{"id":"a1","kind":"ship","harness":"opencode","mode":"m","project":"/p","usage":{"model":"m1"},"current_state":{"state":"working","source":"run-step"},"pr":{"url":"https://example.com/pull/1","source":"meta"},"backlog":{"state":"in_flight"}}],"backlog":{"records":[]},"main_inventory":{"valid":true,"reason":""},"secondmate_current":{"records":[]},"remote_dev_sessions":[],"jev_shadow":{"samples":10,"recorded":8,"allFieldsAgree":0.9,"routeAgree":0.8}},"herdr":{"schema":"fm-fleet-herdr.v1","generated":1,"host":"local","hosts":[{"host":"local","ok":true,"source":"local","error":null,"sessions":[{"name":"default","running":true,"agents":[{"agent":"claude","status":"working","cwd":"/p","pane_id":"p1","tab_id":"t1","workspace_id":"w1","title":"Managed task","matched_task_id":"a1","matched_home":"/h","matched_harness":"opencode","managed":true}],"plain_panes":[]}]},{"host":"adi1","ok":true,"source":"remote","error":null,"sessions":[{"name":"fm-remote","running":true,"agents":[{"agent":"claude","status":"idle","cwd":"/side/project","pane_id":"p9","tab_id":"t9","workspace_id":"w9","title":"Untracked side quest on adi1","matched_task_id":null,"matched_home":null,"matched_harness":null,"managed":false}],"plain_panes":[]}]},{"host":"adi2-ts","ok":true,"source":"remote","error":null,"sessions":[{"name":"fm-remote","running":true,"agents":[{"agent":"opencode","status":"idle","cwd":"/other","pane_id":"p11","tab_id":"t11","workspace_id":"w11","title":"Unmanaged on adi2","matched_task_id":null,"matched_home":null,"matched_harness":null,"managed":false}],"plain_panes":[]}]},{"host":"commandopc","ok":false,"source":"remote","error":"ssh unreachable","sessions":[]}]},"lanes":{}}
+</script>
+<script>
+(function(){
+var el=function(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+var esc=function(s){return String(s==null?"-":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");};
+var dash=function(v){return (v==null||v==="")?"-":esc(v);};
+var data=null;
+try{data=JSON.parse(document.getElementById("fleet-data").textContent);}catch(e){return;}
+function laneOf(id){return (data.lanes&&data.lanes[id])||"unknown";}
+function stateRank(s){s=String(s||"");if(/done|landed|passed|green/i.test(s))return 2;if(/fail|blocked|invalid|unknown/i.test(s))return 1;return 0;}
+function render(d){
+document.getElementById("meta").textContent="Generated "+d.generated+" - home "+(d.snapshot.fm_home||"-")+" - schema "+d.schema;
+var j=d.snapshot.jev_shadow;
+document.getElementById("jev").innerHTML = j ? ("<b>Jev shadow</b> - samples "+dash(j.samples)+" - recorded "+dash(j.recorded)+" - fields agree "+dash(j.allFieldsAgree)+" - route agree "+dash(j.routeAgree)) : "<b>Jev shadow</b> - no report (shadow disabled or tool absent)";
+var root=el("div");var snap=d.snapshot;var rows=(snap.secondmate_current&&snap.secondmate_current.records)||[];
+var st=el("div");st.appendChild(el("h2",null,"Stations"));
+var t=el("table");t.innerHTML="<tr><th>Station</th><th>Home</th><th>State</th><th>Endpoint</th><th>Convergence</th><th class='mono'>Children</th><th class='mono'>Decisions</th><th class='mono'>Queued</th><th>Note</th></tr>";
+var tr=el("tr");
+tr.innerHTML="<td>local</td><td>main</td><td>"+dash(snap.main_inventory&&snap.main_inventory.valid?"ok":"inventory-invalid")+"</td><td>-</td><td>local-backlog</td><td class='mono'>"+((snap.tasks||[]).filter(function(x){return x.kind!=="secondmate";}).length)+"</td><td class='mono'>"+((snap.backlog.records||[]).filter(function(x){return x.captain_actionable;}).length)+"</td><td class='mono'>"+((snap.backlog.records||[]).filter(function(x){return x.state==="queued";}).length)+"</td><td>"+dash(snap.main_inventory&&snap.main_inventory.reason)+"</td>";
+t.appendChild(tr);
+rows.forEach(function(r){var s=(r.host&&r.host!=="")?r.host:"local";var q=el("tr");
+q.innerHTML="<td>"+dash(s)+"</td><td class='mono'>"+dash(r.id)+"</td><td>"+dash((r.current&&r.current.state)||"unknown")+((r.current&&r.current.reason)?" ("+esc(String(r.current.reason)).slice(0,70)+")":"")+"</td><td class='mono'>"+dash(r.station_endpoint)+"</td><td class='mono'>"+dash(r.provenance&&r.provenance.summary_source)+"/"+dash(r.freshness&&r.freshness.status)+"</td><td class='mono'>"+dash(r.counts&&r.counts.active_children)+"</td><td class='mono'>"+dash(r.counts&&r.counts.decisions_open)+"</td><td class='mono'>"+dash(r.counts&&r.counts.queued)+"</td><td>"+(r.invalidity&&r.invalidity.kind?("invalid: "+esc(r.invalidity.kind)):"-")+"</td>";t.appendChild(q);});
+st.appendChild(t);root.appendChild(st);
+var byStation={};
+function push(station,row){(byStation[station]=byStation[station]||[]).push(row);}
+(snap.tasks||[]).filter(function(x){return x.kind!=="secondmate";}).forEach(function(x){push("local",{home:"main",task:x.id,state:(x.current_state&&x.current_state.state)||"unknown",model:(x.usage&&x.usage.model)||"-",lane:laneOf(x.id),pr:(x.pr&&x.pr.url)||null,origin:"managed"});});
+rows.forEach(function(r){var s=(r.host&&r.host!=="")?r.host:"local";((r.active_children)||[]).forEach(function(c){push(s,{home:r.id,task:c.id||"-",state:c.state||"unknown",model:(c.usage&&c.usage.model)||"-",lane:"unknown",pr:null,origin:"managed"});});});
+var w=el("div");w.appendChild(el("h2",null,"Workers (in-flight first within each station)"));
+Object.keys(byStation).sort().forEach(function(s){var box=el("div","station");box.appendChild(el("h2",null,"Station: "+esc(s)));
+var wt=el("table");wt.innerHTML="<tr><th>Home</th><th>Task</th><th>State</th><th>Model</th><th>Lane</th><th>PR</th><th>Origin</th></tr>";
+byStation[s].sort(function(a,b){return stateRank(a.state)-stateRank(b.state);}).forEach(function(r){var q=el("tr");
+q.innerHTML="<td class='mono'>"+dash(r.home)+"</td><td class='mono'>"+dash(r.task)+"</td><td>"+dash(r.state)+"</td><td class='mono'>"+dash(r.model)+"</td><td>"+dash(r.lane)+"</td><td>"+(r.pr?("<a href='"+esc(r.pr)+"'>PR</a>"):"-")+"</td><td>"+dash(r.origin)+"</td>";wt.appendChild(q);});
+box.appendChild(wt);w.appendChild(box);});
+root.appendChild(w);
+var u=el("div");u.appendChild(el("h2",null,"Unmanaged Herdr sessions (seen on host, not tracked by firstmate)"));
+var ut=el("table");ut.innerHTML="<tr><th>Host</th><th>Session</th><th>Agent</th><th>Status</th><th class='mono'>Pane</th><th class='mono'>Cwd</th><th>Title</th></tr>";
+var any=false;
+((d.herdr&&d.herdr.hosts)||[]).forEach(function(h){((h.sessions)||[]).forEach(function(s){((s.agents)||[]).filter(function(a){return !a.managed;}).forEach(function(a){any=true;var q=el("tr");
+q.innerHTML="<td>"+dash(h.host)+"</td><td class='mono'>"+dash(s.name)+"</td><td class='mono'>"+dash(a.agent)+"</td><td>"+dash(a.status)+"</td><td class='mono'>"+dash(a.pane_id)+"</td><td class='mono'>"+esc(a.cwd||"").slice(0,80)+"</td><td>"+dash(a.title)+"</td>";ut.appendChild(q);});
+((s.plain_panes)||[]).forEach(function(p){any=true;var q2=el("tr");
+q2.innerHTML="<td>"+dash(h.host)+"</td><td class='mono'>"+dash(s.name)+"</td><td class='mono'>shell</td><td>unknown</td><td class='mono'>"+dash(p.pane_id)+"</td><td class='mono'>"+esc(p.cwd||"").slice(0,80)+"</td><td>"+dash(p.title)+"</td>";ut.appendChild(q2);});});});
+if(!any){var q3=el("tr");q3.innerHTML="<td colspan='7'>No unmanaged sessions reported."+(((d.herdr&&d.herdr.hosts)||[]).length?"":" Herdr collection unavailable.")+"</td>";ut.appendChild(q3);}
+u.appendChild(ut);
+var herr=((d.herdr&&d.herdr.hosts)||[]).filter(function(h){return !h.ok;});
+if(herr.length){var hn=el("div","note");hn.textContent="Unreachable stations: "+herr.map(function(h){return h.host+" ("+(h.error||"unknown")+")";}).join("; ");u.appendChild(hn);}
+root.appendChild(u);
+var f=document.getElementById("fleet");f.innerHTML="";f.appendChild(root);
+}
+render(data);
+fetch("fleet.json?ts="+Date.now(),{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(fresh){if(fresh&&fresh.generated&&fresh.generated!==data.generated){render(fresh);document.getElementById("fresh").textContent="live-refreshed";}}).catch(function(){});
+setInterval(function(){fetch("fleet.json?ts="+Date.now(),{cache:"no-store"}).then(function(r){return r.ok?r.json():null;}).then(function(fresh){if(fresh&&fresh.generated){render(fresh);}}).catch(function(){});},60000);
+})();
+</script>
+</body>
+</html>

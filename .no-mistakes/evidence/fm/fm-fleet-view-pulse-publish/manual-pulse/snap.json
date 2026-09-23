@@ -1,0 +1,5 @@
+{"schema":"fm-fleet-snapshot.v1","generated":"2026-09-23T09:00:00Z","fm_home":"/h","tasks":[
+{"id":"a1","kind":"ship","harness":"opencode","mode":"m","project":"/p","usage":{"model":"m1"},"current_state":{"state":"working","source":"run-step"},"pr":{"url":"https://example.com/pull/1","source":"meta"},"backlog":{"state":"in_flight"}}],
+"backlog":{"records":[]},"main_inventory":{"valid":true,"reason":""},
+"secondmate_current":{"records":[]},"remote_dev_sessions":[],
+"jev_shadow":{"samples":10,"recorded":8,"allFieldsAgree":0.9,"routeAgree":0.8}}

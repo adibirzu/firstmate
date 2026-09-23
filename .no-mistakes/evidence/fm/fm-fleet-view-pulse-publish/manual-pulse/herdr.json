@@ -1,0 +1,15 @@
+{"schema":"fm-fleet-herdr.v1","generated":1,"host":"local","hosts":[
+{"host":"local","ok":true,"source":"local","error":null,"sessions":[
+{"name":"default","running":true,"agents":[
+{"agent":"claude","status":"working","cwd":"/p","pane_id":"p1","tab_id":"t1","workspace_id":"w1","title":"Managed task","matched_task_id":"a1","matched_home":"/h","matched_harness":"opencode","managed":true}
+],"plain_panes":[]}]},
+{"host":"adi1","ok":true,"source":"remote","error":null,"sessions":[
+{"name":"fm-remote","running":true,"agents":[
+{"agent":"claude","status":"idle","cwd":"/side/project","pane_id":"p9","tab_id":"t9","workspace_id":"w9","title":"Untracked side quest on adi1","matched_task_id":null,"matched_home":null,"matched_harness":null,"managed":false}
+],"plain_panes":[]}]},
+{"host":"adi2-ts","ok":true,"source":"remote","error":null,"sessions":[
+{"name":"fm-remote","running":true,"agents":[
+{"agent":"opencode","status":"idle","cwd":"/other","pane_id":"p11","tab_id":"t11","workspace_id":"w11","title":"Unmanaged on adi2","matched_task_id":null,"matched_home":null,"matched_harness":null,"managed":false}
+],"plain_panes":[]}]},
+{"host":"commandopc","ok":false,"source":"remote","error":"ssh unreachable","sessions":[]}
+]}
