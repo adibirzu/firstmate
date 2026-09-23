@@ -180,7 +180,7 @@ fi
 LANES=$(for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] && [ ! -L "$meta" ] || continue
   id=$(basename "$meta" .meta)
-  case "$id" in ''|.*) continue ;; esac
+  case "$id" in (''|.*) continue ;; esac
   if grep -Eq '^(provider|account)=' "$meta" 2>/dev/null; then lane=routed; else lane=subscription; fi
   printf '%s\t%s\n' "$id" "$lane"
 done | jq -R -s '
