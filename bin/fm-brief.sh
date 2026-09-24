@@ -506,7 +506,7 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 
 $ISOLATION_SECTION
 
-1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+1. Prove your base is current before branching: run \`"$FM_ROOT/bin/fm-base-check.sh" .\` and follow what it prints; only create your branch after it reports current (exit 0): \`git checkout -b fm/$ID\`$SETUP2
 
 $GRAPH_FIRST_SECTION
 

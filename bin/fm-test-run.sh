@@ -279,6 +279,7 @@ family_for_basename() {
     fm-agy-harness.test.sh|fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
     fm-bearings-board.test.sh|\
     fm-brief.test.sh|fm-vendor-auth-probe.test.sh|\
+    fm-base-check.test.sh|fm-duplicate-check.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-context-hygiene.test.sh|fm-context-report.test.sh|\
@@ -413,6 +414,7 @@ family_for_basename() {
     fm-project-origin.test.sh|fm-public-followup.test.sh|fm-quota-choose.test.sh|\
     fm-remote-entrypoint.test.sh|fm-remote-secondmate-parent-binding.test.sh|\
     fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|\
+    fm-spawn-duplicate-gate.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
     fm-test-write-confinement.test.sh|\
     fm-voice-relay.test.sh|fm-wake-drain-open-decisions-cursor.test.sh|\
@@ -656,6 +658,7 @@ tests/fm-backend.test.sh 19719
 tests/fm-backlog-atomicity.test.sh 141151
 tests/fm-backlog-handoff.test.sh 49781
 tests/fm-bearings-board-lavish-live-e2e.test.sh 191
+tests/fm-base-check.test.sh 405
 tests/fm-bearings-board-render.test.sh 16752
 tests/fm-bearings-board.test.sh 57570
 tests/fm-bearings-snapshot.test.sh 192124
@@ -688,6 +691,7 @@ tests/fm-daemon.test.sh 26424
 tests/fm-decision-hold-lifecycle.test.sh 204088
 tests/fm-dispatch-select.test.sh 2223
 tests/fm-documentation-audiences.test.sh 1818
+tests/fm-duplicate-check.test.sh 620
 tests/fm-extension-binding.test.sh 20399
 tests/fm-fleet-snapshot-view.test.sh 9428
 tests/fm-fleet-sync.test.sh 56848
@@ -782,6 +786,7 @@ tests/fm-sessionstart-nudge.test.sh 84103
 tests/fm-shared-captain-inheritance.test.sh 6321
 tests/fm-spawn-capacity.test.sh 16841
 tests/fm-spawn-dispatch-profile.test.sh 72689
+tests/fm-spawn-duplicate-gate.test.sh 6300
 tests/fm-spawn-pool-base-freshen.test.sh 38488
 tests/fm-spawn-relaunch-endpoint.test.sh 61648
 tests/fm-spawn-worktree-settle.test.sh 27788
