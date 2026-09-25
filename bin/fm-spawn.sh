@@ -216,6 +216,16 @@
 #   fetching or resetting its base. An unreachable detected origin, unresolved
 #   default branch, or non-clean worktree refuses a fresh spawn rather than
 #   risking a PR based on stale history or discarding local work.
+#   A fresh ship is also gated against duplicate or superseded work
+#   (bin/fm-duplicate-check.sh): an fm/<task-id> branch that already exists on
+#   origin, or an open PR that already covers that branch or a distinctive
+#   description token, refuses the dispatch rather than starting a second worker
+#   on already-covered ground; the same tool refuses without an answer when the
+#   origin is GitHub but gh/gh-axi is unusable. --duplicate-ok is the explicit
+#   firstmate-vs-the-gate override for one concrete dispatch, never standing
+#   authority. Relaunch and reuse never run the gate (same work continuing), and
+#   secondmates are governed by their own homes; scouts are exempt because
+#   investigating the work already under way is a legitimate purpose.
 #   Every kind - crewmate, scout, and secondmate - is admitted by the
 #   machine-capacity guard first (bin/fm-capacity-lib.sh, backed by
 #   llm-router-axi's `capacity` verdict and policy): it reads live free memory,
@@ -507,6 +517,7 @@ TRACEPARENT_ARG=
 HANDOFF_BRIEF=
 REUSE_WORKTREE=0
 RELAUNCH_STRICT=0
+DUPLICATE_OK=0
 KIND_SET=0
 HARNESS_SET=0
 PROVIDER_SET=0
@@ -553,6 +564,7 @@ for a in "$@"; do
     # states the axes explicitly.
     --reuse-worktree) REUSE_WORKTREE=1 ;;
     --relaunch) REUSE_WORKTREE=1; RELAUNCH_STRICT=1 ;;
+    --duplicate-ok) DUPLICATE_OK=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --provider) want_value=provider ;;
@@ -1288,6 +1300,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
+  [ "$DUPLICATE_OK" -eq 0 ] || shared_args+=(--duplicate-ok)
   if [ "$REUSE_WORKTREE" = 1 ]; then
     echo "error: batch dispatch does not support --reuse-worktree; hand off one task at a time" >&2
     exit 1
@@ -3776,6 +3789,29 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 fi
 if [ "$REUSE_WORKTREE" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
+fi
+
+# Duplicate or superseded-work gate, once the leased worktree is on a current
+# base. A fresh ship is the exact surface the mandate covers - a second worker
+# about to create fm/$ID would collide with an open PR or branch that already
+# covers it - and the freshen above guarantees the branch would be cut from a
+# current base when this check is allowed to pass. The configured override
+# (--duplicate-ok) is an explicit firstmate-vs-the-gate call for the concrete
+# dispatch, never standing authority, and the gate refuses reuse/relaunch
+# worktrees (same work continuing) and secondmates (their own homes) by
+# construction.
+if [ "$REUSE_WORKTREE" -eq 0 ] && [ "$KIND" = ship ] && [ "$DUPLICATE_OK" -eq 0 ]; then
+  INTENDED_BRANCH=fm/$ID
+  DUP_RC=0
+  "$FM_ROOT/bin/fm-duplicate-check.sh" "$WT" "$INTENDED_BRANCH" "$ID" >&2 || DUP_RC=$?
+  if [ "$DUP_RC" -ne 0 ]; then
+    if [ "$DUP_RC" -eq 1 ]; then
+      echo "error: duplicate or superseded work detected for $INTENDED_BRANCH; refusing to dispatch a second worker on already-covered ground; review the evidence above or pass --duplicate-ok to dispatch anyway" >&2
+    else
+      echo "error: duplicate check could not answer whether $INTENDED_BRANCH is already covered; refusing to dispatch without that answer; fix the environment above or pass --duplicate-ok to dispatch anyway" >&2
+    fi
+    exit 1
+  fi
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the
