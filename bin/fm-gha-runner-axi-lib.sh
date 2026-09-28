@@ -15,7 +15,7 @@
 # This file is the single owner of FM_GHA_RUNNER_AXI_MIN, following the axi-family
 # floor policy owned beside the floor constants in bin/fm-bootstrap.sh.
 
-FM_GHA_RUNNER_AXI_MIN=0.1.0
+FM_GHA_RUNNER_AXI_MIN=0.1.1
 
 fm_gha_runner_axi_bin() {  # -> resolved executable, or empty
   local name=${FM_GHA_RUNNER_AXI:-gha-runner-axi} path
