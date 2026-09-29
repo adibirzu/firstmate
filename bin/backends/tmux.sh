@@ -25,6 +25,14 @@
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-agent-process-lib.sh"
 
+# Compatibility alias: bin/fm-agent-process-lib.sh owns the classifier. Callers
+# and tests that still use the tmux-prefixed name stay on that same owner so a
+# cline install path cannot classify as an agent on one backend and other on
+# another.
+fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
+  fm_agent_process_classify_name "$@"
+}
+
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the

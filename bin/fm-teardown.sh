@@ -316,6 +316,16 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+
+# The recorded backend, including every sibling its adapter sources, has to be
+# readable before the first destructive step. --force does not override this.
+teardown_require_backend_prerequisites() {  # <backend> <task-id>
+  local backend=$1 task_id=$2
+  if ! fm_backend_source "$backend"; then
+    echo "error: teardown refused: required $backend source is missing or unreadable for $task_id; nothing was changed" >&2
+    return 1
+  fi
+}
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh

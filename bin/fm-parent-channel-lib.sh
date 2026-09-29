@@ -163,7 +163,7 @@ fm_parent_channel_append_once() {  # <path> <line>
     rm -rf -- "$lock"
     return 1
   fi
-  if grep -Fqx -- "$line" "$path" 2>/dev/null; then
+  if status_event_recorded "$path" "$line"; then
     rm -rf -- "$lock"
     return 0
   fi
