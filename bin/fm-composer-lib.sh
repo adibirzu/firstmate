@@ -490,7 +490,7 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # make away-mode supervision refuse to deliver into it.
 # FM_COMPOSER_IDLE_RE overrides for an unverified harness; matching is
 # case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^What can I do for you\?$|^Ask anything\.\.\.|^Plan, search, build anything$|^Add a follow-up$|^Plan something\.\.\.$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^What can I do for you\?$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Plan something\.\.\.$|^Ask Devin to build features, fix bugs, or work on your code$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed

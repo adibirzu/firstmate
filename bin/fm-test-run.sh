@@ -1318,11 +1318,18 @@ PY
 all_repo_tests() {
   # Deterministic lexical order (same as bash glob expansion under LC_ALL=C).
   local f
-  # shellcheck disable=SC2035
-  for f in tests/*.test.sh; do
-    [ -f "$f" ] || continue
-    printf '%s\n' "$f"
-  done | LC_ALL=C sort
+  {
+    # shellcheck disable=SC2035
+    for f in tests/*.test.sh; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done
+    # shellcheck disable=SC2035
+    for f in tests/federation/test_*.sh; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done
+  } | LC_ALL=C sort
 }
 
 normalize_script_path() {

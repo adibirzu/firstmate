@@ -128,7 +128,15 @@ case "${1:-}" in
     for a in "$@"; do
       if [ "$prev" = "-l" ]; then
         payload=$a
-        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+        logged=$a
+        case "$logged" in
+          ". '"*"'")
+            staged=${logged#". '"}
+            staged=${staged%"'"}
+            [ ! -f "$staged" ] || logged=$(cat "$staged")
+            ;;
+        esac
+        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$logged" >> "$FM_FAKE_LAUNCH_LOG"
       fi
       prev=$a
     done

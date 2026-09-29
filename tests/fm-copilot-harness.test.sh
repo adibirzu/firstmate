@@ -9,7 +9,7 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 classify() { fm_composer_classify_content "$@"; }
 test_copilot_env_marker_detects_harness() {
   local out
-  out=$(COPILOT_CLI=1 "$HARNESS")
+  out=$(env -u CURSOR_AGENT -u CURSOR_INVOKED_AS COPILOT_CLI=1 "$HARNESS")
   [ "$out" = copilot ] || fail "expected copilot from COPILOT_CLI=1, got '$out'"
   pass "fm-harness: Copilot marker selects copilot"
 }

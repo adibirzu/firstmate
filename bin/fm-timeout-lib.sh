@@ -284,3 +284,87 @@ fm_run_timed_foreground() {  # <seconds> <command...>
     *) return 124 ;;
   esac
 }
+
+fm_timed_out() {  # <status>
+  case ${1:-} in
+    124 | 137) return 0 ;;
+  esac
+  return 1
+}
+
+fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
+  local seconds=${1:-} grace=${2:-} value owner
+  for value in "$seconds" "$grace"; do
+    case "$value" in
+      '' | 0* | *[!0-9]*)
+        echo "fm_exec_timed: usage: fm_exec_timed <positive-seconds> <positive-grace-seconds> <command> [args...]" >&2
+        exit 125
+        ;;
+    esac
+  done
+  shift 2
+  if [ "$#" -eq 0 ]; then
+    echo "fm_exec_timed: usage: fm_exec_timed <positive-seconds> <positive-grace-seconds> <command> [args...]" >&2
+    exit 125
+  fi
+  owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
+  [ "$owner" != "$BASHPID" ] || owner=$PPID
+  unset FM_EXEC_TIMED_OWNER_PID
+  if command -v perl >/dev/null 2>&1; then
+    exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
+      my ($bound, $grace, $owner) = (shift, shift, shift);
+      my $parent = getppid();
+      my ($pid, $pending, $kill_at, $timed_out) = (0, "", 0, 0);
+      for my $sig (qw(TERM INT HUP)) {
+        $SIG{$sig} = sub {
+          if ($pid) { kill $sig, -$pid } else { $pending = $sig }
+          $kill_at ||= time + $grace;
+        };
+      }
+      my $child = fork;
+      exit 127 unless defined $child;
+      if ($child == 0) {
+        $SIG{$_} = "DEFAULT" for qw(TERM INT HUP);
+        setpgid(0, 0);
+        exec @ARGV;
+        exit 127;
+      }
+      setpgid($child, $child);
+      $pid = $child;
+      kill $pending, -$pid if $pending;
+      my $deadline = time + $bound;
+      sub finish {
+        my $status = shift;
+        kill "KILL", -$pid if $kill_at;
+        exit 124 if $timed_out;
+        exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+      }
+      while (1) {
+        my $done = waitpid $pid, WNOHANG;
+        finish($?) if $done == $pid;
+        exit 127 if $done == -1;
+        if ($kill_at) {
+          if (time >= $kill_at) {
+            kill "KILL", -$pid;
+            waitpid $pid, 0;
+            finish($?);
+          }
+        } elsif (time >= $deadline) {
+          $timed_out = 1;
+          $kill_at = time + $grace;
+          kill "TERM", -$pid;
+        } elsif (getppid() != $parent || !kill(0, $owner)) {
+          $kill_at = time + $grace;
+          kill "TERM", -$pid;
+        }
+        select undef, undef, undef, 0.05;
+      }
+    ' -- "$seconds" "$grace" "$owner" "$@"
+  elif command -v timeout >/dev/null 2>&1; then
+    exec timeout -k "$grace" "$seconds" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    exec gtimeout -k "$grace" "$seconds" "$@"
+  fi
+  printf 'fm_exec_timed: cannot bound %s within %ss: none of perl, timeout, or gtimeout is available\n' "${1##*/}" "$seconds" >&2
+  exit 127
+}

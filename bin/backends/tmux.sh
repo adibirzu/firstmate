@@ -207,6 +207,34 @@ fm_backend_tmux_reset_shell() {  # <target> <reset-dir>
   return 1
 }
 
+# fm_backend_tmux_window_inventory: <session-target>'s window names, one per
+# line on stdout, together with a verdict on the READ ITSELF, which is what
+# every caller that must not guess depends on:
+#   0 - the inventory was read; its lines are that session's windows.
+#   2 - tmux answered definitively that the session, or its whole server, is
+#       absent, so no window of that session exists.
+#   1 - the read could not be made at all, and proves nothing either way. A
+#       transient tmux problem, or a tmux that is not even on PATH, must never
+#       be read as an absent endpoint: that mistake launches a duplicate agent
+#       for fm_backend_tmux_agent_state and reports a live window as closed for
+#       fm_backend_tmux_kill.
+# The target is passed through exactly as the caller means it, so a caller that
+# requires the exact recorded session asks for `=session` and still gets the
+# same classification.
+fm_backend_tmux_window_inventory() {  # <session-target>
+  local windows
+  if windows=$(LC_ALL=C tmux list-windows -t "$1" -F '#{window_name}' 2>&1); then
+    printf '%s\n' "$windows"
+    return 0
+  fi
+  case "$windows" in
+    *"can't find session:"*|*"no server running on "*|*"error connecting to "*" (No such file or directory)"|*"error connecting to "*" (Connection refused)")
+      return 2
+      ;;
+  esac
+  return 1
+}
+
 # fm_backend_tmux_kill: remove one explicitly named task window, best-effort.
 # Empty, omitted, and malformed targets return nonzero before invoking tmux so
 # tmux can never interpret an empty target as the caller's current window.
