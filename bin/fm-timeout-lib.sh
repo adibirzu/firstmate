@@ -13,18 +13,64 @@
 #   fm_run_timed <seconds> <command> [args...]
 #       Runs the command with a hard bound. Exit status is the command's own,
 #       except 124, which means the bound was hit (GNU timeout's convention,
-#       reproduced by the perl and bash fallbacks).
+#       reproduced by the perl and bash fallbacks), and a command killed by
+#       signal n, which reports 128+n on every mechanism - so a SIGKILLed child
+#       is 137 and a SIGTERMed one 143, never the 0 a caller would read as
+#       success. A signal-death status the wrapper records while the runner
+#       already reports the bound is the bound's own TERM, not the command's
+#       exit, and is reported as 124 too. Only 137 raised by GNU/BSD timeout's
+#       own KILL escalation, with no status recorded by the bounded command,
+#       also collapses into 124: there it means the bound fired, not that the
+#       command chose to die.
+#
+#   fm_exec_timed <seconds> <grace-seconds> <command> [args...]
+#       Replaces the calling shell with the bounded command, so it must be the
+#       last command of a subshell: the bound kills the command, not the
+#       caller. The command runs in its own process group; TERM goes to that
+#       group at the bound, and KILL once <grace-seconds> more have passed,
+#       for a command that ignores TERM or is mid-way through work it will not
+#       abandon. A TERM, INT, or HUP delivered to the bounding process is
+#       forwarded to the group and starts the same grace. The perl watchdog
+#       also starts that escalation when its own parent dies before it could
+#       be signalled (an owner torn down by an outer group-kill cannot leave
+#       the bounded subtree orphaned behind it). The owner is captured before
+#       the watchdog starts: FM_EXEC_TIMED_OWNER_PID when the caller names it,
+#       else the calling script ($$) when fm_exec_timed runs in a subshell,
+#       else the shell's parent. The escalation starts once that owner is gone
+#       or the watchdog's parent changes, so an owner that dies while the
+#       watchdog is still starting is detected too. The timeout/gtimeout
+#       fallback does not track the owner: it bounds the command only by its
+#       deadline and grace, so owner death alone does not stop the command.
+#       Exit status is the command's own, except 124 (the bound was hit) or
+#       137 (GNU timeout's status when its KILL had to fire); fm_timed_out
+#       accepts both. The seconds and grace values must be positive integers
+#       (125 otherwise). The perl watchdog is
+#       preferred: once termination has begun it also KILLs whatever the group
+#       left behind, so a descendant that outlives the command and holds its
+#       output cannot keep a capturing caller waiting, and GNU timeout, the
+#       fallback, cannot be followed by that reap from a replaced shell. A
+#       descendant that moves into a process group of its own is outside both
+#       signals and the reap (the Claude and Pi CLIs do this for every tool
+#       command they run), so it ends only through the command's own TERM
+#       handling; that is what the grace is for, and a command KILLed after
+#       the grace can leave such a descendant running. With
+#       no perl, timeout, or gtimeout on the host it refuses with 127 rather
+#       than run unbounded: there is no bash fallback, because a monitor-mode
+#       watchdog cannot replace the caller.
+#
+#   fm_timed_out <status>
+#       0 iff <status> is how fm_run_timed or fm_exec_timed reports the bound.
 #
 # A non-positive bound is not a bound: `timeout 0` and the perl fallback's
 # `alarm 0` both disable the deadline, so callers must reject 0 before calling.
 #
-# All four mechanisms terminate the whole process GROUP, not just the direct
-# child, so a hung grandchild (a vendor CLI spawned by a wrapper script, a git
-# fetch spawned by a sweep) cannot outlive the bound. GNU/BSD `timeout` does
-# this by default because it does not run the command in the foreground process
-# group; the perl fallback does it explicitly with setpgrp plus a negative pid,
-# and the bash fallback uses monitor mode to give the bounded child its own
-# process group before signaling its negative pid.
+# All four fm_run_timed mechanisms terminate the whole process GROUP, not just
+# the direct child, so a hung grandchild (a vendor CLI spawned by a wrapper
+# script, a git fetch spawned by a sweep) cannot outlive the bound. GNU/BSD
+# `timeout` does this by default because it does not run the command in the
+# foreground process group; the perl fallback does it explicitly with setpgrp
+# plus a negative pid, and the bash fallback uses monitor mode to give the
+# bounded child its own process group before signaling its negative pid.
 set -u
 
 fm_timeout_mechanism() {
@@ -182,7 +228,14 @@ fm_run_external_timeout() {
   rm -f "$status_file" 2>/dev/null || true
   case "$command_rc" in
     ''|*[!0-9]*) ;;
-    *) [ "$command_rc" -le 255 ] && return "$command_rc" ;;
+    *)
+      if [ "$command_rc" -le 255 ]; then
+        case "$runner_rc" in
+          124) [ "$command_rc" -lt 128 ] && return "$command_rc" ;;
+          *) return "$command_rc" ;;
+        esac
+      fi
+      ;;
   esac
   case "$runner_rc" in
     124|137)

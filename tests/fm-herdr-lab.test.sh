@@ -45,6 +45,16 @@ for arg in "$@"; do
 done
 [ "$session_after_separator" -eq 0 ] || { echo "fake herdr: --session landed after the -- separator" >&2; exit 94; }
 [ -n "$session" ] || { echo "fake herdr: missing --session before any -- separator" >&2; exit 90; }
+# Herdr reads --session only as an option, so it must end the arguments or
+# sit immediately before the first -- delimiter.
+last=
+for arg in "$@"; do
+  [ "$arg" != -- ] || break
+  previous=$last
+  last=$arg
+done
+[ "${previous:-}" = --session ] || { echo "fake herdr: missing --session before any -- delimiter" >&2; exit 90; }
+session=$last
 default_socket=$(cat "$state/default-socket")
 lab_state=absent
 [ ! -f "$state/$session" ] || lab_state=$(cat "$state/$session")
@@ -82,6 +92,12 @@ case "$1 ${2:-}" in
     [ "${FM_FAKE_HERDR_DELETE_FAIL:-}" != 1 ] || exit 93
     printf '%s\n' deleted > "$state/$session"
     ;;
+  "terminal title")
+    [ "${FM_FAKE_HERDR_TITLE_FAIL:-}" != 1 ] || exit 94
+    reason=no_foreground_client
+    [ ! -f "$state/$session.foreground" ] || reason=$(cat "$state/$session.foreground")
+    jq -nc --arg reason "$reason" '{result:{reason:$reason,type:"client_window_title"}}'
+    ;;
   *)
     printf '%s\n' '{"ok":true}'
     ;;
@@ -100,6 +116,7 @@ run_with_fake() {
     FM_FAKE_HERDR_SERVER_DELAY="${FM_FAKE_HERDR_SERVER_DELAY:-0}" \
     FM_FAKE_HERDR_FAST_POLL="${FM_FAKE_HERDR_FAST_POLL:-}" \
     FM_FAKE_HERDR_DELETE_FAIL="${FM_FAKE_HERDR_DELETE_FAIL:-}" \
+    FM_FAKE_HERDR_TITLE_FAIL="${FM_FAKE_HERDR_TITLE_FAIL:-}" \
     FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" \
     "$@"
 }
@@ -174,6 +191,39 @@ test_provision_run_and_guarded_teardown() {
   pass "fm-herdr-lab: provisioning, scoped calls, guarded teardown, and fleet tripwire are deterministic"
 }
 
+test_run_scopes_session_before_double_dash() {
+  local name="fm-lab-double-dash-$$" status=0 before after
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "double-dash fixture provision failed"
+
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe --kind pi --pane w1:p1 >/dev/null \
+    || fail "run without a -- delimiter failed"
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe --kind pi --pane w1:p1 \
+    -- --no-session -- --version >/dev/null || fail "run with a -- delimiter failed"
+  grep -Fx -- "agent start probe --kind pi --pane w1:p1 --session $name" "$FAKE_LOG" >/dev/null \
+    || fail "run without a -- delimiter did not append a trailing lab session"
+  grep -Fx -- "agent start probe --kind pi --pane w1:p1 --session $name -- --no-session -- --version" "$FAKE_LOG" >/dev/null \
+    || fail "run did not place the lab session before the first -- delimiter"
+
+  before=$(wc -l < "$FAKE_LOG")
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe --kind pi --pane w1:p1 \
+    -- --session default >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a caller --session after the -- delimiter must be refused"
+  status=0
+  run_with_fake fm_herdr_lab_cli "$name" agent start probe --kind pi --pane w1:p1 \
+    --session=default -- --version >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a caller --session before the -- delimiter must be refused"
+  status=0
+  run_with_fake fm_herdr_lab_cli "$name" -- agent start probe --kind pi --pane w1:p1 >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a leading -- delimiter must be refused"
+  after=$(wc -l < "$FAKE_LOG")
+  [ "$before" = "$after" ] || fail "a refused double-dash run reached Herdr"
+
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "double-dash fixture teardown failed"
+  pass "fm-herdr-lab: run keeps the lab session a Herdr option before any -- delimiter"
+}
+
 test_missing_tripwire_blocks_destruction() {
   local name="fm-lab-no-tripwire-$$" status=0 before after
   printf '%s\n' running > "$FAKE_STATE/$name"
@@ -231,6 +281,9 @@ test_timed_out_provision_cancels_late_launch() {
   cat > "$FAKEBIN/sleep" <<'SH'
 #!/usr/bin/env bash
 if [ "${FM_FAKE_HERDR_FAST_POLL:-}" = 1 ]; then
+  while [ -n "${FM_FAKE_HERDR_WAIT_MARKER:-}" ] && [ ! -f "$FM_FAKE_HERDR_WAIT_MARKER" ]; do
+    "$FM_FAKE_HERDR_REAL_SLEEP" 0.01
+  done
   exit 0
 fi
 exec "$FM_FAKE_HERDR_REAL_SLEEP" "$@"
@@ -284,8 +337,19 @@ test_session_flag_precedes_agent_argv() {
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_session_flag_precedes_agent_argv
+test_run_scopes_session_before_double_dash
 test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
+test_viewer_refuses_unowned_sessions
+test_viewer_start_cancels_an_unrecorded_launcher
+test_viewer_timeout_allows_launcher_escalation
+test_viewer_start_requires_its_owned_process
+test_viewer_stop_only_signals_owned_processes
+test_viewer_stop_requires_the_recorded_parent
+test_interrupted_viewer_start_cancels_launcher
+test_teardown_refuses_while_viewer_attached
+test_viewer_stop_retains_record_when_detach_is_unreadable
+test_viewer_launcher_refuses_unsafe_arguments

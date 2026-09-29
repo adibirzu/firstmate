@@ -140,6 +140,18 @@ fm_afk_contract_present() {  # [state-dir]
   [ -f "$(fm_afk_contract_path "${1:-$FM_AFK_CONTRACT_STATE}")" ]
 }
 
+# Compatibility aliases for upstream callers after the fork kept v1 clause contracts.
+fm_afk_contract_away_present() {  # [state-dir]
+  fm_afk_contract_present "$@"
+}
+fm_afk_contract_mode() {  # [state-dir]
+  if fm_afk_contract_present "$@"; then
+    printf 'away\n'
+  else
+    printf 'none\n'
+  fi
+}
+
 fm_afk_contract_log() { printf 'fm-afk-contract: %s\n' "$*" >&2; }
 
 fm_afk_contract_usage() {

@@ -11,6 +11,8 @@
 #   - a real Pi draft is never touched by away mode (nothing injects on Pi);
 #   - an unmarked return request is recognized as the return, opens the
 #     catch-up gate before Bearings on the live blocker, and renders the brief;
+#     catch-up gate on the live blocker, renders the brief, and still lets
+#     Bearings report that catch-up posture as content;
 #   - remediation/resolution clears the gate, and re-entry is idempotent.
 # The 2026-07-14 two-owner incident's daemon-injection assertions retired with
 # the daemon on Pi; the daemon transport keeps its coverage in
@@ -264,7 +266,9 @@ printf 'resolved [key=synthetic-dependency]: refreshed the synthetic token and r
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   "$ROOT/bin/fm-afk-return.sh" check >/dev/null || fail "remediated blocker did not clear return catch-up"
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
-  "$ROOT/bin/fm-bearings-snapshot.sh" --json >/dev/null || fail "Bearings remained gated after blocker remediation"
+  "$ROOT/bin/fm-bearings-snapshot.sh" --json \
+  | jq -e '[.gates[].id] | index("(return-catchup)") | not' >/dev/null \
+  || fail "Bearings kept the catch-up posture row after the gate cleared"
 
 # A clean re-entry records a fresh posture, and an immediate return is
 # idempotently clear because the keyed blocker is resolved.
@@ -272,6 +276,7 @@ PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_S
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" propose >/dev/null || fail "clean away re-entry read-back failed"
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" confirm >/dev/null || fail "clean away re-entry failed"
+  PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" enter >/dev/null || fail "clean away re-entry failed"
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-return.sh" begin >/dev/null \
   || fail "clean away re-entry/return was not idempotent"

@@ -35,12 +35,19 @@ NAMED_CLAUDE="$FAKEBIN/claude"
 # --- unit layer: identity behind a deterministic process table ---------------
 
 # Run one library expression with <fakebin> shadowing ps. kill is stubbed so
-# liveness questions are decided by the process table alone.
+# liveness questions are decided by the process table alone (FM_TEST_KILL_RC=1
+# makes every pid dead). The suite itself may run inside a Claude session whose
+# CLAUDE_CODE_SESSION_ID and CLAUDE_PID would leak into the expression, so both
+# are scrubbed and only FM_TEST_SESSION_ID and FM_TEST_CLAUDE_PID reach it.
 lib_eval() {  # <fakebin> <expression>
   local fakebin=$1 expr=$2
-  PATH="$fakebin:$PATH" bash -c "
+  local -a session_env=()
+  [ -z "${FM_TEST_SESSION_ID:-}" ] || session_env+=("CLAUDE_CODE_SESSION_ID=$FM_TEST_SESSION_ID")
+  [ -z "${FM_TEST_CLAUDE_PID:-}" ] || session_env+=("CLAUDE_PID=$FM_TEST_CLAUDE_PID")
+  env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID ${session_env[@]+"${session_env[@]}"} \
+    PATH="$fakebin:$PATH" bash -c "
     . \"\$0\"
-    kill() { return 0; }
+    kill() { return \${FM_TEST_KILL_RC:-0}; }
     $expr
   " "$LIB"
 }
@@ -85,6 +92,52 @@ SH
       || fail "$shape: the session holding the lock did not recognize itself as the owner"
   done
   pass "session-lock: a version-named Claude Code session is identified from its install path and argv[0]"
+}
+
+# A harness that is pid 1 of its own PID namespace - a container, or the
+# `codex sandbox` this shape was verified in - used to be invisible: the walk
+# stopped as soon as the NEXT pid was 1, so the one process that identifies the
+# session was never examined and the session could not recognize its own lock.
+test_harness_at_namespace_pid1_is_examined() {
+  local dir fakebin got
+  dir="$TMP_ROOT/namespace-pid1"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field" in
+  1:comm=) printf '%s\n' "${FM_TEST_PID1_COMM:-claude}" ;;
+  1:args=) printf '%s\n' "${FM_TEST_PID1_COMM:-claude}" ;;
+  1:ppid=) printf '%s\n' 0 ;;
+  *:comm=) printf '%s\n' bash ;;
+  *:args=) printf '%s\n' 'bash /repo/bin/fm-watch.sh' ;;
+  *:ppid=) printf '%s\n' 1 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '1\n' > "$dir/state/.lock"
+
+  # Non-vacuity: with a host-shaped pid 1 the same table must find nothing, so
+  # this case cannot pass by the walk matching everything it reaches.
+  if FM_TEST_PID1_COMM=systemd lib_eval "$fakebin" 'fm_harness_ancestry_pid' >/dev/null 2>&1; then
+    fail "a host-shaped pid 1 was read as a harness process"
+  fi
+
+  got=$(lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "the harness at namespace pid 1 was not found in the ancestry at all"
+  [ "$got" = 1 ] || fail "ancestry resolved '$got', expected the namespace harness pid 1"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    || fail "the session holding the lock at namespace pid 1 did not recognize itself as the owner"
+  pass "session-lock: a harness that is pid 1 of its own namespace is examined, not skipped"
 }
 
 test_ordinary_paths_are_never_harness_processes() {
@@ -220,6 +273,160 @@ SH
   pass "session-lock: a live version-named session holding the lock is not mistaken for a stale owner"
 }
 
+# A background Claude session's process table. The hook fires inside
+# `claude bg-spare` (710), whose parent is `claude bg-pty-host` (720). With the
+# transient daemon gone the pty-host is reparented to launchd, so the contiguous
+# claude-named run from the hook ends at 720 and the live front-end 700 that
+# holds the lock is no longer an ancestor at all. FM_TEST_DAEMON_PRESENT=1 puts
+# the daemon (730) back between 720 and 700: the healthy topology.
+write_background_session_ps() {  # <fakebin>
+  cat > "$1/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field:${FM_TEST_DAEMON_PRESENT:-0}" in
+  700:comm=:*) printf '%s\n' claude ;;
+  700:args=:*) printf '%s\n' 'claude --resume' ;;
+  700:ppid=:*) printf '%s\n' 1 ;;
+  730:comm=:*) printf '%s\n' claude ;;
+  730:args=:*) printf '%s\n' 'claude daemon run --origin transient' ;;
+  730:ppid=:*) printf '%s\n' 700 ;;
+  720:comm=:*) printf '%s\n' 'claude bg-pty-host' ;;
+  720:args=:*) printf '%s\n' 'claude bg-pty-host /tmp/pty.sock 120 40 -- claude --bg-spare' ;;
+  720:ppid=:1) printf '%s\n' 730 ;;
+  720:ppid=:*) printf '%s\n' 1 ;;
+  710:comm=:*) printf '%s\n' 'claude bg-spare' ;;
+  710:args=:*) printf '%s\n' 'claude bg-spare /tmp/claim.sock' ;;
+  710:ppid=:*) printf '%s\n' 720 ;;
+  *:comm=:*) printf '%s\n' bash ;;
+  *:args=:*) printf '%s\n' 'bash /repo/bin/fm-claude-stop-autoarm.sh' ;;
+  *:ppid=:*) printf '%s\n' 710 ;;
+esac
+SH
+  chmod +x "$1/ps"
+}
+
+owned() {  # <fakebin> <state>
+  lib_eval "$1" "fm_session_lock_owned_by_self '$2'"
+}
+
+foreign_owner() {  # <fakebin> <state>  -> prints the foreign pid
+  lib_eval "$1" "fm_session_lock_foreign_owner_live '$2' && printf '%s' \"\$FM_SESSION_LOCK_FOREIGN_OWNER_PID\""
+}
+
+test_same_session_id_owns_a_recycled_background_chain() {
+  local dir fakebin state got
+  dir="$TMP_ROOT/background-session"
+  fakebin=$(fm_fakebin "$dir")
+  state="$dir/state"
+  mkdir -p "$state"
+  write_background_session_ps "$fakebin"
+  printf '700\n' > "$state/.lock"
+  printf 'S1\n' > "$state/.lock-session"
+
+  # The divergence itself, so none of the verdicts below can be vacuous: with
+  # the daemon gone the front-end is not an ancestor, with it back it is.
+  if lib_eval "$fakebin" 'fm_harness_ancestry_pids' | grep -qx 700; then
+    fail "the recycled chain still reached the front-end, so the id cases would prove nothing"
+  fi
+  FM_TEST_DAEMON_PRESENT=1 lib_eval "$fakebin" 'fm_harness_ancestry_pids' | grep -qx 700 \
+    || fail "the healthy chain did not reach the front-end"
+
+  # 1. The session's own id from its model-loop process: owned, not foreign.
+  FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state" \
+    || fail "the same session's trusted id did not own the lock after the helper chain was recycled"
+  if FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 foreign_owner "$fakebin" "$state" >/dev/null; then
+    fail "the session's own live front-end was reported as a foreign owner despite the matching id"
+  fi
+  # 2. A different id: the existing refusal, naming the live owner.
+  if FM_TEST_SESSION_ID=S2 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state"; then
+    fail "a different session id claimed a live owner's lock"
+  fi
+  got=$(FM_TEST_SESSION_ID=S2 FM_TEST_CLAUDE_PID=710 foreign_owner "$fakebin" "$state") \
+    || fail "a different session id did not see the live owner as foreign"
+  [ "$got" = 700 ] || fail "the foreign owner pid was '$got', expected 700"
+  # 3. The trust gate: the right id carried by a CLAUDE_PID outside the run.
+  if FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=700 owned "$fakebin" "$state"; then
+    fail "an id whose CLAUDE_PID is outside the current Claude run was trusted"
+  fi
+  FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=700 foreign_owner "$fakebin" "$state" >/dev/null \
+    || fail "an untrusted id suppressed the foreign-owner verdict"
+  printf 'S1:x\n' > "$state/.lock-session"
+  FM_TEST_SESSION_ID='S1:x' FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state" \
+    || fail "a trusted id containing a colon did not own the lock"
+  if FM_TEST_SESSION_ID='S1:x' FM_TEST_CLAUDE_PID=710 foreign_owner "$fakebin" "$state" >/dev/null; then
+    fail "a matching id containing a colon was reported as a foreign owner"
+  fi
+  printf 'S1\r' > "$state/.lock-session"
+  if FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state"; then
+    fail "a recorded id containing a carriage return was treated as a session id"
+  fi
+  FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 foreign_owner "$fakebin" "$state" >/dev/null \
+    || fail "a carriage-return sidecar suppressed the foreign-owner verdict"
+  printf 'S1\n' > "$state/.lock-session"
+  # 4. No id at all: the legacy ancestry verdict, unchanged.
+  if owned "$fakebin" "$state"; then
+    fail "with no session id the recycled chain claimed the lock"
+  fi
+  foreign_owner "$fakebin" "$state" >/dev/null \
+    || fail "with no session id the live owner was not reported as foreign"
+  # 5. The healthy chain owns by ancestry whatever the environment says.
+  FM_TEST_DAEMON_PRESENT=1 FM_TEST_SESSION_ID=S2 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state" \
+    || fail "ancestry membership lost to a different session id"
+  FM_TEST_DAEMON_PRESENT=1 owned "$fakebin" "$state" \
+    || fail "ancestry membership lost with no session id"
+  if FM_TEST_DAEMON_PRESENT=1 FM_TEST_SESSION_ID=S2 FM_TEST_CLAUDE_PID=710 foreign_owner "$fakebin" "$state" >/dev/null; then
+    fail "an ancestor was reported as a foreign owner"
+  fi
+  # 6. Never fail open: no sidecar, a symlinked sidecar, and a dead recorded pid
+  # are all ancestry-only, so the dead one is left for the ordinary reclaim.
+  rm -f "$state/.lock-session"
+  if FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state"; then
+    fail "a lock with no recorded session id was owned through the environment id"
+  fi
+  printf 'S1\n' > "$dir/elsewhere"
+  ln -s "$dir/elsewhere" "$state/.lock-session"
+  if FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state"; then
+    fail "a symlinked sidecar was trusted"
+  fi
+  rm -f "$state/.lock-session"
+  printf 'S1\n' > "$state/.lock-session"
+  if FM_TEST_KILL_RC=1 FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 owned "$fakebin" "$state"; then
+    fail "a same-session lock whose recorded pid is dead was owned instead of left for reclaim"
+  fi
+  pass "session-lock: a trusted same-session id keeps owning a recycled background chain, and nothing weaker does"
+}
+
+test_anchor_pid_is_the_model_loop_process_only_for_a_trusted_id() {
+  local dir fakebin got
+  dir="$TMP_ROOT/background-anchor"
+  fakebin=$(fm_fakebin "$dir")
+  write_background_session_ps "$fakebin"
+
+  got=$(FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 lib_eval "$fakebin" 'fm_session_lock_anchor_pid') \
+    || fail "no anchor pid was resolved for a trusted id"
+  [ "$got" = 710 ] || fail "a trusted id anchored '$got', expected the model-loop process 710"
+  got=$(lib_eval "$fakebin" 'fm_session_lock_anchor_pid') || fail "no anchor pid was resolved without an id"
+  [ "$got" = 720 ] || fail "without an id the anchor was '$got', expected the outermost pid 720"
+  got=$(FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=700 lib_eval "$fakebin" 'fm_session_lock_anchor_pid') \
+    || fail "no anchor pid was resolved for an untrusted id"
+  [ "$got" = 720 ] || fail "an untrusted id anchored '$got', expected the outermost pid 720"
+  got=$(FM_TEST_DAEMON_PRESENT=1 lib_eval "$fakebin" 'fm_session_lock_anchor_pid') \
+    || fail "no anchor pid was resolved for the healthy chain"
+  [ "$got" = 700 ] || fail "the healthy chain without an id anchored '$got', expected the outermost pid 700"
+  got=$(FM_TEST_DAEMON_PRESENT=1 FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=710 lib_eval "$fakebin" 'fm_session_lock_anchor_pid') \
+    || fail "no anchor pid was resolved for the healthy chain with a trusted id"
+  [ "$got" = 710 ] || fail "the healthy chain with a trusted id anchored '$got', expected 710 rather than the front-end"
+  pass "session-lock: a trusted id anchors the lock on the model-loop process, anything else on the outermost pid"
+}
+
 # --- end-to-end layer: the real Stop auto-arm in real process trees ----------
 
 install_autoarm_scripts() {
@@ -229,11 +436,17 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-path-lib.sh" "$dir/bin/fm-path-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$dir/bin/fm-supervision-engine-lib.sh"
   chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
+  # The fixture arm written here stands in for the watcher arm, so the home opts out
+  # of the supervision host a Claude home otherwise runs by default.
+  mkdir -p "$dir/config"
+  printf 'off\n' > "$dir/config/supervision-host"
   cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
@@ -296,10 +509,12 @@ SH
 run_fixture_tree() {  # <dir> <session-bin> [<daemon-bin>]
   local dir=$1 session_bin=$2 daemon_bin=${3:-} i
   if [ -n "$daemon_bin" ]; then
-    FM_HOME="$dir" FM_SESSION_BIN="$session_bin" FM_FIXTURE_ORPHAN_HERE=0 \
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+      FM_HOME="$dir" FM_SESSION_BIN="$session_bin" FM_FIXTURE_ORPHAN_HERE=0 \
       bash -c '"$0" "$1" &' "$daemon_bin" "$dir/daemon.sh"
   else
-    FM_HOME="$dir" FM_FIXTURE_ORPHAN_HERE=1 \
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+      FM_HOME="$dir" FM_FIXTURE_ORPHAN_HERE=1 \
       bash -c '"$0" "$1" &' "$session_bin" "$dir/session.sh"
   fi
   i=0
@@ -526,9 +741,12 @@ test_e2e_fallback_owner_still_excludes_a_second_live_session() {
 }
 
 test_version_named_session_is_identified_on_both_platforms
+test_harness_at_namespace_pid1_is_examined
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
 test_competing_version_named_session_is_seen_as_live
+test_same_session_id_owns_a_recycled_background_chain
+test_anchor_pid_is_the_model_loop_process_only_for_a_trusted_id
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
@@ -536,3 +754,9 @@ test_e2e_claude_pid_set_resolves_identity
 test_e2e_claude_pid_absent_resolves_via_ancestry_fallback
 test_e2e_claude_markers_without_a_live_ancestor_refuse
 test_e2e_fallback_owner_still_excludes_a_second_live_session
+test_e2e_background_session_keeps_its_lock_across_a_recycled_chain
+test_same_session_confirmation_refreshes_rekeyed_id_under_claim_lock
+test_same_session_confirmation_does_not_steal_after_wait
+test_failed_lock_write_restores_previous_sidecar
+test_failed_lock_write_removes_new_sidecar_when_none_existed
+test_verified_reclaim_keeps_new_sidecar
