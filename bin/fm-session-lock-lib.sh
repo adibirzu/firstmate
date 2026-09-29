@@ -175,12 +175,6 @@ fm_harness_ancestry_pids() {
 # trusted Claude session's model-loop pid instead. Every non-Claude harness
 # reports a single pid, so this remains its innermost match unchanged.
 fm_harness_ancestry_pid() {
-  local pid outermost=''
-  fm_harness_ancestry_cache || return 1
-  while IFS= read -r pid; do
-    [ -n "$pid" ] && outermost=$pid
-  done <<EOF
-$FM_HARNESS_ANCESTRY_PIDS
   local pids
   pids=$(fm_harness_ancestry_pids) || return 1
   _fm_harness_outermost_pid "$pids"
@@ -309,16 +303,16 @@ fm_session_lock_anchor_pid() {
 # held by a harness outside this ancestry under another (or no) session id, or
 # an ancestry that cannot be resolved all fail closed.
 fm_session_lock_owned_by_self() {
-  local state=$1 lock_pid pid
+  local state=$1 lock_pid pids pid
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  fm_harness_ancestry_cache || return 1
+  pids=$(fm_harness_ancestry_pids) || return 1
   while IFS= read -r pid; do
     [ "$pid" = "$lock_pid" ] && return 0
   done <<EOF
-$FM_HARNESS_ANCESTRY_PIDS
+$pids
 EOF
   fm_session_lock_same_session "$state" "$pids" || return 1
   fm_harness_pid_alive "$lock_pid"

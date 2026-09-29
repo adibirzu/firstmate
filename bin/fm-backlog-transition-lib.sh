@@ -343,18 +343,39 @@ fm_tasks_axi() {
 # Print one row's `tasks-axi show` output (plus stderr); the exit status is
 # tasks-axi's. Extra flags (such as --full) are passed through.
 fm_backlog_row_show() {  # <resolved-data-dir> <id> [flag...]
-  local data=$1 id=$2 addressing_status
+  local data=$1 id=$2 out status addressing_status secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
   shift 2
+  # A non-positive bound is not a bound (fm-timeout-lib.sh), and a padded zero
+  # such as 00 is still zero, so the digits test alone would let the very read
+  # this bound exists to prevent back in. Compare arithmetically, tolerating a
+  # value too large for the shell to compare at all.
+  case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
+  [ "$secs" -gt 0 ] 2>/dev/null || secs=10
   fm_backlog_tasks_axi_addressing "$data"
   addressing_status=$?
   if [ "$addressing_status" -ne 0 ]; then
     [ -z "${FM_BACKLOG_TRANSITION_ERROR:-}" ] || printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
     return "$addressing_status"
   fi
+  if [ "$FM_BACKLOG_ROW_SHOW_WEDGED" = 1 ]; then
+    printf 'tasks-axi show %s skipped: the backlog backend already exceeded its %ss read bound\n' "$id" "$secs"
+    return 124
+  fi
   if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
-    (cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null && fm_tasks_axi show "$id" "$@" --file "$FM_BACKLOG_AXI_FILE" 2>&1)
+    set -- "$@" --file "$FM_BACKLOG_AXI_FILE"
+  fi
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the child shell.
+  out=$(fm_run_timed "$secs" bash -c 'cd "$1" 2>/dev/null || exit 1; shift; exec tasks-axi show "$@"' \
+    _ "$FM_BACKLOG_AXI_ROOT" "$id" "$@" 2>&1)
+  status=$?
+  # A backend that wrote a header or a progress line before wedging leaves that
+  # fragment as the first output line, and every caller reads the first line as
+  # the failure reason. Whatever a timed-out read managed to emit is incomplete
+  # by definition, so the bound speaks for it instead.
+  if [ "$status" -eq 124 ]; then
+    printf 'tasks-axi show %s exceeded its %ss backlog read bound\n' "$id" "$secs"
   else
-    (cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null && fm_tasks_axi show "$id" "$@" 2>&1)
+    printf '%s\n' "$out"
   fi
   return "$status"
 }
