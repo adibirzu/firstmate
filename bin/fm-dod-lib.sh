@@ -393,7 +393,12 @@ This task ships **direct-PR**: you raise the PR yourself, without the no-mistake
 The task is complete only when committed on your branch.
 When it is implemented and committed, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict before opening the PR; see \`docs/code-review.md\`.
 If it escalates to Stage 2 in delegate mode (exit 2), fix what the printed rules call for in the flagged files, then re-run \`bin/fm-review.sh worktree\` so the verdict you paste reflects the post-fix state.
-Push your branch, open a PR with \`gh-axi pr create --repo <owner>/<name>\` (the repository named by \`git remote get-url origin\`, never the CLI default), and paste that final Stage 1 verdict into the PR body under a \`## Code Review (Stage 1)\` heading, then append \`done: PR {url}\` to the status file and stop.
+Push your branch, open a PR with \`gh-axi pr create --repo <owner>/<name>\` (the repository named by \`git remote get-url origin\`, never the CLI default) that is ready for review, not a draft, and paste that final Stage 1 verdict into the PR body under a \`## Code Review (Stage 1)\` heading.
+Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
+A draft cannot be merged, so a done report on one leaves the merge unasked.
+Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
+That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
+If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;
@@ -418,7 +423,7 @@ Ship branch: $branch
 The task is complete only when committed on your branch.
 Before invoking /no-mistakes, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict (\`docs/code-review.md\`) and fix anything it flags, so the pipeline's own reviewer sees a cleaner diff.
 This does not replace or modify the no-mistakes pipeline itself.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
+When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
 

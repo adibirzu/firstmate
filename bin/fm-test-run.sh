@@ -104,6 +104,24 @@
 #   against. Inspection modes execute nothing and stay available, and a run with
 #   no FM_TASK_ID set is unchanged.
 #
+# Lane router-tool preflight:
+#   An executing --lane, --family, or --all run needs llm-router-axi and
+#   usage-axi, the two tools that own machine-capacity spawn admission. The
+#   runner names both versions when they already resolve, and otherwise builds
+#   the pinned commits through bin/fm-install-router-axi-tools.sh (default
+#   prefix ~/.local). FM_TEST_ROUTER_AXI_PREFIX moves that install and
+#   FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 opts out; targeted --scripts and --changed
+#   runs are unchanged.
+#
+# One-suite-at-a-time admission:
+#   Before it starts a full suite (--lane, --family, or --all), the runner asks
+#   `llm-router-axi capacity --for suite` and refuses to start while another
+#   suite holds the one-suite-at-a-time slot. Spawn admission asks the bare
+#   `capacity` verdict, which keeps the slot as context and never refuses a
+#   spawn on it; the purpose-scoped check lives only here, before any suite
+#   work, so two heavy suites never pile onto one machine. A router that cannot
+#   be resolved refuses the start rather than running the suite unguarded.
+#
 # Exit status is non-zero if any selected script exits non-zero, a configured
 # --fail-on-gate-skip token appears, the measured duration exceeds
 # --max-wall-ms, timing-artifact finalization fails, or a concurrent worker
@@ -2402,6 +2420,79 @@ if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$ROOT/bin/fm-timeout-lib.sh"
 fi
+
+# The two router tools own machine-capacity admission, so every behavior lane
+# that can spawn an agent needs them on PATH. CI installs them as an explicit
+# step; a local lane run gets the same tools here. When both already resolve the
+# runner only names the versions, so a host with the tools installed spends
+# nothing; otherwise it builds the pinned commits through the shared installer.
+# The default prefix is ~/.local, the same location the documented install uses
+# and the one a real spawn's sanitized remote-job PATH composes from
+# (bin/fm-remote-job-lib.sh), so a local run of the remote secondmate suites
+# also resolves the tool. Set FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 to opt out, and
+# FM_TEST_ROUTER_AXI_PREFIX to place the local install elsewhere.
+ensure_router_axi_tools() {
+  local llm usage prefix
+  llm=$(fm_router_axi_bin)
+  usage=$(fm_usage_axi_bin)
+  if [ -n "$llm" ] && [ -n "$usage" ]; then
+    printf 'fm-test-run: llm-router-axi %s\n' "$("$llm" --version 2>/dev/null || printf 'unknown')"
+    printf 'fm-test-run: usage-axi %s\n' "$("$usage" --version 2>/dev/null || printf 'unknown')"
+    return 0
+  fi
+  prefix=${FM_TEST_ROUTER_AXI_PREFIX:-${HOME:-/tmp}/.local}
+  log "llm-router-axi/usage-axi missing from PATH; installing pinned builds into $prefix"
+  "$ROOT/bin/fm-install-router-axi-tools.sh" "$prefix" \
+    || die "could not install the router tools required for machine-capacity admission"
+  PATH="$prefix/bin:$PATH"
+  export PATH
+}
+
+# The one-suite-at-a-time rule serializes suite STARTS, never agent spawns.
+# Spawn admission (bin/fm-capacity-lib.sh) asks the bare `capacity` verdict and
+# keeps the slot as context; this purpose-scoped check is the suite-start half,
+# and it runs before any suite work so a second full suite cannot pile onto the
+# machine. LLM_ROUTER_SUITE_SLOT / the router policy own the verdict; this is
+# only its call site in the runner.
+refuse_when_suite_slot_taken() {
+  local router out
+  # The same deliberate-bypass escape hatch spawn admission honors, so a caller
+  # that chooses to bypass capacity is not silently blocked at suite start.
+  [ -z "${FM_CAPACITY_NO_GUARD:-}" ] || return 0
+  [ -r "$ROOT/bin/fm-router-lib.sh" ] || die "router tool resolver not found: bin/fm-router-lib.sh"
+  # shellcheck source=bin/fm-router-lib.sh
+  . "$ROOT/bin/fm-router-lib.sh"
+  router=$(fm_router_axi_bin)
+  if [ -z "$router" ]; then
+    die "llm-router-axi is not installed, so the one-suite-at-a-time slot cannot be checked before starting this suite; install it with $(fm_router_axi_install_hint) or unset FM_TEST_SKIP_ROUTER_AXI_ENSURE"
+  fi
+  if out=$("$router" capacity --for suite 2>&1); then
+    return 0
+  fi
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out" | sed 's/^/fm-test-run:   /' >&2
+  fi
+  die "refusing to start this suite: llm-router-axi capacity --for suite reported no headroom (the one-suite-at-a-time slot is occupied or another capacity threshold is over; wait for headroom to return or raise the router policy)"
+}
+
+if [ "${FM_TEST_SKIP_ROUTER_AXI_ENSURE:-}" != 1 ]; then
+  case "${MODE:-}" in
+    lane|family|all)
+      # shellcheck source=bin/fm-router-lib.sh
+      . "$ROOT/bin/fm-router-lib.sh"
+      ensure_router_axi_tools
+      ;;
+  esac
+fi
+
+# A full suite takes the one-suite-at-a-time slot; a targeted script or
+# --changed run is unchanged and checked only by the ordinary spawn admission
+# its scripts may perform.
+case "${MODE:-}" in
+  lane|family|all)
+    refuse_when_suite_slot_taken
+    ;;
+esac
 
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")
 RECORDS="$RUN_TMP/records.tsv"

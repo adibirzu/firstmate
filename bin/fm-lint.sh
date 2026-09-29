@@ -907,7 +907,6 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   overall_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
   fm_lint_run_default_gates || overall_rc=$?
-  fm_lint_run_workflows || overall_rc=$?
   exit "$overall_rc"
 fi
 
@@ -1242,9 +1241,9 @@ if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
 fi
 
 if [ "$overall_rc" -eq 0 ]; then
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_default_gates || overall_rc=$?
 else
-  fm_lint_run_workflows || true
+  fm_lint_run_default_gates || true
 fi
 
 if [ -n "$TELEMETRY" ]; then
@@ -1365,16 +1364,8 @@ EOF
   fi
 fi
 
-purity_rc=0
-fm_lint_run_backend_purity || purity_rc=$?
-if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
-  overall_rc=$purity_rc
-fi
-
-if [ "$overall_rc" -eq 0 ]; then
-  fm_lint_run_default_gates || overall_rc=$?
-else
-  fm_lint_run_default_gates || true
+if [ -n "$ROOTS_LOG" ]; then
+  printf 'meta\t%s\t%s\n' 'result_exit' "$overall_rc" >> "$ROOTS_LOG"
 fi
 
 exit "$overall_rc"

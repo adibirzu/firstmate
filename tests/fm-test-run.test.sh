@@ -268,6 +268,7 @@ init_suite_admission_fixture() {  # <repo> <ran-marker>
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
   cp "$ROOT/bin/fm-router-lib.sh" "$repo/bin/fm-router-lib.sh"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/git-config-helpers.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
   cat > "$repo/tests/fm-brief.test.sh" <<PROBE
 #!/usr/bin/env bash

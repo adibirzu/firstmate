@@ -669,7 +669,7 @@ fm_git_init_commit() {
   git -C "$dir" init -q -b main
   printf '# %s\n' "$(basename "$dir")" > "$dir/README.md"
   git -C "$dir" add README.md
-  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >/dev/null
 }
 
 # fm_git_add_origin <repo> <bare>: clone <repo> bare into <bare> and register it
