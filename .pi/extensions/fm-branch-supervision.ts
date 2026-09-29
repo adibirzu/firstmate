@@ -1545,20 +1545,21 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        wakeTaskScope = {
-          rows: [...scope.eligibleSeqs],
-          tasks: new Set(scope.eligibleTasks),
-          taskRows: scope.eligibleTaskSeqs,
-          heartbeat,
-        };
         wakeReportIdentity = heartbeat
           ? `heartbeat:${scope.eligibleSeqs.join(",")}`
           : `rows:${scope.eligibleSeqs.join(",")}`;
-        // A claimed check row names no task, so a prompt carrying one is not
+        // Heartbeat wakes keep the full scope (taskRows + heartbeat) so a
+        // report still has to name a row from this wake. A claimed check row
+        // names no task, so a non-heartbeat prompt carrying one is not
         // scoped by task (only possible in the away posture).
-        wakeTaskScope = heartbeat || scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0
+        wakeTaskScope = !heartbeat && (scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0)
           ? null
-          : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
+          : {
+              rows: [...scope.eligibleSeqs],
+              tasks: new Set(scope.eligibleTasks),
+              taskRows: scope.eligibleTaskSeqs,
+              heartbeat,
+            };
         // Same residual: archive during snapshot publish or read-back still
         // lets this prompt proceed; the guarded scripts revalidate, and the
         // durable queue keeps every row (bin/fm-lease-lib.sh role-partition).
