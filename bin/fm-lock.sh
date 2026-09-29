@@ -40,10 +40,22 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
-fm_session_lock_prepare_acquisition_identity || {
+# A Claude session that cannot publish a new-format identity (no CLAUDECODE,
+# no trusted session id) still must not look like a free home when a live
+# session already recorded its id beside the lock. Name that holder first.
+# A pid-only lock, or no lock, keeps the identity refusal so an unidentifiable
+# Claude worker cannot fall through to ancestry acquisition.
+if ! fm_session_lock_prepare_acquisition_identity; then
+  if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null || true)
+    if fm_harness_pid_alive "$old" && recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
+      echo "error: another live firstmate session holds the lock (pid $old, session $recorded); operate read-only until resolved" >&2
+      exit 1
+    fi
+  fi
   echo "error: cannot establish this session's lock identity; operate read-only until resolved" >&2
   exit 1
-}
+fi
 me=$FM_SESSION_LOCK_OWNER_PID
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
@@ -156,7 +168,13 @@ confirm_own_lock() {  # <recorded-pid>
   fi
   recorded=$(cat "$LOCK" 2>/dev/null || true)
   if [ "$recorded" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
-    publish_lock_session_or_die
+    # Refresh the sidecar only when this process can prove a trusted session
+    # id. A reparented worker that owns via the live recorded CLAUDE_PID still
+    # confirms, but must not strip the owner's sidecar just because that pid
+    # is outside this ancestry.
+    if fm_session_lock_trusted_session_id >/dev/null; then
+      publish_lock_session_or_die
+    fi
     commit_lock_session
     release_claim_lock
     echo "lock acquired: harness pid $recorded"
@@ -181,8 +199,16 @@ refuse_live_owner() {  # <recorded-pid>
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
   if fm_session_lock_owned_by_current_session "$STATE"; then
-    echo "lock acquired: harness pid $old"
-    exit 0
+    # New-format owners refresh the sidecar under the claim lock so a /clear
+    # re-key is published. A pid-only legacy acceptance already logged and
+    # must not grow a sidecar or rewrite line 1.
+    if fm_session_lock_read_record "$STATE"; then
+      confirm_own_lock "$old"
+      old=$(cat "$LOCK" 2>/dev/null || true)
+    else
+      echo "lock acquired: harness pid $old"
+      exit 0
+    fi
   fi
   if fm_harness_pid_alive "$old"; then
     refuse_live_owner "$old"
@@ -209,13 +235,17 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     exit 1
   }
   if fm_session_lock_owned_by_current_session "$STATE"; then
-    release_claim_lock
-    echo "lock acquired: harness pid $old"
-    exit 0
+    if fm_session_lock_read_record "$STATE"; then
+      confirm_own_lock "$old"
+    else
+      release_claim_lock
+      echo "lock acquired: harness pid $old"
+      exit 0
+    fi
+    old=$(cat "$LOCK" 2>/dev/null || true)
   fi
-  if fm_harness_pid_alive "$old"; then
-    echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
-    exit 1
+  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+    refuse_live_owner "$old"
   fi
 fi
 if ! fm_session_lock_write_new_format "$STATE"; then

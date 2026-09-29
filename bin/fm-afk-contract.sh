@@ -103,12 +103,16 @@
 #     (`\\`, `\t`, `\r`, and `\n`) so every record remains one row per clause;
 #     a literal `-` is `\x2d` to distinguish it from the empty-stop marker.
 #   fm-afk-contract.sh refused [--proposal | --path <record>]   TSV: id text missing
+#   fm-afk-contract.sh mode [--proposal | --path <record>]
+#     Print away, quiet, or none. A v1 record with no mode field is away; exact
+#     `mode: quiet` is the upstream present-captain posture (merge stays attended).
 #   fm-afk-contract.sh archive              move the record aside; print its path
 #   fm-afk-contract.sh archived <entered_epoch>   print that archived record's path
 #
-# Sourceable: with the BASH_SOURCE guard, other scripts get the path and
-# presence helpers (fm_afk_contract_path, fm_afk_contract_present,
-# fm_afk_contract_proposal_path, fm_afk_contract_archive_dir) without running main.
+# Sourceable: with the BASH_SOURCE guard, other scripts get the path, presence,
+# and lock helpers (fm_afk_contract_path, fm_afk_contract_present,
+# fm_afk_contract_proposal_path, fm_afk_contract_archive_dir,
+# fm_afk_contract_lock_hold, fm_afk_contract_lock_release) without running main.
 set -u
 
 FM_AFK_CONTRACT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -168,8 +172,9 @@ fm_afk_contract_away_present() {  # [state-dir]
 
 # Generous against the longest legitimate holder, a merge waiting on the forge,
 # so the bound only ever trips on something genuinely wedged. The fork keeps
-# the v1 clause contract (no quiet-mode writer); these lock helpers exist so
-# merge and return can still serialize against the away record.
+# the v1 clause contract; optional `mode: quiet` is recorded when FM_AFK_MODE=quiet
+# so upstream present-captain callers still distinguish quiet from away. These
+# lock helpers exist so merge and return can still serialize against the record.
 _FM_AFK_CONTRACT_LOCK_TIMEOUT=120
 FM_AFK_CONTRACT_LOCK_HELD=
 
@@ -219,6 +224,19 @@ fm_afk_contract_lock_release() {
   FM_AFK_CONTRACT_LOCK_HELD=
   fm_afk_contract_lock_helpers || return 1
   fm_lock_release "$lock"
+}
+
+# The record-mutating subcommands run inside the cross-subsystem lock, so no
+# publication, replacement, or archive can land between another subsystem's
+# authority read and the action it takes on that authority.
+fm_afk_contract_locked_cmd() {  # <command> [args...]
+  local rc=0
+  fm_afk_contract_lock_hold || return 1
+  trap 'fm_afk_contract_lock_release || true' EXIT
+  "$@" || rc=$?
+  trap - EXIT
+  fm_afk_contract_lock_release || true
+  return "$rc"
 }
 
 fm_afk_contract_log() { printf 'fm-afk-contract: %s\n' "$*" >&2; }
@@ -882,8 +900,8 @@ fm_afk_contract_main() {
   shift
   case "$cmd" in
     propose) fm_afk_contract_cmd_propose "$@" ;;
-    enter) fm_afk_contract_cmd_enter "$@" ;;
-    confirm) [ "$#" -eq 0 ] || { fm_afk_contract_usage >&2; return 2; }; fm_afk_contract_cmd_confirm ;;
+    enter) fm_afk_contract_locked_cmd fm_afk_contract_cmd_enter "$@" ;;
+    confirm) [ "$#" -eq 0 ] || { fm_afk_contract_usage >&2; return 2; }; fm_afk_contract_locked_cmd fm_afk_contract_cmd_confirm ;;
     readback)
       path=$(fm_afk_contract_select_path "$@") || { fm_afk_contract_usage >&2; return 2; }
       [ -f "$path" ] || { fm_afk_contract_log "no record at $path"; return 1; }
@@ -916,7 +934,11 @@ fm_afk_contract_main() {
     refused)
       path=$(fm_afk_contract_select_path "$@") || { fm_afk_contract_usage >&2; return 2; }
       fm_afk_contract_read_list "$path" refused ;;
-    archive) fm_afk_contract_cmd_archive ;;
+    mode)
+      path=$(fm_afk_contract_select_path "$@") || { fm_afk_contract_usage >&2; return 2; }
+      [ -f "$path" ] || { fm_afk_contract_log "no record at $path"; return 1; }
+      fm_afk_contract_record_mode "$path" ;;
+    archive) fm_afk_contract_locked_cmd fm_afk_contract_cmd_archive ;;
     archived)
       [ "$#" -eq 1 ] || { fm_afk_contract_usage >&2; return 2; }
       path="$(fm_afk_contract_archive_dir)/$1.afk-contract"

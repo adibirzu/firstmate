@@ -104,6 +104,37 @@ run_watcher_once() {  # <seconds>
   fi
 }
 
+run_bounded() {  # <seconds> <command...>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$@"
+  else
+    perl -e '
+      my $seconds = shift;
+      my $pid = fork;
+      die "fork failed\n" unless defined $pid;
+      if (!$pid) {
+        setpgrp(0, 0);
+        exec @ARGV;
+        die "exec failed: $!\n";
+      }
+      local $SIG{ALRM} = sub {
+        kill "TERM", -$pid;
+        exit 124;
+      };
+      alarm $seconds;
+      waitpid $pid, 0;
+      alarm 0;
+      exit($? >> 8);
+    ' "$@"
+  fi
+}
+
+positive_or() {  # <value> <default>
+  case "$1" in ''|0*|*[!0-9]*) printf '%s\n' "$2" ;; *) printf '%s\n' "$1" ;; esac
+}
+
 out_has_external_wake() {
   grep -E '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" 2>/dev/null \
     | grep -v -x 'check: rearm-resurface' | grep -q .
@@ -118,12 +149,11 @@ quiet_exit() {
   if [ "$REARM_ABSORBED" -gt 0 ]; then
     printf 'checkpoint: absorbed %s internal rearm-resurface event(s); durable queue preserved for drain\n' "$REARM_ABSORBED" >&2
   fi
-  local state="${FM_STATE_OVERRIDE:-${FM_HOME:-$PWD}/state}"
   local lock_pid
-  if [ -f "$state/.watch.lock/pid" ]; then
-    lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  if [ -f "$STATE/.watch.lock/pid" ]; then
+    lock_pid=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
     if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
-      rm -rf "$state/.watch.lock" 2>/dev/null || true
+      rm -rf "$STATE/.watch.lock" 2>/dev/null || true
     fi
   fi
   exit 124
@@ -139,6 +169,42 @@ now_s() {
     date +%s
   fi
 }
+
+# shellcheck source=bin/fm-supervision-engine-lib.sh
+. "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
+if fm_supervision_host_enabled "$CONFIG" codex; then
+  BOUND=$SECONDS_ARG
+  if [ -f "$STATE/.afk-contract" ] \
+    && [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; then
+    AWAY_BOUND=$(positive_or "${FM_CODEX_WATCH_CHECKPOINT_AWAY:-}" 3600)
+    [ "$AWAY_BOUND" -le "$BOUND" ] 2>/dev/null || BOUND=$AWAY_BOUND
+  fi
+  [ "$BOUND" -lt 27000 ] 2>/dev/null || BOUND=27000
+  LIMIT=$(( BOUND + $(positive_or "${FM_SUPERVISION_HOST_TURN_TIMEOUT:-}" 1200) + $(positive_or "${FM_SUPERVISION_ENGINE_GRACE:-}" 30) ))
+  set +e
+  FM_SUPERVISION_HOST_PRIMARY=codex FM_SUPERVISION_HOST_PARK_SECONDS=$BOUND FM_SUPERVISION_HOST_PARK_LIMIT=$LIMIT \
+    run_bounded $((LIMIT + 120)) "$SCRIPT_DIR/fm-supervision-host.sh" park >"$OUT" 2>"$ERR"
+  RC=$?
+  set -e
+  if grep -E '^(signal:|stale:|check:|heartbeat($|:)|supervision-host:)' "$OUT" 2>/dev/null \
+    | grep -Ev '^supervision-host: cycle boundary' >/dev/null; then
+    grep -Ev '^watcher: (started|attached) ' "$OUT"
+    [ ! -s "$ERR" ] || cat "$ERR" >&2
+    exit 0
+  fi
+  if grep -E '^supervision-host: cycle boundary' "$OUT" >/dev/null 2>&1; then
+    printf 'checkpoint: no actionable wake within %ss\n' "$BOUND"
+    exit 124
+  fi
+  [ ! -s "$OUT" ] || cat "$OUT"
+  [ ! -s "$ERR" ] || cat "$ERR" >&2
+  if [ "$RC" -eq 124 ]; then
+    echo "checkpoint: the supervision host outlived its own bound of ${BOUND}s" >&2
+    exit 1
+  fi
+  [ "$RC" -ne 0 ] || RC=1
+  exit "$RC"
+fi
 
 DEADLINE=$(( $(now_s) + SECONDS_ARG ))
 REARM_ABSORBED=0

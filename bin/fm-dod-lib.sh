@@ -113,6 +113,7 @@ For that Firstmate task, start the behavior suite through `bin/fm-test-run.sh`: 
 This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
 Other projects retain their own instructions unchanged.
 EOF
+  printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
 }
 
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a

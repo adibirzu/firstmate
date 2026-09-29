@@ -1121,7 +1121,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --experimental-strip-types --no-warnings --input-type=module 2>&1 <<'EOF'
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1186,7 +1186,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" node --experimental-strip-types --no-warnings --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
 const handlers = new Map();
@@ -2070,12 +2070,16 @@ test_hook_claude_mode_lock_refused_stale_epoch_never_blocks() {
 }
 
 test_hook_default_mode_lock_refused_advisory() {
-  local dir out status owner
+  local dir out status owner home
   dir=$(make_primary_dir "$TMP_ROOT/hook-default-lock-refused")
   : > "$dir/state/task1.meta"
   start_nonancestor_lock_owner "$dir"
   owner=$(cat "$dir/state/.lock")
-  out=$(run_hook "$dir" false); status=$?
+  home=$(cd "$dir" && pwd)
+  # Do not blind ps here: lock-refused needs the live owner still classified as
+  # a harness, and the default-mode path does not need CLAUDECODE to outrank a
+  # structural ancestor.
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 0 "$status" "lock-refused default-mode turn must end without a block"
   assert_contains "$out" "READ-ONLY SESSION WITHOUT LOCK OWNERSHIP" "lock-refused default-mode turn must carry advisory wording"
   assert_not_contains "$out" "TURN WOULD END BLIND" "lock-refused default-mode advisory must not use the blocking banner"

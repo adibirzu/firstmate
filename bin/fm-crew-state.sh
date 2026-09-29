@@ -958,55 +958,95 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
     RUN_OUT=""
   fi
   if [ -n "$RUN_OUT" ]; then
-    run_branch=$(strip_quotes "$(nm_field branch)")
-    # Head equality, or the pipeline-owned-active exemption: while the
-    # pipeline owns this branch, the daemon's own branch attribution is
-    # authoritative and the lane head need not be a git object here
-    # (fm_nm_run_is_pipeline_owned_active in bin/fm-nm-run-lib.sh).
-    if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] \
-      && { nm_run_head_matches_worktree || fm_nm_run_is_pipeline_owned_active "$RUN_OUT"; }; then
-      HAVE_RUN=1
-      # Live-over-terminal (bin/fm-nm-run-lib.sh). Bare `axi status` answers
-      # with the most-recently-touched run, which after a pipeline crash is the
-      # dead run sitting at this worktree's exact commit while the live run
-      # that replaced it validates a descendant commit on the same branch. Both
-      # bind, so a terminal answer is provisional until the ledger has been
-      # asked whether this worktree also has a live run. Only a live word
-      # displaces it: a terminal run with no live sibling keeps its full
-      # `axi status` step and gate detail rather than degrading to the ledger.
-      if ! fm_nm_run_is_active "$RUN_OUT"; then
-        live_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
-        if [ "$(fm_nm_run_status_class "$live_status")" = live ]; then
-          COARSE_STATUS=$live_status
-          RUN_SOURCE=coarse
+    # The overview includes run ids and creation order, which the plain runs
+    # listing omits. Keep the primary empty-call bound above: a nonresponding
+    # CLI is not retried. Older CLI surfaces without the table retain the
+    # coarse fallback below, but cannot turn a replacement into a vague live
+    # verdict when its identity and gate cannot be read.
+    overview_ok=1
+    run_overview=$(fm_nm_run_checked "$WT" "$NM_TIMEOUT" axi) || overview_ok=0
+    [ -n "$run_overview" ] || emit unknown run-step "run inventory unavailable; run id: $(strip_quotes "$(nm_field id)")"
+    run_choice=$(fm_nm_select_run "$CREW_BRANCH" "$run_overview" "$WT" "$NM_TIMEOUT")
+    [ "$overview_ok" = 1 ] || emit unknown run-step "run inventory unreadable; run ids: $(strip_quotes "$(nm_field id)"), ${run_choice##*|}"
+    case "$run_choice" in
+      unknown\|*)
+        known_run_id=""
+        if [ "$(strip_quotes "$(nm_field branch)")" = "$CREW_BRANCH" ]; then
+          known_run_id=$(strip_quotes "$(nm_field id)")
         fi
-      fi
-    else
-      # The active-or-most-recent run is for another branch, or it names this
-      # branch with a head this copy cannot verify (a pipeline-advanced fix
-      # round, or a rewritten tip). Deliberately nested inside
-      # `[ -n "$RUN_OUT" ]`: an empty/timed-out primary call means the CLI
-      # itself did not respond, so retrying it immediately with a second
-      # bounded call would just double the wait for no better answer.
-      COARSE_STATUS=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
-      if [ -n "$COARSE_STATUS" ]; then
+        emit unknown run-step "${run_choice#*|}${known_run_id:+; last reported run id: $known_run_id}"
+        ;;
+      selected\|*)
+        IFS='|' read -r _ selected_id selected_status candidate_ids <<< "$run_choice"
+        RUN_OUT=$(fm_nm_run_checked "$WT" "$NM_TIMEOUT" axi status --run "$selected_id") \
+          || emit unknown run-step "selected run unreadable; run ids: $candidate_ids"
+        if [ "$(strip_quotes "$(nm_field id)")" != "$selected_id" ] \
+          || [ "$(strip_quotes "$(nm_field branch)")" != "$CREW_BRANCH" ]; then
+          emit unknown run-step "selected run unavailable or mismatched; run ids: $candidate_ids"
+        fi
+        case "$(strip_quotes "$(nm_field status)")" in
+          pending|running|fixing|ci|awaiting_approval|fix_review|completed|failed|cancelled) ;;
+          *) emit unknown run-step "selected run status unverified; run ids: $candidate_ids" ;;
+        esac
+        if fm_nm_run_is_active "$RUN_OUT"; then current_class=live; else current_class=terminal; fi
+        if [ "$(fm_nm_run_status_class "$selected_status")" != "$current_class" ]; then
+          emit unknown run-step "selected run status disagrees with inventory; run ids: $candidate_ids"
+        fi
+        if nm_run_head_matches_worktree || fm_nm_run_is_pipeline_owned_active "$RUN_OUT" \
+          || { fm_nm_run_is_executing "$RUN_OUT" && ! nm_daemon_answered_down; }; then
+          HAVE_RUN=1
+        elif [ -z "$(fm_nm_resolve_commit "$WT" "$(strip_quotes "$(nm_field head)")")" ]; then
+          if fm_nm_run_is_active "$RUN_OUT" \
+            && [ "$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" "$(strip_quotes "$(nm_field head)")")" = running ]; then
+            # The anchor PROVED code identity; only liveness can still fail, so
+            # a dead daemon is reported as such rather than as an identity
+            # failure, and a parked run keeps its gate and findings.
+            HAVE_RUN=1
+            if ! fm_nm_run_is_parked "$RUN_OUT" && nm_daemon_answered_down; then
+              RUN_DEAD_DAEMON="no-mistakes daemon unreachable; last run record $(strip_quotes "$(nm_field status)") - unverified"
+            fi
+          else
+            emit unknown run-step "selected run code identity unverified; run ids: $candidate_ids"
+          fi
+        fi
+        SELECTED_RUN_ID=$selected_id
+        ;;
+    esac
+    if [ "$HAVE_RUN" = 0 ] && [ -z "$SELECTED_RUN_ID" ]; then
+      run_branch=$(strip_quotes "$(nm_field branch)")
+      # Head equality, the pipeline-owned parked-run exemption, or executing
+      # regardless of head: a live run on this branch is current even after a
+      # rebase, and while the pipeline owns this branch a parked run binds
+      # without the lane head being a git object here (fm_nm_run_is_executing
+      # and fm_nm_run_is_pipeline_owned_active in bin/fm-nm-run-lib.sh). The
+      # head-free route additionally needs the daemon not provably down, so a
+      # record left saying `running` by a dead daemon stops answering once the
+      # worktree moves off the run head.
+      if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] \
+        && { nm_run_head_matches_worktree || fm_nm_run_is_pipeline_owned_active "$RUN_OUT" \
+          || { fm_nm_run_is_executing "$RUN_OUT" && ! nm_daemon_answered_down; }; }; then
         HAVE_RUN=1
-        # Without run ids, contradictory liveness cannot prove precedence.
-        # A live replacement also needs an id-addressed status read: a bare
-        # "running" row cannot tell working from waiting at a gate.
-        ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
-        if fm_nm_run_is_active "$RUN_OUT"; then
-          if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
-            emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
+        SELECTED_RUN_ID=$(strip_quotes "$(nm_field id)")
+        # Live-over-terminal (fork): a terminal axi-status bind at this
+        # worktree's head is provisional when the ledger shows a live sibling.
+        # Prefer that coarse live word over upstream's "replacement identity
+        # unavailable" unknown, so a working replacement still answers when
+        # the overview table cannot name it.
+        if ! fm_nm_run_is_active "$RUN_OUT"; then
+          live_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+          if [ "$(fm_nm_run_status_class "$live_status")" = live ]; then
+            COARSE_STATUS=$live_status
+            RUN_SOURCE=coarse
+          elif [ -n "$live_status" ] \
+            && [ "$live_status" != "$(strip_quotes "$(nm_field status)")" ] \
+            && [ "$live_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then
+            COARSE_STATUS=$live_status
+            RUN_SOURCE=coarse
           fi
         else
-          if [ "$(fm_nm_run_status_class "$ledger_status")" = live ]; then
-            emit unknown run-step "replacement run identity unavailable; run ids: $(strip_quotes "$(nm_field id)"), replacement unavailable"
-          elif [ -n "$ledger_status" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field status)")" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then
-            COARSE_STATUS=$ledger_status
-            RUN_SOURCE=coarse
+          ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+          if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
+            emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
           fi
         fi
       else
@@ -1084,7 +1124,8 @@ if [ "$HAVE_RUN" = 1 ]; then
     # test_terminal_passed).
     if [ -n "$outcome" ]; then
       case "$outcome" in
-        passed)        RUN_STATE="done"; RUN_DETAIL="run passed: pipeline complete" ;;
+        passed|passed-with-override) RUN_STATE="done"; RUN_DETAIL=$(passed_pr_detail) ;;
+        passed-with-skips) RUN_STATE="done"; RUN_DETAIL="$(passed_pr_detail) (publication/CI verification skipped)" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
         failed)
           if nm_reclassify_failed_run_as_held_green; then :; else

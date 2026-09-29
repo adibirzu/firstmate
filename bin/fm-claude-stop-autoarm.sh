@@ -266,7 +266,7 @@ MY_GEN=$FM_AUTOARM_MY_GEN
 autoarm_commit() {  # <outcome> [marker-file]
   local outcome=$1 marker=${2:-} session_pid recovery
   if [ "$outcome" = rewake ]; then
-    fm_session_lock_owned_by_self "$STATE" || return 2
+    fm_session_lock_owned_by_current_session "$STATE" || return 2
     session_pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
     fm_recovery_marker_snapshot "$STATE/.watcher-down" || return 2
     case "$FM_RECOVERY_MARKER_TOKEN" in

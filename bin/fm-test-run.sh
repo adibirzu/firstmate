@@ -588,36 +588,36 @@ portable_parallel_lane_weight() {
 # workflow step moved with it.
 list_portable_parallel_1() {
   cat <<'EOF'
-tests/fm-lint.test.sh
-tests/fm-pr-merge.test.sh
-tests/fm-test-run.test.sh
-tests/fm-cd-pretool-check.test.sh
+tests/fm-captain-hold-lifecycle.test.sh
+tests/fm-x-mode.test.sh
+tests/fm-arm-pretool-check.test.sh
+tests/fm-backend-herdr.test.sh
+tests/fm-crew-state.test.sh
 tests/fm-pi-primary-types.test.sh
-tests/fm-grok-harness.test.sh
+tests/fm-send-popup-settle.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
-tests/fm-composer-ghost.test.sh
-tests/fm-brief.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-ensure-agents-md.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-transition-lib.test.sh
 EOF
 }
 
 # Portable parallel shard 2: the complementary LPT half of the proven set.
 list_portable_parallel_2() {
   cat <<'EOF'
-tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-x-mode.test.sh
-tests/fm-arm-pretool-check.test.sh
-tests/fm-backend-herdr.test.sh
-tests/fm-crew-state.test.sh
+tests/fm-lint.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-test-run.test.sh
+tests/fm-cd-pretool-check.test.sh
 tests/fm-herdr-lab.test.sh
-tests/fm-send-popup-settle.test.sh
+tests/fm-grok-harness.test.sh
 tests/fm-send-strict.test.sh
-tests/fm-spawn-batch.test.sh
-tests/fm-send-settle.test.sh
-tests/fm-ensure-agents-md.test.sh
-tests/fm-supervision-instructions.test.sh
-tests/fm-transition-lib.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-brief.test.sh
 EOF
 }
 
@@ -1569,6 +1569,15 @@ families_for_changed_path() {
     bin/fm-stow-cascade.sh)
       printf '%s\n' secondmate
       ;;
+    tests/federation/golden/*)
+      printf '%s\n' federation
+      ;;
+    bin/fm-account-*|bin/fm-accounts-*|bin/fm-fleet.sh|bin/fm-fleet-join.sh|\
+    bin/fm-fleet-lib.sh|bin/fm-fleet-quota-lib.sh|bin/fm-fleet-wait.sh|\
+    bin/fm-spawn-acct.sh|bin/quota-copilot-usage.sh|bin/quota-cursor-usage.sh|\
+    bin/quota-sources/*|scripts/fleet-root-prereq.sh)
+      printf '%s\n' federation
+      ;;
     bin/fm-session-start.sh|bin/fm-fleet-sync.sh|\
     bin/fm-sessionstart-nudge.sh|bin/fm-startup-network.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
@@ -1734,6 +1743,9 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     .agents/skills/*/SKILL.md)
+      printf '%s\n' pure-contract-unit
+      ;;
+    .agents/skills/*/*)
       printf '%s\n' pure-contract-unit
       ;;
     .github/workflows/ci.yml|.no-mistakes.yaml)

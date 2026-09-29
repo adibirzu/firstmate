@@ -1414,11 +1414,11 @@ test_terminal_passed() {
   local out; out=$(run_crew_state "$d" feat-d)
   assert_contains "$out" "state: done" "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
-  # Regression for the 2421 false-forge-claim bug: a passed pipeline run only
-  # establishes that the run's own steps completed, never anything about the
-  # PR's forge state, so the detail must not claim the PR is merged or closed.
-  assert_not_contains "$out" "merged" "passed run detail must not claim merged"
-  assert_not_contains "$out" "closed" "passed run detail must not claim closed"
+  # Combined with upstream: a passed outcome may name forge state only from a
+  # bounded PR record or retirement receipt. The 2421 false-claim stays covered
+  # by test_terminal_passed_with_open_pr_does_not_claim_merged.
+  assert_contains "$out" "run passed: PR merged" "passed run reports merged only after the PR record says merged"
+  assert_not_contains "$out" "merged/closed" "passed merged PR must not keep the old ambiguous label"
   pass "terminal passed run is authoritative"
 }
 
@@ -2226,33 +2226,39 @@ EOF
   pass "an unfetched live sibling outranks a terminal row at the worktree's exact commit"
 }
 
+# Identity overview: newest-row-decides. The coarse runs-list path above keeps
+# the fork's live-over-terminal exception (a corpse at this copy must not hide
+# a live replacement). With run ids, the newer failure is selected by id.
 test_terminal_run_keeps_newer_failure_over_live_sibling() {
   reset_fakes
   local d base_head live_head short_base short_live out
-  d=$(new_case live-beats-corpse)
-  make_repo_on_branch "$d/wt" fm/feat-corpse
+  d=$(new_case newer-failure-over-live)
+  make_repo_on_branch "$d/wt" fm/feat-newerfail
   base_head=$(git -C "$d/wt" rev-parse HEAD)
-  git -C "$d/wt" commit -q --allow-empty -m 'live run advanced the tip'
+  git -C "$d/wt" commit -q --allow-empty -m 'older live run advanced the tip'
   live_head=$(git -C "$d/wt" rev-parse HEAD)
-  # Worktree stays at the commit the dead run recorded; the live run is ahead.
   git -C "$d/wt" reset -q --hard "$base_head"
   short_base=$(git -C "$d/wt" rev-parse --short=7 "$base_head")
   short_live=$(git -C "$d/wt" rev-parse --short=7 "$live_head")
   [ "$short_base" != "$short_live" ] || fail "live run head did not advance past the worktree"
   make_fakebin "$d" >/dev/null
-  fm_write_meta "$d/state/corpse.meta" "window=fm:fm-corpse" "worktree=$d/wt" "kind=ship"
-  # The newest run failed at this worktree's own commit.
+  fm_write_meta "$d/state/newerfail.meta" "window=fm:fm-newerfail" "worktree=$d/wt" "kind=ship"
   FM_FAKE_RUN_HEAD="$base_head"
-  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-corpse)"
-  # The older live run may have advanced its tip, but it did not replace this run.
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-newerfail | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_STATUS_RUN="$FM_FAKE_AXI_STATUS"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-newerfail,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-newerfail,running,$short_live,\"\""
   FM_FAKE_RUNS_LIST="$(cat <<EOF
-  failed     fm/feat-corpse ${short_base}  2026-08-05 11:20
-  running    fm/feat-corpse ${short_live}  2026-08-05 10:05
+  failed     fm/feat-newerfail ${short_base}  2026-08-05 11:20
+  running    fm/feat-newerfail ${short_live}  2026-08-05 10:05
 EOF
 )"
-  out=$(run_crew_state "$d" corpse)
+  out=$(run_crew_state "$d" newerfail)
   assert_contains "$out" "state: failed" "the newer failure remains authoritative beside an older live run"
   assert_contains "$out" "source: run-step" "the newer failure keeps its run-step verdict"
+  assert_contains "$out" "01NEW" "the selected identity is the newer failure"
   pass "a newer failure is not hidden by a live sibling"
 }
 
@@ -2262,7 +2268,7 @@ EOF
 test_runs_list_newer_failure_outranks_older_live_row() {
   reset_fakes
   local d base_head live_head short_base short_live out
-  d=$(new_case live-row-beats-terminal-row)
+  d=$(new_case overview-newer-failure)
   make_repo_on_branch "$d/wt" fm/feat-liverow
   base_head=$(git -C "$d/wt" rev-parse HEAD)
   git -C "$d/wt" commit -q --allow-empty -m 'live run advanced the tip'
@@ -2272,7 +2278,13 @@ test_runs_list_newer_failure_outranks_older_live_row() {
   short_live=$(git -C "$d/wt" rev-parse --short=7 "$live_head")
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/liverow.meta" "window=fm:fm-liverow" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_RUN_HEAD="$base_head"
   FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_AXI_STATUS_RUN="$(run_failed fm/feat-liverow | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-liverow,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-liverow,running,$short_live,\"\""
   FM_FAKE_RUNS_LIST="$(cat <<EOF
   running    fm/other-crew aaaaaaa  2026-08-05 11:30
   failed     fm/feat-liverow ${short_base}  2026-08-05 11:20
@@ -2281,6 +2293,7 @@ EOF
 )"
   out=$(run_crew_state "$d" liverow)
   assert_contains "$out" "state: failed" "the newest terminal row must not lose to an older live row"
+  assert_contains "$out" "01NEW" "identity selection keeps the newer failure"
   pass "runs-list selection keeps the newer failure over an older live row"
 }
 
@@ -2289,24 +2302,30 @@ EOF
 test_unfetched_older_live_sibling_does_not_hide_failure() {
   reset_fakes
   local d base_head short_base unfetched out
-  d=$(new_case unfetched-live-sibling)
-  make_repo_on_branch "$d/wt" fm/feat-unfetched
+  d=$(new_case overview-unfetched-older-live)
+  make_repo_on_branch "$d/wt" fm/feat-unfetched-id
   base_head=$(git -C "$d/wt" rev-parse HEAD)
   short_base=$(git -C "$d/wt" rev-parse --short=7 "$base_head")
   unfetched=0123abc
   git -C "$d/wt" rev-parse --verify --quiet "${unfetched}^{commit}" >/dev/null 2>&1 \
     && fail "the unfetched head must not resolve in the task copy"
   make_fakebin "$d" >/dev/null
-  fm_write_meta "$d/state/unfetched.meta" "window=fm:fm-unfetched" "worktree=$d/wt" "kind=ship"
+  fm_write_meta "$d/state/unfetchedid.meta" "window=fm:fm-unfetchedid" "worktree=$d/wt" "kind=ship"
   FM_FAKE_RUN_HEAD="$base_head"
-  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-unfetched)"
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-unfetched-id | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_STATUS_RUN="$FM_FAKE_AXI_STATUS"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-unfetched-id,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-unfetched-id,running,$unfetched,\"\""
   FM_FAKE_RUNS_LIST="$(cat <<EOF
-  failed     fm/feat-unfetched ${short_base}  2026-08-05 11:20
-  running    fm/feat-unfetched ${unfetched}  2026-08-05 10:05
+  failed     fm/feat-unfetched-id ${short_base}  2026-08-05 11:20
+  running    fm/feat-unfetched-id ${unfetched}  2026-08-05 10:05
 EOF
 )"
-  out=$(run_crew_state "$d" unfetched)
+  out=$(run_crew_state "$d" unfetchedid)
   assert_contains "$out" "state: failed" "an older unfetched live head must not hide the newer failure"
+  assert_contains "$out" "01NEW" "identity selection keeps the newer failure"
   pass "an older unfetched live sibling does not hide a newer failure"
 }
 
@@ -2568,6 +2587,40 @@ test_no_run_busy_pane() {
   assert_contains "$out" "source: pane" "busy record -> pane source"
   assert_contains "$out" "claude-hook" "the working verdict names its semantic source"
   pass "no run + a busy semantic record reads working, attributed to its source"
+}
+
+# A launch pinned at the fm-spawn seed (no hook has posted yet) whose pane
+# renders a recognized interactive prompt must read unknown, never working -
+# this is the load-bearing link the launch-prompt backstop depends on:
+# fm-watch.sh's pause_state_class absorbs a stale pane as "provably working"
+# whenever THIS script reports `state: working · source: pane`, so if this
+# authoritative read still said working, the watcher would silently swallow
+# the wake even though bin/fm-busy-lib.sh's own classifier had already flipped
+# to unknown launch-prompt. crew_busy_verdict must therefore capture a real
+# tail for every harness, not only grok, so the backstop's own tail-based
+# check ever runs here at all.
+test_no_run_launch_prompt_parked_is_not_working() {
+  reset_fakes
+  local d; d=$(new_case launch-prompt)
+  make_repo_on_branch "$d/wt" fm/feat-lp
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-lp.meta" "window=fm:fm-feat-lp" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT='Quick safety check: Is this a project you created or one you trust? ...
+> No, exit
+  Yes, I trust this folder
+Enter to confirm . Esc to cancel'
+  export FM_FAKE_BUSY_TEXT
+  # arm only, never apply: the launch turn has never advanced past the seed
+  # fm-spawn.sh writes at spawn time.
+  "$ROOT/bin/fm-busy-event.sh" arm "$d/state" feat-lp >/dev/null
+  local out; out=$(run_crew_state "$d" feat-lp)
+  assert_not_contains "$out" "state: working" "a launch parked on its trust dialog must never read working"
+  assert_contains "$out" "state: unknown" "a parked launch reads unknown, not busy or idle"
+  assert_contains "$out" "launch-prompt" "the unknown verdict names the launch-prompt backstop as its source"
+  pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
 }
 
 # Gap fix: a cline crew used to read `unknown - harness state unavailable`, which
@@ -5529,10 +5582,14 @@ test_legacy_conflicting_run_records_report_unknown() {
   FM_FAKE_AXI_STATUS="$(run_running fm/competing | sed 's/01RUN/01OLD/')"
   FM_FAKE_AXI_HOME=$FM_FAKE_AXI_STATUS
   out=$(run_crew_state "$d" competing)
-  assert_contains "$out" 'state: unknown' 'conflicting records without identities cannot prove authority'
-  assert_contains "$out" '01OLD' 'legacy ambiguity preserves the available run id'
-  assert_contains "$out" 'unavailable' 'legacy ambiguity states that the competing id is unavailable'
-  pass 'legacy conflicting run records report unknown'
+  # Without an identity overview, the fork's live-over-terminal rule still
+  # attributes the live run. Upstream wanted unknown/unavailable here; that
+  # would re-break the 2026-08 corpse-at-HEAD incident the ledger exception
+  # exists to prevent. Identity-aware selection covers the newer-failure case.
+  assert_contains "$out" 'state: working' 'without run ids the live-over-terminal rule still attributes the live run'
+  assert_contains "$out" '01OLD' 'the bound axi-status identity is still named'
+  assert_not_contains "$out" 'state: unknown' 'live-over-terminal is not an identity-unavailable unknown'
+  pass 'legacy conflicting run records keep live-over-terminal without an identity overview'
 }
 
 # Captured AXI stdout is a serialized input contract, not implementation source.
