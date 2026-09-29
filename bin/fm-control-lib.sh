@@ -64,14 +64,10 @@ fm_control_verb_allowed() {  # <verb>
 # section 4's verified-adapter list; an unverified adapter is refused rather
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harnesses() {
-  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin
+  printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse cline copilot rovo omp agy devin
 }
 
 fm_control_harness_supported() {  # <harness>
-  case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|cline|copilot|agy|rovo|omp) return 0 ;;
-  esac
-  return 1
   local harness found=1
   while read -r harness; do
     [ "$harness" = "${1-}" ] && found=0
@@ -105,61 +101,96 @@ fm_control_harness_family() {  # <recorded-harness>
     muse*) printf 'muse' ;;
     cline*) printf 'cline' ;;
     copilot*) printf 'copilot' ;;
-    agy*) printf 'agy' ;;
     rovo*) printf 'rovo' ;;
     *) return 1 ;;
   esac
 }
 
 # Which task kinds an adapter is verified to run. muse, gemini, cline, copilot,
-# agy, and rovo are crewmate/scout adapters only: none has a primary supervision
-# protocol, and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The
-# control plane asks this BEFORE it stops anything, so an incompatible relaunch target is
-# Which task kinds an adapter is verified to run. muse, gemini, rovo, agy, and devin
-# are crewmate/scout adapters only: none has a primary supervision protocol,
-# and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control
-# plane asks this BEFORE it stops anything, so an incompatible relaunch target is
-# refused while the current agent is still running rather than after it has
-# been stopped.
+# rovo, agy, and devin are crewmate/scout adapters only: none has a primary
+# supervision protocol, and bin/fm-spawn.sh refuses a --secondmate launch on
+# any of them. The control plane asks this BEFORE it stops anything, so an
+# incompatible relaunch target is refused while the current agent is still
+# running rather than after it has been stopped.
 fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|gemini|cline|copilot|agy|rovo) [ "$kind" != secondmate ] || return 1 ;;
-    muse|gemini|rovo|agy|devin) [ "$kind" != secondmate ] || return 1 ;;
+    muse|gemini|cline|copilot|agy|rovo|devin) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
 
-# The key that cancels a running turn. Escape for every adapter except grok,
-# whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C. cline is
-# the exact inverse of grok and the reason this pair of tables cannot be
-# collapsed: its Escape cancels the turn while its Ctrl+C EXITS the TUI, so
-# borrowing grok's interrupt key here would stop the agent instead of its turn.
-# gemini names its own key in the running turn's status row
-# (`(esc to cancel, <n>s)`), and a single Escape was verified to cancel it.
-# rovo cancels on a single Escape too, printing "Agent cancelled" (verified,
-# 202609.1.2). agy cancels on a single Escape, printing the Interrupted row
-# with an idle composer and no repollution (verified live, agy 1.2.0 through
-# Herdr). omp (Oh My Pi) shares Pi's single Escape, empty composer
-# afterwards, and /quit exit (verified omp 18.1.2 in a PTY, re-verified 18.1.11
-# through Herdr).
+# The key that cancels a running turn. Escape for every adapter except grok
+# and copilot, whose Esc only moves focus to the scrollback; those cancel on
+# Ctrl+C. cline is the exact inverse of grok and the reason this pair of
+# tables cannot be collapsed: its Escape cancels the turn while its Ctrl+C
+# EXITS the TUI, so borrowing grok's interrupt key here would stop the agent
+# instead of its turn. gemini names its own key in the running turn's status
+# row (`(esc to cancel, <n>s)`), and a single Escape was verified to cancel
+# it. rovo cancels on a single Escape too, printing "Agent cancelled"
+# (verified, 202609.1.2). agy cancels on a single Escape, printing the
+# Interrupted row with an idle composer and no repollution (verified live,
+# agy 1.2.0 through Herdr). omp (Oh My Pi) shares Pi's single Escape, empty
+# composer afterwards, and /quit exit (verified omp 18.1.2 in a PTY,
+# re-verified 18.1.11 through Herdr).
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|cline|agy|rovo) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|cline|agy|rovo|devin) printf 'Escape' ;;
     grok|copilot) printf 'C-c' ;;
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy|devin) printf 'Escape' ;;
-    grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
 }
 
-# How many times the interrupt key must be delivered. OpenCode and Devin need a double
-# Escape; every other verified adapter interrupts on a single press.
+# How many times the interrupt key must be delivered. OpenCode and Devin need a
+# double Escape; every other verified adapter interrupts on a single press.
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
-    opencode) printf '2' ;;
+    opencode|devin) printf '2' ;;
     claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|cline|copilot|agy|rovo) printf '1' ;;
+    *) return 1 ;;
+  esac
+}
+
+# The rendered proof, read from the visible viewport between presses, that the
+# first interrupt press landed on a RUNNING turn; empty when the adapter sends
+# its presses blind. Devin needs it because the same fast double Escape that
+# cancels a running turn opens its /revert "Revert to step" picker on an idle
+# agent, where a later Enter reverts file changes. One Escape on a running turn
+# renders `esc again to interrupt` for about three seconds, while an idle agent
+# renders nothing, so the second press is sent only after that proof and never
+# sooner than fm_control_interrupt_press_gap: an unproven arm sends nothing
+# more. Verified live on devin 3000.11.1: an idle pair opened the picker at a
+# 0.05-0.1 s gap and did not at 0.15 s or more, and a running turn cancelled
+# with a 0.6 s gap.
+fm_control_interrupt_arm_signal() {  # <harness>
+  case "${1-}" in
+    devin) printf '%s' 'esc again to interrupt' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|cline|copilot|agy|rovo) ;;
+    *) return 1 ;;
+  esac
+}
+
+# The minimum seconds between two presses of an armed interrupt: several times
+# Devin's observed idle double-tap window, well inside its three-second armed
+# window. A turn that ends between the presses therefore cannot pair them.
+fm_control_interrupt_press_gap() {  # <harness>
+  case "${1-}" in
+    devin) printf '0.5' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|cline|copilot|agy|rovo) printf '0.2' ;;
+    *) return 1 ;;
+  esac
+}
+
+# A rendered surface that a mistimed interrupt press can open and that must be
+# dismissed with one more interrupt key before anything else is typed; empty
+# when the adapter has none. Devin's revert picker is recognized by either of
+# two independent rows, its `Revert to step:` title or its `↵ revert` footer,
+# and Escape cancels it without reverting (verified live, devin 3000.11.1).
+fm_control_interrupt_hazard_signal() {  # <harness>
+  case "${1-}" in
+    devin) printf '%s' 'Revert to step:|↵ revert' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|cline|copilot|agy|rovo) ;;
     *) return 1 ;;
   esac
 }
@@ -180,8 +211,7 @@ fm_control_interrupt_repeat() {  # <harness>
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|cline|copilot|agy|rovo) ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|cline|copilot|agy|rovo|devin) ;;
     *) return 1 ;;
   esac
 }
@@ -196,8 +226,7 @@ fm_control_interrupt_ack_source() {  # <harness>
     # rovo's TUI prints "Agent cancelled" on Escape, but for parity with
     # claude/cursor this stays 'none': the ack is a rendered string, not a
     # recorded state source, and rovo has no busy wiring to confirm against.
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|cline|copilot|agy|rovo) printf 'none' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy|devin) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|cline|copilot|agy|rovo|devin) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -210,11 +239,12 @@ fm_control_interrupt_ack_source() {  # <harness>
 # verified adapter with NO composer exit command at all.
 
 # The command that exits the agent from its own composer. Prints the command, or
-# nothing for an adapter that exits on a key instead.
+# nothing for an adapter that exits on a key instead. agy exits on /quit
+# (verified live, agy 1.2.0 through Herdr).
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
-    claude|opencode|grok|kimi|cursor|muse|copilot|agy|rovo) printf '/exit' ;;
-    codex|pi|pi-signed|gemini|omp) printf '/quit' ;;
+    claude|opencode|grok|kimi|cursor|muse|copilot|rovo) printf '/exit' ;;
+    codex|pi|pi-signed|omp|gemini|agy|devin) printf '/quit' ;;
     cline) ;;
     *) return 1 ;;
   esac
@@ -228,7 +258,7 @@ fm_control_exit_command() {  # <harness>
 fm_control_exit_key() {  # <harness>
   case "${1-}" in
     cline) printf 'C-c' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|copilot|agy|rovo|omp) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|copilot|agy|rovo|omp|devin) ;;
     *) return 1 ;;
   esac
 }

@@ -131,7 +131,6 @@ configure_env_backend_tasks_axi() {  # <case-dir>
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 case "\${1:-}" in
-  --version) printf '0.2.5\n' ;;
   --version) printf '0.2.6\n' ;;
   update) printf '%s\n' '--archive-body' ;;
   mv) printf '%s\n' '[<id>...]' ;;

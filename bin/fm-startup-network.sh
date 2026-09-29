@@ -789,7 +789,6 @@ case "$LOCKED" in 0|1) ;; *) LOCKED=0 ;; esac
 case "$MODE" in
   start) cmd_start "$LOCKED" "${HARVEST_PID:-0}" ;;
   run) cmd_run "$LOCKED" "$LOCK_PID" "$LOCK_KIND" "$LOCK_SESSION" "$GENERATION" ;;
-  run) cmd_run "$LOCKED" "$LOCK_PID" "$GENERATION" || exit $? ;;
   harvest) cmd_harvest "${HARVEST_PID:-}" ;;
   report) print_state; print_timings ;;
   wait) cmd_wait "${1:-120}" || exit $? ;;

@@ -381,7 +381,6 @@ bash -c '. "$1"; fm_pending_reply_tick "$2"' _ "$ROOT/bin/fm-pending-reply-lib.s
 [ -z "$(grep '^delivered_epoch=' "$escalated_rec" | cut -d= -f2-)" ] \
   || fail "escalation must not invent a delivery for the undelivered wake"
 [ "$(grep -cF "blocked [key=pending-reply-$escalated_corr]:" "$PARENT/state/ios.status")" -eq 1 ] \
-[ "$(grep -cF "blocked [key=pending-reply-$escalated_corr]" "$PARENT/state/ios.status")" -eq 1 ] \
   || fail "undelivered wake escalation was not published exactly once"
 set +e
 handoff_env "$ROOT/bin/fm-backlog-handoff.sh" --resume-pending > "$TMP_ROOT/wake-escalated-resume.out" 2>&1
@@ -400,7 +399,6 @@ assert_absent "$PARENT/state/.backlog-handoff-ios.wake-pending" "escalated wake 
 [ "$(grep '^phase=' "$escalated_rec" | cut -d= -f2-)" = awaiting_report ] \
   || fail "delivered wake retry did not return the correlation to awaiting its report"
 [ "$(grep -cF "blocked [key=pending-reply-$escalated_corr]:" "$PARENT/state/ios.status")" -eq 1 ] \
-[ "$(grep -cF "blocked [key=pending-reply-$escalated_corr]" "$PARENT/state/ios.status")" -eq 1 ] \
   || fail "wake retry duplicated the published escalation"
 write_backlog '- [ ] after-escalated - next handoff flows once the escalated wake is retried (repo: alpha)'
 handoff_env "$ROOT/bin/fm-backlog-handoff.sh" ios after-escalated >/dev/null \

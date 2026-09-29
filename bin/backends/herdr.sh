@@ -1120,48 +1120,6 @@ fm_backend_herdr_projection_target_tab_mutation_allowed() {  # <session> <tab-id
   return 1
 }
 
-# fm_backend_herdr_foreground_client_present: whether a live Herdr client is
-# the session's foreground viewer, as opposed to the persisted .focused
-# pointer workspace list still reports after that client detaches.
-# `herdr status --json` `.client.protocol` / `.client.version` name the CLI
-# making the call, so they cannot answer this; `herdr terminal title clear`
-# maps to client.window_title.clear, which returns reason
-# `no_foreground_client` when no viewer is attached and `cleared` when one is.
-# Unreadable or unexpected reasons are unknown rather than permission to
-# treat the persisted pointer as a live viewer.
-# Return codes: 0 present, 1 absent, 2 unknown.
-fm_backend_herdr_foreground_client_present() {  # <session>
-  local session=$1 out reason
-  out=$(fm_backend_herdr_cli "$session" terminal title clear 2>/dev/null) || return 2
-  reason=$(printf '%s' "$out" | jq -r '.result.reason // empty' 2>/dev/null) || return 2
-  case "$reason" in
-    no_foreground_client) return 1 ;;
-    cleared) return 0 ;;
-    *) return 2 ;;
-  esac
-}
-
-fm_backend_herdr_projection_target_tab_mutation_allowed() {  # <session> <tab-id>
-  local session=$1 target_tab=$2 foreground_rc=0 focus active_tab
-  FM_BACKEND_HERDR_PROJECTION_MUTATION_FOCUS=""
-  fm_backend_herdr_foreground_client_present "$session" || foreground_rc=$?
-  [ "$foreground_rc" -eq 1 ] && return 0
-  focus=$(fm_backend_herdr_projection_focus_snapshot "$session") || return 1
-  active_tab=${focus#*$'\t'}
-  if [ "$target_tab" != "$active_tab" ]; then
-    # Let the close owner preserve the live viewer's fresh non-target focus,
-    # rather than restoring a stale pre-planning pointer after the mutation.
-    FM_BACKEND_HERDR_PROJECTION_MUTATION_FOCUS=$focus
-    return 0
-  fi
-  if [ "$foreground_rc" -eq 0 ]; then
-    echo "warning: herdr presentation cleanup target is the captain's active tab; refusing a close that cannot preserve focus" >&2
-  else
-    echo "warning: herdr presentation cleanup could not verify whether a foreground client is viewing the target tab; refusing a focus-unsafe mutation" >&2
-  fi
-  return 1
-}
-
 # fm_backend_herdr_projection_close_pane_focus_preserving: close one exact
 # response-derived projection pane without leaving the captain focused
 # anywhere else.

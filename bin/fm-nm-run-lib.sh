@@ -124,7 +124,6 @@ fm_nm_head_matches_worktree() {  # <worktree> <run_head>
 fm_nm_run_status_class() {  # <status_word>
   case "${1:-}" in
     completed|failed|cancelled) printf 'terminal' ;;
-    running)                    printf 'live' ;;
     pending|running)            printf 'live' ;;
     *)                          printf 'unknown' ;;
   esac

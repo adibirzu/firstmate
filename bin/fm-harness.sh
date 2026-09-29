@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|agy|cline|copilot|rovo|omp|unknown
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|agy|cline|copilot|rovo|omp|devin|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -78,20 +77,17 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck source=bin/fm-gemini-lib.sh
 . "$SCRIPT_DIR/fm-gemini-lib.sh"
 
-detect_own() {
-  # Layer 1: environment markers for verified harnesses.
-  # Keep marker detection before ancestry detection as an explicit precedence rule.
-  # Claude, Pi, Grok, and Cursor set verified markers of their own; codex,
-  # opencode, Kimi, and Muse are markerless, so a foreign marker retained in a terminal
-  # multiplexer's stored environment can silently misidentify one of them before
-  # ancestry is consulted. This is a precedence hazard, not evidence that
-  # CLAUDECODE inheritance into a kimi child was observed; it was not observed.
+# Print the harness named by a verified environment marker, or nothing when no
+# marker is present. Markers only report what the environment CLAIMS; detect_own
+# decides whether that claim survives contradicting ancestry.
+harness_marker() {
   # agy (Antigravity CLI) sets ANTIGRAVITY_AGENT=1 for its child/tool
   # processes (verified 2026-08-01 on agy 1.1.9 via a clean env -i tool
   # child write; docs/verification/agy-adapter.md). MUST be checked before
   # CLAUDECODE: some interactive environments also surface CLAUDECODE=1 in
   # the process tree, and that marker would otherwise misidentify an agy
-  # worker as claude.
+  # worker as claude. agy 1.2.0 TUI sessions may omit it, in which case
+  # ancestry still identifies the binary.
   [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
   # Cursor is checked BEFORE claude, deliberately. cursor-agent does NOT clear
   # an inherited CLAUDECODE, so a cursor worker launched from a claude primary
@@ -165,109 +161,13 @@ detect_own() {
   # muse (Muse Code) publishes no harness-identity marker of its own. The only
   # MUSE_* variable it is documented to hand a child is MUSE_CURRENT_SESSION_LOG,
   # a per-session log PATH rather than an identity, and its export to tool
-  # subprocesses is unverified (verified: muse 0.1.0-R708.1), so muse is detected
-  # by ancestry alone below. Do NOT promote MUSE_CURRENT_SESSION_LOG to a marker
-  # without verifying it reaches children AND that it cannot survive in a
-  # multiplexer's stored environment, which is the precedence hazard above.
-  # Layer 2: walk the parent chain and match the command name.
-  local pid=$$ comm args argv0
-  for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
-    argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
-    if fm_cursor_process_matches "$comm" '' "$argv0"; then
-      echo cursor
-      return
-    fi
-    if fm_gemini_path_is_gemini "$comm"; then
-      echo gemini
-      return
-    fi
-    # On platforms where ps reports an interpreter as comm, preserve Muse's
-    # versioned launcher identity from argv[0]. The match is still anchored so
-    # an unrelated argument containing "muse" cannot claim this harness.
-    case "$(basename -- "$argv0")" in
-      muse|muse-bin-*) echo muse; return ;;
-    esac
-    case "$(basename -- "$comm")" in
-      # gemini precedes claude here for the same precedence reason as the
-      # marker layer above, so a gemini worker under a claude primary is never
-      # read as claude. This arm covers a natively-named gemini binary only.
-      # It does NOT reach the currently installed CLI, which is a node bundle
-      # (~/.local/bin/gemini -> @google/gemini-cli/bundle/gemini.js): modern
-      # Node on Linux reports `comm` as MainThread rather than node (measured
-      # on Node v24.20.0), so neither this arm nor the node interpreter arm
-      # below matches a live gemini process. GEMINI_CLI above is therefore
-      # load-bearing for gemini rather than a fast path, which is why gemini
-      # is not offered as a primary or secondmate harness. Do NOT add
-      # MainThread to the interpreter arm to close this: that would make the
-      # args of EVERY node process searchable and let an unrelated node
-      # command carrying a harness name in its arguments claim an identity.
-      *claude*) echo claude; return ;;
-      *codex*) echo codex; return ;;
-      *opencode*) echo opencode; return ;;
-      *grok*) echo grok; return ;;
-      *cline*) echo cline; return ;;
-      *cursor*) echo cursor-agent; return ;;
-      *copilot*) echo copilot; return ;;
-      agy) echo agy; return ;;
-      kimi) echo kimi; return ;;
-      rovo) echo rovo; return ;;
-      # muse's installed launcher ~/.local/bin/muse execs ~/.local/bin/muse-bin-<version>
-      # (verified in the published launcher, muse 0.1.0-R708.1), so the live process
-      # name carries the version and CHANGES on every auto-update. Match the stable
-      # prefix rather than any exact name. Deliberately anchored, never *muse*, so
-      # unrelated commands (musescore, amuse) cannot be misread as this harness.
-      muse|muse-bin-*|*/muse|*/muse-bin-*) echo muse; return ;;
-      pi-signed) echo pi; return ;;
-      pi) echo pi; return ;;
-      # omp is a Bun-compiled single binary whose process name is exactly `omp`
-      # (verified, omp 18.1.11: `ps -o comm=` reports omp from both its `!`
-      # bash path and the model's bash tool). Anchored, never *omp*, so ompd,
-      # comp, and similar unrelated commands are not misread as this harness.
-      # It sits above the node*|python* interpreter fallback deliberately: the
-      # optional claude-bridge extension runs a nested executable literally
-      # named `claude` with its own node child, and that fallback's *claude*
-      # args glob would otherwise claim it if that subtree were ever walked.
-      omp) echo omp; return ;;
-      node*|python*)
-        # Bare interpreter: match the harness name in its script path.
-        args=$(ps -o args= -p "$pid" 2>/dev/null)
-        if fm_gemini_args_are_gemini "$args"; then
-          echo gemini
-          return
-        fi
-        case "$args" in
-          *claude*) echo claude; return ;;
-          *codex*) echo codex; return ;;
-          *opencode*) echo opencode; return ;;
-          *grok*) echo grok; return ;;
-          *cline*) echo cline; return ;;
-          *cursor*) echo cursor-agent; return ;;
-          *copilot*) echo copilot; return ;;
-          # Anchored like the pi arm below: a bare `agy` substring also occurs
-          # inside ordinary words ("legacy"), so only a whole argv token or a
-          # trailing path segment counts.
-          *" agy "*|*"/agy "*|*/agy) echo agy; return ;;
-          *" pi "*|*/pi) echo pi; return ;;
-        esac ;;
-      MainThread)
-        # GitHub Copilot CLI 1.0.75 is a standalone compiled (Bun) executable,
-        # not an interpreter script; /proc/<pid>/comm reports the runtime's
-        # internal main-thread name "MainThread", never "copilot" or "node"/
-        # "python" (verified live; docs/verification/copilot-adapter.md
-        # "Detection"). Same argv-substring fallback shape as the node/python
-        # case above, keyed on this observed comm value instead.
-        args=$(ps -o args= -p "$pid" 2>/dev/null)
-        case "$args" in
-          *copilot*) echo copilot; return ;;
-        esac ;;
-    esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ -z "$pid" ] || [ "$pid" -le 1 ]; then
-      break
-    fi
-  done
-  echo unknown
+  # subprocesses is unverified (verified: muse 0.1.0-R708.1), so muse is
+  # identified by ancestry alone. Do NOT promote MUSE_CURRENT_SESSION_LOG to a
+  # marker without verifying it reaches children AND that it cannot survive in
+  # a multiplexer's stored environment.
+  # codex, opencode, kimi, cline, and devin likewise publish no harness-identity
+  # marker and are identified by ancestry alone.
+  return 0
 }
 
 # True when an exact `omp` process sits within eight parents of this one. The
@@ -322,6 +222,8 @@ harness_process_verdict() {  # <pid>
     *codex*) echo "comm codex"; return ;;
     *opencode*) echo "comm opencode"; return ;;
     *grok*) echo "comm grok"; return ;;
+    cline) echo "comm cline"; return ;;
+    copilot) echo "comm copilot"; return ;;
     kimi) echo "comm kimi"; return ;;
     rovo) echo "comm rovo"; return ;;
       # muse's installed launcher ~/.local/bin/muse execs ~/.local/bin/muse-bin-<version>
@@ -351,7 +253,8 @@ harness_process_verdict() {  # <pid>
     # publishes no harness-identity marker of its own (a live 1.2.0 TUI
     # carries no AGY_* or ANTIGRAVITY_* variable; AGENT=1 seen there is an
     # inherited launcher value, not an agy identity), so like muse it is
-    # detected by ancestry alone.
+    # detected by ancestry alone when the marker is absent. ANTIGRAVITY_AGENT=1
+    # remains a marker fast path for child/tool processes that still publish it.
     agy) echo "comm agy"; return ;;
     devin) echo "comm devin"; return ;;
     node*|python*)
@@ -366,7 +269,20 @@ harness_process_verdict() {  # <pid>
         *codex*) echo "args codex"; return ;;
         *opencode*) echo "args opencode"; return ;;
         *grok*) echo "args grok"; return ;;
+        *cline*) echo "args cline"; return ;;
+        *copilot*) echo "args copilot"; return ;;
         *" pi "*|*/pi) echo "args pi"; return ;;
+      esac ;;
+    MainThread)
+      # GitHub Copilot CLI 1.0.75 is a standalone compiled (Bun) executable,
+      # not an interpreter script; /proc/<pid>/comm reports the runtime's
+      # internal main-thread name "MainThread", never "copilot" or "node"/
+      # "python" (verified live; docs/verification/copilot-adapter.md
+      # "Detection"). Same argv-substring fallback shape as the node/python
+      # case above, keyed on this observed comm value instead.
+      args=$(ps -o args= -p "$pid" 2>/dev/null)
+      case "$args" in
+        *copilot*) echo "comm copilot"; return ;;
       esac ;;
   esac
 }
@@ -512,7 +428,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|cline|copilot|rovo|omp|agy|devin)
       printf '%s\n' "$pin"
       ;;
     *)

@@ -3004,47 +3004,6 @@ test_live_paused_until_controls_recheck_time() {
   pass "a live paused worker stays absorbed until its declared time, then rechecks"
 }
 
-test_live_paused_until_controls_recheck_time() {
-  local dir state fakebin out capture_file statusf window key sig wakes future past
-  dir=$(make_case live-paused-until); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/parked.status"
-  window="test:fm-parked"
-  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
-  future=$(iso_utc_at "$(( $(date +%s) + 7200 ))")
-  printf 'paused: rate limit until %s\n' "$future" > "$statusf"
-  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
-  printf 'parked, elapsed 1s' > "$capture_file"
-  printf '%s' "$(hash_text 'parked, elapsed 1s')" > "$state/.hash-$key"
-  printf '1\n' > "$state/.count-$key"
-  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
-    || fail "a live worker woke before its declared future time"
-  printf 'parked, elapsed 2s' > "$capture_file"
-  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
-    || fail "pane churn bypassed a live worker's declared future time"
-  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
-    "$state/.wake-queue" 2>/dev/null || echo 0)
-  [ "$wakes" -eq 0 ] || fail "a live worker produced $wakes wakes before its declared time"
-
-  past=$(iso_utc_at "$(( $(date +%s) - 120 ))")
-  printf 'paused: rate limit until %s\n' "$past" >> "$statusf"
-  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
-  printf 'parked, elapsed 3s' > "$capture_file"
-  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
-    || fail "a live worker did not wake when its declared time passed"
-  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
-    "$state/.wake-queue" 2>/dev/null || echo 0)
-  [ "$wakes" -eq 1 ] || fail "a passed declared time produced $wakes wakes instead of one"
-  ack_stopped_cycle "$state" || fail "could not acknowledge the due declared-time recheck"
-  printf 'parked, elapsed 4s' > "$capture_file"
-  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
-    || fail "a due declared time bypassed the reset long cadence"
-  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
-    "$state/.wake-queue" 2>/dev/null || echo 0)
-  [ "$wakes" -eq 0 ] || fail "a due declared time rechecked again inside the long cadence"
-  pass "a live paused worker stays absorbed until its declared time, then rechecks"
-}
-
 # --- the wedge threshold consults the worker's own declared wait ------------
 # Upstream kunchenguid/firstmate#3909 and #2614: wedge_timer_check escalated on
 # elapsed idle time alone, without ever asking whether the worker had already
