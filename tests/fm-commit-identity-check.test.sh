@@ -70,13 +70,19 @@ assert_contains "$out" "refusing push" \
   "refusal did not state that the push is blocked"
 pass "commit identity gate refuses wrong author and committer identities with commit diagnostics"
 
-lint_command=$(ruby -e '
-  require "yaml"
-  value = YAML.safe_load(File.read(ARGV.fetch(0))).dig("commands", "lint")
-  abort "missing commands.lint" unless value.is_a?(String)
-  print value
-' "$ROOT/.no-mistakes.yaml") \
-  || fail "could not read the no-mistakes lint command"
+lint_command=$(python3 - "$ROOT/.no-mistakes.yaml" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+match = re.search(r"(?m)^commands:\n(?:  .*\n)*?  lint:\s*(.+)$", text)
+if not match:
+    raise SystemExit("missing commands.lint")
+value = match.group(1).strip()
+quotes = "\"'"
+if len(value) >= 2 and value[0] == value[-1] and value[0] in quotes:
+    value = value[1:-1]
+print(value, end="")
+PY
+) || fail "could not read the no-mistakes lint command"
 assert_equals 'bin/fm-commit-identity-check.sh && bin/fm-lint.sh' "$lint_command" \
   "no-mistakes does not run the identity check before its canonical lint"
 pass "no-mistakes runs the commit identity check in its deterministic pre-push path"

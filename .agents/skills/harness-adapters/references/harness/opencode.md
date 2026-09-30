@@ -39,8 +39,7 @@ The primary integration was verified on 2026-07-08 with OpenCode 1.17.6.
 Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive.
 [`docs/turnend-guard.md`](../../../../../docs/turnend-guard.md#harness-integrations) owns the watch-arm handoff, including its exact silent outcomes and the failed-arm fail-safe.
 The follow-up was verified in the interactive TUI.
-The headless `opencode run` path remains fail-open because it can exit before displaying a queued follow-up.
-In a home with `config/supervision-host` (not `off`) the watch-arm plugin spawns the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
+In a home with `config/supervision-host` and no `config/supervision-host-off` the watch-arm plugin spawns the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
 `opencode run` can exit before displaying a queued follow-up, so the adapter steps aside in headless mode.
 On native Windows, the operational-input adapter runs its Bash helper through `bash`; macOS and Linux invoke it directly.
 
