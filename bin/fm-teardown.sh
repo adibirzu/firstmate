@@ -557,11 +557,30 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     if [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ]; then
       # A record that predates the incarnation field. Its acceptance is gated
       # later: a recorded endpoint must be confirmed dead or agent-less, and a
-      # record with no window endpoint at all is retirable only with
-      # --legacy-record once its worktree is clean and landed or already gone.
-      # The --legacy-record flag is therefore no longer required just to reach
-      # that gate; it only widens the gate to accept a missing endpoint.
-      TEARDOWN_LEGACY_PENDING=1
+      # still-present worktree with no window is retirable only with
+      # --legacy-record once that worktree is clean and landed. A windowless
+      # leftover whose worktree is already gone names no live endpoint, so
+      # there is nothing for --legacy-record to classify; accept it as a
+      # missing-endpoint leftover with or without the flag. A no-window
+      # record outside that leftover class (foreign backend identity, extra
+      # bindings) is not a husk --legacy-record can prove gone.
+      if [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ]; then
+        TEARDOWN_WINDOWLESS_WT=$(fm_meta_get "$META" worktree)
+        if [ "$LEGACY_RECORD_GIVEN" != 1 ] \
+           && [ -n "$TEARDOWN_WINDOWLESS_WT" ] \
+           && [ ! -e "$TEARDOWN_WINDOWLESS_WT" ] && [ ! -L "$TEARDOWN_WINDOWLESS_WT" ]; then
+          TEARDOWN_WINDOWLESS=1
+        fi
+        TEARDOWN_LEGACY_PENDING=1
+      elif [ "$TEARDOWN_WINDOW_COUNT" = 1 ] \
+           && [ -n "$(fm_meta_get "$META" window)" ]; then
+        TEARDOWN_LEGACY_PENDING=1
+      elif [ "$LEGACY_RECORD_GIVEN" = 1 ]; then
+        TEARDOWN_LEGACY_PENDING=1
+      else
+        echo "error: task $ID's record has no spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
+        exit 1
+      fi
     else
       echo "error: task $ID's record has an unreadable spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - fix the record, then retry teardown" >&2
       exit 1
@@ -578,9 +597,6 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
         # the abandoned attempt's own stamp.
         if [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ]; then
           TEARDOWN_WINDOWLESS=1
-        elif [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
-          echo "error: task $ID's record carries the legacy incarnation stamp $FM_BACKLOG_META_SPAWN_GEN left by an abandoned --legacy-record teardown, not an incarnation published by a spawn; refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
-          exit 1
         fi
         TEARDOWN_LEGACY_PENDING=1
         TEARDOWN_LEGACY_RETAINED_STAMP=$FM_BACKLOG_META_SPAWN_GEN
@@ -1087,13 +1103,16 @@ elif [ "$TEARDOWN_WINDOW_COUNT" = 1 ] \
   TEARDOWN_WINDOW_MISSING=1
 fi
 if [ "$TEARDOWN_LEGACY_PENDING" = 1 ] && [ "$TEARDOWN_WINDOW_MISSING" = 1 ]; then
-  if [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
+  if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
+    :
+  elif [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
     echo "REFUSED: task $ID's record predates spawn_gen and records no window endpoint; a plain teardown cannot prove its endpoint gone. Pass --legacy-record once its worktree is clean and landed or already gone. Nothing was changed." >&2
     exit 1
+  else
+    fm_backend_validate_task_endpoint "$META" "$ID" --allow-missing-window || exit 1
+    TEARDOWN_ENDPOINT_MISSING=1
   fi
-  fm_backend_validate_task_endpoint "$META" "$ID" --allow-missing-window || exit 1
-  TEARDOWN_ENDPOINT_MISSING=1
-else
+elif [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
   fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
 fi
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
@@ -1105,9 +1124,6 @@ if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
   BACKEND=tmux
   T=
 else
-  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
-  BACKEND=$FM_BACKEND_VALIDATED_BACKEND
-  T=$FM_BACKEND_VALIDATED_TARGET
   [ "$BACKEND" != orca ] || T_ORCA=$T
 fi
 # The recorded backend, including every sibling its adapter sources, has to
@@ -1168,6 +1184,9 @@ if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
     # exact unlanded evidence and refuses); there is no agent that could be
     # bound to an endpoint this record never named.
     TEARDOWN_LEGACY_ENDPOINT=absent
+  elif [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
+    # A leftover with no window and no worktree names no endpoint.
+    TEARDOWN_LEGACY_ENDPOINT=missing
   else
     TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
     case "$TEARDOWN_LEGACY_ENDPOINT" in
@@ -3726,6 +3745,22 @@ if [ "$BACKEND" = herdr ]; then
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+# teardown_herdr_journal_orphaned: true when the task's own journal names
+# nothing the session-start sweep could still close - a version 1 attempt whose
+# token-bearing projected workspace is confirmed gone, or a version 2 binding of
+# exactly the recorded pane this teardown proves gone. Unreadable, malformed, or
+# otherwise-bound journals, and a version 1 workspace still present or
+# unreadable, are not orphans.
+teardown_herdr_journal_orphaned() {
+  fm_backend_source herdr || return 1
+  fm_backend_herdr_projection_journal_snapshot "$HERDR_PRESENTATION_JOURNAL" "$ID" || return 1
+  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 1 ]; then
+    fm_backend_herdr_projection_token_workspace_gone \
+      "$TEARDOWN_HERDR_SESSION" "$HERDR_PRESENTATION_JOURNAL" "$ID"
+  else
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION:$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$T" ]
+  fi
+}
 HERDR_FOCUS_CHECKPOINT="$STATE/$ID.herdr-focus"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
@@ -3967,7 +4002,8 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] && [ "$BACKEND" = herdr ]; th
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
+elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ] \
+     && [ "$TEARDOWN_ENDPOINT_MISSING" != 1 ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
     || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
 fi
@@ -3979,23 +4015,11 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   fi
 elif [ "$BACKEND" = herdr ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  # A projected teardown can lose the pre-close candidate gate when metadata
-  # cleanup has already advanced the endpoint identity.  The journal is still
-  # safe to retire only after the exact recorded pane is positively absent;
-  # never infer absence from a failed or malformed query.
-  HERDR_JOURNAL_SESSION=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
-  HERDR_JOURNAL_PANE=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
-  # Metadata may have advanced past the endpoint binding by the time the
-  # close confirmation runs. The journal is the durable, read-only binding for
-  # this exact projection, so use its session as the fallback rather than
-  # leaving a confirmed-dead projection journal quarantined.
-  [ -n "$HERDR_JOURNAL_SESSION" ] || HERDR_JOURNAL_SESSION=$HERDR_PRESENTATION_SESSION
-  if [ -n "$HERDR_JOURNAL_SESSION" ] && [ -n "$HERDR_JOURNAL_PANE" ] \
-     && [ "$(fm_backend_herdr_pane_presence_state "$HERDR_JOURNAL_SESSION" "$HERDR_JOURNAL_PANE")" = dead ]; then
-    rm -f "$HERDR_PRESENTATION_JOURNAL"
-  else
-    echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
-  fi
+  # Close did not retire this journal. A version 2 binding of some other pane,
+  # or a version 1 attempt whose token-bearing workspace is still present, is
+  # not the closed endpoint; teardown_herdr_journal_orphaned below owns the
+  # leftover-journal verdict so a drifted pane is not treated as gone.
+  echo "warning: herdr presentation journal for $ID was not retired by its close; no workspace cleanup was attempted" >&2
 fi
 # A refused, skipped, or failed Herdr close must never erase a live task's
 # durable endpoint identity: unless the exact pane is confirmed gone, retain
@@ -4012,20 +4036,6 @@ if [ "$BACKEND" = herdr ]; then
   if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
-  fi
-  # Endpoint confirmation is the final destructive-operation boundary. A
-  # transient presence lookup above may have quarantined the projection
-  # journal even though the authoritative endpoint check now proves teardown
-  # complete. Retire only the journal's exact pane, and only after a positive
-  # dead result; malformed or unqueryable journals remain recoverable.
-  if { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; } \
-    && declare -F fm_backend_herdr_projection_journal_field >/dev/null 2>&1; then
-    journal_session=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" session 2>/dev/null || true)
-    journal_pane=$(fm_backend_herdr_projection_journal_field "$HERDR_PRESENTATION_JOURNAL" pane_id 2>/dev/null || true)
-    if [ -n "$journal_session" ] && [ -n "$journal_pane" ] \
-      && [ "$(fm_backend_herdr_pane_presence_state "$journal_session" "$journal_pane")" = dead ]; then
-      rm -f "$HERDR_PRESENTATION_JOURNAL"
-    fi
   fi
 fi
 if [ "$KIND" != secondmate ]; then

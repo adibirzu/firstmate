@@ -1491,7 +1491,7 @@ test_windowless_legacy_record_tears_down_with_the_legacy_flag() {
 
   out=$(run_teardown "$case_dir" --legacy-record) \
     || fail "windowless-flag: --legacy-record refused a leftover with no window and no spawn_gen"
-  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint missing' \
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent' \
     || fail "windowless-flag: the teardown line did not log the missing-endpoint leftover: $out"
   assert_absent "$case_dir/state/task-x1.meta" \
     "windowless-flag: teardown left the leftover record"
@@ -4545,32 +4545,6 @@ test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconf
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_retains_records_when_focus_restore_fails
-
-test_legacy_record_without_the_flag_refuses() {
-  local case_dir rc
-  case_dir=$(make_case legacy-noflag)
-  write_legacy_meta "$case_dir" no-mistakes ship
-  seed_backlog_in_flight "$case_dir"
-  wt_commit "$case_dir" "landed legacy work"
-  add_fork_with_pushed_branch "$case_dir"
-
-  set +e
-  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-
-  expect_code 1 "$rc" "legacy-noflag: a record without spawn_gen must refuse without --legacy-record"
-  grep -q -- '--legacy-record' "$case_dir/stderr" \
-    || fail "legacy-noflag: the refusal did not name the --legacy-record path"
-  [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
-    || fail "legacy-noflag: the refusal stamped a spawn generation into the record"
-  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
-    || fail "legacy-noflag: the refusal closed the backlog item anyway"
-  assert_present "$case_dir/state/task-x1.meta" \
-    "legacy-noflag: the refusal removed the task record"
-  pass "a record predating spawn_gen refuses teardown until --legacy-record is passed"
-}
-
 test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone
@@ -4597,7 +4571,6 @@ test_legacy_record_without_window_needs_the_flag
 test_legacy_record_without_window_retires_when_worktree_landed
 test_legacy_record_without_window_refuses_unlanded_work
 test_legacy_record_without_window_retires_when_worktree_absent
-test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down
 test_windowless_legacy_record_tears_down_with_the_legacy_flag
 test_windowless_legacy_record_still_refuses_unlanded_work

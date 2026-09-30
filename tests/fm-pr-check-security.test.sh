@@ -816,9 +816,10 @@ test_valid_recording_and_merge_derivation() {
   [ "$count" -eq 1 ] || fail "duplicate pr_head metadata was appended"
 
   : > "$dir/gh.log"
+  : > "$dir/gh-axi.log"
   run_merge_entry "$dir" task-a https://github.com/my-org/repo_name.with-dots/pull/37 -- --merge \
     >/dev/null 2>/dev/null || fail "valid merge wrapper failed"
-  grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh.log" \
+  grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh-axi.log" \
     || fail "merge wrapper did not preserve repository derivation, live head, and method"
   # A merge this home performed leaves its own durable outcome, so the poll's
   # confirmation is no longer the first the captain hears of it. Acknowledge that
@@ -3256,7 +3257,7 @@ SH
     || fail "re-recorded registration differs from the one published on the live device"
   [ "$(file_mode "$state/task-a.pr-poll-registration")" = 600 ] || fail "re-recorded registration is not private"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "re-recorded poll is not strictly authenticated"
-  grep -F 'pr view https://github.com/o/r/pull/1 --json state' "$dir/gh.log" >/dev/null \
+  grep -F 'pr view https://github.com/o/r/pull/1 --repo o/r --json state' "$dir/gh.log" >/dev/null \
     || fail "re-recorded poll did not run its validated check in the same cycle"
   grep -F 're-recorded PR poll identity for task-a' "$state/.watch-triage.log" >/dev/null \
     || fail "re-record left no triage evidence"
