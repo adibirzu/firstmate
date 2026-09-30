@@ -484,6 +484,22 @@ EOF
   printf '%s' "$state"
 }
 
+# Record a failed stage when a live process still holds the publish lock at
+# the worker's deadline. Origin had no bounded wait here; upstream added this
+# so a wedged harvest cannot keep the worker alive past the budget with every
+# result discarded. Writes the failed record without needing the lock.
+publish_lock_held() {  # <generation> <phases> <locked> <started> <lockdir> <output-file> <timing-file>
+  local generation=$1 phases=$2 locked=$3 started=$4 lockdir=$5 out=$6 timings=${7:-}
+  printf 'NETWORK_CHECKS: the deferred check worker gave up because %s was still held by %s at its deadline, so %s may be incomplete; rerun %s/bin/fm-startup-network.sh run --locked %s once that lock is released\n' \
+    "$lockdir" "$(held_by)" "$(phase_label "$phases")" "$FM_ROOT" "$locked" >> "$out"
+  if [ "$(status_get generation)" != "$generation" ] \
+    && [ "$(status_get state)" = running ] && worker_alive; then
+    return 1
+  fi
+  record_result "$generation" failed "$phases" "$locked" "$started" 124 "$out" "$timings" >/dev/null
+  queue_result_wake failed
+}
+
 publish() {  # <generation> <state> <phases> <locked> <started> <rc> <output-file> <timing-file>
   local generation=$1 state=$2 phases=$3 locked=$4 started=$5 rc=$6 out=$7 timings=${8:-}
   DELIVERY_DEADLINE=$(( $(now) + $(delivery_budget) ))
@@ -530,8 +546,12 @@ cmd_run() {  # <locked> <lock-pid> <lock-kind> <lock-session> <generation>
     fm_lock_release "$PUBLISH_LOCK"
     [ "$internal" -eq 1 ] || return 1
   elif [ "$locked" = 1 ] && ! fm_session_lock_owned_by_current_session "$STATE"; then
-    [ "$internal" -eq 1 ] || { run_cleanup "$out" "$timings"; return 1; }
-  elif [ "$locked" = 1 ] && ! fm_session_lock_owned_by_self "$STATE"; then
+    # Fork lock identity is the owner check (Claude PID / session). A lock
+    # this session no longer holds still runs the read-only probe; it must
+    # not return before bootstrap, or the deferred stage cannot report the
+    # downgrade. Do not add upstream owned_by_self as a second gate after a
+    # passing current-session check: a Claude helper can own the lock without
+    # the recorded pid sitting in this ancestry.
     downgraded=1
     locked=0
   fi
@@ -788,7 +808,7 @@ case "$LOCKED" in 0|1) ;; *) LOCKED=0 ;; esac
 
 case "$MODE" in
   start) cmd_start "$LOCKED" "${HARVEST_PID:-0}" ;;
-  run) cmd_run "$LOCKED" "$LOCK_PID" "$LOCK_KIND" "$LOCK_SESSION" "$GENERATION" ;;
+  run) cmd_run "$LOCKED" "$LOCK_PID" "$LOCK_KIND" "$LOCK_SESSION" "$GENERATION" || exit $? ;;
   harvest) cmd_harvest "${HARVEST_PID:-}" ;;
   report) print_state; print_timings ;;
   wait) cmd_wait "${1:-120}" || exit $? ;;
