@@ -4513,7 +4513,7 @@ EOF
   kill -KILL "$root_pid" 2>/dev/null || true
 
   expect_code 1 "$rc" "endpoint-tree-refusal: teardown should refuse a surviving descendant"
-  assert_grep "REFUSED: leaked worktree process(es)" "$case_dir/stderr" \
+  assert_grep "REFUSED: leaked endpoint process(es)" "$case_dir/stderr" \
     "endpoint-tree-refusal: teardown did not surface the surviving descendant loudly"
   assert_present "$case_dir/wt" "endpoint-tree-refusal: teardown removed the worktree despite the leak"
   assert_present "$case_dir/state/task-x1.meta" \

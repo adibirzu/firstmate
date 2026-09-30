@@ -2111,6 +2111,10 @@ ${context.command}
     calmPresentation.active &&
     !calmPresentation.stockExportRendering &&
     !calmTranscriptClassIsVisible(itemClass);
+  // Calm-on hide needs renderShell "self" so an empty Container removes the whole row.
+  // Calm-off and HTML export must keep Pi's stock boxed shell, or throw-to-stock inner content still renders without toolSuccessBg.
+  const outcomesRenderShell = (): "self" | "default" =>
+    calmPresentation.active && !calmPresentation.stockExportRendering ? "self" : "default";
 
   const outcomesToolAnsiPattern = new RegExp(
     "(?:\\u001B\\][\\s\\S]*?(?:\\u0007|\\u001B\\u005C|\\u009C))|[\\u001B\\u009B][[\\]\\()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]",
@@ -2204,7 +2208,9 @@ ${context.command}
     parameters: Type.Object({
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
-    renderShell: "self",
+    get renderShell() {
+      return outcomesRenderShell();
+    },
     renderCall: (_args, theme, context) => {
       if (!calmPresentation.active || calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
@@ -2270,7 +2276,9 @@ ${context.command}
     parameters: Type.Object({
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
-    renderShell: "self",
+    get renderShell() {
+      return outcomesRenderShell();
+    },
     renderCall: (_args, theme, context) => {
       if (!calmPresentation.active || calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
