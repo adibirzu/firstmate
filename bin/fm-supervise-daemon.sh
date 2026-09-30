@@ -57,8 +57,6 @@
 #     PAUSE_RESURFACE_SECS recheck, never a wedge escalation, whether its pane
 #     reads idle or busy; only a status append that stops declaring the wait
 #     ends that routing. A captain-held transfer is not rechecked at all while
-#     the away-posture record (state/.afk-contract) exists: nobody is there to
-#     answer it, and the return brief lists it.
 #     an away record (state/.afk-contract, never quiet mode's) exists: nobody
 #     is there to answer it, and the return brief lists it.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
@@ -441,7 +439,7 @@ classify_stale() {  # <window> <state> [<span-record> <span-status>]
     rc=$?
   fi
   last=$(last_status_line "$state/$task.status")
-  declared=$(status_paused_governing_line "$state/$task.status")
+  declared=$(status_declared_wait_line "$state/$task.status")
   if [ "$rc" -eq 2 ]; then
     printf 'escalate|unreadable status span for %s' "$task"
     return
@@ -575,7 +573,6 @@ clear_pause_tracking() {  # <window> <state>
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(fm_window_marker_key "$win")
-  watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-stale-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key" \
@@ -606,8 +603,6 @@ migrate_watcher_pause_markers() {  # <state>
     task=$(basename "$meta"); task=${task%.meta}
     key=$(_stale_key "$task")
     watcher_key=$(fm_window_marker_key "$win")
-    last=$(status_paused_governing_line "$state/$task.status")
-    watcher_key=$(_stale_key "$win")
     last=$(status_declared_wait_line "$state/$task.status")
     if status_is_paused_or_captain_held "$last" || [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
       reconcile_pause_tracking "$win" "$state" "$last"
@@ -1298,7 +1293,7 @@ housekeeping() {  # <state>
     due="$state/.subsuper-pause-until-due-$key"
     until=
     bounded_until=0
-    if status_is_captain_held "$last" && fm_afk_contract_present "$state"; then
+    if status_is_captain_held "$last" && fm_afk_contract_away_present "$state"; then
       continue
     fi
     if until=$(status_paused_until "$last"); then

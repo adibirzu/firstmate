@@ -50,11 +50,16 @@ let armClose = new WeakMap();
 let armReadiness = new WeakMap();
 let armRecovery = new WeakMap();
 let armHostMode = new WeakMap();
+let armStatus = "idle";
 
 function positiveInteger(name, fallback) {
   const value = Number(process.env[name]);
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.floor(value);
+}
+
+function setArmStatus(status) {
+  armStatus = status;
 }
 
 function waitForArmReady(armChild) {
@@ -152,22 +157,59 @@ async function sessionOwnsLock(paths) {
   return false;
 }
 
-function observeArmOutput(stdout, stderr, settleReadiness) {
+function awayRecordPresent(paths) {
+  if (!existsSync(`${paths.state}/.afk-contract`)) return false;
+  const result = spawnSync("bash", [`${paths.root}/bin/fm-afk-contract.sh`, "mode"], {
+    encoding: "utf8",
+    env: { ...process.env, FM_STATE_OVERRIDE: paths.state },
+  });
+  return String(result.stdout || "").trim() !== "quiet";
+}
+
+function hostModeEnabled(paths) {
+  const result = spawnSync("bash", [`${paths.root}/bin/fm-supervision-engine-lib.sh`, "enabled", paths.config, "opencode"], {
+    stdio: "ignore",
+  });
+  return result.status === 0;
+}
+
+function hostWakeMessage(paths, combined) {
+  let shown = 0;
+  const lines = combined.split(/\r?\n/).filter((line) => {
+    if (HOST_LINE.test(line)) return true;
+    if (WAKE_LINE.test(line) && shown < 8) {
+      shown += 1;
+      return true;
+    }
+    return false;
+  });
+  if (lines.length === 0) return "";
+  if (awayRecordPresent(paths)) {
+    lines.push("This wake comes from automatic supervision under the away-posture record, not from the captain: it is not a return, so handle it under the away posture.");
+  }
+  return lines.join("\n");
+}
+
+function observeArmOutput(hostMode, stdout, stderr, settleReadiness) {
   const lines = `${stdout}\n${stderr}`.split(/\r?\n/);
   const carries = (pattern) => lines.some((line) => pattern.test(line));
-  if (carries(ACTIONABLE_RE)) {
+  if (carries(ACTIONABLE_RE) || (hostMode && carries(HOST_LINE))) {
+    setArmStatus("wake");
     settleReadiness("wake");
     return;
   }
   if (carries(OWNED_RE)) {
+    setArmStatus("armed");
     settleReadiness("armed");
     return;
   }
   if (carries(HEALTHY_RE)) {
+    setArmStatus("healthy");
     settleReadiness("healthy");
     return;
   }
   if (carries(FAILED_RE)) {
+    setArmStatus("failed");
     settleReadiness("failed");
   }
 }
@@ -466,7 +508,21 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settled = true;
     resolveClosed();
     releaseChild();
-    const classification = classifyArmClose(stdout, stderr, code, signal);
+    const combined = `${stdout}\n${stderr}`;
+    let classification;
+    if (hostMode) {
+      const hostMessage = hostWakeMessage(paths, combined);
+      if (hostMessage) {
+        classification = { kind: "actionable", message: hostMessage };
+      } else {
+        const stoodDown = combined.split(/\r?\n/).find((line) => /^supervision-host stood down:/.test(line));
+        classification = stoodDown
+          ? { kind: "failure", message: `watcher: FAILED - ${stoodDown}` }
+          : classifyArmClose(stdout, stderr, code, signal);
+      }
+    } else {
+      classification = classifyArmClose(stdout, stderr, code, signal);
+    }
     const acceptedBeforeClose = readinessSettled;
     const established =
       (readinessStatus === "armed" || readinessStatus === "healthy") && Date.now() - spawnedAt >= ARM_ESTABLISHED_MS;

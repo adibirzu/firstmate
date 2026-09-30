@@ -1079,6 +1079,8 @@ crew_dispatch_validate() {
       ($items | any(has("model") and (((.model | type) != "string") or (.model | length) == 0)))
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)))
       or ($typed and ($items | any(has("provider") and (provider_id(.provider) | not))));
+    def malformed_quota_window($items):
+      ($items | any(has("quotaWindow") and (((.quotaWindow | type) != "string") or (.quotaWindow | length) == 0)));
     # A quota floor, on a rule or a profile: bin/fm-dispatch-resolve.sh applies
     # it in code against one quota-axi row, so scope and min_percent must be
     # concrete; a rule floor also names the provider whose row it reads.
@@ -1100,6 +1102,52 @@ crew_dispatch_validate() {
       | map(select(. as $p | effort_ok($p.h; $p.m; $p.e) | not))
       | map("\(.h):\(.e)")
       | unique;
+    def fallback_error:
+      (.modelFallback // ._model_fallback // null) as $fb
+      | [
+        if (has("modelFallback") and has("_model_fallback")) then
+          "modelFallback and its legacy alias _model_fallback cannot both be declared"
+        else empty end,
+        if ((has("modelFallback") or has("_model_fallback")) and (($fb | type) != "object")) then
+          "modelFallback must be an object mapping a harness to its ordered model chain"
+        else empty end,
+        if ($fb != null and ($fb | type) == "object") then
+          ($fb | to_entries[]
+            | .key as $h | .value as $chain
+            | if (verified($h) | not) then
+                "modelFallback has an unverified harness: \($h)"
+              elif ((($chain | type) != "array") or (($chain | length) == 0)) then
+                "modelFallback chain must be a non-empty array of non-empty model ids: \($h)"
+              elif ($chain | any((type != "string") or (length == 0))) then
+                "modelFallback chain must be a non-empty array of non-empty model ids: \($h)"
+              elif (($chain | unique | length) != ($chain | length)) then
+                "modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: \($h)"
+              else empty end)
+        else empty end,
+        if has("modelFallbackCycles") then
+          (if ((.modelFallbackCycles | type) != "array") or ((.modelFallbackCycles | length) == 0) then
+             "modelFallbackCycles must be a non-empty array of verified harness names"
+           elif ([.modelFallbackCycles[] | select((type != "string") or (verified(.) | not))] | length) > 0 then
+             "modelFallbackCycles has a non-string or unverified harness entry: " + ([.modelFallbackCycles[] | select((type != "string") or (verified(.) | not))] | unique | join(", "))
+           elif ((.modelFallbackCycles | unique | length) != (.modelFallbackCycles | length)) then
+             "modelFallbackCycles has duplicate entries; a cyclic lane must be named once"
+           else
+             ([.modelFallbackCycles[] | . as $h
+               | (($fb // {})[$h] // []) as $chain
+               | select((($chain | type) != "array") or (($chain | length) < 2))
+               | "modelFallbackCycles requires a modelFallback chain with at least two model ids: \($h)"] | .[0] // empty)
+           end)
+        else empty end,
+        if has("fallbackLanes") then
+          (if ((.fallbackLanes | type) != "array") or ((.fallbackLanes | length) == 0) then
+             "fallbackLanes must be a non-empty array of verified harness names"
+           elif ([.fallbackLanes[] | select((type != "string") or (verified(.) | not))] | length) > 0 then
+             "fallbackLanes has a non-string or unverified harness entry: " + ([.fallbackLanes[] | select((type != "string") or (verified(.) | not))] | unique | join(", "))
+           elif ((.fallbackLanes | unique | length) != (.fallbackLanes | length)) then
+             "fallbackLanes has duplicate entries; a lane order must name each runtime once"
+           else empty end)
+        else empty end
+      ] | .[0] // null;
     if type != "object" then "top-level value must be an object"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
@@ -1108,6 +1156,7 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
+    elif malformed_quota_window([(.rules // [])[]? | profiles(.use?)[]?]) then "use profile model, effort, and quotaWindow must be non-empty strings when present"
     elif malformed_optional_fields([(.rules // [])[]? | profiles(.use?)[]?]) then
       if $typed then "use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
       else "use profile model and effort must be non-empty strings when present"
@@ -1123,18 +1172,26 @@ crew_dispatch_validate() {
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"
     elif has("default") and ([profiles(.default)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length) > 0 then "each default profile needs harness"
+    elif has("default") and malformed_quota_window([profiles(.default)[]?]) then "default profile model, effort, and quotaWindow must be non-empty strings when present"
     elif has("default") and malformed_optional_fields([profiles(.default)[]?]) then
       if $typed then "default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
       else "default profile model and effort must be non-empty strings when present"
       end
     elif $typed and has("default") and malformed_profile_floors([profiles(.default)[]?]) then "default profile floor needs scope and min_percent 0..100"
+    elif (fallback_error) != null then (fallback_error)
     else
       (configured_profiles
         | map(.harness)
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
+      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","opencode","grok","cursor","agy","kimi","google"] | index($provider)) == null)) | unique) as $bad_providers
+      | (configured_profiles | map(select(.harness == "kimi")) | length) as $bad_kimi_routes
+      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "opencode" or .harness == "grok" or .harness == "cursor" or .harness == "agy") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
+        elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
+        elif $typed and ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))
+        elif $typed and ($bad_providers | length) > 0 then "unsupported subscription provider: " + ($bad_providers | join(", "))
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
         else empty
         end

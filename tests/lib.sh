@@ -431,6 +431,14 @@ fm_fake_exit0() {
   local fakebin=$1 tool
   shift
   for tool in "$@"; do
+    # Spawn leases the worktree by executing treehouse and reading the path
+    # off stdout. A trivial exit-0 stub reads as "no usable worktree path".
+    # Suites that pass treehouse here mean "treehouse is on PATH", not
+    # "return empty"; custom recorders still call fm_fake_treehouse after.
+    if [ "$tool" = treehouse ]; then
+      fm_fake_treehouse "$fakebin"
+      continue
+    fi
     cat > "$fakebin/$tool" <<'SH'
 #!/usr/bin/env bash
 exit 0
