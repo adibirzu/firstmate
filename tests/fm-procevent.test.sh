@@ -4668,6 +4668,89 @@ tout_elapsed=$(cat "$TMP_ROOT/timeout-arm/elapsed")
   || fail "arm did not wait out the confirm window (${tout_elapsed}s)"
 pass "arm waits out the confirm window before reporting that the listener is not running"
 
+# --- arm reports ready only once this registration's listener is running ----
+# The public arm path used to print armed as soon as registration was stored.
+# A listener that has not claimed the source is not ready, so arm waits for the
+# same live-claim or launch-stamp evidence reconcile uses and fails closed when
+# that evidence does not appear within the confirm window.
+READY="$TMP_ROOT/ready-arm"
+mkdir -p "$READY/bin" "$READY/home/state"
+cat > "$READY/bin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'started\n' >> "${READY_MARK:?}"
+while [ ! -e "${READY_RELEASE:?}" ]; do sleep 0.02; done
+printf 'session:\n  status: ended\n'
+SH
+chmod +x "$READY/bin/lavish-axi"
+ready_art="$READY/board.html"
+printf '<h1>ready</h1>\n' > "$ready_art"
+lavish_session "$ready_art"
+ready_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$ready_art")
+fm_test_track_procevent_home "$READY/home"
+export READY_MARK="$READY/mark" READY_RELEASE="$READY/release"
+: > "$READY_MARK"
+PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$ready_art" > "$READY/arm.out"
+assert_contains "$(cat "$READY/arm.out")" "armed: $ready_id" "a live listener was not reported ready"
+[ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] \
+  || fail "arm reported ready without a listener claim"
+for _ in $(seq 1 50); do
+  grep -q started "$READY_MARK" && break
+  sleep 0.05
+done
+grep -q started "$READY_MARK" || fail "arm reported ready before the listener command ran"
+touch "$READY_RELEASE"
+for _ in $(seq 1 50); do
+  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] || break
+  sleep 0.05
+done
+PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$ready_art" >/dev/null 2>&1 || true
+pass "arm reports ready only after the listener is running"
+
+# Delayed start: the source lock is held so the listener cannot claim, and arm
+# must not print armed until that lock clears and the listener does.
+DELAY="$TMP_ROOT/delay-arm"
+mkdir -p "$DELAY/bin" "$DELAY/home/state"
+cp "$READY/bin/lavish-axi" "$DELAY/bin/lavish-axi"
+delay_art="$DELAY/board.html"
+printf '<h1>delay</h1>\n' > "$delay_art"
+lavish_session "$delay_art"
+delay_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$delay_art")
+fm_test_track_procevent_home "$DELAY/home"
+export READY_MARK="$DELAY/mark" READY_RELEASE="$DELAY/release"
+: > "$READY_MARK"
+delay_ready="$DELAY/lock-ready"
+delay_rel="$DELAY/lock-release"
+hold_source_lock "$delay_id" "$delay_ready" "$delay_rel"
+wait_for "$delay_ready" || fail "delayed-start fixture could not hold the source lock"
+PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$delay_art" > "$DELAY/arm.out" 2>"$DELAY/arm.err" &
+delay_arm=$!
+sleep 0.4
+assert_not_contains "$(cat "$DELAY/arm.out" 2>/dev/null || true)" "armed:" \
+  "arm reported ready while the listener could not start"
+[ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" ] \
+  || fail "a listener claimed the source while its lock was held"
+touch "$delay_rel"
+wait "$delay_arm" || fail "arm failed after the delayed listener was allowed to start: $(cat "$DELAY/arm.err")"
+assert_contains "$(cat "$DELAY/arm.out")" "armed: $delay_id" \
+  "arm did not report ready once the delayed listener was running"
+for _ in $(seq 1 50); do
+  grep -q started "$READY_MARK" && break
+  sleep 0.05
+done
+grep -q started "$READY_MARK" || fail "the delayed listener never ran"
+touch "$READY_RELEASE"
+wait "$HOLDER_PID" 2>/dev/null || true
+for _ in $(seq 1 50); do
+  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" ] || break
+  sleep 0.05
+done
+PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$delay_art" >/dev/null 2>&1 || true
+pass "arm waits out a delayed listener start before reporting ready"
+
 # Re-arming a firstmate-owned board publishes a new registration while the
 # earlier generation's listener still holds the claim. When that listener still
 # holds it as the confirm window ends, it keeps serving the board, so arm must
