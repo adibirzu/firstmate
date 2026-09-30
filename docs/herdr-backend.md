@@ -1,14 +1,36 @@
 # Herdr runtime backend
 
+This page covers running Firstmate workers on the Herdr runtime backend: setup, where tasks appear, how they are cleaned up, how input reaches them, and how their liveness is read.
+Operators who choose Herdr, or who verify Firstmate against it, need it.
+
 Herdr is an agent-native terminal backend with native per-pane agent state and push events.
-Firstmate requires Herdr protocol 14 or newer; broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, and 0.8.0, while protocol-16 features remain gated by availability.
+Firstmate requires Herdr protocol 14 or newer.
+Broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, and 0.8.0.
+Protocol-16 features remain gated by availability.
 Default-on presentation spaces have a higher floor of Herdr 0.8.0 for the reason given under [Presentation spaces](#presentation-spaces).
 Herdr provides the terminal session while Treehouse continues to provide task worktrees.
 [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend) owns shared backend selection and metadata semantics.
 
+## Find a topic
+
+| What you want to know | Start here |
+| --- | --- |
+| Install Herdr and select it | [Setup](#setup) |
+| Why a command ran on a different `herdr` client | [Client selection](#client-selection) |
+| Where task tabs appear and how to watch them | [Watching and task containers](#watching-and-task-containers) |
+| The one-task workspaces, their setting, and their cleanup | [Presentation spaces](#presentation-spaces) |
+| Why a seeded default tab is or is not closed | [Default-tab prune safety](#default-tab-prune-safety) |
+| What task metadata records for a Herdr endpoint | [Endpoint metadata](#endpoint-metadata) |
+| How text and keys reach a worker and how delivery is confirmed | [Current transport behavior](#current-transport-behavior) and [Composer and injection safety](#composer-and-injection-safety) |
+| What happens after a Herdr server restart and how liveness is judged | [Restart and liveness behavior](#restart-and-liveness-behavior) |
+| How blocked transitions arrive and what happens without protocol 16 | [Push events and polling fallback](#push-events-and-polling-fallback) |
+| Where the away daemon runs and how it stops | [Away-mode supervisor support](#away-mode-supervisor-support) |
+| Stopping or deleting Herdr sessions during verification | [Destructive lab safety](#destructive-lab-safety) |
+| Known limits and the test suite | [Active limits](#active-limits) and [Regression entry points](#regression-entry-points) |
+
 ## Setup
 
-Pick Herdr when you want native busy, idle, and blocked state and accept the active limits below.
+Pick Herdr when you want native busy, idle, and blocked state and accept the [active limits](#active-limits) below.
 
 Prerequisites:
 
@@ -23,9 +45,12 @@ Firstmate invokes its CLI as a separate process.
 Select Herdr with local `config/backend` containing `herdr`, `FM_BACKEND=herdr` for one launch, or an explicit request to Firstmate.
 A remote development session's named-session continuity, record, and attach command are owned by [`remote-dev-sessions.md`](remote-dev-sessions.md).
 A remote second-mate agent is the one case with no choice: it always runs on Herdr, and [`remote-secondmates.md`](remote-secondmates.md) owns that requirement and the readiness its host must meet.
-It is also auto-detected when the primary runs natively under `HERDR_ENV=1` and is not inside tmux.
+
+Herdr is also auto-detected when the primary runs natively under `HERDR_ENV=1` and is not inside tmux.
 A tmux pane nested inside Herdr resolves to tmux because the innermost multiplexer wins.
-An auto-detected Herdr spawn prints an opt-out notice.
+An auto-detected Herdr spawn stays silent, matching the verified tmux default path.
+
+### Spawn preflight and CI
 
 Spawn stops before creating a Herdr container or acquiring a task worktree when `herdr`, `jq`, or the protocol floor is unavailable.
 No separate first-run provisioning is required.
@@ -53,29 +78,57 @@ A primary home running a berthed session labels that workspace `firstmate@<berth
 The `@` separator keeps a berth distinguishable from the legacy `firstmate-<id>` secondmate workspaces noted below, which are never migrated automatically.
 A secondmate home label is `2m-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker.
 Workspaces created before the short label carry the legacy `2ndmate-<secondmate-id>` form; they are never renamed or migrated, and every label matcher keeps accepting them.
+
+| Home | Workspace label |
+| --- | --- |
+| Primary | `firstmate` |
+| Secondmate | `2ndmate-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker |
 A secondmate launched by the primary receives a narrowly scoped home override during container creation.
+
+### Watching tasks
 
 Attach to the selected named Herdr session and switch to the relevant home workspace to watch its task tabs.
 Routine supervision uses `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.sh <id> '<text>'` without attaching.
 
+### Focus
+
 Workspace and tab creation use `--no-focus`.
-The first workspace in a completely empty Herdr session must become focused because no prior target exists, but later task creation does not intentionally steal focus.
+The first workspace in a completely empty Herdr session must become focused, because no prior target exists.
+Later task creation does not intentionally steal focus.
+
+### Placement beside the launcher
 
 Herdr does not enforce workspace or tab label uniqueness, so a label can never decide where a worker goes.
-Herdr 0.7.5 exports `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_SESSION`, `HERDR_SOCKET_PATH`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID` into every process it manages a pane for, and a Firstmate or secondmate agent's own commands inherit them.
+
+Herdr 0.7.5 exports `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_SESSION`, `HERDR_SOCKET_PATH`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID` into every process it manages a pane for.
+A Firstmate or secondmate agent's own commands inherit them.
 Older injection shapes are unverified, so a claimed launcher pane without the injected socket identity cannot be trusted.
-With presentation spaces disabled, a crewmate or scout is created in the exact workspace that identity currently resolves to, read live from Herdr rather than from the injected snapshot, so the worker always appears beside the agent that launched it.
+
+With presentation spaces disabled, a crewmate or scout is created in the exact workspace that identity currently resolves to.
+That workspace is read live from Herdr rather than from the injected snapshot, so the worker always appears beside the agent that launched it.
 Duplicate labels elsewhere in the session are irrelevant, and the globally focused workspace is never the target.
 A `--secondmate` launch is the deliberate exception: it stands up that secondmate home's own workspace instead of joining the launcher's.
 
+### Unresolvable launcher identity
+
 A claimed parent identity that cannot be resolved exactly stops the spawn before any worker endpoint exists, rather than falling back to a label search.
-That covers a missing or unusable socket identity, a closed or unreadable launcher pane, a pane and tab that disagree about their workspace, a workspace missing from the session, and a pane belonging to another named session or Herdr server.
+That covers:
+
+- A missing or unusable socket identity.
+- A closed or unreadable launcher pane.
+- A pane and tab that disagree about their workspace.
+- A workspace missing from the session.
+- A pane belonging to another named session or Herdr server.
+
+### Firstmate running outside Herdr
 
 Firstmate running outside Herdr entirely has no launcher workspace to inherit, so its workers use this home's own labeled workspace, created on first use.
 That path needs the home label to identify exactly one workspace: two workspaces sharing it are an unresolvable placement and refuse rather than adopting either.
 Avoid naming a personal workspace `firstmate`, `2m-<id>`, or legacy `2ndmate-<id>` for that reason, and because the adapter cannot distinguish that label collision from its own container.
 An older secondmate workspace using `firstmate-<id>` is not migrated automatically; rename it manually before expecting new tasks or recovery to use it.
 Recovery and list-live still scan the first workspace matching the home label, because they address panes they already recorded rather than choosing where new work goes.
+The one recovery that does place new work is the control plane's reclaim of a destroyed endpoint.
+It mints a replacement tab through this section's ordinary placement rules while pinning the herdr session the task's record names ([`agent-control.md`](agent-control.md) "Reclaiming a task whose endpoint is gone").
 
 Existing task operations use recorded endpoint ids and do not move a live task when labels change.
 The per-home workspace is reused while it has task tabs.
@@ -158,12 +211,19 @@ The setting is inherited into secondmate homes through the normal configuration-
 A secondmate agent itself always stays in its ordinary parent workspace; only children launched by that home are eligible.
 An unconverged opt-out keeps the default projection in that home until convergence.
 
+### Presentation journal
+
 Presentation is a best-effort visual projection, never task ownership or lifecycle authority.
+A presentation journal is the per-task record in this home's `state/` that binds a task to its projected workspace.
+
 Only a fresh task with neither metadata nor an existing presentation journal is eligible for projected creation.
-Firstmate atomically publishes a three-field version 1 journal containing a random 128-bit base64url token before asking Herdr to create anything.
-After the new workspace converges to one exact task endpoint beneath one exact parent workspace id, the journal advances to a version 2 binding that records the physical home, named session, endpoint, parent, and immutable expected labels.
+Creation proceeds in this order:
+
+1. Firstmate atomically publishes a three-field version 1 journal containing a random 128-bit base64url token, before asking Herdr to create anything.
+2. After the new workspace converges to one exact task endpoint beneath one exact parent workspace id, the journal advances to a version 2 binding.
+   That binding records the physical home, named session, endpoint, parent, and immutable expected labels.
+
 Another parent with the same presentation label does not prevent publication or participate in restart reclaim.
-The token is visible in the workspace title because Herdr exposes no verified hidden persistent field, but neither token, title, nor journal authorizes send, capture, task ownership, Treehouse return, or general recovery.
 
 The owning parent is the launcher's own exact workspace, resolved from the same identity the flat path uses, and falls back to a unique home-label lookup only for a Firstmate outside Herdr.
 Projected children are never collapsed back into that parent; it is the placement and ordering reference the projection is bound under.
@@ -172,15 +232,27 @@ Only the exact seeded default tab returned by the same workspace-create response
 Before and after create, prune, order, abort cleanup, and normal cleanup, Firstmate verifies exact workspace, tab, pane, and active-focus ids.
 An ambiguous response grants no mutation or cleanup authority.
 
+### Ordering
+
 Protocol 16 exposes `workspace.move` over the named session socket but no CLI subcommand.
 `bin/backends/herdr-workspace-move.py` sends only that whitelisted method and verifies the complete returned workspace order.
-Projected children are placed in one contiguous block immediately after their owning home when the session layout, protocol, socket, `python3`, and machine-private per-session lock are all verifiable.
+
+Projected children are placed in one contiguous block immediately after their owning home when all of these are verifiable:
+
+- The session layout.
+- The protocol.
+- The socket.
+- `python3`.
+- The machine-private per-session lock.
+
 Existing legacy child labels may extend an already adjacent block read-only but are never renamed or migrated.
 A foreign, ambiguous, detached, or manually interleaved child makes ordering skip with a warning rather than rewriting the layout.
 
 Ordering failure never fails the task spawn.
 Firstmate does not retry, adopt, reuse, close, delete, or rename anything in response to an unavailable method, lock contention, ambiguous socket, lost response, failed move, or verification mismatch.
 The worker remains on the ordinary flat or Herdr-current-order path.
+
+### Cleanup and focus safety
 
 Normal task metadata remains the sole endpoint authority after creation.
 Cleanup closes only the exact recorded task pane and never calls `workspace close`.
@@ -201,41 +273,113 @@ Forced secondmate cleanup recursively preflights every Herdr child endpoint and 
 Durable task records are erased only once the exact pane is confirmed gone through its structured presence: after every close path, only a structured not-found response counts as gone, while a present or unknown result retains every record with a visible, retryable error.
 Missing or malformed endpoint identity and missing confirmation machinery are ambiguity, never proof of a gone pane, and refuse record removal the same way.
 If lock, snapshot, pane identity, or restoration is ambiguous, cleanup warns and preserves the journal for manual inspection.
+Once the exact pane is confirmed gone, teardown retires the task's own journal when it binds that same pane, or when it is a version 1 attempt whose token-bearing projected workspace is itself confirmed gone, because nothing then remains for the session-start sweep to correlate; a journal bound to any other pane, or a version 1 attempt whose workspace is still present or unreadable, stays for that sweep.
+
+### Restart recovery
 
 Recovery is deliberately conservative and presentation-only.
 An existing journal suppresses another projected create.
 Before any recovery mutation, Firstmate holds both the task spawn lock and the named-session presentation lock.
-A same-identity version 2 binding may replace one exact agent-free restart husk in place only when the physical home, session, metadata endpoint, unique token match, workspace shape and labels, parent identity and placement, and non-target focus snapshot all agree.
-The replacement tab and pane are created and verified before the old pane is rechecked and closed, then the journal advances atomically to the replacement endpoint before metadata publication.
+
+A same-identity version 2 binding may replace one exact agent-free restart husk in place.
+A husk is a restored same-labeled tab with a missing pane or no registered agent, as [Restart and liveness behavior](#restart-and-liveness-behavior) describes.
+The replacement is allowed only when all of these agree:
+
+- The physical home.
+- The session.
+- The metadata endpoint.
+- The unique token match.
+- The workspace shape and labels.
+- The parent identity and placement.
+- The non-target focus snapshot.
+
+The replacement tab and pane are created and verified before the old pane is rechecked and closed.
+Then the journal advances atomically to the replacement endpoint before metadata publication.
 The reclaim path never moves, closes, deletes, or renames a workspace and never touches a parent, sibling, captain, or foreign pane.
 A failed replacement rolls back only the exact response-derived new pane when focus-safe verification permits it.
-Version 1 journals, dead or missing panes, duplicate or absent tokens, renamed or detached spaces, cross-home mismatches, inconsistent endpoint bindings, active target tabs, and ambiguous identity or focus fall back flat without mutating the old projection when duplicate-agent risk is positively absent.
+
+These cases fall back flat without mutating the old projection when duplicate-agent risk is positively absent:
+
+- Version 1 journals.
+- Dead or missing panes.
+- Duplicate or absent tokens.
+- Renamed or detached spaces.
+- Cross-home mismatches.
+- Inconsistent endpoint bindings.
+- Active target tabs.
+- Ambiguous identity or focus.
+
 A live or unknown recorded or token-matched endpoint refuses duplicate launch.
 
-Locked session start has one narrower cleanup for a restored projected child that is no longer current task state.
-It runs only when the current home has at least one ordinary presentation journal and considers only that home; a primary never recursively sweeps a secondmate home.
-Discovery starts from the exact current `└ <concise-task> · p:<22-character-token>` grammar, but a title or token alone is never mutation authority.
-The title must contain exactly one token occurrence across the named-session snapshot and must equal the title derived from exactly one valid presentation journal in this home's own `state/`; a version 2 journal additionally must bind this exact physical home, named session, workspace, tab, and pane.
-The task's ordinary metadata must be absent, and the candidate must have exactly one tab and exactly one pane.
-Before cleanup, Firstmate acquires the existing task-id spawn lock and then the shared named-session presentation lock.
-Inside both locks it takes one exact snapshot, requires one unambiguous non-target focus and the exact title, token, tab, and pane shape, positively confirms no registered agent, and reads Herdr's process information for the exact named-session pane.
-The process proof requires one recognized idle shell as both the shell process and the sole foreground process-group member, an operating-system process-table row for that shell, no child process, and a sleeping or idle shell state.
-The proof retries strict single samples for a bounded settle window because an idle interactive shell transiently hosts short-lived prompt helpers; a genuinely busy pane fails every sample.
-Any foreground command, child process, active shell job, unknown shell, unreadable process table, missing field, or API error preserves the pane.
-Firstmate immediately revalidates the same journal, metadata absence, workspace title and token uniqueness, one-tab and one-pane topology, exact pane relationship, absent agent, process proof, and non-target focus before calling the existing exact-pane focus-preserving close helper.
-It closes only that pane, never a workspace.
-The matching journal is retired only after the exact pane is positively confirmed gone; an unconfirmed close retains the journal, while a confirmed close may retire it even when focus restoration reported an error after the close.
-A second run finds no matching title or journal and is a no-op.
-A malformed or missing title or token, duplicate token, zero or multiple journal matches, cross-home version 2 binding, current metadata, registered or unknown agent, extra tab or pane, active target, busy lock, changed revalidation, unreadable check, or any error preserves the candidate and lets session startup continue with at most a concise warning.
+### Startup cleanup of restored projections
 
-Operational compromises:
+Locked session start has one narrower cleanup for a restored projected child that is no longer current task state.
+It runs only when the current home has at least one ordinary presentation journal, and it considers only that home.
+A primary never recursively sweeps a secondmate home.
+
+Discovery starts from the exact current `└ <concise-task> · p:<22-character-token>` grammar, but a title or token alone is never mutation authority.
+A candidate must meet all of these conditions:
+
+- The title must contain exactly one token occurrence across the named-session snapshot.
+- The title must equal the title derived from exactly one valid presentation journal in this home's own `state/`.
+- A version 2 journal additionally must bind this exact physical home, named session, workspace, tab, and pane.
+- The task's ordinary metadata must be absent.
+- The candidate must have exactly one tab and exactly one pane.
+
+Firstmate then cleans up the candidate in this order:
+
+1. Acquire the existing task-id spawn lock, and then the shared named-session presentation lock.
+2. Inside both locks, take one exact snapshot.
+3. Require one unambiguous non-target focus and the exact title, token, tab, and pane shape.
+4. Positively confirm no registered agent.
+5. Read Herdr's process information for the exact named-session pane and apply the process proof below.
+6. Immediately revalidate the same journal, metadata absence, workspace title and token uniqueness, one-tab and one-pane topology, exact pane relationship, absent agent, process proof, and non-target focus.
+7. Call the existing exact-pane focus-preserving close helper.
+   It closes only that pane, never a workspace.
+8. Retire the matching journal only after the exact pane is positively confirmed gone.
+
+The process proof requires all of these:
+
+- One recognized idle shell as both the shell process and the sole foreground process-group member.
+- An operating-system process-table row for that shell.
+- No child process.
+- A sleeping or idle shell state.
+
+The proof retries strict single samples for a bounded settle window, because an idle interactive shell transiently hosts short-lived prompt helpers.
+A genuinely busy pane fails every sample.
+Any foreground command, child process, active shell job, unknown shell, unreadable process table, missing field, or API error preserves the pane.
+
+An unconfirmed close retains the journal.
+A confirmed close may retire it even when focus restoration reported an error after the close.
+A second run finds no matching title or journal and is a no-op.
+
+Any of these preserves the candidate and lets session startup continue with at most a concise warning:
+
+- A malformed or missing title or token.
+- A duplicate token.
+- Zero or multiple journal matches.
+- A cross-home version 2 binding.
+- Current metadata.
+- A registered or unknown agent.
+- An extra tab or pane.
+- An active target.
+- A busy lock.
+- A changed revalidation.
+- An unreadable check.
+- Any error.
+
+### Operational compromises
 
 - Grouping is best-effort; only an exact same-identity version 2 binding survives a Herdr restart in place.
-- A failed journal publication or projected workspace create stops that spawn instead of falling back flat, so a Herdr create failure surfaces as a spawn failure in every Herdr home rather than only in homes that opted in; every earlier degradation on the fresh projected-create path (no session server, contended presentation lock, absent or ambiguous parent) still warns and continues flat.
-- Recovery of an existing presentation journal deliberately refuses the spawn when the shared presentation lock is contended rather than falling back flat, and default-on makes that refusal reachable in any Herdr home.
+- A failed journal publication or projected workspace create stops that spawn instead of falling back flat.
+  So a Herdr create failure surfaces as a spawn failure in every Herdr home, rather than only in homes that opted in.
+  Every earlier degradation on the fresh projected-create path (no session server, contended presentation lock, absent or ambiguous parent) still warns and continues flat.
+- Recovery of an existing presentation journal deliberately refuses the spawn when the shared presentation lock is contended, rather than falling back flat.
+  Default-on makes that refusal reachable in any Herdr home.
 - Existing layouts are not force-renamed or rearranged.
 - Missing or ambiguous restart bindings fall back to the ordinary home workspace while the old projection remains untouched.
-- Crashes, lost responses, failed exact-pane cleanup, or human renames can leave quarantined spaces; session start removes only the exact home-local, uniquely journal-correlated, childless idle-shell shape above.
+- Crashes, lost responses, failed exact-pane cleanup, or human renames can leave quarantined spaces.
+  Session start removes only the exact home-local, uniquely journal-correlated, childless idle-shell shape above.
 - Spaces have no cross-home cleanup path, and a secondmate child can clean up only from its exact home.
 - Every stale-looking space outside that narrow startup proof still requires manual cleanup in Herdr's UI after human inspection.
 - Regaining a dedicated space after degradation requires stopping the flat task, manually checking the stale projection, and clearing its journal before a genuinely fresh launch.
@@ -289,68 +433,159 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 
 The adapter starts and polls a named server before operational workspace, tab, pane, or agent calls.
 Passive supervision observations are the exception; [Launch-argv replay](#launch-argv-replay) owns that no-autostart contract.
+### Named server and session routing
+
+The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
-When the selected named server is not running, the adapter launches it without inherited Firstmate home and directory overrides, harness identity markers, or the supervision-model override.
+
+When the selected named server is not running, the adapter launches it without these inherited values:
+
+- Firstmate home and directory overrides.
+- Harness identity markers.
+- The supervision-model override.
+
 Herdr passes its server startup environment to every later pane, so retaining those values could misroute panes for another Firstmate home or harness.
 An already-running server is reused without restart or environment changes.
 Explicit named-session routing and unrelated launch environment remain intact.
 
-Literal text and Enter are separate operations on `fm-send.sh`'s typed plane; ordinary local text steers instead use the durable steering inbox and send only its best-effort constant doorbell through this adapter.
+### Sending text and keys
+
+Literal text and Enter are separate operations on `fm-send.sh`'s typed plane.
+Ordinary local text steers instead use the durable steering inbox and send only its best-effort constant doorbell through this adapter.
 Spawn-time fixed commands may use Herdr's atomic run primitive.
 Enter, Escape, and Ctrl-C are supported.
-Typed-plane slash input, and dollar-prefixed skill input for Codex, uses the shared harness-aware settle before the first Enter so a completion popup cannot consume it.
+
+Typed-plane slash input, and dollar-prefixed skill input for Codex, uses the shared harness-aware settle before the first Enter, so a completion popup cannot consume it.
 Typed-plane text is typed once; only Enter is retried.
 
-On an idle or done native baseline, submit confirmation first waits for `working` or `blocked` across a bounded polling window.
-If native status stays idle, the shared composer verdict is the next positive signal: a cleared composer is delivery, and proven pending text retries Enter.
-After the retry budget, `fm_composer_queued_enter_verdict` treats proven pending text plus a generating busy signal as a queued delivered Enter, and keeps an idle pending composer as a genuine swallow.
-On an already active or unreadable baseline, the adapter falls back to conservative composer clearance, with a pre-Enter rendered-footer transition when that baseline is unavailable.
+### Claude composer proof
+
+When native `agent get` identity is Claude, the adapter types only into an empty composer.
+A Claude composer that already holds text, or cannot be read, before the send is refused with nothing typed.
+Before that Enter, the adapter continues only when the selected composer shows the typed payload, or only Claude paste placeholders with no literal remainder.
+Every herdr adapter composer read (`fm_backend_herdr_composer_state`, `fm_backend_herdr_composer_content`) captures the full visible viewport, never a bounded tail, while the shared inbox pending-line confirmation read (bin/fm-task-inbox-lib.sh) stays a bounded tail on every backend: an overlay Claude renders between the composer and the pane bottom - the slash-command popup is the verified shape - pushes the composer outside a tail window, and the composer is by definition inside the viewport.
+Dated measurement: docs/verification/runtime-backends.md "Claude exit behind the slash-command popup".
+
+That comparison ignores whitespace and U+2063, the invisible mark that starts operational inputs and ends the from-firstmate label.
+It ignores U+2063 because Claude's Herdr read-back never shows it.
+
+A composer that holds a shorter suffix, or a placeholder plus a literal remainder, does not receive Enter.
+Instead:
+
+1. The adapter presses Ctrl+U until the shared classifier reads the composer as empty.
+2. It then reports `send-failed`, so a resend starts from a clean composer.
+
+Ctrl+C is not used for this, because Claude documents it as interrupting a running operation.
+If the composer cannot be verified empty again, the submit reports `unknown` instead, because text may still be in the composer.
+
+Other harnesses, and panes with no native identity, skip this proof and keep the type-then-Enter path.
+They skip it because their paste placeholders and composer shapes are not live-verified.
+
+### Submit confirmation
+
+On an idle or done native baseline, submit confirmation proceeds in this order:
+
+1. Wait for `working` or `blocked` across a bounded polling window.
+2. If native status stays idle, use the shared composer verdict as the next positive signal.
+   A cleared composer is delivery, and proven pending text retries Enter.
+3. After the retry budget, `fm_composer_queued_enter_verdict` treats proven pending text plus a generating busy signal as a queued delivered Enter.
+   It keeps an idle pending composer as a genuine swallow.
+
+On an already active or unreadable baseline, the adapter falls back to conservative composer clearance.
+That fallback adds a pre-Enter rendered-footer transition when the baseline is unavailable.
 A fully unreadable target stops retrying and reports unknown.
-blocked is not treated as a queued-Enter busy signal, so a Cursor pane that reports blocked in every state does not receive that conversion.
+
+`blocked` is not treated as a queued-Enter busy signal, so a Cursor pane that reports blocked in every state does not receive that conversion.
+
+### Harnesses with no idle baseline
 
 Some harnesses never present a legibly idle native baseline at all, so the composer fallback is their only path.
-Herdr reports a Cursor pane `blocked` in every state, and Cursor's mid-turn composer renders its placeholder beside a right-aligned busy token, which is composer content and therefore `pending` on a composer that holds no user text.
-That fallback alone reported every delivered steer as unconfirmed, so it is paired with a rendered-footer transition: the pane's verified busy footer is read once before the first Enter, and an idle-to-busy transition across that Enter confirms the submit.
+
+Cursor is one such harness:
+
+- Herdr reports a Cursor pane `blocked` in every state.
+- Cursor's mid-turn composer renders its placeholder beside a right-aligned busy token.
+  That token is composer content, and therefore `pending` on a composer that holds no user text.
+
+That fallback alone reported every delivered steer as unconfirmed.
+So it is paired with a rendered-footer transition.
+The pane's verified busy footer is read once before the first Enter, and an idle-to-busy transition across that Enter confirms the submit.
 It is the same semantic signal the native path uses and the same one the tmux submit core reads.
-A pane already mid-turn cannot borrow a rendered-footer transition as proof of this delivery; after retries, only proven pending text plus native `working` can establish that its Enter was accepted and queued.
-The composer verdict itself is deliberately unchanged: a right-aligned status token on the composer row stays content for every other caller, including the away-mode pre-injection guard.
-The poll density bounds the residual possibility of an extremely fast complete turn; a missed native transition falls through to the composer verdict rather than reporting a false swallow.
+
+A pane already mid-turn cannot borrow a rendered-footer transition as proof of this delivery.
+After retries, only proven pending text plus native `working` can establish that its Enter was accepted and queued.
+
+The composer verdict itself is deliberately unchanged.
+A right-aligned status token on the composer row stays content for every other caller, including the away-mode pre-injection guard.
+
+The poll density bounds the residual possibility of an extremely fast complete turn.
+A missed native transition falls through to the composer verdict rather than reporting a false swallow.
+
+### Capture size
 
 `pane read --lines N` can return empty output when N is below the viewport height.
 The capture owner requests at least 200 lines from Herdr and trims locally to the caller's bound.
-This generous floor is required for small composer and peek reads.
+This generous floor is required for the small bounded reads that remain: peek and watch tails, the rendered busy-footer read, and the shared steering-inbox pending-line read.
+The adapter's own composer reads are exempt because they read the visible viewport instead, which takes no line count (see [Claude composer proof](#claude-composer-proof)).
+
+### Native idle state
 
 Herdr's native agent state can read idle while a harness waits on its own long foreground tool.
-The shared crew-state path therefore accepts a native `busy` as evidence of activity but never a native `idle` as evidence that a worker has stopped; the task's own semantic busy state (`bin/fm-busy-lib.sh`) decides that.
+The shared crew-state path therefore accepts a native `busy` as evidence of activity.
+It never accepts a native `idle` as evidence that a worker has stopped; the task's own semantic busy state (`bin/fm-busy-lib.sh`) decides that.
 A human-blocked permission dialog has no busy banner and still surfaces.
 
 ## Composer and injection safety
 
 Herdr has no direct cursor-row primitive.
-The adapter is a thin capture: it hands a bounded ANSI tail plus Herdr's capability facts to the fleet-wide classifier in `bin/fm-composer-lib.sh`, which owns every shape - bordered boxes, bare agent-glyph rows (including muse's `⟩`, which the adapter's retired local pattern silently omitted), opencode's left bar, and the Pi separator region this adapter pioneered, admitted only when native `agent get` identity is exactly Pi and state is idle or done.
-A blocked Pi is parked on an interactive prompt, so its blank composer region is a menu's and not a free composer's; that state defers instead of proving emptiness.
+The adapter is a thin capture.
+It hands the visible pane's ANSI viewport plus Herdr's capability facts to the fleet-wide classifier in `bin/fm-composer-lib.sh`, which owns every shape:
+
+- Bordered boxes.
+- Bare agent-glyph rows, including muse's `⟩`, which the adapter's retired local pattern silently omitted.
+- opencode's left bar.
+- The Pi separator region this adapter pioneered, admitted only when native `agent get` identity is exactly Pi and state is idle or done.
+
+### Pi composer states
+
+A blocked Pi is parked on an interactive prompt, so its blank composer region is a menu's and not a free composer's.
+That state defers instead of proving emptiness.
 A working Pi, pending middle row, missing identity, incomplete separator pair, or over-tall candidate remains unknown or pending.
 Identity stays a lazy second read, consulted only when a separator pair could change the verdict.
 
+### Placeholder and ghost text
+
 ANSI capture preserves de-emphasized placeholder style.
 `bin/fm-composer-lib.sh` is the fleet-wide owner that strips dim or faint runs and dark truecolor placeholders while retaining bright typed input.
-If the ANSI capture ever fails, the plain fallback declares itself unstyled and the classifier degrades a glyph row carrying trailing text to `unknown` instead of misreading ghost suggestions as typed input, which safely defers injection and eventually raises the wedge alarm.
+
+If the ANSI capture ever fails, the plain fallback declares itself unstyled.
+The classifier then degrades a glyph row carrying trailing text to `unknown` instead of misreading ghost suggestions as typed input.
+That safely defers injection and eventually raises the wedge alarm.
+
+### Away-mode injection
 
 A bare shell prompt is never an empty agent composer.
 Away-mode injection proceeds only on an affirmative `empty` result, never on unknown.
 This prevents a dead agent pane from receiving and possibly executing an escalation as shell input.
 
+### Operational input markers
+
 The current operational envelope starts with U+2063 and `FIRSTMATE_OP: `.
 The separate routed-request carrier uses `[fm-from-firstmate]` plus U+2063.
 U+2063 survives Herdr terminal input as text, unlike the legacy ASCII control separator that could erase the visible routing label.
+Claude Code itself then removes it from the submitted prompt, so a Claude Code primary receives away-mode escalations as the owner's record-backed doorbell instead.
 `bin/fm-operational-input.sh` owns current operational construction and parsing, and the AFK skill owns legacy away-input compatibility.
 No Herdr-specific copy of that protocol exists.
 
 ## Restart and liveness behavior
 
-Stopping and restarting a named Herdr server preserves workspace, tab, pane, and label ids, but the underlying harness processes and live agent registrations do not survive.
+### Husks after a server restart
+
+Stopping and restarting a named Herdr server preserves workspace, tab, pane, and label ids.
+The underlying harness processes and live agent registrations do not survive.
 A restored same-labeled tab with a missing pane or no registered agent is a husk.
+
 Create replaces only a confidently dead or no-agent husk, creates the replacement before closing the old tab, and refuses live or unknown states.
 This prevents closing the workspace's last tab before a replacement exists.
 
@@ -359,8 +594,31 @@ A structurally gone pane or a pane read from a session positively reported as ha
 The stopped-server exception does not widen husk detection or any close authority; those paths still refuse an unreadable pane.
 Unlike tmux process-name inspection, native registration can classify Pi without guessing from a generic interpreter name.
 
-The session-start sweep uses this probe.
-Mid-session secondmate agent-process liveness is not implemented because idle secondmates are deliberately exempt from stale-pane escalation and need a separate periodic identity signal.
+Native registration still identifies Pi by name where tmux would see a generic interpreter.
+The process-level proof only decides whether that registration is backed by a running process.
+`tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh` pins the live-Pi versus leftover-shell distinction.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#agent-lifecycle-control) owns the versioned evidence.
+
+The session-start sweep and the watcher's dedicated secondmate liveness tick use this probe.
+Idle secondmates remain exempt from stale-pane escalation.
+[Secondmate endpoint recovery](architecture.md) owns the shared supervision mechanism.
+
+## Agent status authority and relaunch
+
+A pane has ONE status authority, and for Pi with the integration installed that authority is the lifecycle hooks - Herdr then skips screen detection for the pane, which is the `full_lifecycle_hook_authority` reason `herdr agent explain` prints for it.
+That authority is bound to a session identity, and in the crew shape the registration outliving its process ([above](#restart-and-liveness-behavior)) is that same binding: the record stays, the agent it named is gone.
+
+An agent started FRESH in such a pane reports a new session and Herdr ignores its reports, so the pane stays frozen at whatever the previous agent last reported - a crewmate running its pipeline reads `idle` until its task ends, and nothing from outside repairs it (measured 2026-09-21 on Herdr 0.9.1 against a real Pi; `pane report-agent-session` and `pane report-agent` for `herdr:pi` are accepted without being applied unless the reporter is the registered pane agent, and `pane release-agent` on the stale record changes nothing).
+A fresh spawn never meets this: it gets a new pane with nothing bound.
+
+So a **relaunch** preserves the binding instead of fighting it: before the Pi-family launch line is composed, `bin/fm-spawn.sh` reads the pane's recorded session reference through `fm_backend_herdr_pane_agent_session_ref` and passes it back as Pi's own `--session <path-or-id>` (`relaunch_resume_args`; `bin/fm-control-lib.sh`'s `fm_control_relaunch_resume_flag` owns which adapters and which registration labels qualify).
+The replacement therefore starts on the exact identity the authority is bound to, and its `working`/`idle`/`blocked` reports land again.
+The reference is the endpoint's own record, never a guess about which session is recent, and only a `pi` label may supply it: a registration belonging to another adapter is ignored, as is an unreadable, missing, or malformed one, in which case the relaunch is the ordinary fresh session it always was.
+A relaunch that changes harness AWAY from Pi is not repaired by this and keeps the pre-existing behavior; only the adapter the authority belongs to can resume its session.
+
+The session file may not exist any more: Pi creates it at exactly that path, so the identity survives either way.
+The read grants no send, close, or lifecycle authority of its own - it is a read of Herdr's record.
+The portable halves are pinned by `tests/fm-backend-herdr.test.sh` (the read, against a canned CLI) and `tests/fm-control.test.sh` (the per-adapter rule), and `tests/fm-control-herdr-smoke.test.sh` exercises the relaunch path against the real binary; the versioned live measurement, including the reproduction and the resume that lifts it, is [`verification/runtime-backends.md`](verification/runtime-backends.md) "Pane status authority across a relaunch".
 
 ### Launch-argv replay
 
@@ -395,7 +653,15 @@ The Herdr adapter subscribes before reconciling current levels, buffers edges du
 The watcher maps the pane back to the task and skips secondmate endpoints, declared `paused:` waits, and verified `captain-held` transfers, because a declared wait already names the human the fast escalation would report and is left to the watcher's own bounded pause cadence; a captain-held transfer remains silent without rechecks while the away-posture record exists.
 
 The push path only shortens latency.
-Polling runs every cycle and remains the permanent fallback when protocol 16, the event schema, Python, connection, subscription, or repeated reader execution is unavailable.
+Polling runs every cycle and remains the permanent fallback when any of these is unavailable:
+
+- Protocol 16.
+- The event schema.
+- Python.
+- The connection.
+- The subscription.
+- Repeated reader execution.
+
 There is still one watcher process; the event reader is a bounded child of that watcher.
 
 `tests/fm-backend-herdr-eventwait-smoke.test.sh`, `tests/fm-transition-lib.test.sh`, and `tests/fm-supervision-events.test.sh` cover capability, subscribe-then-reconcile ordering, dedupe, exemptions, and polling fallback.
@@ -413,16 +679,30 @@ For another harness without native tracked background execution, `bin/fm-afk-lau
 It never splits the captain's active tab and never uses shell `&`.
 Recovery reconciles only the recorded exact id.
 
-On stop, the daemon receives termination while `state/.afk` still exists so its final flush can run, the recorded terminal is closed, and the AFK flag is removed last.
+### Stopping the daemon
+
+On stop:
+
+1. The daemon receives termination while `state/.afk` still exists, so its final flush can run.
+2. The recorded terminal is closed.
+3. The AFK flag is removed last.
+
 A fresh entry clears stale transient escalation caches, while durable queue and task records remain authoritative.
 
 ## Destructive lab safety
 
 Never use ambient `herdr server stop` for Firstmate verification.
-An environment-only session selection can silently reach a different running server, and the ambient stop command has no explicit target.
+An environment-only session selection can silently reach a different running server.
+The ambient stop command has no explicit target.
 
 `bin/fm-herdr-lab.sh` is the sole supported lifecycle helper for isolated verification.
-It provisions only non-default names beginning with `fm-lab-`, appends an explicit `--session` to allowed task commands, refuses caller-supplied session flags and server/session lifecycle subcommands, and performs destructive stop/delete only through its guarded lifecycle actions.
+The helper:
+
+- Provisions only non-default names beginning with `fm-lab-`.
+- Supplies an explicit `--session` Herdr option before any `--` delimiter in allowed task commands.
+- Refuses caller-supplied session flags and server/session lifecycle subcommands.
+- Performs destructive stop/delete only through its guarded lifecycle actions.
+
 Immediately before every destructive call it re-queries the named session and refuses empty, missing, literal `default`, or `default:true` identities.
 Its before/after tripwire requires the live default-session snapshot to remain byte-identical.
 
@@ -435,7 +715,6 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Mutable labels can collide; they are never placement or destructive authority.
 - A Firstmate outside Herdr cannot resolve a launcher workspace, so a colliding home label refuses new spawns until the collision is cleared.
 - Ghost and placeholder recognition uses ANSI de-emphasis when available; an unstyled glyph row carrying trailing non-idle text fails safely to `unknown`.
-- Mid-session secondmate agent-process liveness is not implemented.
 - Only tmux and Herdr can host the away-mode supervisor terminal.
 - No launch command is persisted from 0.8.0, so a restored worker's flags cannot be replayed and are only detected as drift.
 
@@ -474,10 +753,13 @@ tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
 tests/fm-backend-herdr-launch-argv-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
+tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
+tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh
 tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
+tests/fm-herdr-attached-viewer-live-e2e.test.sh
 tests/fm-afk-inject-herdr-e2e.test.sh
 tests/fm-afk-pi-herdr-return-e2e.test.sh
 tests/fm-fleet-snapshot-view.test.sh

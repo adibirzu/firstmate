@@ -47,6 +47,15 @@
 #                              proposal still records it as refused.
 #   fm-afk-launch.sh confirm   Promote the required proposal and print the entry
 #                              announcement. On Pi this is the whole entry.
+#   fm-afk-launch.sh enter [--words-file <path> | --words <text>]
+#                          [--expected-return <UTC ISO 8601>] [--spend <n>]
+#                              Compatibility writer for /quiet and upstream
+#                              same-turn callers: write the posture record now
+#                              through bin/fm-afk-contract.sh enter. /afk on this
+#                              fork still uses propose then confirm. With
+#                              FM_AFK_MODE=quiet, refuse (exit 3) when quiet-check
+#                              would report that quiet mode needs nothing here or
+#                              that a live away record must return first.
 #   fm-afk-launch.sh start     Capture the captain pane, then (unless the daemon
 #                              is already running) launch the daemon in a fresh
 #                              non-visible terminal for the detected backend and
@@ -62,6 +71,14 @@
 #                              id, clear state/.afk, then archive the record last.
 #   fm-afk-launch.sh reconcile Close a recorded-but-dead daemon terminal by exact
 #                              id and drop the record (recovery after a crash).
+#   fm-afk-launch.sh quiet-check
+#                              Whether /quiet needs anything here: exit 0 with
+#                              one line when the attended supervision host already
+#                              keeps routine wakes off this conversation; exit 1
+#                              when quiet mode should enter through enter and the
+#                              daemon (one line only when the host is why); exit 2
+#                              with one line naming a live away record on a home
+#                              that runs the host.
 #
 # Supported backends: herdr, tmux. Others (zellij, orca, cmux) have no verified
 # non-visible-launch primitive here yet and refuse loudly.
@@ -70,6 +87,10 @@
 # terminal (default bin/fm-afk-start.sh), so a topology test can run a harmless
 # placeholder instead of a real daemon. FM_SUPERVISOR_TARGET/FM_SUPERVISOR_BACKEND
 # override the captured captain pane/backend (an isolated lab pane in tests).
+# FM_AFK_MODE (away|quiet, default away) declares which mode an `enter` writes;
+# with it unset, a daemon start/refresh uses the record's mode.
+# FM_TEST_HARNESS pins the primary harness this launch path judges, through
+# fm_supervision_host_primary (bin/fm-supervision-engine-lib.sh owns the seam).
 set -u
 
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -118,6 +139,9 @@ set +e
 # shellcheck source=bin/fm-afk-contract.sh
 . "$FM_AFK_LAUNCH_DIR/fm-afk-contract.sh"
 FM_AFK_CONTRACT_CMD="$FM_AFK_LAUNCH_DIR/fm-afk-contract.sh"
+# The supervision host's home gate and attended readiness check.
+# shellcheck source=bin/fm-supervision-engine-lib.sh
+. "$FM_AFK_LAUNCH_DIR/fm-supervision-engine-lib.sh"
 
 fm_afk_launch_log() { printf 'fm-afk-launch: %s\n' "$*" >&2; }
 
@@ -182,7 +206,82 @@ fm_afk_launch_usage() {
 }
 
 fm_afk_launch_primary_harness() {
-  "$FM_AFK_LAUNCH_DIR/fm-harness.sh" 2>/dev/null || printf unknown
+  fm_supervision_host_primary
+}
+
+# The primary harnesses whose arm owner runs the supervision host when the
+# home runs it (docs/supervision-host.md).
+fm_afk_launch_host_primary() {  # <harness>
+  case "$1" in
+    claude|cursor|opencode|omp|grok|codex) return 0 ;;
+  esac
+  return 1
+}
+
+# True when the posture record is a quiet entry's (bin/fm-afk-contract.sh mode).
+fm_afk_launch_record_quiet() {
+  [ "$(fm_afk_contract_mode "$FM_AFK_LAUNCH_STATE")" = quiet ]
+}
+
+# An explicit request takes precedence; otherwise the record owns the mode
+# for both a new daemon and a refresh of an existing one.
+fm_afk_launch_requested_mode() {
+  if [ -n "${FM_AFK_MODE:-}" ]; then
+    printf '%s' "$FM_AFK_MODE"
+  else
+    fm_afk_contract_mode "$FM_AFK_LAUNCH_STATE"
+  fi
+}
+
+# Whether /quiet needs anything here (the header's quiet-check): 0 when it needs
+# nothing; 2 while an away record is live on a home that runs the host;
+# otherwise 1, with FM_AFK_LAUNCH_QUIET_WHY naming what the attended host
+# lacks on a home that runs it, or empty without the host.
+fm_afk_launch_quiet_needs_nothing() {
+  local harness config
+  FM_AFK_LAUNCH_QUIET_WHY=
+  harness=$(fm_afk_launch_primary_harness)
+  fm_afk_launch_host_primary "$harness" || return 1
+  config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+  fm_supervision_host_enabled "$config" "$harness" || return 1
+  if fm_afk_contract_present "$FM_AFK_LAUNCH_STATE"; then
+    fm_afk_launch_record_quiet || return 2
+    return 1
+  fi
+  [ ! -e "$FM_AFK_LAUNCH_STATE/.afk" ] || return 1
+  if ! fm_supervision_host_attended_ready "$config" "$harness"; then
+    FM_AFK_LAUNCH_QUIET_WHY="$FM_SUPERVISION_HOST_UNREADY${FM_SUPERVISION_ENGINE_PROBLEM:+: $FM_SUPERVISION_ENGINE_PROBLEM}"
+  elif ! fm_supervision_host_main_key "$FM_AFK_LAUNCH_STATE" >/dev/null; then
+    FM_AFK_LAUNCH_QUIET_WHY="the main session could not be identified"
+  elif ! FM_STATE_OVERRIDE="$FM_AFK_LAUNCH_STATE" "$FM_AFK_LAUNCH_DIR/fm-host-mirror.sh" check; then
+    FM_AFK_LAUNCH_QUIET_WHY="the dialog mirror is missing or could not be read"
+  fi
+  [ -z "$FM_AFK_LAUNCH_QUIET_WHY" ]
+}
+
+fm_afk_launch_quiet_check() {
+  local rc retry
+  fm_afk_launch_quiet_needs_nothing
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    printf 'Quiet mode starts nothing on this home while its away record (state/.afk-contract) is live: the captain has returned, so run the /afk return (bin/fm-afk-return.sh), pass its catch-up gate, then run quiet-check again.\n'
+    return 2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    [ -z "$FM_AFK_LAUNCH_QUIET_WHY" ] \
+      || printf 'Quiet mode is not already the ordinary posture on this home, because %s, so every attended wake reaches this conversation; quiet mode enters through the quiet daemon instead.\n' "$FM_AFK_LAUNCH_QUIET_WHY"
+    return 1
+  fi
+  if retry=$(fm_supervision_host_paused_until "$FM_AFK_LAUNCH_STATE"); then
+    if [ "$(date +%s)" -lt "$retry" ]; then
+      retry="its next retry is due at $(fm_supervision_host_clock "$retry")"
+    else
+      retry="its next wake retries it"
+    fi
+    printf 'Quiet mode starts nothing on this home, but its supervision session is paused after repeated engine errors: routine wakes reach this conversation until it recovers, and %s.\n' "$retry"
+    return 0
+  fi
+  printf 'Quiet mode needs nothing on this home: the ordinary supervision session already handles the wakes it can while the captain is present, never opens a turn here for a routine outcome, and hands this conversation only what needs it; no daemon and no away record are used.\n'
 }
 
 # The away daemon is no longer launched on Pi: the posture record is the whole
@@ -229,6 +328,24 @@ fm_afk_launch_confirm() {
   "$FM_AFK_CONTRACT_CMD" confirm
 }
 
+# Same-turn writer for /quiet and upstream enter callers. /afk on this fork
+# still goes through propose then confirm; this path does not retire those.
+fm_afk_launch_enter() {
+  fm_afk_launch_catchup_pending && return 1
+  if [ "${FM_AFK_MODE:-}" = quiet ]; then
+    fm_afk_launch_quiet_needs_nothing
+    case $? in
+      0)
+        fm_afk_launch_log "quiet mode writes no away-posture record on this home, whose attended supervision host already is quiet mode; run bin/fm-afk-launch.sh quiet-check"
+        return 3 ;;
+      2)
+        fm_afk_launch_log "quiet mode refuses while this home's away record (state/.afk-contract) is live; run the /afk return (bin/fm-afk-return.sh) and pass its catch-up gate, then run bin/fm-afk-launch.sh quiet-check"
+        return 3 ;;
+    esac
+  fi
+  "$FM_AFK_CONTRACT_CMD" enter "$@"
+}
+
 # The command run inside the created terminal. Real launch runs the shared
 # daemon entry; a test overrides it with a harmless placeholder.
 fm_afk_launch_entry_cmd() {
@@ -244,7 +361,9 @@ fm_afk_launch_record_write() {  # <backend> <target> <extra>
 }
 
 fm_afk_launch_flag_write() {
-  fm_afk_flag_write "$FM_AFK_LAUNCH_STATE"
+  # Use the explicit request or the record's mode, so /afk over a quiet
+  # record switches a running daemon's flag to away on refresh.
+  fm_afk_flag_write "$FM_AFK_LAUNCH_STATE" "$(fm_afk_launch_requested_mode)"
 }
 
 # Read the recorded terminal into FM_AFK_REC_BACKEND/FM_AFK_REC_TARGET. The third
@@ -727,10 +846,12 @@ fm_afk_launch_main() {
   case "${1:-start}" in
     propose) shift; fm_afk_launch_propose "$@" ;;
     confirm) fm_afk_launch_confirm ;;
+    enter) shift; fm_afk_launch_enter "$@" ;;
     start) fm_afk_launch_start ;;
     start-native) fm_afk_launch_start_native ;;
     stop) fm_afk_launch_stop ;;
     reconcile) fm_afk_launch_reconcile ;;
+    quiet-check) fm_afk_launch_quiet_check ;;
     -h|--help|help) fm_afk_launch_usage ;;
     *) fm_afk_launch_usage >&2; return 2 ;;
   esac

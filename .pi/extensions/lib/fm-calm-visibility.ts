@@ -90,7 +90,7 @@ export function registerFirstmateSyntheticPresentation(pi: ExtensionAPI): void {
   pi.registerEntryRenderer<FirstmateSyntheticPresentation>(
     FIRSTMATE_SYNTHETIC_PRESENTATION_TYPE,
     (entry) => {
-      if (calmPresentationHides("synthetic-user")) return undefined;
+      if (stockExportRendering || calmPresentationHides("synthetic-user")) return undefined;
       const data = entry.data;
       if (!data || typeof data.content !== "string") return undefined;
       return new UserMessageComponent(data.content, getMarkdownTheme());

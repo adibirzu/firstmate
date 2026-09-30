@@ -979,6 +979,33 @@ unit_flag_write_failure_aborts() {
   rm -rf "$st"
 }
 
+# Quiet-check and enter stay callable so /quiet can enter after the fork kept
+# propose/confirm for /afk. Host-off means quiet mode uses the daemon path.
+unit_quiet_check_and_enter_shims() {
+  local st out rc
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-quiet-shim.XXXXXX")
+  mkdir -p "$st/state" "$st/config"
+  printf 'off\n' > "$st/config/supervision-host"
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" \
+    "$LAUNCH" quiet-check 2>&1)
+  rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$out" ]; then
+    pass "quiet-check: a home that opted the host off exits 1 with no line"
+  else
+    fail "quiet-check: host-off should exit 1 silently (rc=$rc): $out"
+  fi
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" \
+    FM_AFK_MODE=quiet "$LAUNCH" enter --words 'stay quiet' 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f "$st/state/.afk-contract" ] \
+    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" mode)" = quiet ]; then
+    pass "enter: FM_AFK_MODE=quiet writes a quiet record when the host is off"
+  else
+    fail "enter: quiet shim did not write a quiet record (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
 # ---------------------------------------------------------------------------
 # E2E herdr: topology invariant.
 # ---------------------------------------------------------------------------
@@ -1116,6 +1143,7 @@ unit_clear_failure_aborts_entry
 unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
 unit_flag_write_failure_aborts
+unit_quiet_check_and_enter_shims
 e2e_herdr
 e2e_tmux
 
