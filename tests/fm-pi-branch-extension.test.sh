@@ -1887,7 +1887,7 @@ if (systemPrompt.includes("POSTURE: AWAY.")) throw new Error("the per-wake tail 
 if (!systemPrompt.includes("# Postures") || !systemPrompt.includes("# Ask-user authority policy")) {
   throw new Error("the prefix lost its fixed Postures section or the ask-user-authority policy");
 }
-await report.execute("r1", { task: "branch-driver", verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
+await report.execute("r1", { task: "branch-driver", wakeRow: globalThis.__fmCurrentWakeRow, verdict: "routine", summary: "worker healthy" }, undefined, undefined, {});
 finishPrompt();
 await attendedOffer.settlement;
 globalThis.__fmOnBranchPrompt = undefined;
