@@ -807,20 +807,31 @@ const renderTheme = {
 };
 const renderContext = { state: {}, isError: false, isPartial: false };
 const stockResult = { content: [{ type: "text", text: "OUTCOME_DUMP" }] };
-const assertStockFallback = (label, fn) => {
-  try {
-    fn();
-  } catch {
-    return;
-  }
-  throw new Error(label);
+const calmOffCall = outcomesTool.renderCall({}, renderTheme, renderContext);
+const calmOffResult = outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
+if (calmOffCall.constructor.name !== "Box" || calmOffCall.paddingX !== 1 || calmOffCall.paddingY !== 1) {
+  throw new Error("fm_branch_outcomes changed its ordinary shell rendering");
+}
+if (calmOffResult.constructor.name !== "Container" || calmOffCall.children[0]?.text !== "fm_branch_outcomes" || calmOffCall.children[1]?.text !== "OUTCOME_DUMP") {
+  throw new Error("fm_branch_outcomes changed its ordinary call or result rendering");
+}
+const legacyStockResult = {
+  content: [{
+    type: "text",
+    text: Array.from({ length: 12 }, (_, index) => `LEGACY_OUTCOME_${String(index + 1).padStart(2, "0")}`).join("\n"),
+  }],
 };
-assertStockFallback("fm_branch_outcomes replaced Pi stock rendering while Calm was off", () => {
-  outcomesTool.renderCall({}, renderTheme, renderContext);
-});
-assertStockFallback("fm_branch_outcomes replaced Pi stock result rendering while Calm was off", () => {
-  outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
-});
+const legacyRenderContext = { state: {}, isError: false, isPartial: false };
+const legacyCall = outcomesTool.renderCall({}, renderTheme, legacyRenderContext);
+outcomesTool.renderResult(legacyStockResult, { expanded: false, isPartial: false }, renderTheme, legacyRenderContext);
+const collapsedLegacyText = legacyCall.children[1]?.text;
+if (!collapsedLegacyText?.includes("LEGACY_OUTCOME_12") || collapsedLegacyText.includes("more lines")) {
+  throw new Error("legacy all-line stock capability did not preserve collapsed Calm-off output");
+}
+outcomesTool.renderResult(legacyStockResult, { expanded: true, isPartial: false }, renderTheme, legacyRenderContext);
+if (legacyCall.children[1]?.text !== collapsedLegacyText) {
+  throw new Error("legacy all-line stock capability changed expanded Calm-off output");
+}
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: false });
 const calmOnCall = outcomesTool.renderCall({}, renderTheme, renderContext);
 const calmOnResult = outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
@@ -828,12 +839,9 @@ if (calmOnCall.constructor.name !== "Container" || calmOnCall.render(100).length
   throw new Error("fm_branch_outcomes remained visible while Calm was on");
 }
 pi.events.emit("firstmate:calm-presentation", { active: false, stockExportRendering: false });
-assertStockFallback("fm_branch_outcomes did not restore stock rendering when Calm was turned off", () => {
-  outcomesTool.renderCall({}, renderTheme, renderContext);
-});
-assertStockFallback("fm_branch_outcomes did not restore stock result rendering when Calm was turned off", () => {
-  outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
-});
+if (outcomesTool.renderCall({}, renderTheme, renderContext).constructor.name !== "Box" || outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext).constructor.name !== "Container") {
+  throw new Error("fm_branch_outcomes did not restore ordinary rendering when Calm was turned off");
+}
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
 let exportCallFellBack = false;
 let exportResultFellBack = false;
