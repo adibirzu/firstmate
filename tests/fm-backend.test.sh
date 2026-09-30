@@ -164,21 +164,19 @@ resolve_permissive_tmux_kill_ref() {
 # after this complete baseline has been materialized.
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
-  local name=$1 root
   local name=$1 root archive base_ref
   root="$TMP_ROOT/$name"
-  bin="$root/bin"
+  archive="$root/bin.tar"
   mkdir -p "$root"
-  # Materialize BASE_REF's complete bin/ tree in one operation, exactly as the
+  # Materialize the complete bin/ tree in one operation, exactly as the
   # note above describes. The hand-maintained per-file lists this used to walk
   # (OLD_BIN_UNCHANGED_SIBLINGS and friends) are gone: they rotted every time a
   # script gained a dependency, and an incomplete shim makes the historical
   # process abort on a missing `source` before it ever reaches the behavior
   # under test - which reads as a behavior difference rather than a broken
   # fixture. git archive preserves the executable bits, so entrypoints stay
-  # runnable without a chmod sweep.
-  git -C "$ROOT" archive "$BASE_REF" bin | tar -x -C "$root" || return 1
-  [ -d "$bin" ] || return 1
+  # runnable without a chmod sweep. backend_base_ref is the lazy owner of the
+  # historical revision, so this does not depend on an earlier top-level call.
   base_ref=$(backend_base_ref)
   git -C "$ROOT" archive --format=tar "$base_ref" bin > "$archive" \
     || fail "old-bin shim: could not archive bin/ from $base_ref"

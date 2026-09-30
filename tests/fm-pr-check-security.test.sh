@@ -210,6 +210,9 @@ case "${1:-} ${2:-}" in
     [ "$#" -eq 5 ] && [ "${4:-}" = --repo ] || exit 2
     printf 'pull_request:\n  number: %s\n  state: %s\n' "$3" "${FM_TEST_GH_MERGE_STATE:-merged}"
     ;;
+  "pr merge")
+    [ -z "${FM_TEST_GH_MERGE_HOOK:-}" ] || "$FM_TEST_GH_MERGE_HOOK"
+    ;;
 esac
 exit "${FM_TEST_GH_AXI_RC:-0}"
 SH

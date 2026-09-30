@@ -658,7 +658,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       decisions_open: (if $all_decisions == 1 then $decisions_all else $decisions_all[:$decisions_n] end),
       landed: ($done | map({id, what:(.title | trunc(70)),
                             artifact:(landed_artifact // "-"),owner:.home_id})),
-      gates: (if $all_queued == 1 then $gates_all else $gates_all[:$gates_n] end),
+      gates: ($return_catchup_gate
+              + ($gates_all | newest_filed_first
+                 | if $all_queued == 1 then . else .[:$gates_n] end)),
       reports: (if $all_reports == 1 then $reports_all else $reports_all[:$reports_n] end),
       recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end)
     }

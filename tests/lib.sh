@@ -63,6 +63,14 @@ export FM_TEST_SEAM=1
 # under the marker. A case that verifies the refusal sets FM_TASK_ID itself.
 unset FM_TASK_ID
 
+# Clear the tasks-axi env overrides. An operator shell exports TASKS_AXI_FILE
+# (and may export TASKS_AXI_BACKEND) at its real home's backlog, and tasks-axi
+# resolves those ahead of a fixture's .tasks.toml. Suites that seed or read
+# through tasks-axi from a fixture home would otherwise write the operator's
+# live backlog. A case that verifies isolation against an ambient override sets
+# TASKS_AXI_FILE itself.
+unset TASKS_AXI_FILE TASKS_AXI_BACKEND
+
 # Clear the home identity a live firstmate session exports, so a test file
 # launched directly (not through bin/fm-test-run.sh, which clears the same
 # names per worker) still starts from no home. A script given only

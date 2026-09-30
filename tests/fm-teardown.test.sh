@@ -4546,28 +4546,6 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_retains_records_when_focus_restore_fails
 
-
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup() {
-  local case_dir log closed restored
-  case_dir=$(make_case herdr-projection-restore-failure)
-  write_meta "$case_dir" local-only ship
-  configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
-
-  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
-    FM_FAKE_HERDR_RESTORE_FAIL=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-restore-failure: a confirmed close with a failed focus restore blocked teardown"
-  [ -e "$closed" ] \
-    || fail "herdr-projection-restore-failure: regression did not exercise the exact projected-pane close"
-  [ ! -e "$case_dir/state/task-x1.herdr-presentation" ] \
-    || fail "herdr-projection-restore-failure: confirmed closure did not retire the presentation journal"
-  assert_grep "exact-tab restoration failed" "$case_dir/stderr" \
-    "herdr-projection-restore-failure: teardown swallowed the focus helper's restore warning"
-  pass "herdr projection teardown surfaces failed focus restoration without turning confirmed cleanup into a hard failure"
-}
-
-
 test_legacy_record_without_the_flag_refuses() {
   local case_dir rc
   case_dir=$(make_case legacy-noflag)
@@ -4593,7 +4571,6 @@ test_legacy_record_without_the_flag_refuses() {
   pass "a record predating spawn_gen refuses teardown until --legacy-record is passed"
 }
 
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone

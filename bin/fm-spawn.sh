@@ -1145,6 +1145,11 @@ spawn_remote_secondmate() {
   fi
   launch_args=("$id" "$harness" "$model" "$effort" "$backend")
   [ -z "$remote_traceparent" ] || launch_args+=("$remote_traceparent")
+  # Hand the remote host this route's registry host token; its launch seeds the
+  # remote home's config/herdr-session-host when absent, so the secondmate's tab
+  # and every crewmate/scout it later spawns share one `adix-[<host>-]...` host
+  # segment alongside the launcher-owner segment (bin/fm-herdr-name-lib.sh).
+  launch_args+=(--herdr-host "$host")
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" </dev/null 2>&1); then
     rc=0
@@ -5279,7 +5284,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
 else
   SPAWN_META_TMP="$STATE/.$ID.meta.spawn.${BASHPID:-$$}"
-  SPAWN_FRESH_COMMIT_PENDING=1
+  # A fresh spawn owns the backlog In-flight commit deferred to the final
+  # commit point only when this task has a backlog transition. Without one,
+  # metadata publication is already the final ownership handoff, so an
+  # interrupt during a later best-effort refresh must preserve that record.
+  if [ "$BACKLOG_TRANSITION" = 1 ]; then
+    SPAWN_FRESH_COMMIT_PENDING=1
+  fi
 fi
 SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
@@ -5433,8 +5444,14 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+# Without a pending backlog commit the published record is already final and
+# teardown owns its lease, so refresh the side-band home summary now: a launch
+# or readiness failure below keeps this durable endpoint and must leave it
+# visible. A provisional record waits for the post-commit refresh instead,
+# because a failure before that commit rolls it back.
+if [ "$SPAWN_FRESH_COMMIT_PENDING" = 0 ]; then
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
@@ -6033,6 +6050,9 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+[ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
