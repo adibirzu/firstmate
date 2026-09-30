@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+# fm-review.sh - deterministic-first code review wrapper.
+#
+# Two-stage review built on Alibaba's Open Code Review (`ocr`, the AACR-bench
+# tool at https://github.com/alibaba/open-code-review):
+#
+#   Stage 1 (always, zero LLM tokens): `ocr delegate preview` selects the
+#   reviewable file set and reports changeset size; the target repo's own
+#   configured linter runs against that same diff (bin/fm-lint.sh, invoked
+#   with exactly the OCR-selected files that fall in its canonical set -
+#   bin/*.sh, bin/backends/*.sh, tests/*.sh - when the target repo is
+#   firstmate itself, otherwise a `package.json` "lint" script when one
+#   exists - nothing else is auto-detected).
+#
+#   Stage 2 (only when Stage 1 flags a reason): a high-risk file matched a
+#   configured pattern, the linter reported findings, or the changeset
+#   exceeds the configured size threshold. Two stage-2 modes:
+#     - "delegate" (default): no LLM call at all. `ocr delegate rule` prints
+#       the deterministic rule text for the OCR-selected files so the
+#       calling agent's own harness reviews them directly - this is the
+#       cheaper path whenever a metered LLM call isn't already unavoidable.
+#     - "litellm": `ocr review` runs a real LLM pass through the LiteLLM
+#       gateway (see LIFEOS/DOCUMENTATION/Services/Gb10Fleet.md), only on
+#       the same OCR-selected diff.
+#
+# Usage:
+#   fm-review.sh worktree [--dir PATH] [--from REF] [--to REF]
+#   fm-review.sh pr <PR_URL>
+#   fm-review.sh (worktree|pr ...) [--format json|markdown] [--output FILE] [--stage1-only]
+#
+# Config (repo-root config/code-review, JSON; all keys optional):
+#   {
+#     "sizeThreshold": 1000,          // total changed lines before Stage 2 escalates
+#     "riskPatterns": ["auth/**"],    // glob patterns (matched with bash extglob) that force Stage 2
+#     "stage2Mode": "delegate",       // "delegate" (no LLM) or "litellm" (real LLM call)
+#     "stage2Provider": "litellm",    // passed to `ocr review --provider`  (litellm mode only)
+#     "stage2Model": "auto-code",     // passed to `ocr review --model`     (litellm mode only)
+#     "stage2Difficulty": "medium",   // REVIEW lane difficulty when resolving reviewer order
+#     "stage2Reviewers": [            // ordered second-level reviewers; default mirrors the REVIEW lane
+#       {"harness": "grok"},
+#       {"harness": "agy", "model": "gemini-3.8-flash"},
+#       {"harness": "cursor", "model": "auto"}
+#     ],
+#     "stage2EscalateTo": "claude"    // named target reached only on the reviewer's own "needs more" verdict
+#   }
+#
+# The second-level reviewer order is the REVIEW lane owned by llm-router-axi
+# (the mechanical owner behind the router-dispatch skill and the resolver over
+# config/crew-dispatch.json). An explicit config/code-review stage2Reviewers
+# array overrides it; otherwise this wrapper reads the lane's ordered candidate
+# group from `llm-router-axi policy show --json`; otherwise the built-in default
+# below mirrors that same REVIEW lane so an offline run still resolves the order
+# without inventing a second policy.
+#
+# Env overrides (take precedence over config/code-review, for quick local testing):
+#   FM_REVIEW_SIZE_THRESHOLD, FM_REVIEW_STAGE1_ONLY, FM_REVIEW_STAGE2_MODE,
+#   FM_REVIEW_STAGE2_DIFFICULTY
+#
+# Exit codes:
+#   0  Stage 1 clean, no escalation
+#   1  Stage 1 found lint findings, or a required tool is missing/failed
+#   2  Escalated to Stage 2 in "delegate" mode - a host-agent review is still owed
+# Stage 2 "litellm" escalation exits 0 once the LLM pass completes (its own
+# findings are reported in the verdict body, not via exit code).
+#
+# Requires: ocr, jq. `gh` (via gh-axi) only for `pr` mode.
+
+set -euo pipefail
+
+# Where this wrapper's own sibling helpers live (bin/fm-router-lib.sh), separate
+# from --dir, which names the repo being reviewed.
+REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+
+# --- Argument parsing ---
+
+MODE=""
+DIR="."
+FROM=""
+TO="HEAD"
+PR_URL=""
+FORMAT="markdown"
+OUTPUT=""
+STAGE1_ONLY="${FM_REVIEW_STAGE1_ONLY:-}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  fm-review.sh worktree [--dir PATH] [--from REF] [--to REF] [options]
+  fm-review.sh pr <PR_URL> [options]
+
+Options:
+  --format json|markdown   output format (default: markdown)
+  --output FILE            write the verdict to FILE instead of stdout
+  --stage1-only            never escalate to Stage 2, regardless of config/thresholds
+  -h, --help               print this usage
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 1
+fi
+
+MODE="$1"; shift
+case "$MODE" in
+  worktree)
+    ;;
+  pr)
+    if [[ $# -eq 0 || "$1" == -* ]]; then
+      echo "error: 'pr' mode requires a PR URL as its first argument" >&2
+      exit 1
+    fi
+    PR_URL="$1"; shift
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "error: unknown mode '$MODE' (expected 'worktree' or 'pr')" >&2
+    exit 1
+    ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir) DIR="$2"; shift 2 ;;
+    --from) FROM="$2"; shift 2 ;;
+    --to) TO="$2"; shift 2 ;;
+    --format) FORMAT="$2"; shift 2 ;;
+    --output) OUTPUT="$2"; shift 2 ;;
+    --stage1-only) STAGE1_ONLY=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "error: unrecognized argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+for tool in ocr jq git; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    if [[ "$tool" == "ocr" ]]; then
+      echo "error: required tool 'ocr' not found on PATH; install it with bin/fm-install-ocr.sh <destination-directory> and put that directory on PATH" >&2
+    else
+      echo "error: required tool '$tool' not found on PATH" >&2
+    fi
+    exit 1
+  fi
+done
+
+# --- Resolve mode into DIR / FROM / TO ---
+
+if [[ "$MODE" == "pr" ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "error: 'pr' mode requires 'gh' on PATH" >&2
+    exit 1
+  fi
+  # Pin the read to an explicit repository: the PR URL's own GitHub slug when
+  # it is canonical, otherwise this checkout's origin remote. Relying on gh's
+  # default repository is what lets a fork checkout read the parent's PR.
+  REPO_SLUG="$(fm_pr_github_repo_slug "$PR_URL" 2>/dev/null)" \
+    || REPO_SLUG="$(fm_pr_github_repo_from_checkout "$DIR" 2>/dev/null)" \
+    || REPO_SLUG=""
+  if [[ -z "$REPO_SLUG" ]]; then
+    echo "error: could not resolve a GitHub repository for $PR_URL" >&2
+    exit 1
+  fi
+  BASE_REF="$(gh pr view "$PR_URL" --repo "$REPO_SLUG" --json baseRefName -q .baseRefName 2>/dev/null)" || {
+    echo "error: could not resolve base ref for $PR_URL via gh" >&2
+    exit 1
+  }
+  FROM="$BASE_REF"
+  TO="HEAD"
+fi
+
+if [[ -z "$FROM" ]]; then
+  FROM="$(git -C "$DIR" merge-base HEAD origin/main 2>/dev/null || git -C "$DIR" merge-base HEAD main 2>/dev/null || echo main)"
+fi
+
+# --- Stage 2 reviewer order (REVIEW lane): constants and resolver ---
+#
+# Built-in default mirrors the REVIEW lane (grok -> agy gemini-3.8-flash ->
+# cursor auto) so an offline run without llm-router-axi still resolves the same
+# order; when the router is present its lane is authoritative.
+DEFAULT_STAGE2_DIFFICULTY="medium"
+DEFAULT_STAGE2_ESCALATE_TO="claude"
+DEFAULT_STAGE2_REVIEWERS='[{"harness":"grok","provider":"grok"},{"harness":"agy","model":"gemini-3.8-flash","provider":"agy"},{"harness":"cursor","model":"auto","provider":"cursor"}]'
+STAGE2_REVIEWERS_SOURCE=""
+
+# resolve_stage2_reviewers: print "<source>\t<reviewer-json-array>".
+# Precedence: explicit config/code-review override, then the llm-router-axi
+# review lane (the mechanical owner behind router-dispatch), then the built-in
+# default mirror. The source travels back with the JSON because a command
+# substitution runs this in a subshell, so a global assignment here would not
+# survive to the caller.
+resolve_stage2_reviewers() {
+  local lib="$REVIEW_SCRIPT_DIR/fm-router-lib.sh" router="" policy="" group="" candidates=""
+  if [[ -n "$STAGE2_REVIEWERS_JSON" ]]; then
+    printf 'config/code-review\t%s\n' "$STAGE2_REVIEWERS_JSON"
+    return 0
+  fi
+  if [[ -f "$lib" ]]; then
+    # shellcheck source=bin/fm-router-lib.sh
+    . "$lib"
+    router="$(fm_router_axi_bin)"
+    if [[ -n "$router" ]]; then
+      policy="$("$router" policy show --json 2>/dev/null)" || policy=""
+    fi
+    if [[ -n "$policy" ]]; then
+      group="$(printf '%s' "$policy" | jq -r --arg d "$STAGE2_DIFFICULTY" '.kinds.review[$d].candidates[0] // empty' 2>/dev/null)" || group=""
+      if [[ -n "$group" ]]; then
+        candidates="$(printf '%s' "$policy" | jq -c --arg g "$group" '.candidateGroups[$g] // empty' 2>/dev/null)" || candidates=""
+        if [[ -n "$candidates" && "$candidates" != "null" ]]; then
+          printf 'llm-router-axi policy (%s)\t%s\n' "$group" "$candidates"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  printf 'built-in default (REVIEW lane mirror)\t%s\n' "$DEFAULT_STAGE2_REVIEWERS"
+}
+
+# stage2_default_model <harness>: the model token the REVIEW lane uses when the
+# lane names none (harness-default), so the printed order stays recognizable.
+stage2_default_model() {
+  case "$1" in
+    agy) printf 'gemini-3.8-flash' ;;
+    cursor) printf 'auto' ;;
+    *) printf '' ;;
+  esac
+}
+
+# format_stage2_reviewers <json-array>: one "harness (model)" line per reviewer.
+format_stage2_reviewers() {
+  local harness model
+  while IFS=$'\t' read -r harness model; do
+    [[ -n "$harness" ]] || continue
+    if [[ -z "$model" || "$model" == "null" || "$model" == "harness-default" ]]; then
+      model="$(stage2_default_model "$harness")"
+    fi
+    if [[ -n "$model" ]]; then
+      printf '%s (%s)\n' "$harness" "$model"
+    else
+      printf '%s\n' "$harness"
+    fi
+  done < <(printf '%s' "$1" | jq -r '.[] | "\(.harness)\t\(.model // "")"' 2>/dev/null || true)
+}
+
+# --- Load config/code-review (repo-root JSON, all keys optional) ---
+
+CONFIG_FILE="$DIR/config/code-review"
+SIZE_THRESHOLD="${FM_REVIEW_SIZE_THRESHOLD:-}"
+STAGE2_MODE="${FM_REVIEW_STAGE2_MODE:-}"
+STAGE2_PROVIDER=""
+STAGE2_MODEL=""
+STAGE2_DIFFICULTY="${FM_REVIEW_STAGE2_DIFFICULTY:-}"
+STAGE2_REVIEWERS_JSON=""
+STAGE2_ESCALATE_TO=""
+RISK_PATTERNS=()
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  [[ -n "$SIZE_THRESHOLD" ]] || SIZE_THRESHOLD="$(jq -r '.sizeThreshold // empty' "$CONFIG_FILE")"
+  [[ -n "$STAGE2_MODE" ]] || STAGE2_MODE="$(jq -r '.stage2Mode // empty' "$CONFIG_FILE")"
+  STAGE2_PROVIDER="$(jq -r '.stage2Provider // empty' "$CONFIG_FILE")"
+  STAGE2_MODEL="$(jq -r '.stage2Model // empty' "$CONFIG_FILE")"
+  [[ -n "$STAGE2_DIFFICULTY" ]] || STAGE2_DIFFICULTY="$(jq -r '.stage2Difficulty // empty' "$CONFIG_FILE")"
+  STAGE2_ESCALATE_TO="$(jq -r '.stage2EscalateTo // empty' "$CONFIG_FILE")"
+  # Accept either an array of "harness" / "harness:model" strings or objects.
+  STAGE2_REVIEWERS_JSON="$(jq -c '
+    (.stage2Reviewers // empty)
+    | if type == "array" then
+        [ .[] | if type == "string"
+                then (split(":") | {harness: .[0], model: (.[1] // "")})
+                else . end ]
+      else empty end' "$CONFIG_FILE")"
+  while IFS= read -r pattern; do
+    [[ -n "$pattern" ]] && RISK_PATTERNS+=("$pattern")
+  done < <(jq -r '.riskPatterns[]? // empty' "$CONFIG_FILE")
+fi
+
+SIZE_THRESHOLD="${SIZE_THRESHOLD:-1000}"
+STAGE2_MODE="${STAGE2_MODE:-delegate}"
+STAGE2_DIFFICULTY="${STAGE2_DIFFICULTY:-$DEFAULT_STAGE2_DIFFICULTY}"
+STAGE2_ESCALATE_TO="${STAGE2_ESCALATE_TO:-$DEFAULT_STAGE2_ESCALATE_TO}"
+
+# --- Stage 1: deterministic review (zero LLM tokens) ---
+
+stage1_json="$(ocr delegate preview --repo "$DIR" --from "$FROM" --to "$TO" --format json)"
+
+total_insertions="$(echo "$stage1_json" | jq -r '.total_insertions // 0')"
+total_deletions="$(echo "$stage1_json" | jq -r '.total_deletions // 0')"
+total_changed=$(( total_insertions + total_deletions ))
+mapfile -t reviewable_files < <(echo "$stage1_json" | jq -r '.reviewable_files[]?.path // empty')
+
+# Repo's own configured linter, run only against the reviewable diff.
+# fm-lint.sh's own canonical set (a direct *.sh child of bin/, bin/backends/,
+# or tests/); explicit-path mode requires at least one match, otherwise
+# no-arg mode would fall back to its own unrelated file-set auto-detection.
+review_lint_target() {  # <path>
+  local path=$1 dir base
+  case "$path" in
+    */*) dir=${path%/*}; base=${path##*/} ;;
+    *) dir=; base=$path ;;
+  esac
+  case "$base" in
+    *.sh) : ;;
+    *) return 1 ;;
+  esac
+  case "$dir" in
+    bin|bin/backends|tests) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+lint_targets=()
+for f in "${reviewable_files[@]}"; do
+  review_lint_target "$f" && lint_targets+=("$f")
+done
+
+lint_ran=false
+lint_findings=0
+lint_output=""
+if [[ -x "$DIR/bin/fm-lint.sh" ]]; then
+  if [[ ${#lint_targets[@]} -gt 0 ]]; then
+    lint_ran=true
+    if ! lint_output="$("$DIR/bin/fm-lint.sh" "${lint_targets[@]}" 2>&1)"; then
+      lint_findings=1
+    fi
+  fi
+elif [[ -f "$DIR/package.json" ]] && jq -e '.scripts.lint' "$DIR/package.json" >/dev/null 2>&1; then
+  lint_ran=true
+  if ! lint_output="$(cd "$DIR" && npm run lint --silent 2>&1)"; then
+    lint_findings=1
+  fi
+fi
+
+# High-risk file match against configured glob patterns.
+matched_risk_files=()
+if [[ ${#RISK_PATTERNS[@]} -gt 0 ]]; then
+  shopt -s extglob nullglob globstar 2>/dev/null || true
+  for f in "${reviewable_files[@]}"; do
+    for pattern in "${RISK_PATTERNS[@]}"; do
+      # Intentional glob match (pattern is a glob, not a literal string).
+      # shellcheck disable=SC2053
+      if [[ "$f" == $pattern ]]; then
+        matched_risk_files+=("$f")
+        break
+      fi
+    done
+  done
+fi
+
+escalate=false
+escalate_reason=""
+if [[ "$STAGE1_ONLY" != "true" ]]; then
+  if [[ $total_changed -gt $SIZE_THRESHOLD ]]; then
+    escalate=true
+    escalate_reason="changeset ($total_changed lines) exceeds threshold ($SIZE_THRESHOLD)"
+  elif [[ ${#matched_risk_files[@]} -gt 0 ]]; then
+    escalate=true
+    escalate_reason="high-risk file(s) matched: ${matched_risk_files[*]}"
+  elif [[ $lint_findings -gt 0 ]]; then
+    escalate=true
+    escalate_reason="linter reported findings"
+  fi
+fi
+
+# --- Stage 2 (only when escalated) ---
+
+stage2_ran=false
+stage2_mode_used=""
+stage2_output=""
+stage2_exit=0
+
+if [[ "$escalate" == "true" ]]; then
+  stage2_ran=true
+  stage2_mode_used="$STAGE2_MODE"
+  if [[ "$STAGE2_MODE" == "litellm" ]]; then
+    ocr_args=(review --repo "$DIR" --from "$FROM" --to "$TO" --format json)
+    [[ -n "$STAGE2_PROVIDER" ]] && ocr_args+=(--provider "$STAGE2_PROVIDER")
+    [[ -n "$STAGE2_MODEL" ]] && ocr_args+=(--model "$STAGE2_MODEL")
+    if stage2_output="$(ocr "${ocr_args[@]}" 2>&1)"; then
+      stage2_exit=0
+    else
+      stage2_exit=1
+    fi
+  else
+    # delegate mode: print the deterministic rule text for the selected
+    # files; no LLM call. The calling agent applies these rules itself.
+    if [[ ${#reviewable_files[@]} -gt 0 ]]; then
+      stage2_output="$(ocr delegate rule --repo "$DIR" "${reviewable_files[@]}" --format json 2>&1)" || stage2_exit=1
+    else
+      stage2_output='{"groups": []}'
+    fi
+  fi
+fi
+
+# Reviewer order is only resolved when a host-agent review is owed (delegate
+# mode); the litellm path already names its own provider/model.
+stage2_reviewers_json="[]"
+if [[ "$stage2_ran" == "true" && "$stage2_mode_used" != "litellm" ]]; then
+  resolved="$(resolve_stage2_reviewers)"
+  STAGE2_REVIEWERS_SOURCE="${resolved%%$'\t'*}"
+  stage2_reviewers_json="${resolved#*$'\t'}"
+  [[ -n "$stage2_reviewers_json" ]] || stage2_reviewers_json="[]"
+fi
+
+# --- Render verdict ---
+
+if [[ "$FORMAT" == "json" ]]; then
+  result="$(jq -n \
+    --argjson stage1 "$stage1_json" \
+    --arg escalate "$escalate" \
+    --arg reason "$escalate_reason" \
+    --arg lint_ran "$lint_ran" \
+    --arg lint_findings "$lint_findings" \
+    --arg lint_output "$lint_output" \
+    --arg stage2_ran "$stage2_ran" \
+    --arg stage2_mode "$stage2_mode_used" \
+    --arg stage2_output "$stage2_output" \
+    --argjson stage2_reviewers "$stage2_reviewers_json" \
+    --arg stage2_reviewers_source "${STAGE2_REVIEWERS_SOURCE:-}" \
+    --arg stage2_escalate_to "${STAGE2_ESCALATE_TO:-}" \
+    --arg stage2_failed "$( [[ $stage2_exit -ne 0 ]] && echo true || echo false )" \
+    '{
+      stage1: {
+        preview: $stage1,
+        total_changed_lines: ($stage1.total_insertions + $stage1.total_deletions),
+        lint: { ran: ($lint_ran == "true"), findings: ($lint_findings | tonumber), output: $lint_output }
+      },
+      escalated: ($escalate == "true"),
+      escalation_reason: $reason,
+      stage2: {
+        ran: ($stage2_ran == "true"),
+        mode: $stage2_mode,
+        failed: ($stage2_failed == "true"),
+        output: $stage2_output,
+        reviewers: $stage2_reviewers,
+        reviewers_source: $stage2_reviewers_source,
+        escalate_to: $stage2_escalate_to
+      }
+    }')"
+else
+  result="# Code Review Verdict
+
+**Stage 1: Deterministic Review (zero LLM tokens)**
+
+- Files reviewable: ${#reviewable_files[@]} / $(echo "$stage1_json" | jq -r '.total_files // 0')
+- Changes: +${total_insertions} / -${total_deletions} ($total_changed lines)
+- Linter: $([[ "$lint_ran" == "true" ]] && echo "ran, $lint_findings finding(s)" || echo "none configured for this repo")
+- LLM tokens: 0
+"
+  if [[ "$lint_ran" == "true" && $lint_findings -gt 0 ]]; then
+    result+="
+\`\`\`
+$lint_output
+\`\`\`
+"
+  fi
+  if [[ "$escalate" == "true" ]]; then
+    result+="
+**Stage 2: Escalated** (${escalate_reason})
+
+Mode: \`$stage2_mode_used\`
+"
+    if [[ "$stage2_mode_used" == "litellm" ]]; then
+      result+="$(echo "$stage2_output" | jq -r '.summary // "LLM review completed; see JSON output for findings."' 2>/dev/null || echo "$stage2_output")"
+    else
+      result+="No LLM call made. The host agent must review the selected files against the rules below before this PR is ready.
+
+$(echo "$stage2_output" | jq -r '.groups[]? | "### " + (.files | join(", ")) + "\n\n" + .rule' 2>/dev/null || echo "$stage2_output")"
+      result+="
+
+**Second-level reviewers** (order resolved from ${STAGE2_REVIEWERS_SOURCE:-the configured order})
+
+$(format_stage2_reviewers "$stage2_reviewers_json" | sed 's/^/- /')
+
+Escalate to \`${STAGE2_ESCALATE_TO:-claude}\` only when the reviewer's own verdict states it needs more."
+    fi
+  else
+    result+="
+No escalation: Stage 1 alone gates this change."
+  fi
+fi
+
+if [[ -n "$OUTPUT" ]]; then
+  echo "$result" > "$OUTPUT"
+  echo "Verdict written to $OUTPUT" >&2
+else
+  echo "$result"
+fi
+
+if [[ $stage2_exit -ne 0 ]]; then
+  echo "error: Stage 2 ($stage2_mode_used) failed; see output above" >&2
+  exit 1
+fi
+if [[ $lint_findings -gt 0 && "$escalate" != "true" ]]; then
+  exit 1
+fi
+if [[ "$escalate" == "true" && "$stage2_mode_used" == "delegate" ]]; then
+  exit 2
+fi
+exit 0
