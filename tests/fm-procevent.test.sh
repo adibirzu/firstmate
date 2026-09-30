@@ -4659,6 +4659,42 @@ plant_source "$HCASEINCASE" bash --not-an-option "$(deep_nested_case_in_case)"
 assert_planted_bash_refused "$HCASEINCASE" "nested-case-in-case"
 pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
+arm_blocked_claim() {  # <dir> <confirm-seconds>
+  local dir=$1 secs=$2 art id began rc elapsed
+  mkdir -p "$dir/bin" "$dir/home/state"
+  cat > "$dir/bin/lavish-axi" <<'SH'
+#!/bin/sh
+printf started >> "${READY_MARK:?}"
+SH
+  chmod +x "$dir/bin/lavish-axi"
+  art="$dir/board.html"
+  printf '<h1>blocked</h1>\n' > "$art"
+  lavish_session "$art"
+  id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$art")
+  fm_test_track_procevent_home "$dir/home"
+  mkdir -p "$FM_PROCEVENT_CLAIM_ROOT/$id.claim"
+  export READY_MARK="$dir/mark"
+  : > "$READY_MARK"
+  began=$(date +%s)
+  set +e
+  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS="$secs" \
+    "$ROOT/bin/fm-procevent-lavish.sh" arm "$art" > "$dir/arm.out" 2>"$dir/arm.err"
+  rc=$?
+  set -e
+  elapsed=$(( $(date +%s) - began ))
+  [ "$rc" -ne 0 ] || fail "arm reported success when no listener could claim ($dir)"
+  assert_not_contains "$(cat "$dir/arm.out")" "armed:" \
+    "arm printed ready when no listener could claim ($dir)"
+  [ ! -s "$READY_MARK" ] || fail "the listener command ran without a claim ($dir)"
+  # retire refuses a claim it cannot read, and arm must not override it.
+  [ -e "$dir/home/state/procevent/$id.source" ] \
+    || fail "arm removed a registration that retire refused to remove ($dir)"
+  printf '%s\n' "$elapsed" > "$dir/elapsed"
+  rmdir "$FM_PROCEVENT_CLAIM_ROOT/$id.claim" 2>/dev/null || true
+  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" \
+    "$ROOT/bin/fm-procevent-lavish.sh" retire "$art" >/dev/null 2>&1 || true
+}
+
 arm_blocked_claim "$TMP_ROOT/immediate-arm" 1
 pass "arm fails when the listener cannot claim, and leaves the registration retire refused"
 
