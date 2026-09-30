@@ -1271,7 +1271,6 @@ const prelude = process.env.DRIVER_PRELUDE;
 await eval(`(async () => { ${prelude}; globalThis.__t = { fire, dispatch, settle, sentToMain, mainEntries, mainTools, outcomeScript, defaultSessionCtx, home, bus }; })()`);
 const { fire, dispatch, settle, sentToMain, mainEntries, mainTools, outcomeScript, defaultSessionCtx, home, bus } = globalThis.__t;
 import { readFileSync, writeFileSync } from "node:fs";
-import { writeFileSync } from "node:fs";
 
 let requestsFloor = 0;
 const requests = () => sentToMain.filter((sent) => sent.message.customType === "fm-branch-process").slice(requestsFloor);
@@ -5112,7 +5111,11 @@ for (const row of [stockRow, actualRow]) {
 const collapsedStock = stockRow.render(100);
 const collapsedActual = actualRow.render(100);
 if (JSON.stringify(collapsedActual) !== JSON.stringify(collapsedStock)) {
-  throw new Error("Calm-off ToolExecutionComponent rendering differs from Pi stock");
+  throw new Error(
+    "Calm-off ToolExecutionComponent rendering differs from Pi stock\n" +
+      `STOCK:${JSON.stringify(collapsedStock)}\n` +
+      `ACTUAL:${JSON.stringify(collapsedActual)}`,
+  );
 }
 const collapsedText = collapsedStock.join("\n");
 if (collapsedText.includes("OUTCOME_TWELVE") || !collapsedText.includes("more lines") || !collapsedText.includes("to expand")) {

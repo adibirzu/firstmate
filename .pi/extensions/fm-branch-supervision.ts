@@ -2156,6 +2156,8 @@ ${context.command}
         { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
         root,
       );
+      probe.markExecutionStarted();
+      probe.setArgsComplete();
       probe.updateResult({
         content: [{ type: "text", text: probeTokens.join("\n") }],
         isError: false,

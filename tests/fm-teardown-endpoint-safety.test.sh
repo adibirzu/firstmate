@@ -1383,6 +1383,20 @@ test_already_gone_endpoint_still_completes_without_a_refusal() {
   pass "fm-teardown: an already-exited endpoint, and a server that is already gone, still complete cleanup silently"
 }
 
+assert_reassigned_slot_left_alone() {  # <case> <id> <other> <description>
+  local dir=$1 id=$2 other=$3 description=$4
+  assert_absent "$dir/home/state/$id.meta" "$description: the stale task's own record was not removed"
+  assert_present "$dir/pool/1/.fm-slot-owner" "$description: another task's slot claim was removed"
+  assert_contains "$(cat "$dir/pool/1/.fm-slot-owner")" "task=$other" \
+    "$description: another task's slot claim was rewritten"
+  assert_present "$dir/pool/1/project/.git" "$description: the reassigned slot's checkout was removed"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "$description: the reassigned slot was returned to the pool: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$other" \
+    "$description: the warning should name the task the slot was reassigned to"
+  assert_contains "$(cat "$dir/stderr")" "reassigned" \
+    "$description: the warning should name the reassignment as the cause"
+}
 
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
   local dir id=stale-task other=reassigned-task worker rc

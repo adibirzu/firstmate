@@ -99,7 +99,6 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "agy": "references/harness/agy.md",
     "rovo": "references/harness/rovo.md",
     "omp": "references/harness/omp.md",
-    "agy": "references/harness/agy.md",
     "devin": "references/harness/devin.md"
   }
 }

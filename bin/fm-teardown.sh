@@ -2607,10 +2607,14 @@ require_exclusive_worktree_slot_record() {
         [ -n "$other_path" ] || continue
         other_slot=$(canonical_existing_dir "$other_path") || continue
         [ "$other_slot" = "$slot" ] || continue
+        # Same inode under another task name is a second claim, not a husk.
         # A retirable pre-spawn_gen husk is not a live owner of the slot; the
         # task being torn down proves the slot's work is safe through its own
-        # landed-work gate, so the husk must not pin the slot against it.
-        teardown_record_is_retirable_legacy_husk "$other" && continue
+        # landed-work gate, so a different-inode husk must not pin the slot.
+        if [ ! "$other" -ef "$record_meta" ] \
+           && teardown_record_is_retirable_legacy_husk "$other"; then
+          continue
+        fi
         echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
         echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
         echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
@@ -3932,8 +3936,12 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   fi
 fi
 
-if [ "$KIND" != secondmate ]; then
-  reap_task_endpoint_processes worktree
+# Fork endpoint capture (above) snapshots the worker tree before any close.
+# Do not TERM that tree before the recorded close: killing the pane first makes
+# a blocked kill-window look like success and strands the durable record.
+# Worktree cwd reaping stays on the upstream owns-worktree gate so a
+# close-only fixture with no worktree cannot harvest the tmux pane by cwd.
+if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 elif [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes tasktmp "$TASK_TMP"
@@ -4004,8 +4012,19 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] && [ "$BACKEND" = herdr ]; th
   fi
 elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ] \
      && [ "$TEARDOWN_ENDPOINT_MISSING" != 1 ]; then
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
-    || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
+  if fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"; then
+    :
+  else
+    TEARDOWN_ENDPOINT_CLOSE_OK=0
+    endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
+  fi
+fi
+# Fork endpoint-tree reap is the leak net for setsid children the pane close
+# never signals. Run it only after a close that actually succeeded: a failed
+# close (including --force continuing past it) must leave the recorded window
+# alive so the refusal still names a surviving endpoint.
+if [ "$KIND" != secondmate ] && [ "${TEARDOWN_ENDPOINT_CLOSE_OK:-1}" = 1 ]; then
+  reap_task_endpoint_processes endpoint
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_presence_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then

@@ -576,8 +576,16 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id> [--allow-missing-
       workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
       tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
       pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || pane=
-      if [ -z "$recorded_session" ] || [ -z "$workspace" ] || [ -z "$tab" ] || [ -z "$pane" ] \
-        || [ "$window" != "$recorded_session:$pane" ] \
+      missing=
+      [ -n "$recorded_session" ] || missing="${missing:+$missing }herdr_session"
+      [ -n "$workspace" ] || missing="${missing:+$missing }herdr_workspace_id"
+      [ -n "$tab" ] || missing="${missing:+$missing }herdr_tab_id"
+      [ -n "$pane" ] || missing="${missing:+$missing }herdr_pane_id"
+      if [ -n "$missing" ]; then
+        echo "REFUSED: task $id's record is missing the herdr endpoint identity ($missing); preserving task state." >&2
+        return 1
+      fi
+      if [ "$window" != "$recorded_session:$pane" ] \
         || ! fm_backend_endpoint_atom_valid "$recorded_session" \
         || ! fm_backend_endpoint_atom_valid "$workspace" \
         || ! fm_backend_endpoint_atom_valid "${tab//:/_}" \

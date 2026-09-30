@@ -6771,14 +6771,16 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 
 
 # Own background work is a declared wait using the same existing paused verb.
-# This intentionally keeps the first-sight alert, then uses the long cadence.
+# A live declared wait is absorbed on first sight (the 2026-08/09 alarm-loop
+# fix: agent liveness must not route a paused: line through the bare stale
+# path), then uses the long cadence rather than repeated possible-wedge alarms.
 # The backend/current-state fixtures are not live-harness evidence.
 test_own_work_wait_keeps_first_alert_then_long_cadence() {
   local wait_kind dir state fakebin out capture_file statusf window key sig pid round
   for wait_kind in background-shell pipeline-run foreground-command; do
     dir=$(make_case "own-work-$wait_kind"); state="$dir/state"; fakebin="$dir/fakebin"
     out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/own-work.status"
-    window="test:fm-own-work"; key=$(printf '%s' "$window" | tr ':/.' '___')
+    window="test:fm-own-work"; key=$(watch_marker_key "$window")
     printf 'idle worker awaiting its own %s\n' "$wait_kind" > "$capture_file"
     printf 'window=%s\nkind=scout\nharness=grok\nbackend=tmux\n' "$window" > "$state/own-work.meta"
     printf 'paused: waiting for my %s to finish; resume on completion\n' "$wait_kind" > "$statusf"
@@ -6794,9 +6796,12 @@ test_own_work_wait_keeps_first_alert_then_long_cadence() {
       FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting for own work' \
       watch_bg "$state" "$fakebin" "$out" env FM_PAUSE_RESURFACE_SECS=999
     pid=$!
-    wait_for_exit "$pid" 100 || { reap "$pid"; fail "$wait_kind lost its first-sight alert"; }
-    grep -Fx "stale: $window" "$out" >/dev/null || fail "$wait_kind did not surface as a plain stale"
-    ack_stopped_cycle "$state" || fail "could not acknowledge $wait_kind first alert"
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "$wait_kind surfaced instead of absorbing: $(cat "$out")"; }
+    [ ! -s "$out" ] || { reap "$pid"; fail "$wait_kind printed a first-sight wake during absorb"; }
+    [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$wait_kind queued a first-sight wake during absorb"; }
+    [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "$wait_kind did not record the pause cadence marker"; }
+    reap "$pid"
+    ack_stopped_cycle "$state" || fail "could not acknowledge $wait_kind absorb"
 
     # Cross the ordinary wedge threshold twice without aging the declaration
     # past the long pause cadence. Neither re-arm may add a second alert.
@@ -6816,9 +6821,10 @@ test_own_work_wait_keeps_first_alert_then_long_cadence() {
       ack_stopped_cycle "$state" || fail "could not acknowledge $wait_kind test stop"
     done
 
-    # Both the unchanged declaration and its first alert must be older than
-    # the 240s cadence for a forgotten wait to get its bounded recheck.
-    set_mtime "$(( $(date +%s) - 500 ))" "$state/.paused-resurfaced-$key"
+    # The declaration is already 500s old and no re-surface throttle exists,
+    # so dropping the cadence to 240s is a forgotten wait that must recheck.
+    # A first-sight absorb does not write .paused-resurfaced; missing throttle
+    # plus absorb-age past the cadence is the long-cadence path.
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
       FM_FAKE_TMUX_CURRENT_COMMAND=grok \
       FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting for own work' \
@@ -6846,7 +6852,7 @@ test_own_work_wait_keeps_first_alert_then_long_cadence() {
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "undeclared idle worker no longer alarms"; }
   grep -Fx "stale: $window" "$out" >/dev/null || fail "undeclared idle worker did not surface"
   grep -F "stale: $window" "$state/.wake-queue" >/dev/null || fail "undeclared idle worker's wake was not queued"
-  pass "own-work waits keep one first alert, then bounded rechecks without wedges; undeclared idle still alarms"
+  pass "own-work waits absorb on first sight, then bounded rechecks without wedges; undeclared idle still alarms"
 }
 
 

@@ -1770,7 +1770,10 @@ cmd_reconcile() {
           fm_procevent_extension_registration_load_locked "$STATE" "$id"
           owner_state=$?
           if [ "$owner_state" -eq 1 ]; then
-            if ! read_argv "$id" || fm_procevent_argv_feeds_shell_parser "${ARGV[@]}"; then
+            # Nested $(...) in interpreter -c argv overflows bash's parser;
+            # skip that launch. An unreadable argv still detaches so
+            # confirmation can report failed= (a source that cannot start).
+            if read_argv "$id" && fm_procevent_argv_feeds_shell_parser "${ARGV[@]}"; then
               uncertain=$((uncertain + 1))
               fm_procevent_source_lock_release "$id"
               continue

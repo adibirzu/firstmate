@@ -4614,9 +4614,10 @@ elif [ "$RELAUNCH" -eq 1 ]; then
       # A stale Herdr registration (issue #4115) can swallow a plain pane-run
       # `cd` while the shell still sits in the fork's throwaway reset directory.
       # The verified bare-shell reset sends C-c/C-u first so the next cd hits
-      # the shell, then proves the cwd moved. Keep the fork worktree proof:
-      # if even that cannot land in the recorded copy, refuse.
-      if fm_backend_reset_shell "$BACKEND" "$WT_TARGET" "$WT"; then
+      # the shell, then proves the cwd moved. Keep this extra recovery on
+      # Herdr only: a drifted tmux pane must attempt the recorded-worktree
+      # `cd` once, then refuse, so two agents cannot share one window.
+      if [ "$BACKEND" = herdr ] && fm_backend_reset_shell "$BACKEND" "$WT_TARGET" "$WT"; then
         relaunch_seen=$(spawn_current_path "$WT_TARGET" || true)
       fi
     fi

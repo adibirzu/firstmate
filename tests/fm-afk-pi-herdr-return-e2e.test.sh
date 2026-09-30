@@ -276,7 +276,6 @@ PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_S
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" propose >/dev/null || fail "clean away re-entry read-back failed"
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" confirm >/dev/null || fail "clean away re-entry failed"
-  PI_CODING_AGENT=true "$ROOT/bin/fm-afk-launch.sh" enter >/dev/null || fail "clean away re-entry failed"
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   PI_CODING_AGENT=true "$ROOT/bin/fm-afk-return.sh" begin >/dev/null \
   || fail "clean away re-entry/return was not idempotent"
