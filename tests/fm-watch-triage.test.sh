@@ -6856,6 +6856,19 @@ test_own_work_wait_keeps_first_alert_then_long_cadence() {
 }
 
 
+# The reason line is the headline firstmate reads before the payload. Every
+# procevent:* key used to surface as "process-event result captured", which
+# presents a source that is collecting NOTHING as a healthy capture - the exact
+# shape of the incident these wakes exist to expose. These assertions read the
+# reason the watcher actually printed, so a typo in either classifying glob
+# fails here instead of silently falling back to the healthy-looking headline.
+surface_once() {  # <dir> <out> [limit-ticks]: run one watcher to its wake, return its status
+  local dir=$1 out=$2 limit=${3:-100} pid
+  procevent_watch_bg "$dir" "$out"
+  pid=$!
+  wait_for_exit "$pid" "$limit"
+}
+
 test_procevent_headlines_classify_queue_keys() {
   local dir state out
   dir=$(make_case procevent-headline-captured); state="$dir/state"; out="$dir/watch.out"
