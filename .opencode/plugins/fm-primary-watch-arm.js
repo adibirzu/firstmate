@@ -473,8 +473,6 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settleReadiness(
       classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "healthy" : "failed",
     );
-    const classification = classifyArmClose(paths, hostMode, stdout, stderr, code, signal);
-    settleReadiness(classification.kind === "actionable" ? "wake" : "failed");
     const predecessor = String(armChild.pid ?? "");
     if (established) replenishRetryBudgets();
     if (classification.kind === "idle") {

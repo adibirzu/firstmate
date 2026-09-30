@@ -403,7 +403,7 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
   printf '# Terminal sample review\n\nNo unresolved captain choice remains.\n' > "$home/data/$id/report.md"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
-  assert_contains "$open" "default" "fixture must retain the raw stale status decision"
+  [ -z "$open" ] || fail "the shared fold retained a pre-terminal decision"
   run_decisions "$home" complete "$id" --none >/dev/null \
     || fail "terminal single-owner stale status decision blocked empty inventory completion"
   run_decisions "$home" verify "$id" >/dev/null \

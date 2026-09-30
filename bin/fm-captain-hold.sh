@@ -1696,7 +1696,7 @@ EOF
   done <<EOF
 $open
 EOF
-  if [ -n "$open" ] && [ -z "$keys" ]; then
+  if [ -n "$open" ] && [ -z "$supplied" ]; then
     fail "origin $origin still has open captain decisions in its status stream; hold a captain task for what remains, or answer them, before attesting --none"
   fi
 
