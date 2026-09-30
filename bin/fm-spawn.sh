@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--provider <name>] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--provider <name>] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--provider <name>] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -637,6 +637,7 @@ fm_refuse_if_gate_agent
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
+PROVIDER=
 MODEL=
 EFFORT=
 BACKEND_ARG=
@@ -645,6 +646,7 @@ YOLO=
 BRANCH_PREFIX=fm/
 TRACEPARENT_ARG=
 HARNESS_SET=0
+PROVIDER_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
@@ -667,6 +669,10 @@ for a in "$@"; do
     harness)
       HARNESS_ARG=$a
       HARNESS_SET=1
+      ;;
+    provider)
+      PROVIDER=$a
+      PROVIDER_SET=1
       ;;
     model)
       MODEL=$a
@@ -719,6 +725,11 @@ for a in "$@"; do
     HARNESS_ARG=${a#--harness=}
     HARNESS_SET=1
     ;;
+  --provider) want_value=provider ;;
+  --provider=*)
+    PROVIDER=${a#--provider=}
+    PROVIDER_SET=1
+    ;;
   --model) want_value=model ;;
   --model=*)
     MODEL=${a#--model=}
@@ -765,6 +776,10 @@ done
   echo "error: --harness requires a non-empty value" >&2
   exit 1
 }
+[ "$PROVIDER_SET" -eq 0 ] || [ -n "$PROVIDER" ] || {
+  echo "error: --provider requires a non-empty value" >&2
+  exit 1
+}
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || {
   echo "error: --model requires a non-empty value" >&2
   exit 1
@@ -806,6 +821,13 @@ case "$EFFORT" in
 '' | low | medium | high | xhigh | max | ultra) ;;
 *)
   echo "error: --effort must be one of low, medium, high, xhigh, max, ultra" >&2
+  exit 1
+  ;;
+esac
+case "$PROVIDER" in
+'' | claude | codex | opencode | grok | cursor | agy) ;;
+*)
+  echo "error: --provider must be one of claude, codex, opencode, grok, cursor, agy" >&2
   exit 1
   ;;
 esac
@@ -1132,6 +1154,7 @@ spawn_remote_secondmate() {
     echo "tasktmp="
     echo "model=${model#-}"
     echo "effort=${effort#-}"
+    [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
     echo "home=$home"
     echo "projects=$(secondmate_registry_field "$DATA/secondmates.md" "$id" projects)"
     echo "remote_host=$host"
@@ -1452,6 +1475,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   rc=0
   shared_args=()
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
+  [ -z "$PROVIDER" ] || shared_args+=(--provider "$PROVIDER")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
@@ -1750,8 +1774,16 @@ if [ "$RELAUNCH" -eq 1 ]; then
       dead) RELAUNCH_STATE=dead ;;
       alive) RELAUNCH_STATE=alive ;;
       *)
-        echo "error: task $ID's recorded endpoint $RELAUNCH_TARGET reads 'missing', but ${RELAUNCH_ABSENCE#*$'\t'}. An endpoint that cannot be proven absent may still hold a live agent on this task's worktree; refusing rather than launching a second agent into it" >&2
-        exit 1
+        # Fork relaunch recreates a tmux window this process already classified
+        # missing. Exit still refuses that same unproven read (the shared
+        # absence verdict stays unproven); only replacement launch is allowed
+        # to stand the endpoint back up, matching origin/main.
+        if [ "$BACKEND" = tmux ]; then
+          RELAUNCH_STATE=missing
+        else
+          echo "error: task $ID's recorded endpoint $RELAUNCH_TARGET reads 'missing', but ${RELAUNCH_ABSENCE#*$'\t'}. An endpoint that cannot be proven absent may still hold a live agent on this task's worktree; refusing rather than launching a second agent into it" >&2
+          exit 1
+        fi
         ;;
     esac
   fi
@@ -2035,7 +2067,24 @@ launch_template() {
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
-  opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+  opencode)
+    # Crewmate and scout launches disable Claude Code prompt and skills
+    # compatibility so a 32K local slot is not filled by ~/.claude/CLAUDE.md
+    # and discovered skill descriptions before any work starts.
+    # OPENCODE_CONFIG_CONTENT is a merge overlay, not a full config:
+    # permission.* allow keeps tools unattended, while permission.skill
+    # deny-except-no-mistakes prevents that overlay from widening the skill
+    # catalog (OpenCode documents deny as hidden from the agent).
+    # Secondmate launches keep the previous permission-only overlay: a
+    # secondmate is a firstmate instance whose own AGENTS.md already exceeds
+    # a 32K slot. __EFFORTFLAG__ injects the optional agent.build variant
+    # fragment from the effort mapper below.
+    if [ "$kind" = secondmate ]; then
+      printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    else
+      printf '%s' 'OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    fi
+    ;;
   pi | pi-signed)
     printf '%s' '__PIBIN____PITUIMODE____PIRESUME__'
     if [ "$kind" = secondmate ]; then
@@ -2110,7 +2159,10 @@ launch_template() {
   # inherited CLAUDECODE cannot outrank cursor's own marker in a process that
   # only reads the environment. Cursor exposes no effort flag, so the shared
   # effort axis is deliberately omitted and stays in task metadata only.
-  cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+  # The brief is NOT a positional initial prompt: Cursor's CLI auto-runs that
+  # argument before the composer is proven ready, so firstmate types the
+  # encoded launch-brief only after cursor_wait_for_ready succeeds.
+  cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__' ;;
   # gemini (Google Gemini CLI): a positional query starts the supervised
   # interactive session and auto-submits it, so the brief rides the launch
   # command exactly as it does for claude and grok (verified: a multi-line
@@ -2287,6 +2339,33 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
   echo "error: rovo is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
 fi
+
+# A subscription routing provider only makes sense for a verified adapter whose
+# credit identity the dispatcher can enforce; a raw escape-hatch command carries
+# no such contract, so refuse the combination rather than record a provider that
+# governs nothing.
+if [ "$RAW_LAUNCH" = 1 ] && [ -n "$PROVIDER" ]; then
+  echo "error: raw launch commands cannot carry a subscription routing provider" >&2
+  exit 1
+fi
+
+# A subscription routing provider is only meaningful for a wrapper adapter that
+# borrows another subscription's credit identity. A native subscription harness
+# must run on its own provider, and Kimi carries no subscription window at all.
+case "$HARNESS" in
+kimi)
+  [ -z "$PROVIDER" ] || {
+    echo "error: Kimi cannot carry a subscription routing provider" >&2
+    exit 1
+  }
+  ;;
+claude | codex | opencode | grok | cursor | agy)
+  [ -z "$PROVIDER" ] || [ "$PROVIDER" = "$HARNESS" ] || {
+    echo "error: native harness $HARNESS requires provider $HARNESS" >&2
+    exit 1
+  }
+  ;;
+esac
 
 case "$HARNESS" in
 devin)
@@ -3530,12 +3609,22 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # recorded worktree. The record published below writes window= (and herdr's
     # ids) from these values, which is the whole rebind - the task id, brief,
     # worktree, armed poll and status log are untouched.
-    #
-    # Herdr is the ONLY backend that reaches here: the gate above rebinds only
-    # on a PROVEN-gone endpoint, and absence is provable only on herdr, whose
-    # every read is scoped to the session the record names
-    # (fm_control_endpoint_absence_verdict owns that argument). tmux and every
-    # secondmate were already refused, so there is no dispatch left to make.
+    case "$BACKEND" in
+    tmux)
+      # Fork relaunch stands a replacement window up on this process's tmux
+      # server when the recorded window is already classified missing.
+      SES=$(fm_backend_tmux_container_ensure)
+      T="$SES:$W"
+      WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+      WT_TARGET="$WID"
+      ;;
+    herdr)
+    # Herdr is the backend that can PROVE a pane is gone. Re-create the tab
+    # under the RECORDED herdr session. Without the explicit session the
+    # container would resolve from the AMBIENT one (${HERDR_SESSION:-default}),
+    # so reclaiming a task recorded on a named session from a seat that is not
+    # in it would silently relocate the task onto another herdr server - an
+    # identity change, published as a self-consistent but wrong record.
     #
     # This deliberately uses the FLAT container shape rather than Herdr's
     # presentation projection: projection is a presentation-only layout that is
@@ -3548,15 +3637,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # pane behind and a retry mints another. Documented in
     # docs/agent-control.md rather than fixed here, because the remedy is
     # machinery the ordinary flat spawn path does not have either.
-    #
-    # Re-create the tab under the RECORDED herdr session. Without the explicit
-    # session the container would resolve from the AMBIENT one
-    # (${HERDR_SESSION:-default}), so reclaiming a task recorded on a named
-    # session from a seat that is not in it would silently relocate the task
-    # onto another herdr server - an identity change, published as a
-    # self-consistent but wrong record.
     HERDR_REBIND_SES=${RELAUNCH_TARGET%%:*}
-    HERDR_CONTAINER_RAW=$(HERDR_PANE_ID="$RELAUNCH_LAUNCHER_PANE_ID" \
+    HERDR_CONTAINER_RAW=$(HERDR_PANE_ID="${RELAUNCH_LAUNCHER_PANE_ID:-}" \
       fm_backend_herdr_container_ensure "$PROJ_ABS" launcher-home "$HERDR_REBIND_SES") || {
       # container_ensure returns 1 for several unrelated reasons - a failed
       # version check, a server that will not start, an ambiguous workspace
@@ -3573,7 +3655,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
       # would fire for EVERY named-session task reclaimed from a plain shell and
       # send the operator chasing a session mismatch that was never the cause.
       HERDR_AMBIENT_SES=$(fm_backend_herdr_session)
-      if [ -n "$RELAUNCH_LAUNCHER_PANE_ID" ] && [ "$HERDR_AMBIENT_SES" != "$HERDR_REBIND_SES" ]; then
+      if [ -n "${RELAUNCH_LAUNCHER_PANE_ID:-}" ] && [ "$HERDR_AMBIENT_SES" != "$HERDR_REBIND_SES" ]; then
         echo "error: task $ID's endpoint could not be re-created in its recorded herdr session '$HERDR_REBIND_SES'; this seat is running in herdr session '$HERDR_AMBIENT_SES', and a reclaim never moves a task to another session" >&2
       else
         echo "error: task $ID's endpoint could not be re-created in its recorded herdr session '$HERDR_REBIND_SES'; see the refusal above for what failed" >&2
@@ -3595,6 +3677,12 @@ EOF
     T="$HERDR_SES:$HERDR_PANE_ID"
     SES=$HERDR_SES
     WT_TARGET=$T
+      ;;
+    *)
+      echo "error: task $ID's recorded endpoint is gone and backend '$BACKEND' has no rebind path; refusing rather than launching into an unknown endpoint" >&2
+      exit 1
+      ;;
+    esac
   fi
 else
   case "$BACKEND" in
@@ -4311,10 +4399,11 @@ elif [ "$RELAUNCH" -eq 1 ]; then
     sleep 0.5
   done
   if [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ]; then
-    if [ "$BACKEND" != herdr ]; then
-      echo "error: task $ID's endpoint is in '${relaunch_seen:-unknown}', not its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
-      exit 1
-    fi
+    # The fork's relaunch reset parks the bare shell in a throwaway directory
+    # to prove the continuation is gone. Every backend, not only herdr, must
+    # then be told to return to the recorded worktree before the replacement
+    # launch. Refusing on the first mismatched read would make that reset
+    # incompatible with the worktree proof.
     relaunch_cd_path=${WT//\'/\'\\\'\'}
     spawn_send_text_line "$WT_TARGET" "cd -- '$relaunch_cd_path'" || {
       echo "error: task $ID's endpoint is in '${relaunch_seen:-unknown}' and could not be told to return to its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
@@ -4996,7 +5085,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort provider account account_provider busy_gen spawn_gen traceparent launch_argv worker_root_pid worker_root_start backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5015,6 +5104,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
   # The worker account pin, only when this home declares one, so an unpinned
   # task record stays byte-identical.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
@@ -5348,6 +5438,87 @@ spawn_record_traceparent() {
   return "$status"
 }
 
+# spawn_record_launch_argv publishes the fully resolved launch command as the
+# task record's launch_argv= line, using the same locked rewrite as
+# spawn_record_traceparent and for the same concurrency reason.
+#
+# It runs late because the command is only final after model, effort, brief, and
+# launch-env substitution. bin/fm-crew-state.sh's launch-drift detector compares
+# this recorded command against what the endpoint is live running, which is the
+# only cover firstmate has for a restored worker that came back without its
+# flags: no supported backend replays a launch command
+# (bin/fm-launch-drift-lib.sh owns that rationale).
+#
+# A command carrying a newline would forge a second key=value line in the
+# record, so it is refused rather than written. That is not reachable from any
+# current launch construction - every substituted value is a shell-quoted path -
+# and a refusal only costs the detector its argv axis, which reports `unknown`.
+spawn_record_launch_argv() {
+  local meta="$STATE/$ID.meta" tmp status=0 acquired=0
+  case "$LAUNCH" in
+    *$'\n'*)
+      echo "warning: resolved launch command contains a newline; not recording launch_argv= for $ID" >&2
+      return 1
+      ;;
+  esac
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+    SPAWN_META_LOCK_HELD=1
+    acquired=1
+  fi
+  tmp="$STATE/.$ID.meta.launch.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "launch_argv"' "$meta" > "$tmp" \
+     || ! printf 'launch_argv=%s\n' "$LAUNCH" >> "$tmp" \
+     || ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  if [ "$acquired" = 1 ]; then
+    fm_lock_release "$SPAWN_META_LOCK" || status=1
+    SPAWN_META_LOCK_HELD=0
+  fi
+  return "$status"
+}
+
+# spawn_record_worker_process_root publishes the endpoint's process-tree root
+# (its pane shell) and that process's birth identity as the task record's
+# worker_root_pid=/worker_root_start= lines, using the same locked rewrite as
+# spawn_record_launch_argv. bin/fm-teardown.sh walks descendants from this
+# root to reap the worker's whole tree - including a harness child that called
+# setsid and so left the pane's process group and cwd - and accepts the
+# recorded pid only while its birth identity still matches. It is recorded
+# best-effort after launch delivery, so a failure only costs that fallback and
+# never fails the spawn.
+spawn_record_worker_process_root() {
+  local meta="$STATE/$ID.meta" tmp status=0 acquired=0 root start
+  root=$(fm_backend_task_process_root "$BACKEND" "$T" 2>/dev/null) || return 1
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$root" -gt 1 ] || return 1
+  start=$(fm_process_birth_identity "$root") || return 1
+  case "$start" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+    SPAWN_META_LOCK_HELD=1
+    acquired=1
+  fi
+  tmp="$STATE/.$ID.meta.root.${BASHPID:-$$}"
+  if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
+     || ! awk -F= '$1 != "worker_root_pid" && $1 != "worker_root_start"' "$meta" > "$tmp" \
+     || ! printf 'worker_root_pid=%s\nworker_root_start=%s\n' "$root" "$start" >> "$tmp" \
+     || ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+    status=1
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  if [ "$acquired" = 1 ]; then
+    fm_lock_release "$SPAWN_META_LOCK" || status=1
+    SPAWN_META_LOCK_HELD=0
+  fi
+  return "$status"
+}
+
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
@@ -5464,6 +5635,11 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
   echo "error: could not stage the launch command at $LAUNCH_FILE" >&2
   exit 1
 fi
+# Record the resolved command before submitting it: this is the last point where
+# $LAUNCH is final, and a record written here still describes the incarnation the
+# next line starts. A failure to record is not fatal - it costs the launch-drift
+# detector its argv axis, which then reports `unknown` rather than a false alarm.
+spawn_record_launch_argv || true
 sleep 0.3
 SPAWN_LAUNCH_SENT=1
 spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
@@ -5473,6 +5649,40 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = cursor ]; then
+  case "$BACKEND" in
+    tmux|herdr) ;;
+    *)
+      cursor_spawn_fail "cursor first-turn confirmation is unavailable on backend $BACKEND"
+      exit 1
+      ;;
+  esac
+  CURSOR_SUBMIT_RETRIES=${FM_CURSOR_SUBMIT_RETRIES:-3}
+  CURSOR_SUBMIT_SLEEP=${FM_CURSOR_SUBMIT_SLEEP:-0.8}
+  CURSOR_SUBMIT_SETTLE=${FM_CURSOR_SUBMIT_SETTLE:-0.3}
+  # The seeded brief is typed only into a proven-ready composer. Without this
+  # gate a pre-composer dialog (trust, sandbox intro) or a still-booting TUI
+  # receives the brief instead, and the submit below reads unknown forever
+  # without ever starting a turn.
+  if ! cursor_wait_for_ready; then
+    cursor_spawn_fail "cursor did not reach a ready composer before brief delivery (${CURSOR_READY_DETAIL:-no readiness detail})"
+    exit 1
+  fi
+  CURSOR_BRIEF=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || {
+    cursor_spawn_fail "cursor seeded brief could not be encoded"
+    exit 1
+  }
+  CURSOR_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
+    "$BACKEND" "$T" "$CURSOR_BRIEF" "$CURSOR_SUBMIT_RETRIES" \
+    "$CURSOR_SUBMIT_SLEEP" "$CURSOR_SUBMIT_SETTLE" "$W" cursor_first_turn_started) || {
+    cursor_spawn_fail "cursor seeded brief could not be submitted"
+    exit 1
+  }
+  if [ "$CURSOR_SUBMIT_VERDICT" != empty ]; then
+    cursor_spawn_fail "cursor seeded brief did not start a confirmed first turn (submit verdict: $CURSOR_SUBMIT_VERDICT)"
+    exit 1
+  fi
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
@@ -5539,6 +5749,10 @@ if [ "$HARNESS" = agy ]; then
     exit 1
   fi
 fi
+# Launch delivery has now succeeded for every harness, so record this
+# endpoint's process-tree root for a later teardown. Best-effort: a failure
+# only costs the fallback root, never the spawn.
+spawn_record_worker_process_root || true
 
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then

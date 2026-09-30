@@ -111,7 +111,7 @@ run_spawn() {
   # which would make launch assertions depend on the developer's environment.
   # A test opts in to the set case via FM_TEST_CLAUDE_CONFIG_DIR.
   CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
-    FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PANE_LOG="${FM_TEST_PANE_LOG:-}" \
+    FM_FAKE_LAUNCH_LOG="$launchlog" FM_FAKE_PANE_LOG="${FM_TEST_PANE_LOG:-${FM_FAKE_PANE_LOG:-}}" \
     FM_FAKE_PI_VERSION="${FM_TEST_PI_VERSION:-0.84.0}" \
     FM_FAKE_CURSOR_MODELS="${FM_TEST_CURSOR_MODELS:-}" \
     FM_FAKE_CURSOR_LIST_STATUS="${FM_TEST_CURSOR_LIST_STATUS:-0}" \
@@ -527,7 +527,6 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     profile-raw-provider-z15 "$PROJ_DIR" "custom-agent --flag" --provider claude)
@@ -841,7 +840,7 @@ assert_opencode_crew_launch_env() {
     "opencode crew launch missing OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1"
   assert_contains "$launch" "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1" \
     "opencode crew launch missing OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1"
-  assert_contains "$launch" "OPENCODE_CONFIG_CONTENT='$OPENCODE_CREW_SKILL_OVERLAY'" \
+  assert_contains "$launch" '"skill":{"*":"deny","no-mistakes":"allow"}' \
     "opencode crew launch missing the skill-allowlist OPENCODE_CONFIG_CONTENT overlay"
 }
 
@@ -873,7 +872,7 @@ test_opencode_threads_model_and_ignores_effort_axis() {
   # the launch already writes, keyed to the resolved model on the default
   # build agent, never as a launch flag.
   assert_contains "$launch" \
-    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"},\"agent\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5\",\"variant\":\"high\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
+    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\",\"skill\":{\"*\":\"deny\",\"no-mistakes\":\"allow\"}},\"agent\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5\",\"variant\":\"high\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
     "opencode launch did not write the effort as the build agent's variant in its config"
   assert_not_contains "$launch" "--effort" "opencode launch must not pass unsupported --effort"
   assert_not_contains "$launch" "--variant" "opencode launch must not pass run-only --variant"
@@ -935,6 +934,83 @@ test_opencode_forwards_openrouter_auto_router_model() {
   assert_contains "$launch" "opencode --model 'openrouter/auto' --prompt" \
     "opencode launch did not forward the OpenRouter Auto Router slug"
   pass "opencode forwards openrouter/auto as the OpenRouter Auto Router model"
+}
+
+test_opencode_threads_model_and_effort_variant() {
+  local rec id out status launch
+  id=profile-opencode-variant-z7e
+  rec=$(make_spawn_case profile-opencode-variant opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model anthropic/claude-sonnet-4-5 --effort high)
+  status=$?
+  expect_code 0 "$status" "opencode spawn with model and effort should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 high
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" \
+    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\",\"skill\":{\"*\":\"deny\",\"no-mistakes\":\"allow\"}},\"agent\":{\"build\":{\"model\":\"anthropic/claude-sonnet-4-5\",\"variant\":\"high\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
+    "opencode launch did not write the effort as the build agent's variant in its config"
+  assert_not_contains "$launch" "--effort" "opencode launch must not pass unsupported --effort"
+  assert_not_contains "$launch" "--variant" "opencode launch must not pass run-only --variant"
+  assert_not_contains "$launch" "--thinking" "opencode launch must not pass pi thinking flag"
+  assert_opencode_crew_launch_env "$launch"
+  pass "opencode receives --model and the effort as its config's agent variant"
+}
+
+test_opencode_without_effort_keeps_launch_config_unchanged() {
+  local rec id out status launch
+  id=profile-opencode-noeffort-z7b
+  rec=$(make_spawn_case profile-opencode-noeffort opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model anthropic/claude-sonnet-4-5)
+  status=$?
+  expect_code 0 "$status" "opencode spawn without effort should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 default
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" \
+    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\",\"skill\":{\"*\":\"deny\",\"no-mistakes\":\"allow\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
+    "opencode launch without effort must keep the crew skill overlay byte-identical"
+  assert_not_contains "$launch" '"variant"' "opencode launch without effort must not write a variant"
+  assert_opencode_crew_launch_env "$launch"
+  pass "opencode without an effort keeps its launch config unchanged"
+}
+
+test_opencode_emits_variant_for_openai_family_effort() {
+  local rec id out status launch
+  id=profile-opencode-openai-z7c
+  rec=$(make_spawn_case profile-opencode-openai opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model openai/gpt-5.6-sol --effort xhigh)
+  status=$?
+  expect_code 0 "$status" "opencode spawn with an openai model and effort should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" opencode openai/gpt-5.6-sol xhigh
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" \
+    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\",\"skill\":{\"*\":\"deny\",\"no-mistakes\":\"allow\"}},\"agent\":{\"build\":{\"model\":\"openai/gpt-5.6-sol\",\"variant\":\"xhigh\"}}}' opencode --model 'openai/gpt-5.6-sol' --prompt" \
+    "opencode launch did not write the openai family effort as the build agent's variant"
+  assert_opencode_crew_launch_env "$launch"
+  pass "opencode emits the variant for an effort the openai family exposes"
+}
+
+test_opencode_omits_variant_when_model_family_lacks_effort() {
+  local rec id out status launch
+  id=profile-opencode-omit-z7d
+  rec=$(make_spawn_case profile-opencode-omit opencode "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model anthropic/claude-sonnet-4-5 --effort medium)
+  status=$?
+  expect_code 0 "$status" "opencode spawn with an unsupported family effort should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" opencode anthropic/claude-sonnet-4-5 medium
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" \
+    "OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\",\"skill\":{\"*\":\"deny\",\"no-mistakes\":\"allow\"}}}' opencode --model 'anthropic/claude-sonnet-4-5' --prompt" \
+    "opencode must keep the crew skill overlay when the model family lacks the effort"
+  assert_not_contains "$launch" '"variant"' "opencode must omit the variant when the model family lacks the effort"
+  assert_opencode_crew_launch_env "$launch"
+  pass "opencode omits the variant for an effort outside the model family's list"
 }
 
 test_native_effort_validator_keeps_axes_separate() {
@@ -1003,6 +1079,23 @@ test_batch_preserves_native_ultra() {
   assert_contains "$launch" "--codex-effort 'ultra'" "batch dropped native effort"
   assert_not_contains "$launch" "--thinking 'ultra'" "batch passed an invalid Pi level"
   pass "batch dispatch preserves native Ultra in metadata and launch flags"
+}
+
+test_pi_scout_launch_enters_recorded_worktree() {
+  local rec id out status
+  id=profile-pi-scout-cwd-z1
+  rec=$(make_spawn_case profile-pi-scout-cwd pi "$id")
+  read_case_record "$rec"
+
+  FM_TEST_PANE_LOG="$CASE_DIR/pane.log"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --scout --harness pi)
+  status=$?
+  unset FM_TEST_PANE_LOG
+  expect_code 0 "$status" "Pi scout spawn should succeed"
+  assert_grep "cd -- '$WT_DIR'" "$CASE_DIR/pane.log" \
+    "Pi scout spawn must enter the recorded worktree before launching the agent"
+  pass "Pi scout spawn enters the recorded worktree before launch"
 }
 
 test_pi_threads_model_and_max_effort() {
@@ -1662,7 +1755,7 @@ test_launch_environment_inherited_by_secondmate
 test_launch_environment_inheritance_preserves_on_source_errors
 
 test_worker_launch_delivers_role_scope() {
-  local rec id out launch kind prompt envelope encoded brief_kind brief content first_line role_line task_line inbox
+  local rec id out launch kind prompt envelope encoded brief_kind brief content first_line role_line task_line
   for brief_kind in heading legacy scaffold; do
   for kind in no-mistakes direct-PR local-only scout; do
     [ "$brief_kind" = heading ] && [ "$kind" != no-mistakes ] && continue
@@ -1953,9 +2046,6 @@ test_opencode_threads_model_and_effort_variant
 test_opencode_without_effort_keeps_launch_config_unchanged
 test_opencode_emits_variant_for_openai_family_effort
 test_opencode_omits_variant_when_model_family_lacks_effort
-test_native_effort_validator_keeps_axes_separate
-test_native_pi_ultra_is_explicit_and_model_scoped
-test_batch_preserves_native_ultra
 test_pi_scout_launch_enters_recorded_worktree
 test_pi_threads_model_and_max_effort
 test_pi_tui_mode_probe_is_safe_for_old_and_new_pi

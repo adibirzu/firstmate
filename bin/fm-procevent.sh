@@ -1678,9 +1678,8 @@ stranded_leaderless_detail() {  # <source-id>
 }
 
 cmd_reconcile() {
-  local rec id published started=0 stopped=0 uncertain=0 claim owner pid token identity claim_state stop_state
-  local owner_state
   local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
+  local owner_state
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
@@ -1780,6 +1779,18 @@ cmd_reconcile() {
             uncertain=$((uncertain + 1))
             fm_procevent_source_lock_release "$id"
             continue
+          fi
+          # Snapshot the launch-pacing stamp for the registration generation
+          # this launch will run under, while the source lock still keeps that
+          # registration from being replaced underneath it. The runner writes
+          # this stamp after it claims and before it runs the source command,
+          # and nothing removes it on the way out, so an advanced or newly
+          # appeared value is durable evidence the launch got going.
+          launch_identity=$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null) || launch_identity=
+          launch_mark=
+          if [ -n "$launch_identity" ] \
+            && launch_stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$launch_identity"); then
+            launch_mark=$(cat -- "$launch_stamp" 2>/dev/null || true)
           fi
           fm_procevent_source_lock_release "$id"
           detach_runner "$id"

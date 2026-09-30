@@ -167,6 +167,25 @@ case "${1:-}" in
         done
       fi
     fi
+    # The pre-launch pane exports ride the text-line form
+    # (`send-keys -t <target> <text> Enter`), which carries no -l flag, so a
+    # suite that asserts on what the pane shell received opts in with its own
+    # log. Skip the flags, the target, and the trailing key so only the payload
+    # is recorded, one per line, in send order.
+    if [ -n "${FM_FAKE_PANE_LOG:-}" ]; then
+      shift
+      skip_next=
+      literal=
+      for a in "$@"; do
+        if [ -n "$skip_next" ]; then skip_next=; continue; fi
+        case "$a" in
+          -t) skip_next=1; continue ;;
+          -l) literal=1; continue ;;
+          Enter|C-m) continue ;;
+          *) [ -n "$literal" ] || printf '%s\n' "$a" >> "$FM_FAKE_PANE_LOG" ;;
+        esac
+      done
+    fi
     exit 0
     ;;
   capture-pane)
@@ -198,25 +217,6 @@ case "${1:-}" in
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
-    fi
-    # The pre-launch pane exports ride the text-line form
-    # (`send-keys -t <target> <text> Enter`), which carries no -l flag, so a
-    # suite that asserts on what the pane shell received opts in with its own
-    # log. Skip the flags, the target, and the trailing key so only the payload
-    # is recorded, one per line, in send order.
-    if [ -n "${FM_FAKE_PANE_LOG:-}" ]; then
-      shift
-      skip_next=
-      literal=
-      for a in "$@"; do
-        if [ -n "$skip_next" ]; then skip_next=; continue; fi
-        case "$a" in
-          -t) skip_next=1; continue ;;
-          -l) literal=1; continue ;;
-          Enter|C-m) continue ;;
-          *) [ -n "$literal" ] || printf '%s\n' "$a" >> "$FM_FAKE_PANE_LOG" ;;
-        esac
-      done
     fi
     exit 0
     ;;

@@ -108,6 +108,7 @@ case "${1:-}" in
       case "$payload" in
         'cd '*)
           cd_dir=${payload#cd }
+          cd_dir=${cd_dir#-- }
           case "$cd_dir" in
             \'*\') cd_dir=${cd_dir#\'}; cd_dir=${cd_dir%\'} ;;
           esac

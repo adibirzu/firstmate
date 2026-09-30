@@ -231,6 +231,22 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      case "$payload" in
+        'cd '*)
+          # Fork relaunch proves the bare shell by cd'ing into a reset
+          # directory and reading pane_current_path. Model that execution so
+          # the proof succeeds; keep the worktree cwd for other cd payloads
+          # unless a case pins the pane outside it.
+          cd_dir=${payload#cd }
+          cd_dir=${cd_dir#-- }
+          cd_dir=${cd_dir#\'}
+          cd_dir=${cd_dir%\'}
+          case "$cd_dir" in
+            */.control-reset-*) printf '%s' "$cd_dir" > "$D/cwd" ;;
+            *) [ "${FM_FAKE_SHELL_EXECUTES_CD:-0}" = 1 ] && printf '%s' "$cd_dir" > "$D/cwd" ;;
+          esac
+          ;;
+      esac
     fi
     exit 0 ;;
   display-message)
@@ -292,6 +308,7 @@ test_relaunch_rebuilds_the_switch() {
     out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_FAKE_DIR="$dir/fake" \
       HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_SPAWN_NO_GUARD=1 \
       FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
+      FM_FAKE_SHELL_EXECUTES_CD=1 \
       "$CONTROL" "$id" relaunch --note 'replacement continues the same task' 2>&1)
     status=$?
     expect_code 0 "$status" "relaunch with allowlist=$setting should succeed: $out"

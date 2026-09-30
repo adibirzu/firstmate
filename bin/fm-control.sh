@@ -1054,7 +1054,13 @@ do_relaunch() {
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
   state=$(agent_state)
   if [ "$state" = missing ]; then
-    exit_result="already-stopped"
+    if [ "$BACKEND" = herdr ]; then
+      # Herdr can prove a pane is gone; record that proven outcome so reclaim
+      # journal lines distinguish destroyed endpoints from already-stopped shells.
+      exit_result=$(do_exit)
+    else
+      exit_result="already-stopped"
+    fi
   else
     exit_result=$(do_exit)
   fi
