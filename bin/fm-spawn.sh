@@ -1819,6 +1819,16 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch refused after locking: $FM_BACKLOG_TRANSITION_ERROR" >&2
     exit 1
   }
+  # --reuse-worktree is runtime-handoff: Orca owns its own worktree lifecycle
+  # and there is no treehouse lease to preserve in place. Strict --relaunch
+  # still follows the recorded backend's own relaunch path below.
+  if [ "$REUSE_WORKTREE" -eq 1 ] && [ "$RELAUNCH_STRICT" -eq 0 ]; then
+    RELAUNCH_BACKEND_EARLY=$(fm_backend_of_meta "$RELAUNCH_META")
+    if [ "$RELAUNCH_BACKEND_EARLY" = orca ]; then
+      echo "error: --reuse-worktree does not support backend=orca yet (Orca owns worktree lifecycle; refuse rather than re-create a worktree)" >&2
+      exit 1
+    fi
+  fi
   fm_backend_validate_task_endpoint "$RELAUNCH_META" "$ID" || exit 1
   BACKEND=$FM_BACKEND_VALIDATED_BACKEND
   RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
@@ -3733,7 +3743,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     # adopt: create ONE fresh endpoint for the same task, opened directly in the
     # recorded worktree. The record published below writes window= (and herdr's
     # ids) from these values, which is the whole rebind - the task id, brief,
-    # worktree, armed poll and status log are untouched.
+    # worktree, armed poll and status log are untouched. Say plainly that a
+    # fresh endpoint is being created, so a relaunch that silently fell back to
+    # a new endpoint is never mistaken for an ordinary in-place adoption.
+    echo "note: task $ID's recorded endpoint $RELAUNCH_TARGET is gone (read as '${RELAUNCH_STATE:-unknown}'); creating a fresh endpoint" >&2
     case "$BACKEND" in
     tmux)
       # Fork relaunch stands a replacement window up on this process's tmux
@@ -4069,13 +4082,18 @@ fi
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
 spawn_send_text_line() { # <target> <text>
+  local rc=0
   case "$BACKEND" in
-  tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
-  herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
-  orca) fm_backend_orca_send_text_line "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
+  tmux) fm_backend_tmux_send_text_line "$1" "$2" || rc=$? ;;
+  herdr) fm_backend_herdr_send_text_line "$1" "$2" || rc=$? ;;
+  zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" || rc=$? ;;
+  orca) fm_backend_orca_send_text_line "$1" "$2" || rc=$? ;;
+  cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send line to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 spawn_current_path() { # <target>
   case "$BACKEND" in
@@ -4086,22 +4104,32 @@ spawn_current_path() { # <target>
   esac
 }
 spawn_send_literal() { # <target> <text>
+  local rc=0
   case "$BACKEND" in
-  tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
-  herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
-  orca) fm_backend_orca_send_literal "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+  tmux) fm_backend_tmux_send_literal "$1" "$2" || rc=$? ;;
+  herdr) fm_backend_herdr_send_literal "$1" "$2" || rc=$? ;;
+  zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" || rc=$? ;;
+  orca) fm_backend_orca_send_literal "$1" "$2" || rc=$? ;;
+  cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send literal text to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 spawn_send_key() { # <target> <key>
+  local rc=0
   case "$BACKEND" in
-  tmux) fm_backend_tmux_send_key "$1" "$2" ;;
-  herdr) fm_backend_herdr_send_key "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
-  orca) fm_backend_orca_send_key "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
+  tmux) fm_backend_tmux_send_key "$1" "$2" || rc=$? ;;
+  herdr) fm_backend_herdr_send_key "$1" "$2" || rc=$? ;;
+  zellij) fm_backend_zellij_send_key "$1" "$2" "$W" || rc=$? ;;
+  orca) fm_backend_orca_send_key "$1" "$2" || rc=$? ;;
+  cmux) fm_backend_cmux_send_key "$1" "$2" "$W" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    echo "error: failed to send key '$2' to $1 on $BACKEND" >&2
+    return "$rc"
+  fi
 }
 
 # Enter the exact copy recorded for this task immediately before trust setup and
