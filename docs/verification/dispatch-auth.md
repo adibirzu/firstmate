@@ -7,7 +7,7 @@ It records only facts that must be re-established when a producer or vendor vers
 Task chronology, incident transcripts, and credential metadata stay in private reports or PR evidence.
 
 Firstmate resolves a candidate's provider family, credential surface, and applicable quota by reading the evidence below and reasoning in the open.
-The [worker helper](../../bin/fm-quota-choose.sh) and [typed resolver](../configuration.md#typed-dispatch-resolution-env-typesafe_api_key) document their deterministic mapping boundaries; the [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns the remaining catalog and credential judgments.
+The [worker helper](../../bin/fm-quota-choose.sh) and [typed resolver](../configuration.md#typed-dispatch-resolution-env-typesafe_api_key) document their deterministic mapping boundaries; the [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns the remaining catalog and credential judgments.
 Credential paths below are shown with the home directory replaced by `<home>`.
 
 ## Quota granularity the judgment depends on
@@ -31,7 +31,7 @@ Current dispatch reads the TOON scope and `limitedBy` fields; the JSON fallback'
 }
 ```
 
-The [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns account and scope applicability; this capture illustrates those scope bounds:
+The [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns account and scope applicability; this capture illustrates those scope bounds:
 
 - The captured Codex account reports an `all_models` bound of 64% even for models without their own window.
 - A `model:`-scoped entry is an additional bound for that one model. `model:codex_bengalfox` is the GPT-5.3-Codex-Spark window and bounds nothing else.
@@ -109,8 +109,7 @@ This live snapshot was all `through_reset`, so finite-runway fields were omitted
 There is no `projectionBasis` field; its absence means `cycle_average`.
 `runway` and `selection` are nested under each effective-availability scope, so the same provider/model applicability rules govern headroom, runway, and `spendPriority`.
 Projection confidence is not present on every known runway, so selection must preserve that absence as uncertainty rather than fabricate it.
-The older-schema fallback contract is owned by `router-dispatch`; this evidence does not reinterpret an absent runway, pace, or selection field.
-The schema compatibility and account-matching contract is owned by [`quota-array-dispatch`](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility); this schema-5 evidence does not reinterpret an absent runway, pace, or selection field.
+The older-schema fallback contract and the account-matching contract are owned by [`router-dispatch`](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array); this schema-5 evidence does not reinterpret an absent runway, pace, or selection field.
 
 ## Provider-family counterfactual that this producer schema supports
 
@@ -168,7 +167,7 @@ Observed source statuses are `available`, `expired` (with an `error` slug), and 
 - A provider can carry a healthy source beside a missing or expired one, so a provider must not be collapsed to a single status. Claude's `oauth-file` is missing while its keychain source is available, and Kimi's standalone CLI credential is expired while its Pi source is available.
 - In this captured setup, only `pi:xai` and `pi:kimi-coding` have `pi:`-prefixed sources.
   The Pi `openai-codex` candidate used the Codex store listed above; this observation does not establish the credential source for another account or setup.
-  The [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns how missing authentication evidence affects dispatch.
+  The [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns how missing authentication evidence affects dispatch.
 
 Neither this per-source shape nor `state.authStatus` exists before quota-axi 0.1.16.
 `bin/fm-bootstrap.sh` enforces the current compatibility floor through `bin/fm-quota-axi-lib.sh`.

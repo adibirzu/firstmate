@@ -485,8 +485,11 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/graphify.md",
       "path": "docs/fleet-ledger.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/graphify.md",
       "audience": "operator-current"
     },
     {
@@ -594,8 +597,11 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/cursor-agent-adapter.md",
       "path": "docs/verification/agy.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cursor-agent-adapter.md",
       "audience": "maintainer-verification"
     },
     {

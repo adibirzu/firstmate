@@ -4443,7 +4443,7 @@ EOF
   kill -KILL "$root_pid" 2>/dev/null || true
   expect_code 0 "$rc" "endpoint-tree-reap: teardown should succeed"
   [ "$survived" -eq 0 ] || fail "endpoint-tree-reap: a setsid descendant outside the worktree survived teardown"
-  assert_grep "reaped leaked worktree process tree" "$case_dir/stderr" \
+  assert_grep "reaped leaked endpoint process tree" "$case_dir/stderr" \
     "endpoint-tree-reap: teardown did not report reaping the endpoint process tree"
   pass "the endpoint process-tree reap removes a setsid descendant the cwd scan cannot see"
 }

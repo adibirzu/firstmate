@@ -1192,7 +1192,7 @@ After the answer, code applies all remaining checks and ranking:
 - Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
 - The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
 
-The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
+The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/router-dispatch/SKILL.md#matched-profile-array).
 
 - An expanded provider with no matching account row leaves the candidate eligible but unranked.
 - Known applicable rows from a provider with partial quota semantics remain rankable; rows whose own status is not known remain unrankable.

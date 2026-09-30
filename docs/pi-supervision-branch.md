@@ -101,6 +101,9 @@ On a non-Pi home that runs the supervision host, the host runs the branch beside
   Each report carries that wake row into a deterministic event identity, so retrying an interrupted append with the same report recovers its existing outcome instead of adding another one.
   A heartbeat review is not scoped by task, but still requires one of its claimed wake rows.
   The branch's guarded commands never tell it to drain queued rows mid-handling: for that actor `bin/fm-guard.sh` keeps the queued-wakes warning silent, and an acknowledgement that consumed nothing reports that plainly with the exact command for the current wake (`docs/watcher-continuity.md` "Per-actor acknowledgement").
+
+#### Broken-branch latch and recovery
+
   Two consecutive settled provider errors latch the branch broken and surface a one-line health note only on that initial trip.
   Main keeps every wake during a five-minute cooldown, after which one wake may probe the branch while concurrent wakes still stay on main; each probe that settles with another provider error doubles the next cooldown up to one hour.
   A prompt from the current branch generation and model or effort selection that appends a durable `fm_branch_report` and then settles without a provider error clears both the latch and provider-error streak and surfaces a one-line recovery note; a provider error settled after that report wins instead, re-latches the branch, and extends the cooldown.
@@ -368,9 +371,94 @@ That carve-out is scoped to provider registration alone:
 
 `tests/fm-pi-branch-extension.test.sh` pins the pin-and-fallthrough behavior.
 
-On Pi the away daemon is no longer launched: `/afk` writes the away-posture record (`state/.afk-contract`, owned by `bin/fm-afk-contract.sh`) and never the `state/.afk` daemon flag, so the branch keeps its attended shape under the record until the posture-aware dispatch lands in a later phase.
-The branch's decline while `state/.afk` exists is retained only for a legacy flag left by an older daemon launch.
-What the branch already does for the captain is unchanged: it absorbs the routine majority that previously interrupted the captain's conversation, applying the same escalation etiquette the daemon applies on the harnesses that still run one.
+## Postures
+
+One supervision session runs in two postures, attended and away.
+The posture is a file: the away-posture record `state/.afk-contract`.
+Only `bin/fm-afk-contract.sh` writes it, in the same turn as `/afk`.
+The return path archives it on the captain's first unmarked message.
+
+### Who reads the record
+
+The record is never inferred from chat and never placed in the branch's byte-stable prompt prefix.
+Three readers check it:
+
+- The dispatcher reads its presence at every routing decision.
+- The branch reads it at the tail of every wake and immediately before every captain-outcome presentation.
+- The guarded scripts validate it through the record owner at every gate.
+
+On Pi the away daemon is never launched, so the watcher is the single owner of supervision in both postures.
+A leftover `state/.afk` flag declines nothing.
+
+### While the record exists
+
+- Every actionable row is branch-eligible.
+  Check rows, decision-owned signal and stale rows, and heartbeat rows are claimed by the branch on whatever wake finds them unread.
+  The trigger class no longer forces a batch to main.
+  The two vetoes that describe a broken queue, an unresolvable task-local row and a structurally invalid row, stay vetoes in both postures.
+  A prompt that claims a check row is not scoped by task, so the branch may report it as `fleet`.
+- Main is parked, and reachable only for the classes only main can act on:
+  - A watcher-failure alarm is delivered to main as always, because `fm_watch_arm_pi` lives there.
+  - A wake the branch declines or cannot take (a broken branch inside its cooldown, an unresolvable or corrupt scan) falls back to main exactly as attended.
+
+  Parking is a cost and chat-cleanliness measure.
+  Supervision continuity is the safety property, and the return brief's health section reads any gap.
+- The wake message ends with a fixed `POSTURE: AWAY` tail plus the record's read-back verbatim (`bin/fm-afk-contract.sh readback`).
+  The branch therefore has the captain's away words, the spend cap, the expected return, and the reach line in front of it at execution time, without any prefix change.
+- Captain-verdict outcomes accumulate unprocessed in the outcome store.
+  Their visible entries still persist, but no processing turn opens on the parked main.
+  The request is re-checked against the record immediately before it would open and at every run boundary, so a request pending when the record appears is cancelled rather than delivered.
+  The first run boundary after the record is archived, ordinarily the captain's return message, presents the accumulated rows with a fresh triggered budget exactly as after any other gap.
+  `bin/fm-afk-return.sh` lists them under "waiting on you".
+- Main's standing authority relocates to the branch, and nothing more.
+  [Authority relocation](#authority-relocation) below gives the details.
+- The branch prompt's fixed "Postures" section states these rules once per firstmate version, so the prefix stays byte-stable.
+  The per-wake tail is the only dynamic content.
+
+### Authority relocation
+
+`fm_lease_forbid_branch` passes the branch actor only for the actions whose guarded script opts in.
+It does so only while `bin/fm-afk-contract.sh validate` succeeds on a complete, readable, live away record (`mode` is not quiet).
+An archived, incomplete, invalid, or quiet record restores the attended refusal byte for byte.
+
+The captain's away words are the whole mandate:
+
+- The branch reads them at the tail.
+- It decides by its own judgment whether the event in front of it is the moment they name.
+- It acts on them only through the guarded scripts, never by analogy.
+- It holds with verdict captain on doubt.
+
+`bin/fm-branch-prompt.sh` "Postures" owns those execution rules.
+It requires every action taken under the words to open its outcome summary with "per your away instructions:".
+
+Each relocated script keeps its own gate, enforcing exactly what a script can check without reading words:
+
+| Script | Gate while away |
+| --- | --- |
+| `bin/fm-pr-merge.sh` | Merges any pull request green at its live head, synchronously, under the record lock, and refuses `--allow-red` and `--allow-missing` while away, so the green gate is absolute in this posture; which pull request the words meant is the branch's reading. |
+| `bin/fm-spawn.sh` | Dispatches only queued work whose blockers cleared - already queued, or filed by the branch because the words explicitly call for it; refuses a fresh ordinary spawn for either actor once the home holds as many ordinary task records as the record's spend cap (relaunches and secondmates exempt). |
+| `bin/fm-send.sh --resolve-key` | Answers a decision the words pre-answer, or one `ask-user-authority`'s judgment (carried verbatim in the branch prompt) lets firstmate decide. |
+| `bin/fm-merge-local.sh` | Never relocated. |
+
+The merge-authority record and the outcome row's summary are the audit trail.
+The return brief renders the words verbatim beside that account.
+
+### The authority invariant
+
+Being away changes how the captain is informed and what happens at a captain-owned decision point, never firstmate's authority set.
+`tests/fm-branch-supervision.test.sh`, `tests/fm-pr-merge.test.sh`, and `tests/fm-send-resolve-key.test.sh` pin this invariant.
+It sets these limits:
+
+- The never-set (credential entry, legal or financial acceptance, an attended prompt, an unnamed discard, a security-sensitive action) has no guarded entrypoint that accepts away authority for either actor.
+- A forced teardown stays refused for the branch.
+- A red merge is refused in this posture whatever the words say.
+- No relocation survives the return, because an archived record validates as absent and the words die with it.
+
+### Cleanup after a landed pull request
+
+The ordinary cleanup of a task whose pull request has landed needs no relocation, because it is the branch's own job in both postures.
+`bin/fm-branch-prompt.sh` names the `check: merge landed:` wake, and any later stale or inactive-outcome row on that task, as the moment to attempt `bin/fm-teardown.sh` without `--force`.
+At that moment the branch reports any refusal instead of concluding there is "nothing to recover".
 
 ## Verification
 
