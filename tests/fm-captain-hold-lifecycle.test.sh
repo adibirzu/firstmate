@@ -103,10 +103,6 @@ configure_merged_github() {  # <home>
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
-  "pr view") printf '%s\n' 1111111111111111111111111111111111111111 ;;
-  "api graphql")
-    printf '%s\n' 'state=MERGED' 'merged=true' 'queued=false' 'base=main'
-    ;;
   "pr view")
     case " $* " in
       *statusCheckRollup*)
@@ -3349,7 +3345,6 @@ test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one() {
   run_pr_merge "$home" "$id" "$pr" > "$home/absent-pr.out" 2> "$home/absent-pr.err" \
     || fail "the PR merge entrypoint refused a home carrying no backlog"
   merge_count=$(grep -c 'pr merge 43 ' "$home/gh-axi.log" || true)
-  merge_count=$(grep -c 'pr merge 43 ' "$home/gh.log" || true)
   [ "$merge_count" -eq 1 ] || fail "the absent backlog did not permit exactly one PR merge"
   pass "the PR merge entrypoint separates an unreadable authority record from an absent one"
 }
