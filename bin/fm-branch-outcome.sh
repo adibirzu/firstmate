@@ -551,8 +551,8 @@ case "$CMD" in
     case "$VERDICT" in routine|captain) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
     case "$EVENT_ID" in *$'\t'*|*$'\n'*) usage ;; esac
-    if [ "$SILENT" = true ] && { [ "$TASK" != fleet ] || [ "$VERDICT" != routine ]; }; then
-      echo "error: silent outcomes must be routine fleet outcomes" >&2
+    if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
+      echo "error: silent outcomes must be routine" >&2
       exit 2
     fi
     fm_lock_acquire_wait "$LOCK"

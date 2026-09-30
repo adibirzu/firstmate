@@ -111,6 +111,7 @@ When this task works on Firstmate itself, the repository root `AGENTS.md` (also 
 For that Firstmate task, do the assigned work yourself and report to firstmate; do not adopt the supervisor identity, delegate the task, run fleet supervision, or address the captain.
 For that Firstmate task, start the behavior suite through `bin/fm-test-run.sh`: it asks `llm-router-axi capacity --for suite` and refuses to start a full suite while another suite holds the one-suite-at-a-time slot, so never launch a second full suite beside a running one.
 This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
 Other projects retain their own instructions unchanged.
 EOF
   printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
