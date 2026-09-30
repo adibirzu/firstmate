@@ -529,6 +529,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             kind:(.kind // "secondmate"),
             state:(.state // "working"),
             repo:(.repo // null),
+            name:((.name // "") as $name
+                  | (if (($name | type) == "string" and ($name | test("[^[:space:]]")))
+                     then $name else ($m.id + "/" + .id) end) | trunc(70)),
             doing:((.doing // .state) | trunc(90)),
             usage_harness: (.usage.harness // ""),
             usage_model: (.usage.model // ""),

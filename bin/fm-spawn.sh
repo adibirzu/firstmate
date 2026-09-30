@@ -42,6 +42,17 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
+#        fm-spawn.sh <task-id> --reuse-worktree --harness <name> [--handoff-brief <path>] [--model ...] [--effort ...] [--backend ...]
+#   --reuse-worktree relaunches an existing ship/scout task in its recorded
+#   worktree and endpoint (bin/fm-runtime-handoff.sh's entry). It is not
+#   --relaunch: identity axes may be restated, and --handoff-brief substitutes
+#   a progress-note overlay for the ordinary brief. A live endpoint refuses.
+#   A fresh ship is also gated against duplicate or superseded work
+#   (bin/fm-duplicate-check.sh): an fm/<task-id> branch that already exists on
+#   origin, or an open PR that already covers that branch, refuses rather than
+#   starting a second worker on already-covered ground. --duplicate-ok is the
+#   explicit override for one concrete dispatch. Relaunch and reuse never run
+#   the gate; scouts are exempt.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
@@ -639,6 +650,10 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-remote-overflow-lib.sh
+. "$SCRIPT_DIR/fm-remote-overflow-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -666,6 +681,10 @@ YOLO_SET=0
 BRANCH_PREFIX_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
+RELAUNCH_STRICT=0
+REUSE_WORKTREE=0
+DUPLICATE_OK=0
+HANDOFF_BRIEF=
 POS=()
 want_value=
 for a in "$@"; do
@@ -713,6 +732,9 @@ for a in "$@"; do
       TRACEPARENT_ARG=$a
       TRACEPARENT_SET=1
       ;;
+    handoff-brief)
+      HANDOFF_BRIEF=$a
+      ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
       exit 1
@@ -730,7 +752,11 @@ for a in "$@"; do
     KIND=secondmate
     KIND_SET=1
     ;;
-  --relaunch) RELAUNCH=1 ;;
+  --reuse-worktree) RELAUNCH=1; REUSE_WORKTREE=1 ;;
+  --relaunch) RELAUNCH=1; RELAUNCH_STRICT=1; REUSE_WORKTREE=1 ;;
+  --duplicate-ok) DUPLICATE_OK=1 ;;
+  --handoff-brief) want_value="handoff-brief" ;;
+  --handoff-brief=*) HANDOFF_BRIEF=${a#--handoff-brief=} ;;
   --harness) want_value=harness ;;
   --harness=*)
     HARNESS_ARG=${a#--harness=}
@@ -815,6 +841,19 @@ done
   echo "error: --traceparent requires a non-empty value" >&2
   exit 1
 }
+[ -z "$HANDOFF_BRIEF" ] || [ -f "$HANDOFF_BRIEF" ] || {
+  echo "error: --handoff-brief is not a readable file: $HANDOFF_BRIEF" >&2
+  exit 1
+}
+# --handoff-brief is only meaningful with --reuse-worktree (runtime handoff).
+if [ -n "$HANDOFF_BRIEF" ] && [ "$REUSE_WORKTREE" != 1 ]; then
+  echo "error: --handoff-brief requires --reuse-worktree" >&2
+  exit 1
+fi
+if [ "$REUSE_WORKTREE" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --reuse-worktree cannot be combined with --secondmate" >&2
+  exit 1
+fi
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -846,8 +885,10 @@ esac
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
 # task's own durable record below. Contradicting it on the command line is a
-# refusal rather than a silently-ignored flag.
-if [ "$RELAUNCH" -eq 1 ]; then
+# refusal rather than a silently-ignored flag. --reuse-worktree is the
+# runtime-handoff entry: it also reuses the recorded worktree and endpoint,
+# but firstmate may name a new harness/model/effort/mode for that same work.
+if [ "$RELAUNCH_STRICT" -eq 1 ]; then
   [ "$BACKEND_SET" -eq 0 ] || {
     echo "error: --relaunch reuses the task's recorded backend; --backend cannot override it" >&2
     exit 1
@@ -868,7 +909,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded ship branch; --branch-prefix cannot override it" >&2
     exit 1
   }
-else
+fi
+if [ "$RELAUNCH" -eq 0 ]; then
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
   # here rather than resolved from the project registry. Scouts deliver a report
@@ -1490,7 +1532,11 @@ spawn_herdr_presentation_order_lock_release() {
 # one (task ids are bare slugs), so they fall straight through to the logic below.
 idpart=${POS[0]:-}
 idpart=${idpart%%=*}
-if [ "$RELAUNCH" -eq 1 ] && [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ]; then
+if [ "$REUSE_WORKTREE" -eq 1 ] && [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ]; then
+  echo "error: batch dispatch does not support --reuse-worktree; hand off one task at a time" >&2
+  exit 1
+fi
+if [ "$RELAUNCH_STRICT" -eq 1 ] && [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ]; then
   echo "error: --relaunch is single-task only; relaunch each task explicitly" >&2
   exit 1
 fi
@@ -1512,6 +1558,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
   [ "$BRANCH_PREFIX_SET" -eq 0 ] || shared_args+=(--branch-prefix "$BRANCH_PREFIX")
+  [ "$DUPLICATE_OK" -eq 0 ] || shared_args+=(--duplicate-ok)
   for pair in "${POS[@]}"; do
     case "$pair" in
     *=*) : ;;
@@ -1558,6 +1605,26 @@ if [ -e "$STATE" ] || [ -L "$STATE" ]; then
   }
 elif [ "$RELAUNCH" -eq 1 ]; then
   echo "error: spawn refused: state directory does not exist at $STATE" >&2
+  exit 1
+fi
+# Machine-capacity guard (bin/fm-capacity-lib.sh). Every kind of direct
+# report passes through here before the task lock, backend, worktree, or
+# metadata mutation. A refused fresh ship or scout spawn is first offered
+# to a remote secondmate home with headroom (bin/fm-remote-overflow-lib.sh).
+# Relaunches and secondmates are never overflowable. A tooling failure
+# (router or jq absent) is never overflowed.
+if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
+  if [ "$FM_CAPACITY_GUARD_REASON" = capacity ] \
+    && [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
+    && fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND" 2>/dev/null \
+    && fm_backlog_row_probe "$DATA" "$ID" 2>/dev/null \
+    && [ "$FM_BACKLOG_ROW_STATE" = "queued no no" ] \
+    && [ -n "$(fm_overflow_remote_ids)" ]; then
+    if fm_overflow_try "$ID"; then
+      exit 0
+    fi
+    echo "overflow: task $ID stays queued locally; no remote secondmate home took it" >&2
+  fi
   exit 1
 fi
 # Role partition: spawning NEW work is MAIN-owned while attended. A relaunch of
@@ -1817,8 +1884,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
   case "$RELAUNCH_STATE" in
     dead) ;;
     missing) RELAUNCH_REBIND=1 ;;
+    alive)
+      echo "error: task $ID's endpoint is still alive; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit, or use bin/fm-runtime-handoff.sh)" >&2
+      exit 1
+      ;;
     *)
-      echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
+      echo "error: cannot reconcile existing endpoint ownership for $ID; it reads '${RELAUNCH_STATE:-unknown}' and a relaunch requires a positively agent-free endpoint, so this refuses rather than guessing" >&2
       exit 1
       ;;
   esac
@@ -3110,9 +3181,12 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 else
-  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
+  PROJ_ABS="$(cd -- "$(resolve_project_dir_arg "$PROJ")" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
+fi
+if [ -n "$HANDOFF_BRIEF" ]; then
+  BRIEF=$HANDOFF_BRIEF
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
@@ -4570,6 +4644,24 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
+fi
+
+# Duplicate or superseded-work gate, once the leased worktree is on a current
+# base. A fresh ship is the surface the mandate covers; --duplicate-ok is the
+# explicit override for one concrete dispatch. Relaunch and secondmates skip
+# the gate; scouts are exempt because investigating covered work is legitimate.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ] && [ "$DUPLICATE_OK" -eq 0 ]; then
+  INTENDED_BRANCH=${BRANCH:-fm/$ID}
+  DUP_RC=0
+  "$FM_ROOT/bin/fm-duplicate-check.sh" "$WT" "$INTENDED_BRANCH" "$ID" >&2 || DUP_RC=$?
+  if [ "$DUP_RC" -ne 0 ]; then
+    if [ "$DUP_RC" -eq 1 ]; then
+      echo "error: duplicate or superseded work detected for $INTENDED_BRANCH; refusing to dispatch a second worker on already-covered ground; review the evidence above or pass --duplicate-ok to dispatch anyway" >&2
+    else
+      echo "error: duplicate check could not answer whether $INTENDED_BRANCH is already covered; refusing to dispatch without that answer; fix the environment above or pass --duplicate-ok to dispatch anyway" >&2
+    fi
+    exit 1
+  fi
 fi
 
 # Re-assert the durable task copy after either treehouse acquisition or endpoint

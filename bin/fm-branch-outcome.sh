@@ -552,7 +552,7 @@ case "$CMD" in
     case "$SILENT" in true|false) ;; *) usage ;; esac
     case "$EVENT_ID" in *$'\t'*|*$'\n'*) usage ;; esac
     if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
-      echo "error: silent outcomes must be routine" >&2
+      echo "error: silent outcomes must have the routine verdict" >&2
       exit 2
     fi
     fm_lock_acquire_wait "$LOCK"

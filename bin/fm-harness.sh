@@ -195,11 +195,19 @@ ancestry_names_omp() {
 harness_process_verdict() {  # <pid>
   local pid=$1 comm args argv0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+  comm=${comm#"${comm%%[![:space:]]*}"}
+  comm=${comm%"${comm##*[![:space:]]}"}
   argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
   if fm_cursor_process_matches "$comm" '' "$argv0"; then
     echo "comm cursor"
     return
   fi
+  # Linux ps comm ignores exec -a (it reports bash); Muse's live identity is
+  # argv0 (`muse` or versioned `muse-bin-<version>`). Match that before
+  # *claude* so a claude-named ancestor cannot rename a muse worker.
+  case "$(basename -- "${argv0:-}")" in
+    muse|muse-bin-*) echo "comm muse"; return ;;
+  esac
   if fm_gemini_path_is_gemini "$comm"; then
     echo "comm gemini"
     return

@@ -1061,6 +1061,8 @@ crew_dispatch_validate() {
       elif $h == "agy" then (["low","medium","high"] | index($e))
       elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
+      elif $h == "cline" then (["low","medium","high","xhigh"] | index($e))
+      elif $h == "copilot" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "rovo" then (["low","medium","high","max"] | index($e))
       elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
       else true

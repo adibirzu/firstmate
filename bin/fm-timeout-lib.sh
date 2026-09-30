@@ -253,7 +253,7 @@ fm_run_timed() {  # <seconds> <command...>
     timeout) fm_run_external_timeout timeout "$seconds" "$@" ;;
     gtimeout) fm_run_external_timeout gtimeout "$seconds" "$@" ;;
     perl)
-      perl -MPOSIX=setsid -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setsid() or die "setsid failed: $!"; exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' \
+      perl -MPOSIX=setsid -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setsid() or die "setsid failed: $!"; exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
         "$seconds" "$@"
       ;;
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
@@ -277,7 +277,7 @@ fm_run_timed_foreground() {  # <seconds> <command...>
     timeout) timeout -f -k 1 "$seconds" "$@" ;;
     gtimeout) gtimeout -f -k 1 "$seconds" "$@" ;;
     perl)
-      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", $pid; select undef, undef, undef, 0.2; kill "KILL", $pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' \
+      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { exec @ARGV; exit 127 } local $SIG{ALRM} = sub { kill "TERM", $pid; select undef, undef, undef, 0.2; kill "KILL", $pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
         "$seconds" "$@"
       ;;
     bash) fm_run_bash_timeout_foreground "$seconds" "$@" ;;
