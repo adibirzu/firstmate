@@ -7,49 +7,25 @@ Remote second mates place a whole persistent Firstmate home on another SSH-reach
 The primary still owns routing and supervision, while the remote home owns its own projects, backlog, and workers.
 Firstmate does not support placing an individual worker remotely or failing a remote route over to a local replacement.
 
-## Find a topic
-
-| Task | Start here |
-| --- | --- |
-| Prepare the primary and the remote host | [Prerequisites](#prerequisites) and [non-interactive tool contract](#non-interactive-tool-contract) |
-| Check whether a host is ready, or repair it | [Readiness, repair, and the human steps](#readiness-repair-and-the-human-steps) |
-| Create the route and the remote home | [Provision a route](#provision-a-route) |
-| Launch, recover, message, and read a remote second mate | [Normal operation](#normal-operation) |
-| Move queued work to the remote home | [Backlog handoff](#backlog-handoff) |
-| Push configuration, relaunch, update, or retire | [Sync, update, and retirement](#sync-update-and-retirement) |
-| Run the tests or a real-host smoke test | [Verification](#verification) |
-
-## Where the remote agent runs
-
-The remote second-mate agent itself always runs on the [Herdr backend](herdr-backend.md) in the shared `fm-remote` session.
-Every path that provisions or launches one refuses a host that is not ready for it.
-
-- `fm-remote` is reserved for remote fleet work and must not be used for personal work.
-- The user's interactive Herdr session remains `default` and is not a remote-secondmate prerequisite.
-- Herdr's remote-session server belongs to the host's own GUI login session rather than to the SSH connection.
-  As a result, the agent's endpoint survives every disconnection the primary's supervision depends on.
-- Local second mates are unaffected and keep their ordinary backend and session selection.
-  So do the workers a remote second mate supervises inside its own home.
+The remote second-mate agent itself always runs on the [Herdr backend](herdr-backend.md) in the shared `fm-remote` session, and every path that provisions or launches one refuses a host that is not ready for it.
+`fm-remote` is reserved for remote fleet work and must not be used for personal work.
+The user's interactive Herdr session remains `default` and is not a remote-secondmate prerequisite.
+Herdr's remote-session server belongs to the host's own GUI login session rather than to the SSH connection, so the agent's endpoint survives every disconnection the primary's supervision depends on.
+Local second mates are unaffected and keep their ordinary backend and session selection, as do the workers a remote second mate supervises inside its own home.
+Watching or reconnecting to a station's development session from the primary is owned by [`remote-dev-sessions.md`](remote-dev-sessions.md).
 
 ## Prerequisites
 
-### SSH access from the primary
+Configure an SSH alias in the primary account's normal OpenSSH configuration.
+Use ordinary public-key authentication, strict host-key verification, and a dedicated remote account where practical.
+Do not enable agent forwarding for Firstmate.
+A host whose default SSH landing is not POSIX (for example commandopc, which lands in Windows PowerShell) needs a separate alias that reaches a real shell first; [commandopc-wsl-ssh.md](commandopc-wsl-ssh.md) records that machine's route and its restart caveat.
+`fm-on.sh` also disables agent forwarding, forwarding setup, and configured `SendEnv` patterns on every call, and arms bounded SSH dead-peer detection so a vanished host (a reboot, a dropped link) fails within a bounded window instead of hanging indefinitely; its [script header](../bin/fm-on.sh) owns the keepalive defaults and environment overrides.
 
-1. Configure an SSH alias in the primary account's normal OpenSSH configuration.
-2. Use ordinary public-key authentication, strict host-key verification, and a dedicated remote account where practical.
-3. Do not enable agent forwarding for Firstmate.
-
-`fm-on.sh` adds its own protections:
-
-- On every call, it also disables agent forwarding, forwarding setup, and configured `SendEnv` patterns.
-- It arms bounded SSH dead-peer detection, so a vanished host (a reboot, a dropped link) fails within a bounded window instead of hanging indefinitely.
-
-Its [script header](../bin/fm-on.sh) owns the keepalive defaults and environment overrides.
-
-### Remote clone and entrypoint
-
-1. Clone Firstmate on the remote host at an absolute code-root path.
-2. Expose that clone's fixed entrypoint on the account's non-interactive SSH `PATH`, for example:
+Clone Firstmate on the remote host at an absolute code-root path.
+For a bare Linux host, `bin/fm-station-bootstrap.sh <ssh-alias>` performs the whole code-root, entrypoint, toolchain, harness, and router-policy build-out idempotently and ends at the doctor; its header owns the exact steps.
+The alias must already land in a POSIX shell, which the script verifies and never creates.
+Expose that clone's fixed entrypoint on the account's non-interactive SSH `PATH`, for example:
 
 ```sh
 mkdir -p ~/.local/bin
@@ -123,6 +99,12 @@ It never touches a worker whose checkout still exists.
 
 ## Non-interactive tool contract
 
+Remote job execution never runs a login or interactive shell, so `~/.profile`, `~/.bashrc`, and `~/.zshrc` never contribute to the job worker's runtime `PATH`.
+`bin/fm-remote-job-lib.sh` is the single owner of the worker `PATH` and builds it by filesystem discovery rather than by evaluating shell startup files.
+The authorized child sees `<remote-root>/bin` first, then a genuine account `~/.local/bin`, the nvm default version bin, asdf shims and install bins, mise shims and install bins, Nix directories, Homebrew directories, and the system tail `/usr/bin:/bin:/usr/sbin:/sbin`.
+Nvm selection follows the filesystem `alias/default` chain and chooses the highest matching installed semantic version, falling back to the highest installed semantic version when the alias is absent or has no installed match.
+An nvm `system` default adds no nvm version bin, so the later system directories provide Node.
+The Nix and package-manager order after version-manager discovery is `~/.nix-profile/bin`, `/etc/profiles/per-user/<account>/bin`, `/run/current-system/sw/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
 Remote job execution never runs a login or interactive shell.
 So `~/.profile`, `~/.bashrc`, and `~/.zshrc` never contribute to the job worker's runtime `PATH`.
 `bin/fm-remote-job-lib.sh` is the single owner of the worker `PATH`.
@@ -148,7 +130,6 @@ The Nix and package-manager order after version-manager discovery is:
 3. `/run/current-system/sw/bin`
 4. `/opt/homebrew/bin`
 5. `/usr/local/bin`
-
 Exact repeated entries are omitted.
 
 ### nvm version selection
@@ -165,22 +146,9 @@ For the three Nix locations:
 - A path reached through symlinked ancestors remains in its documented position.
 
 Other final-component symlink directories, including `~/.local/bin`, are excluded.
-
-### Stale Herdr clients
-
-Because `~/.local/bin` precedes the package-manager directories, a stale self-updated `herdr` there shadows the one the account's login shell may resolve.
-The Herdr adapter steps around a client the running server refuses, and `fm-remote-doctor.sh` names which client it selected ([`herdr-backend.md`](herdr-backend.md#client-selection)).
-
-### How the entrypoint resolves git
-
-The entrypoint resolves `git` only from the operator portion of the `PATH` (every discovered directory except `<remote-root>/bin`).
-It does this before prepending `<remote-root>/bin` for the authorized child.
-This has two consequences:
-
-- A checkout-local `bin/git` cannot authorize an untracked command.
-- A host with no operator `git` receives an install-or-wrapper diagnostic before command execution.
-
-### Wrappers for version-managed tools
+Because `~/.local/bin` precedes the package-manager directories, a stale self-updated `herdr` there shadows the one the account's login shell may resolve; the Herdr adapter steps around a client the running server refuses and `fm-remote-doctor.sh` names which client it selected ([`herdr-backend.md`](herdr-backend.md#client-selection)).
+The entrypoint resolves `git` only from the operator portion before prepending `<remote-root>/bin` for the authorized child.
+A checkout-local `bin/git` therefore cannot authorize an untracked command, and a host with no operator `git` receives an install-or-wrapper diagnostic before command execution.
 
 The filesystem discovery normally finds tools installed by nvm, asdf, or mise without starting their shell hooks.
 When a required tool remains discoverable only through one of those managers, `fm-remote-doctor.sh --fix` may create a Firstmate-owned wrapper in `~/.local/bin` that executes its selected absolute target.
@@ -241,6 +209,15 @@ The script's own header owns the full line protocol.
 bin/fm-on.sh <secondmate-id|ssh-alias> fm-remote-doctor.sh --fix
 ```
 
+Over the plain SSH doctor bootstrap, it writes and reloads the Firstmate-owned `dev.firstmate.remote-job` and `dev.firstmate.herdr.fm-remote` launch agents on macOS, both scoped with `LimitLoadToSessionType=Aqua` and bootstrapped in `gui/<uid>`.
+The Herdr agent runs [`bin/fm-remote-herdr-guard.sh`](../bin/fm-remote-herdr-guard.sh) through a shell in login mode with separate `-l` and `-c` arguments, resolving the remote account's executable labeled Directory Services `UserShell`, then an executable `$SHELL`, and finally `/bin/sh`, so the server inherits the account's own environment.
+The `gui/<uid>` domain, not the login shell, is what gives that server and every pane it spawns the Aqua audit session and login-keychain access; a server born in any other session cannot read the login keychain, and every claude pane under it falls back to a stale plaintext credentials file and reports "Login expired".
+Herdr's own SSH remote attach starts such a server when it finds none, and at boot it wins the `fm-remote` socket because sshd accepts connections before the login session exists, so the guard is what makes the launch agent converge: it execs the server in the foreground under launchd when nothing owns the socket, exits 0 when an Aqua-born server already does, and otherwise stops the foreign server and takes the session over, closing its panes so the parent firstmate relaunches its mates into the Aqua-born server.
+`KeepAlive={SuccessfulExit=false}` lets that exit 0 rest instead of respawning against a held socket; the guard's header owns the decision table and [`bin/fm-remote-herdr-owner-lib.sh`](../bin/fm-remote-herdr-owner-lib.sh) owns the birth markers it reads.
+It starts the same workers directly on Linux, recreates the `~/.local/bin/fm-remote-entrypoint.sh` symlink when it is absent, and creates only Firstmate-owned required-tool wrappers that it can prove resolve to a version-manager target, stopping after one harness satisfies the at-least-one requirement.
+It never installs packages or overwrites a non-Firstmate file at a reserved wrapper path.
+The dedicated Herdr launch agent owns only the remote-secondmate `fm-remote` server and does not inspect, rewrite, start, stop, or require the user's interactive `default` session or its `dev.firstmate.herdr` launch agent.
+It re-derives every check from the host afterwards, so what it prints is the state after the repair rather than the intent of one.
 Over the plain SSH doctor bootstrap, it writes and reloads two Firstmate-owned launch agents on macOS:
 
 - `dev.firstmate.remote-job`.
@@ -300,6 +277,7 @@ These steps are never automated and are always reported rather than silently att
 - The first console login on that Mac, and automatic login in System Settings > Users & Groups when the machine runs headless and must come back on its own after a reboot.
 - FileVault, which holds a reboot at pre-boot authentication before any login session exists.
 - Installing any missing required tool that no safe wrapper can resolve.
+- The required remote tool set is `git`, `jq`, `herdr`, compatible `tasks-axi`, `treehouse`, and at least one of `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, or `kimi`; macOS additionally requires `lsof` so the doctor and guard can prove which process owns the session socket.
 - Each worker runtime's own `/login`, and any keychain password prompt that login needs.
 
 Firstmate never writes an auto-login password, never changes FileVault, and never stores an account password.
@@ -411,14 +389,13 @@ Launch or recover the remote second mate with the same command used for a local 
 bin/fm-spawn.sh <id> --secondmate
 ```
 
-The primary then takes these steps:
-
-1. It resolves the verified secondmate harness and optional model and effort.
-2. It runs the same readiness gate the seed runs.
-3. It transfers the inherited-material allowlist.
-4. It asks the remote host to launch on Herdr in `fm-remote`.
-
-All remote secondmates on one host share `fm-remote` and retain separate `2ndmate-<id>` workspaces inside it.
+The primary resolves the verified secondmate harness and optional model and effort, runs the same readiness gate the seed runs, transfers the inherited-material allowlist, and asks the remote host to launch on Herdr in `fm-remote`.
+All remote secondmates on one host share `fm-remote` and retain separate `2m-<id>` workspaces inside it.
+An explicit request for any other backend is refused rather than honored, and the remote host refuses one too.
+An existing remote endpoint recorded in another Herdr session, including `default`, is classified as unverified and left untouched; launch, liveness recovery, control, and retirement refuse it until an operator explicitly migrates it instead of attempting a live cutover.
+A launch after a host has drifted out of readiness fails with the doctor's own gap text instead of leaving a half-created endpoint.
+Raw launch commands are not accepted for remote secondmates.
+Backends that already refuse secondmate launch, currently Orca and cmux, remain unsupported on the remote host.
 
 ### Refused and unsupported launches
 
@@ -595,12 +572,13 @@ Move already-judged queued work with the normal command:
 bin/fm-backlog-handoff.sh <id> <item-key>...
 ```
 
+For a remote route, `tasks-axi mv` first moves the dependency-closed set atomically from the primary backlog into `data/handoff/<id>.outbox.md`.
+The outbox is then copied to the remote handoff scratch directory and `fm-backlog-receive.sh` atomically ingests every destination-absent key under the remote backlog's own lock.
 For a remote route, the handoff takes these steps:
 
 1. `tasks-axi mv` first moves the dependency-closed set atomically from the primary backlog into `data/handoff/<id>.outbox.md`.
 2. The outbox is then copied to the remote handoff scratch directory.
 3. `fm-backlog-receive.sh` atomically ingests every destination-absent key (a key the remote backlog does not already hold) under the remote backlog's own lock.
-
 The [`bin/fm-backlog-handoff.sh`](../bin/fm-backlog-handoff.sh) header owns remote outbox release after receipt and stable wake-correlation retry behavior.
 Bootstrap retries pending outboxes and wakes, and emits `SECONDMATE_HANDOFF:` only when an outbox remains.
 There is no two-phase journal and no additional tasks-axi release requirement.
@@ -645,15 +623,8 @@ Retire a remote second mate with the normal guarded command:
 bin/fm-teardown.sh <id>
 ```
 
-Retirement is executed on the configured host.
-It refuses while any of these holds:
-
-- The remote home has child work.
-- The primary has an unfinished backlog outbox.
-- A routed reply remains unresolved.
-
-It closes only the retiring secondmate's panes or `2ndmate-<id>` workspace in `fm-remote`.
-It never stops the shared session or removes a sibling secondmate's workspace or panes.
+Retirement is executed on the configured host and refuses while the remote home has child work, while the primary has an unfinished backlog outbox, or while a routed reply remains unresolved.
+It closes only the retiring secondmate's panes or `2m-<id>` workspace in `fm-remote`; it never stops the shared session or removes a sibling secondmate's workspace or panes.
 SSH exit 255 preserves both the route and local records because completion is unknown.
 `--force` remains the explicit discard path and requires the same captain authority as local secondmate discard.
 
@@ -661,6 +632,49 @@ No generic remote delete or write surface exists:
 
 - Remote writes are confined to inherited allowlist files and backlog handoff scratch files.
 - Remote home removal is reachable only through guarded secondmate retirement.
+
+## Idle-window update gate
+
+A herdr update restarts the whole server on a station and stops every pane on that host, so the captain's rule is that herdr and firstmate are updated on a station only when its tasks are finished, never mid-run.
+`bin/fm-station-idle.sh <station>` encodes that rule as a read-only probe: it prints exactly one line, `station-idle: <station>`, only when every Firstmate home on that station is provably idle, and otherwise stays silent.
+The probe is the condition half only - it never performs the update.
+Homes are resolved from this home's `data/secondmates.md`: a remote station matches its `host:` routes, so `adi2` reaches a route whose host alias is `adi2-ts`, while the local station `local` matches the local routes plus this home.
+A station is idle when every home has zero in-flight tasks, no recorded task endpoint is live, and herdr on that host reports no `working` or `blocked` agent in any session.
+The line is news once and only after the station has been idle continuously for `FM_STATION_IDLE_WINDOW` seconds (default 300), so a brief gap between tasks is not mistaken for a real window.
+The probe's own header is the single owner of its flags, environment knobs, and failure behavior.
+
+Register the gate per station once, from the primary home, so the watcher turns the line into a `check:` wake:
+
+```sh
+bin/fm-station-idle.sh arm adi1
+bin/fm-station-idle.sh arm adi2
+bin/fm-station-idle.sh arm adi3
+```
+
+`disarm <station>` removes the check and its record.
+The update itself is always a wake-time decision, never an action bound to the condition.
+
+When a station reports idle, run the per-station update sequence:
+
+```sh
+# 1. re-verify the whole host is still idle (the wake is a moment, not a grant)
+bin/fm-station-idle.sh <station>
+
+# 2. update herdr on that host - the disruptive step that stops every pane
+ssh <ssh-alias> 'herdr update'
+
+# 3. fast-forward firstmate and every local or remote secondmate home
+bin/fm-update.sh
+
+# 4. restart the second mates that live on that host
+bin/fm-secondmate-restart.sh <id>...
+
+# 5. verify
+ssh <ssh-alias> 'herdr --version; herdr session list'
+```
+
+Per-station targets from the fleet inventory: adi2 needs `herdr 0.7.4 -> 0.8.2` and `treehouse v2.0.1 -> v2.3.0`, while adi1, adi3, and the mini are already on herdr 0.8.2 and take only the firstmate fast-forward.
+A station with no registered home yet (for example a not-yet-onboarded adi3) is still probed host-wide through herdr, and an unreachable host keeps the gate silent rather than reporting a window that was never proven.
 
 ## Verification
 
@@ -695,8 +709,11 @@ bin/fm-test-run.sh tests/fm-remote-reply.test.sh
 bin/fm-test-run.sh tests/fm-remote-backlog-handoff.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-lifecycle-e2e.test.sh
 bin/fm-test-run.sh tests/fm-remote-secondmate-trace-context.test.sh
+bin/fm-test-run.sh tests/fm-station-idle.test.sh
 ```
 
+The account-level checks the doctor performs - a real Aqua login session, a real `launchctl` domain, and a real herdr server - are only ever exercised against fixtures here, so the readiness gate's behavior on a genuine Mac remains an operator-run smoke test.
+The audit-session facts the guard relies on are recorded with their commands in [runtime backend verification](verification/runtime-backends.md#fm-remote-server-birth-and-login-keychain-access).
 ### What the portable tests cannot prove
 
 The doctor performs these account-level checks, and they are only ever exercised against fixtures here:

@@ -29,6 +29,10 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
 7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
+8. Push every follow-up commit on that open PR through the gate as well, never with a plain `git push`.
+   The attestation in the PR body binds to the exact head it was produced for, so any head the gate has not attested yet fails `Require no-mistakes` with a head mismatch.
+   A plain `git push` leaves the PR body bound to the older head permanently, so re-run `git push no-mistakes` to bind the attestation to the current head.
+   A red `Require no-mistakes` while a pipeline is still running is expected instead: the head lands before the gate rewrites the PR body, and the body edit reruns the check against the new head.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
@@ -127,6 +131,7 @@ Its header and `--help` own the flags, family labels, lanes, and changed-file ma
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
+Starting a full suite (`--lane`, `--family`, or `--all`) asks `llm-router-axi capacity --for suite` and refuses while another suite holds the one-suite-at-a-time slot, so never start a second full suite beside a running one; targeted script and `--changed` runs are unchanged.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated; pushes to `main` are never cancelled, and the workflow owns that contract and its rationale.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.

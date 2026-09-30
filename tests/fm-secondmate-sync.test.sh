@@ -408,7 +408,7 @@ SH
 }
 
 test_bootstrap_sweep_nudges_only_instruction_change() {
-  local w c1 c2 c3 fakebin out info_line log marker_dir
+  local w c1 c2 c3 c4 fakebin out info_line log marker_dir first_delivery second_delivery
   w=$(new_world boot-sweep)
   c1=$(head_of "$w/main")
   add_sm_worktree "$w" sm-instr "$c1"        # behind by an instruction change
@@ -452,6 +452,34 @@ test_bootstrap_sweep_nudges_only_instruction_change() {
   [ "$(head_of "$w/sm-current")" = "$c3" ] || fail "sm-current moved off primary HEAD"
   # The non-live home is never touched by the bootstrap sweep.
   [ "$(head_of "$w/sm-nonlive")" = "$c1" ] || fail "a home with no live meta was swept"
+
+  # A second, DISTINCT instruction update must notify again even though the
+  # message bytes match the first. Moving the first record into handled/ models
+  # the mate acknowledging it; a constant delivery id would then let the second
+  # send dedupe onto that acknowledged record (reporting success while the mate
+  # is never notified), so the id must be derived from the recorded instruction
+  # commit and change with it.
+  mv "$w/home/state/sm-instr.inbox/001.msg" "$w/home/state/sm-instr.inbox/handled/001.msg"
+  bump_primary "$w" bin
+  c4=$(head_of "$w/main")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
+    FM_SEND_SETTLE=0 FM_FAKE_TMUX_LOG="$log" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  [ "$(head_of "$w/sm-instr")" = "$c4" ] \
+    || fail "sm-instr did not advance to the second instruction commit"
+  assert_contains "$out" "BOOTSTRAP_INFO: nudged fm-sm-instr " \
+    "second distinct instruction change should report a fresh nudge"
+  [ -f "$w/home/state/sm-instr.inbox/002.msg" ] \
+    || fail "a second distinct instruction nudge must create a new live inbox record"
+  assert_contains "$(cat "$w/home/state/sm-instr.inbox/002.msg")" "firstmate was updated to the latest - please re-read your AGENTS.md" \
+    "second nudge should enqueue the same re-read message"
+  first_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm-instr.inbox/handled/001.msg" | head -1)
+  second_delivery=$(grep -o 'delivery=[a-f0-9]\{16\}' "$w/home/state/sm-instr.inbox/002.msg" | head -1)
+  [ -n "$first_delivery" ] || fail "first nudge carried no delivery id"
+  [ -n "$second_delivery" ] || fail "second nudge carried no delivery id"
+  [ "$first_delivery" != "$second_delivery" ] \
+    || fail "a distinct instruction commit must derive a distinct delivery id"
+  [ ! -e "$marker_dir/sm-instr.pending" ] || fail "second successful nudge should clear its retry marker"
   pass "T8 bootstrap sweeps live homes and sends exactly one marked nudge for the instruction change"
 }
 

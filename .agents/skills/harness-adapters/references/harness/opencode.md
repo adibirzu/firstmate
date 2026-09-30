@@ -15,6 +15,7 @@ Verified on 2026-06-11 across versions 1.15.7 through 1.17.6, with busy-queue be
 | Effort flag | None for Firstmate's interactive `opencode --prompt` launch; `opencode run` has `--variant`, but that is not this path. The effort instead rides the launch's `OPENCODE_CONFIG_CONTENT` JSON as the `build` agent's `variant` keyed to the resolved model, the config schema's per-model reasoning-effort field verified on 1.18.32. It is emitted only when the resolved model's provider is known to expose that effort as a variant (`anthropic/*`: high, max; `openai/*`: low, medium, high, xhigh); with no model resolved, another provider, or an effort outside its family's list, the variant is omitted and the permission-only launch is unchanged. |
 | Model discovery | Run `opencode models [provider]` to list available provider/model identifiers. |
 | Trust dialog | None. |
+| Crewmate/scout launch | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1`, and `OPENCODE_CONFIG_CONTENT` with `permission.skill` deny except `no-mistakes`, so a 32K local slot is not filled by `~/.claude/CLAUDE.md` and discovered skill descriptions. Secondmate launches keep the previous permission-only overlay. `../../../bin/fm-spawn.sh` owns the template. |
 | Marker | None; OpenCode publishes no identity marker, so `../../../bin/fm-harness.sh` identifies it from process ancestry. |
 
 OpenCode can auto-upgrade in the background, and the running TUI can exit mid-task.
@@ -35,7 +36,8 @@ The live Herdr guard is `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 ../../../tests/fm-herdr-
 
 The primary integration was verified on 2026-07-08 with OpenCode 1.17.6.
 `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
-Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `../../../bin/fm-turnend-guard.sh` returns 2.
+Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive.
+[`docs/turnend-guard.md`](../../../../../docs/turnend-guard.md#harness-integrations) owns the watch-arm handoff, including its exact silent outcomes and the failed-arm fail-safe.
 The follow-up was verified in the interactive TUI.
 In a home with `config/supervision-host` and no `config/supervision-host-off` the watch-arm plugin spawns the supervision host instead of `../../../bin/fm-watch-arm.sh`, with Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md) owns the host.
 `opencode run` can exit before displaying a queued follow-up, so the adapter steps aside in headless mode.

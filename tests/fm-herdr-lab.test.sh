@@ -20,6 +20,31 @@ cat > "$FAKEBIN/herdr" <<'SH'
 set -eu
 printf '%s\n' "$*" >> "$FM_FAKE_HERDR_LOG"
 state=$FM_FAKE_HERDR_STATE
+# Isolation must come from a --session flag Herdr actually parses, which means it
+# has to sit before any "--" separator. Anything after the separator is the
+# launched process's own argv, where a session flag both corrupts the command and
+# silently leaves the Herdr call scoped by nothing but the ambient HERDR_SESSION.
+session=
+separator=0
+session_after_separator=0
+previous=
+for arg in "$@"; do
+  if [ "$separator" -eq 0 ] && [ "$arg" = -- ]; then
+    separator=1
+    previous=$arg
+    continue
+  fi
+  if [ "$previous" = --session ]; then
+    if [ "$separator" -eq 1 ]; then
+      session_after_separator=1
+    else
+      session=$arg
+    fi
+  fi
+  previous=$arg
+done
+[ "$session_after_separator" -eq 0 ] || { echo "fake herdr: --session landed after the -- separator" >&2; exit 94; }
+[ -n "$session" ] || { echo "fake herdr: missing --session before any -- separator" >&2; exit 90; }
 # Herdr reads --session only as an option, so it must end the arguments or
 # sit immediately before the first -- delimiter.
 last=
@@ -94,6 +119,30 @@ run_with_fake() {
     FM_FAKE_HERDR_TITLE_FAIL="${FM_FAKE_HERDR_TITLE_FAIL:-}" \
     FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" \
     "$@"
+}
+
+
+start_viewer_fixture() {
+  local pair=$1
+  (
+    "$REAL_SLEEP" 20 &
+    printf '%s\n' "$!" > "$pair"
+    wait
+  ) &
+  FIXTURE_LAUNCHER_PID=$!
+  while [ ! -s "$pair" ]; do
+    "$REAL_SLEEP" 0.01
+  done
+  FIXTURE_VIEWER_PID=$(cat "$pair")
+}
+
+
+write_viewer_record() {
+  local record=$1 launcher_pid=$2 viewer_pid=$3 launcher_start viewer_start
+  launcher_start=$(fm_herdr_lab_process_start "$launcher_pid") || fail "could not identify launcher fixture process"
+  viewer_start=$(fm_herdr_lab_process_start "$viewer_pid") || fail "could not identify viewer fixture process"
+  printf 'launcher_pid=%s\nlauncher_start=%s\nviewer_pid=%s\nviewer_start=%s\n' \
+    "$launcher_pid" "$launcher_start" "$viewer_pid" "$viewer_start" > "$record"
 }
 
 test_refuses_unsafe_names() {
@@ -280,6 +329,46 @@ SH
   pass "fm-herdr-lab: timed-out provisioning cancels the launch before teardown"
 }
 
+test_session_flag_precedes_agent_argv() {
+  local name="fm-lab-argv-$$" status=0 logged
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "argv fixture provision failed"
+  : > "$FAKE_LOG"
+
+  run_with_fake fm_herdr_lab_cli "$name" \
+    agent start worker --cwd /tmp -- claude --dangerously-skip-permissions --model opus --effort high \
+    >/dev/null || fail "agent start with a -- separator was rejected"
+  logged=$(tail -1 "$FAKE_LOG")
+  [ "$logged" = "agent start worker --cwd /tmp --session $name -- claude --dangerously-skip-permissions --model opus --effort high" ] \
+    || fail "session flag was not inserted before the separator with the argv forwarded intact: $logged"
+
+  # A session flag pushed past the separator would be swallowed into the agent's
+  # argv, leaving the Herdr call scoped only by the ambient HERDR_SESSION.
+  case "$logged" in
+    *" -- "*"--session"*) fail "session flag leaked into the agent argv: $logged" ;;
+  esac
+
+  run_with_fake fm_herdr_lab_cli "$name" agent start worker --cwd /tmp -- >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a trailing separator with no argv must fail closed"
+  status=0
+  run_with_fake fm_herdr_lab_raw "$name" -- claude --model opus >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a separator with no Herdr subcommand must fail closed"
+
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "argv fixture teardown failed"
+  pass "fm-herdr-lab: the session flag precedes agent argv and ambiguous separators fail closed"
+}
+
+test_refuses_unsafe_names
+test_provision_run_and_guarded_teardown
+test_session_flag_precedes_agent_argv
+test_run_scopes_session_before_double_dash
+test_missing_tripwire_blocks_destruction
+test_changed_default_trips_after_teardown
+test_stopped_owned_lab_can_reprovision
+test_failed_delete_retains_tripwire
+test_timed_out_provision_cancels_late_launch
+
+
 
 # The pty attachment itself needs a real Herdr client, so the live guard
 # tests/fm-herdr-attached-viewer-live-e2e.test.sh owns that proof. What is
@@ -300,27 +389,6 @@ test_viewer_refuses_unowned_sessions() {
   pass "fm-herdr-lab: the viewer attaches only to a session this lab owns"
 }
 
-start_viewer_fixture() {
-  local pair=$1
-  (
-    "$REAL_SLEEP" 20 &
-    printf '%s\n' "$!" > "$pair"
-    wait
-  ) &
-  FIXTURE_LAUNCHER_PID=$!
-  while [ ! -s "$pair" ]; do
-    "$REAL_SLEEP" 0.01
-  done
-  FIXTURE_VIEWER_PID=$(cat "$pair")
-}
-
-write_viewer_record() {
-  local record=$1 launcher_pid=$2 viewer_pid=$3 launcher_start viewer_start
-  launcher_start=$(fm_herdr_lab_process_start "$launcher_pid") || fail "could not identify launcher fixture process"
-  viewer_start=$(fm_herdr_lab_process_start "$viewer_pid") || fail "could not identify viewer fixture process"
-  printf 'launcher_pid=%s\nlauncher_start=%s\nviewer_pid=%s\nviewer_start=%s\n' \
-    "$launcher_pid" "$launcher_start" "$viewer_pid" "$viewer_start" > "$record"
-}
 
 test_viewer_start_cancels_an_unrecorded_launcher() {
   local name="fm-lab-viewer-late-$$" out status=0 launcher_pid
@@ -343,6 +411,7 @@ SH
   run_with_fake fm_herdr_lab_teardown "$name" || fail "viewer-late fixture teardown failed"
   pass "fm-herdr-lab: timed-out viewer startup cancels its exact launcher"
 }
+
 
 test_viewer_timeout_allows_launcher_escalation() {
   local launcher_pid started="$TMP_ROOT/viewer-grace-started"
@@ -369,6 +438,7 @@ SH
   pass "fm-herdr-lab: startup timeout allows launcher child escalation"
 }
 
+
 test_viewer_start_requires_its_owned_process() {
   local name="fm-lab-viewer-ownership-$$" out status=0 marker="$TMP_ROOT/viewer-launched"
   run_with_fake fm_herdr_lab_provision "$name" || fail "viewer-ownership fixture provision failed"
@@ -390,6 +460,7 @@ SH
   run_with_fake fm_herdr_lab_teardown "$name" || fail "viewer-ownership fixture teardown failed"
   pass "fm-herdr-lab: viewer start requires an identity-matched owned process"
 }
+
 
 test_viewer_stop_only_signals_owned_processes() {
   local name="fm-lab-viewer-stop-$$" record status=0 holder_pid pair="$TMP_ROOT/viewer-stop-pair"
@@ -431,6 +502,7 @@ test_viewer_stop_only_signals_owned_processes() {
   pass "fm-herdr-lab: viewer stop signals only recorded processes and confirms the detach"
 }
 
+
 test_viewer_stop_requires_the_recorded_parent() {
   local name="fm-lab-viewer-parent-$$" record launcher_pid viewer_pid
   run_with_fake fm_herdr_lab_provision "$name" || fail "viewer-parent fixture provision failed"
@@ -450,6 +522,7 @@ test_viewer_stop_requires_the_recorded_parent() {
   run_with_fake fm_herdr_lab_teardown "$name" || fail "viewer-parent fixture teardown failed"
   pass "fm-herdr-lab: viewer ownership requires the recorded parent"
 }
+
 
 test_interrupted_viewer_start_cancels_launcher() {
   local name="fm-lab-viewer-interrupt-$$" command_pid launcher_pid status=0
@@ -484,6 +557,7 @@ SH
   pass "fm-herdr-lab: interrupted viewer start cancels its launcher"
 }
 
+
 test_teardown_refuses_while_viewer_attached() {
   local name="fm-lab-viewer-teardown-$$" record status=0 pair="$TMP_ROOT/viewer-teardown-pair"
   run_with_fake fm_herdr_lab_provision "$name" || fail "viewer-teardown fixture provision failed"
@@ -505,6 +579,7 @@ test_teardown_refuses_while_viewer_attached() {
   pass "fm-herdr-lab: teardown refuses to destroy a session an attached viewer still holds"
 }
 
+
 test_viewer_stop_retains_record_when_detach_is_unreadable() {
   local name="fm-lab-viewer-unreadable-$$" record status=0
   run_with_fake fm_herdr_lab_provision "$name" || fail "unreadable-detach fixture provision failed"
@@ -518,6 +593,7 @@ test_viewer_stop_retains_record_when_detach_is_unreadable() {
   run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after a confirmed detach failed"
   pass "fm-herdr-lab: unreadable detach results fail closed on running sessions"
 }
+
 
 test_viewer_launcher_refuses_unsafe_arguments() {
   local launcher="$ROOT/bin/fm-herdr-lab-viewer.py" status=0
@@ -534,14 +610,6 @@ test_viewer_launcher_refuses_unsafe_arguments() {
   pass "fm-herdr-lab: the viewer launcher refuses unsafe sessions and pidfiles"
 }
 
-test_refuses_unsafe_names
-test_provision_run_and_guarded_teardown
-test_run_scopes_session_before_double_dash
-test_missing_tripwire_blocks_destruction
-test_changed_default_trips_after_teardown
-test_stopped_owned_lab_can_reprovision
-test_failed_delete_retains_tripwire
-test_timed_out_provision_cancels_late_launch
 test_viewer_refuses_unowned_sessions
 test_viewer_start_cancels_an_unrecorded_launcher
 test_viewer_timeout_allows_launcher_escalation

@@ -13,6 +13,7 @@ Select it explicitly with local `config/backend` containing `tmux`, with `FM_BAC
 Explicit tmux selection via `config/backend` or `--backend tmux` overrides runtime auto-detection.
 
 No provisioning is required before the first task.
+A remote development session's explicit tmux fallback and its continuity record are owned by [`remote-dev-sessions.md`](remote-dev-sessions.md).
 
 ## Watching the crew
 

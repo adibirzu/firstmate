@@ -1,30 +1,10 @@
 #!/usr/bin/env bash
 # Acquire or inspect the per-home firstmate session lock.
-#
-# Line 1 of state/.lock is the owning session's anchor pid, resolved by
-# fm_session_lock_anchor_pid in bin/fm-session-lock-lib.sh: the harness (agent)
-# process found by walking the shell's ancestry, which lives as long as the
-# firstmate session - unlike the transient subshell PID of any one tool call,
-# which is dead moments after it is written. For a Claude session that proves a
-# trusted session id the anchor is CLAUDE_PID, the model-loop process, so a
-# shared transient daemon or a front-end that outlives the session never keeps
-# a dead session's lock alive. Line 1 keeps its whole-line pid format because
-# every other reader takes the first line as the pid.
-#
-# The trusted id itself is recorded beside the lock in state/.lock-session, a
-# sidecar written only here and only under the claim lock: refreshed on every
-# confirmed-own acquisition, including the early already-mine exit that waits
-# for the claim lock, removed when the acquiring session proves no trusted id,
-# and left byte-identical when it already names that id. A same-session
-# confirmation never rewrites line 1 while the recorded pid is alive, because
-# bin/fm-startup-network.sh compares that pid across its deferred sweeps; a dead
-# recorded pid is reclaimed and rewritten to this session's anchor.
-#
+# Writes a verified session identity beside the compatible numeric lock pid.
+# Claude's binding is independent of its reparented worker-pool ancestry, so a
+# sibling session cannot claim the same home through that shared pool.
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
-#        fm-lock.sh status    print holder and liveness; always exits 0.
-#                             A held lock is not proof the holder is consuming
-#                             wakes. Machine-readable lock fields live on
-#                             fm-inbox.sh ready, from the same inspect helper.
+#        fm-lock.sh status    print holder and ownership; always exits 0
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,17 +25,38 @@ mkdir -p "$STATE" 2>/dev/null || {
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 if [ "${1:-}" = "status" ]; then
-  fm_session_lock_inspect "$STATE"
-  case "$FM_LOCK_INSPECT_STATE" in
-    free) echo "lock: free" ;;
-    unreadable) echo "lock: unreadable" ;;
-    held) echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID" ;;
-    *) echo "lock: stale (pid $FM_LOCK_INSPECT_PID dead or not a harness)" ;;
-  esac
+  if [ ! -f "$LOCK" ]; then echo "lock: free"; exit 0; fi
+  old=$(cat "$LOCK" 2>/dev/null) || {
+    echo "lock: unreadable"
+    exit 0
+  }
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    echo "lock: held by this session (harness pid $old)"
+  elif fm_harness_pid_alive "$old"; then
+    echo "lock: held by live harness pid $old"
+  else
+    echo "lock: stale (pid $old dead or not a harness)"
+  fi
   exit 0
 fi
 
-me=$(fm_session_lock_anchor_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+# A Claude session that cannot publish a new-format identity (no CLAUDECODE,
+# no trusted session id) still must not look like a free home when a live
+# session already recorded its id beside the lock. Name that holder first.
+# A pid-only lock, or no lock, keeps the identity refusal so an unidentifiable
+# Claude worker cannot fall through to ancestry acquisition.
+if ! fm_session_lock_prepare_acquisition_identity; then
+  if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null || true)
+    if fm_harness_pid_alive "$old" && recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
+      echo "error: another live firstmate session holds the lock (pid $old, session $recorded); operate read-only until resolved" >&2
+      exit 1
+    fi
+  fi
+  echo "error: cannot establish this session's lock identity; operate read-only until resolved" >&2
+  exit 1
+fi
+me=$FM_SESSION_LOCK_OWNER_PID
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
@@ -167,7 +168,13 @@ confirm_own_lock() {  # <recorded-pid>
   fi
   recorded=$(cat "$LOCK" 2>/dev/null || true)
   if [ "$recorded" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
-    publish_lock_session_or_die
+    # Refresh the sidecar only when this process can prove a trusted session
+    # id. A reparented worker that owns via the live recorded CLAUDE_PID still
+    # confirms, but must not strip the owner's sidecar just because that pid
+    # is outside this ancestry.
+    if fm_session_lock_trusted_session_id >/dev/null; then
+      publish_lock_session_or_die
+    fi
     commit_lock_session
     release_claim_lock
     echo "lock acquired: harness pid $recorded"
@@ -191,9 +198,17 @@ refuse_live_owner() {  # <recorded-pid>
 
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$old" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
-    confirm_own_lock "$old"
-    old=$(cat "$LOCK" 2>/dev/null || true)
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    # New-format owners refresh the sidecar under the claim lock so a /clear
+    # re-key is published. A pid-only legacy acceptance already logged and
+    # must not grow a sidecar or rewrite line 1.
+    if fm_session_lock_read_record "$STATE"; then
+      confirm_own_lock "$old"
+      old=$(cat "$LOCK" 2>/dev/null || true)
+    else
+      echo "lock acquired: harness pid $old"
+      exit 0
+    fi
   fi
   if fm_harness_pid_alive "$old"; then
     refuse_live_owner "$old"
@@ -219,46 +234,21 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: session lock is unreadable; operate read-only until resolved" >&2
     exit 1
   }
-  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
-    fm_session_lock_owned_by_self "$STATE" && confirm_own_lock "$old"
-    old=$(cat "$LOCK" 2>/dev/null || true)
-    if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
-      refuse_live_owner "$old"
-    fi
-  fi
-fi
-# The sidecar goes first: a fresh pid beside a previous session's id would let
-# that session's resume own this lock. If the sidecar changes before line 1 is
-# written, a failure restores the previous sidecar. If line 1 is written but
-# not yet verified, a failure removes the sidecar and leaves the lock
-# ancestry-only. After line 1 verifies as this session's anchor, a later
-# signal leaves the published pair in place.
-publish_lock_session_or_die
-if [ -f "$LOCK" ]; then
-  LOCK_LINE_PRE=$(mktemp "$STATE/.lock.pre.XXXXXX") || {
-    echo "error: cannot write session lock; operate read-only until resolved" >&2
-    exit 1
-  }
-  if ! cp "$LOCK" "$LOCK_LINE_PRE" 2>/dev/null; then
-    echo "error: cannot write session lock; operate read-only until resolved" >&2
-    exit 1
-  fi
-fi
-LOCK_SESSION_PHASE=2
-if ! { printf '%s\n' "$me" > "$LOCK"; } 2>/dev/null; then
-  lock_unchanged=0
-  if [ -n "$LOCK_LINE_PRE" ] && cmp -s "$LOCK_LINE_PRE" "$LOCK"; then
-    lock_unchanged=1
-  elif [ -z "$LOCK_LINE_PRE" ] && [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ]; then
-    lock_unchanged=1
-  fi
-  if [ "$lock_unchanged" -eq 1 ]; then
-    if [ "$LOCK_SESSION_KIND" -ne 0 ]; then
-      LOCK_SESSION_PHASE=1
+  if fm_session_lock_owned_by_current_session "$STATE"; then
+    if fm_session_lock_read_record "$STATE"; then
+      confirm_own_lock "$old"
     else
-      LOCK_SESSION_PHASE=0
+      release_claim_lock
+      echo "lock acquired: harness pid $old"
+      exit 0
     fi
+    old=$(cat "$LOCK" 2>/dev/null || true)
   fi
+  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+    refuse_live_owner "$old"
+  fi
+fi
+if ! fm_session_lock_write_new_format "$STATE"; then
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
 fi

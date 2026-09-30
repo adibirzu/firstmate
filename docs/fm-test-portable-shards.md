@@ -5,9 +5,12 @@
 
 ## Verification inputs
 
-Balance hints come from serial runs of the real lanes on `ubuntu-latest`.
-The concurrent isolation proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) establishes concurrency safety, not serial CI duration.
-Local timings are not interchangeable with CI timings: platform and machine load can affect each script differently and change their relative weights.
+The parallel lanes are balanced on CI-measured per-script maxima, not on the local concurrent proof.
+The 2026-08-20 proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) still owns the *membership* of the proven-isolated set; it is a poor balance source because a hosted runner is far slower than the proof machine.
+Several of its durations are low by 3-16x: `tests/fm-lint.test.sh` measured 9766 ms there and up to 160345 ms in CI, `tests/fm-pr-merge.test.sh` 6290 ms against 118197 ms, and `tests/fm-captain-hold-lifecycle.test.sh` 35095 ms against 302454 ms.
+
+These are the slowest `duration_ms` per script across the `fm-test-timing-portable-parallel-*` artifacts of four green `adibirzu/firstmate` main runs on 2026-09-14 and 2026-09-15 - [34862039579](https://github.com/adibirzu/firstmate/actions/runs/34862039579), [34864676099](https://github.com/adibirzu/firstmate/actions/runs/34864676099), [34891809040](https://github.com/adibirzu/firstmate/actions/runs/34891809040), and [34931366868](https://github.com/adibirzu/firstmate/actions/runs/34931366868) - plus [34962817564](https://github.com/adibirzu/firstmate/actions/runs/34962817564), whose shard 1 was cancelled at its job cap.
+That cancelled shard uploaded no artifact, so its per-script values are read from the job log's `FM_TEST_END` lines; it is the slow-runner case the balance has to survive, so its maxima are kept.
 
 Both hint tables were refreshed on 2026-09-30 from five Ubuntu CI runs: [36583881812](https://github.com/kunchenguid/firstmate/actions/runs/36583881812), [36658498535](https://github.com/kunchenguid/firstmate/actions/runs/36658498535), [36663947738](https://github.com/kunchenguid/firstmate/actions/runs/36663947738), [36664663190](https://github.com/kunchenguid/firstmate/actions/runs/36664663190), and [36669175457](https://github.com/kunchenguid/firstmate/actions/runs/36669175457).
 Use the slowest successful `duration_ms` per script across their uploaded portable timing artifacts and completed `FM_TEST_END` log markers, with the two version/platform exceptions below.
@@ -26,6 +29,13 @@ That post-fix value has only one sample in this baseline, so further green runs 
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
+The two parallel lanes use longest-processing-time assignment from those measured maxima.
+
+| Lane | Script count | Estimated duration |
+|---|---:|---:|
+| `portable-parallel-1` | 13 | 450741 ms (~7.51 min) |
+| `portable-parallel-2` | 11 | 451044 ms (~7.52 min) |
+| imbalance | | 303 ms |
 ## Parallel lanes
 
 The two parallel lanes use longest-processing-time assignment over those hints, with the Pi typecheck pinned to the job that installs its prerequisite.
@@ -38,6 +48,15 @@ The CI cap follows the three-tier timeout policy in [Timeouts](#timeouts) below.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
 Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
+
+`tests/fm-pi-primary-types.test.sh` must stay in shard 1.
+Only the shard 1 CI job installs `@earendil-works/pi-coding-agent` and passes `--fail-on-gate-skip 'Pi extension typecheck prerequisite not found'`, so in shard 2 that script would gate-skip silently instead of running.
+Any future rebalance either keeps it in shard 1 or moves the install and the gate-skip flag with it.
+
+Balancing on the proof's local durations was not a cosmetic error.
+Against the maxima above, the previous partition put 653541 ms (~10.89 min) on shard 1 and 248244 ms (~4.14 min) on shard 2: shard 1 exceeded its own 10-minute job cap while shard 2's runner finished in about four minutes and sat idle.
+That shard ran 9m10s on [34931366868](https://github.com/adibirzu/firstmate/actions/runs/34931366868) and was cancelled at the cap on [34962817564](https://github.com/adibirzu/firstmate/actions/runs/34962817564) partway through `tests/fm-lint.test.sh`, after a branch added shell files for that script's ShellCheck sweep to cover.
+Rebalancing restores roughly 1.3x tripwire margin on both runners without changing which scripts run.
 
 ## Portable serial remainder
 
@@ -74,7 +93,9 @@ Even so, maxima from five runs do not establish a P95 or guarantee future headro
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
 
-Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs and replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`:
+The single longest script, `tests/fm-watch-triage.test.sh` at 503378 ms, is the floor for any shard count.
+
+Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs on both repositories, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`, and updating the table above:
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
@@ -86,8 +107,8 @@ jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-s
 bin/fm-test-run.sh --check-coverage
 ```
 
-A timed-out shard may upload no artifact, so include a complete green run or the slowest scripts go unmeasured in exactly the shard that needs them most.
-Completed shards from a partial run can supplement that complete baseline, but never treat missing tail scripts or the timeout duration as successful samples.
+A shard killed before its test step finishes uploads no artifact, so prefer green runs or the lane's slowest scripts go unmeasured in exactly the shard that needs them most.
+A job that was cancelled after its test step completed still uploaded a full artifact, so it counts as a source and captures the slow-runner case.
 Measure native-Windows-only scripts through the focused Git Bash runner and retain that `duration_ms` separately, because the portable CI shards skip them.
 
 ## Coverage guard

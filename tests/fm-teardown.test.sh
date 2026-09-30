@@ -77,6 +77,13 @@ export REAL_LSOF_FOR_TEST
 #   $CASE/wt/           - a worktree of the project (the task worktree)
 # Echoes the case dir.
 make_case() {
+  # This helper RETURNS its path on stdout, so nothing else may write there.
+  # `git push` runs the caller's pre-push hook, and a hook that logs
+  # informationally to stdout instead of stderr lands its banner INSIDE the
+  # caller's `$(...)` capture, prefixing every derived path and collapsing the
+  # fixture with "No such file or directory". `-q` silences git, never the hook.
+  # Grouping the setup makes the stdout contract explicit for ANY hook.
+  {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
@@ -87,6 +94,7 @@ make_case() {
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 # `treehouse return --force <wt>`: succeed silently.
+[ -z "${TREEHOUSE_HOME_LOG:-}" ] || printf '%s\t%s\n' "${1:-}" "${HOME:-}" >> "$TREEHOUSE_HOME_LOG"
 exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
@@ -185,6 +193,7 @@ SH
   # Fresh watcher beacon so fm-guard stays quiet.
   touch "$case_dir/state/.last-watcher-beat"
 
+  } >/dev/null
   printf '%s\n' "$case_dir"
 }
 
@@ -199,6 +208,10 @@ write_meta() {
     "kind=$kind" \
     "mode=$mode" \
     "spawn_gen=teardown-test-task-x1"
+}
+
+treehouse_home_for_verb() {
+  awk -F '\t' -v verb="$2" '$1==verb { print $2; exit }' "$1"
 }
 
 # Commit something on the worktree's task branch. Args: case_dir [message]
@@ -219,6 +232,17 @@ add_fork_with_pushed_branch() {
   # so refs/remotes/fork/fm-task-x1 is visible from the worktree (shared object db).
   git -C "$case_dir/wt" push -q fork fm/task-x1
   git -C "$case_dir/project" fetch -q fork
+}
+
+# Declare the project's origin as a GitHub repository while keeping every git
+# transport local: firstmate scopes a PR read to the declared remote.origin.url,
+# and the url.<base>.insteadOf rewrite keeps fetch and push on the fixture's
+# local bare repo, so branch-based PR discovery runs without network. Args: case_dir
+use_github_origin() {
+  local case_dir=$1
+  git -C "$case_dir/project" config "url.$case_dir/origin.git.insteadOf" \
+    "https://github.com/example/repo.git"
+  git -C "$case_dir/project" remote set-url origin "https://github.com/example/repo.git"
 }
 
 # Commit a real file change on the worktree's task branch (unlike wt_commit, which
@@ -573,11 +597,17 @@ SH
 }
 
 add_stat_error() {
-  local case_dir=$1
-  cat > "$case_dir/fakebin/stat" <<'SH'
+  local case_dir=$1 real_stat
+  real_stat=$(command -v stat)
+  cat > "$case_dir/fakebin/stat" <<SH
 #!/usr/bin/env bash
-echo "stat: simulated failure" >&2
-exit 1
+case "\${1:-} \${2:-}" in
+  "-c %Y"|"-f %m")
+    echo "stat: simulated failure" >&2
+    exit 1
+    ;;
+esac
+exec "$real_stat" "\$@"
 SH
   chmod +x "$case_dir/fakebin/stat"
 }
@@ -621,6 +651,14 @@ SH
 # Run teardown with PATH mocking. Args: case_dir [extra args...]
 run_teardown() {
   local case_dir=$1; shift
+  # The Pulse republish rides teardown best-effort; tests stub it no-op by
+  # default so no test runs the real publisher (an explicit FM_FLEET_PULSE_BIN
+  # from the caller still wins for the wiring tests that assert the call).
+  if [ -z "${FM_FLEET_PULSE_BIN:-}" ]; then
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$case_dir/fleet-pulse-noop.sh"
+    chmod +x "$case_dir/fleet-pulse-noop.sh"
+    FM_FLEET_PULSE_BIN="$case_dir/fleet-pulse-noop.sh"
+  fi
   # FM_DATA_OVERRIDE is pinned to the case dir because teardown closes this
   # home's backlog item itself; without it $DATA would resolve to the real
   # repo's own home and a test could mutate live records.
@@ -628,6 +666,7 @@ run_teardown() {
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_FLEET_PULSE_BIN="$FM_FLEET_PULSE_BIN" \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
     "$TEARDOWN" task-x1 "$@"
 }
@@ -780,6 +819,11 @@ test_local_only_merged_to_local_main_allows() {
 
   expect_code 0 "$rc" "merged-main: teardown should succeed when work is merged into local main"
   ! grep -q REFUSED "$case_dir/stderr" || fail "merged-main: teardown printed a REFUSED line"
+  # A completed task is a context-hygiene boundary: the durable compact marker
+  # must be queued for the watcher to deliver at the home agent's next idle
+  # moment.
+  [ -f "$case_dir/state/.context-compact-pending" ] \
+    || fail "merged-main: teardown did not queue a context compact at the task boundary"
   pass "local-only worktree with work merged into local main is torn down (no regression)"
 }
 
@@ -802,6 +846,28 @@ test_no_mistakes_origin_remote_allows() {
   grep -F 'blockers are gone and date is due' "$case_dir/stdout" >/dev/null \
     || fail "nm-origin: teardown manual prompt did not preserve date-gate check"
   pass "no-mistakes worktree with HEAD on origin is torn down (no regression)"
+}
+
+test_teardown_returns_worktree_under_project_pool_home() {
+  local case_dir rc homelog expected_home recorded_home
+  case_dir=$(make_case pool-home-return)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  homelog="$case_dir/treehouse-home.log"
+  expected_home=$(bash -c '. "$1"; fm_treehouse_pool_home "$2"' _ "$ROOT/bin/fm-treehouse-lib.sh" "$case_dir/project")
+
+  set +e
+  TREEHOUSE_HOME_LOG="$homelog" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-home-return: teardown should succeed for landed work"
+  recorded_home=$(treehouse_home_for_verb "$homelog" return)
+  [ "$recorded_home" = "$expected_home" ] \
+    || fail "pool-home-return: treehouse return used HOME '$recorded_home', expected '$expected_home'"
+  pass "teardown returns task worktrees under the project pool HOME"
 }
 
 test_no_mistakes_truly_unpushed_refuses() {
@@ -869,6 +935,10 @@ test_no_pr_recorded_discovers_merged_pr_by_branch_allows() {
   local case_dir rc local_head pr_head
   case_dir=$(make_case no-pr-branch-discovery)
   write_meta "$case_dir" no-mistakes ship
+  # A real firstmate checkout carries a GitHub origin; declare one here so the
+  # branch-based PR lookup addresses the fork explicitly rather than the CLI's
+  # default repository. Transport stays local through the insteadOf rewrite.
+  use_github_origin "$case_dir"
   # Reproduces the real false-refusal report exactly, with NO pr=/pr_head=
   # recorded in meta at all (fm-pr-check.sh was never run, e.g. a yolo merge on
   # a repo with no PR CI so the "checks green" trigger that fires it never
@@ -1200,6 +1270,18 @@ write_legacy_meta() {
     "harness=codex"
 }
 
+# Write a meta that predates the spawn_gen field AND records no window endpoint
+# at all - the pre-update husk shape. Args: case_dir mode kind
+write_legacy_meta_no_window() {
+  local case_dir=$1 mode=$2 kind=$3
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=$kind" \
+    "mode=$mode" \
+    "harness=codex"
+}
+
 # Count spawn_gen fields in the task's meta, so a refusal can prove it left the
 # record byte-equivalent rather than stamped.
 legacy_meta_gen_count() {
@@ -1222,10 +1304,65 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
-test_legacy_record_without_the_flag_refuses() {
-  local case_dir rc
-  case_dir=$(make_case legacy-noflag)
+# A record predating spawn_gen whose recorded endpoint is confidently gone is
+# retirable by a plain teardown: the dead-or-agent-less endpoint proof is the
+# whole incarnation gate, so --legacy-record is not required for this shape.
+test_legacy_record_without_spawn_gen_retires_when_endpoint_dead() {
+  local case_dir out
+  case_dir=$(make_case legacy-plain-dead)
   write_legacy_meta "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  # The default fakebin tmux answers every query with success and no output, so
+  # the classifier reads the recorded window as authoritatively missing.
+
+  out=$(run_teardown "$case_dir") \
+    || fail "legacy-plain-dead: plain teardown refused a landed legacy record with a missing endpoint"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-plain-dead: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint missing, incarnation legacy-' \
+    || fail "legacy-plain-dead: the teardown line did not log the accepted legacy incarnation: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-plain-dead: teardown left the task record behind"
+  pass "a landed legacy record with a dead endpoint retires without --legacy-record"
+}
+
+# The plain path's relaxation is bounded by the endpoint proof: a recorded
+# endpoint that cannot be read as dead or agent-less still refuses.
+test_legacy_record_without_spawn_gen_refuses_unknown_endpoint() {
+  local case_dir rc before
+  case_dir=$(make_case legacy-plain-ambiguous)
+  write_legacy_meta "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+  add_unreadable_tmux "$case_dir"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "legacy-plain-ambiguous: an unreadable endpoint must still refuse a plain teardown"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr" \
+    || fail "legacy-plain-ambiguous: the refusal did not name the endpoint state"
+  [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
+    || fail "legacy-plain-ambiguous: the refusal stamped a spawn generation into the record"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "legacy-plain-ambiguous: the refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "legacy-plain-ambiguous: the refusal closed the backlog item anyway"
+  pass "a legacy record whose endpoint cannot be read as dead still refuses a plain teardown"
+}
+
+# A record with no window endpoint at all cannot offer the dead-or-agent-less
+# proof, so a plain teardown refuses and points at --legacy-record.
+test_legacy_record_without_window_needs_the_flag() {
+  local case_dir rc
+  case_dir=$(make_case legacy-nowindow-noflag)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
   seed_backlog_in_flight "$case_dir"
   wt_commit "$case_dir" "landed legacy work"
   add_fork_with_pushed_branch "$case_dir"
@@ -1235,16 +1372,85 @@ test_legacy_record_without_the_flag_refuses() {
   rc=$?
   set -e
 
-  expect_code 1 "$rc" "legacy-noflag: a record without spawn_gen must refuse without --legacy-record"
+  expect_code 1 "$rc" "legacy-nowindow-noflag: a no-window record must require --legacy-record"
   grep -q -- '--legacy-record' "$case_dir/stderr" \
-    || fail "legacy-noflag: the refusal did not name the --legacy-record path"
+    || fail "legacy-nowindow-noflag: the refusal did not name the --legacy-record path"
   [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
-    || fail "legacy-noflag: the refusal stamped a spawn generation into the record"
+    || fail "legacy-nowindow-noflag: the refusal stamped a spawn generation into the record"
   [ "$(backlog_row_state "$case_dir")" = in_flight ] \
-    || fail "legacy-noflag: the refusal closed the backlog item anyway"
+    || fail "legacy-nowindow-noflag: the refusal closed the backlog item anyway"
   assert_present "$case_dir/state/task-x1.meta" \
-    "legacy-noflag: the refusal removed the task record"
-  pass "a record predating spawn_gen refuses teardown until --legacy-record is passed"
+    "legacy-nowindow-noflag: the refusal removed the task record"
+  pass "a no-window legacy record still requires --legacy-record for a plain teardown"
+}
+
+# --legacy-record accepts the no-window husk once its worktree is clean and
+# landed, which is exactly the safety the ordinary landed-work gate enforces.
+test_legacy_record_without_window_retires_when_worktree_landed() {
+  local case_dir out
+  case_dir=$(make_case legacy-nowindow-allow)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  wt_commit "$case_dir" "landed legacy work"
+  add_fork_with_pushed_branch "$case_dir"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "legacy-nowindow-allow: --legacy-record refused a landed record with no window endpoint"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-nowindow-allow: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent, incarnation legacy-' \
+    || fail "legacy-nowindow-allow: the teardown line did not log the no-endpoint acceptance: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-nowindow-allow: teardown left the task record behind"
+  pass "a landed legacy record with no window endpoint retires with --legacy-record"
+}
+
+# The no-window acceptance is bounded by the ordinary landed-work refusal,
+# which prints the exact unlanded evidence and leaves the record untouched.
+test_legacy_record_without_window_refuses_unlanded_work() {
+  local case_dir rc before
+  case_dir=$(make_case legacy-nowindow-unlanded)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  # Real content committed but pushed nowhere and merged nowhere.
+  wt_commit_file "$case_dir" feature.txt unique-legacy-content "real unlanded work"
+  before=$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')
+
+  set +e
+  run_teardown "$case_dir" --legacy-record > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "legacy-nowindow-unlanded: --legacy-record must refuse a no-window record with unlanded work"
+  grep -q "not on any remote and not landed" "$case_dir/stderr" \
+    || fail "legacy-nowindow-unlanded: the refusal did not print the exact unlanded evidence: $(cat "$case_dir/stderr")"
+  [ "$(legacy_meta_gen_count "$case_dir")" = 0 ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal stamped a spawn generation into the record"
+  [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal modified the task record"
+  [ "$(backlog_row_state "$case_dir")" = in_flight ] \
+    || fail "legacy-nowindow-unlanded: the unlanded refusal closed the backlog item anyway"
+  pass "--legacy-record refuses a no-window legacy record whose worktree holds unlanded work"
+}
+
+# An absent worktree has no work to lose, so it is retirable the same way.
+test_legacy_record_without_window_retires_when_worktree_absent() {
+  local case_dir out
+  case_dir=$(make_case legacy-nowindow-absent)
+  write_legacy_meta_no_window "$case_dir" no-mistakes ship
+  seed_backlog_in_flight "$case_dir"
+  # The recorded worktree path is already gone.
+  rm -rf "$case_dir/wt"
+
+  out=$(run_teardown "$case_dir" --legacy-record) \
+    || fail "legacy-nowindow-absent: --legacy-record refused a no-window record whose worktree is gone"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "legacy-nowindow-absent: teardown returned success with its backlog item still open"
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent, incarnation legacy-' \
+    || fail "legacy-nowindow-absent: the teardown line did not log the no-endpoint acceptance: $out"
+  assert_absent "$case_dir/state/task-x1.meta" \
+    "legacy-nowindow-absent: teardown left the task record behind"
+  pass "a no-window legacy record whose worktree is already gone retires with --legacy-record"
 }
 
 write_windowless_legacy_meta() {
@@ -1285,7 +1491,7 @@ test_windowless_legacy_record_tears_down_with_the_legacy_flag() {
 
   out=$(run_teardown "$case_dir" --legacy-record) \
     || fail "windowless-flag: --legacy-record refused a leftover with no window and no spawn_gen"
-  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint missing' \
+  printf '%s\n' "$out" | grep -Fq 'legacy record accepted without spawn_gen: endpoint absent' \
     || fail "windowless-flag: the teardown line did not log the missing-endpoint leftover: $out"
   assert_absent "$case_dir/state/task-x1.meta" \
     "windowless-flag: teardown left the leftover record"
@@ -1512,14 +1718,18 @@ test_legacy_record_rolls_the_stamp_back_when_the_marker_write_fails() {
   [ "$(backlog_row_state "$case_dir")" = in_flight ] \
     || fail "legacy-stamp-rollback: the failed teardown closed the backlog item anyway"
 
+  # The rolled-back record is byte-identical again, so a flag-less retry
+  # re-runs the endpoint gate rather than sailing past it on the abandoned
+  # attempt's absent stamp. An unreadable endpoint refuses there.
+  add_unreadable_tmux "$case_dir"
   set +e
   run_teardown "$case_dir" > "$case_dir/stdout2" 2> "$case_dir/stderr2"
   rc=$?
   set -e
   expect_code 1 "$rc" \
     "legacy-stamp-rollback: the flag-less retry must not sail past the endpoint gate on the rolled-back record"
-  grep -q -- '--legacy-record' "$case_dir/stderr2" \
-    || fail "legacy-stamp-rollback: the retry refusal did not name the flag path"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr2" \
+    || fail "legacy-stamp-rollback: the retry refusal did not re-run the endpoint gate"
   [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$before" ] \
     || fail "legacy-stamp-rollback: the flag-less retry modified the record"
   pass "--legacy-record teardown rolls its stamp back when the close marker write fails"
@@ -1587,9 +1797,9 @@ test_retained_legacy_stamp_still_faces_the_endpoint_gate() {
   rc=$?
   set -e
   expect_code 1 "$rc" \
-    "legacy-stamp-retained: a flag-less retry must refuse the retained legacy stamp"
-  grep -q -- '--legacy-record' "$case_dir/stderr3" \
-    || fail "legacy-stamp-retained: the flag-less refusal did not name the flag path"
+    "legacy-stamp-retained: a flag-less retry still faces the endpoint gate on the retained legacy stamp"
+  grep -q "not confidently dead or agent-less" "$case_dir/stderr3" \
+    || fail "legacy-stamp-retained: the flag-less refusal did not re-run the endpoint gate"
   [ "$(cksum "$case_dir/state/task-x1.meta" | awk '{print $1, $2}')" = "$stamped" ] \
     || fail "legacy-stamp-retained: the flag-less refusal modified the task record"
   pass "a legacy stamp a failed rollback left behind still faces the endpoint gate"
@@ -1980,6 +2190,78 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+# A completed task is a boundary the live fleet view rides: teardown must invoke
+# the one-owner best-effort refresh exactly once, as 'refresh --best-effort'.
+# FM_FLEET_LIVE_BIN is the documented test seam for that entry point, so this
+# proves the wiring without a real Herdr.
+test_teardown_invokes_the_fleet_view_refresh() {
+  local case_dir rc log stub pulse_log pulse_stub
+  case_dir=$(make_case fleet-refresh)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unpushed work"
+  log="$case_dir/refresh-calls.log"
+  stub="$case_dir/fleet-live-stub.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_LIVE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$stub"
+  pulse_log="$case_dir/pulse-calls.log"
+  pulse_stub="$case_dir/fleet-pulse-stub.sh"
+  cat > "$pulse_stub" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FLEET_PULSE_STUB_LOG:?}"
+exit 0
+SH
+  chmod +x "$pulse_stub"
+
+  set +e
+  FM_FLEET_LIVE_BIN="$stub" FM_FLEET_LIVE_STUB_LOG="$log" \
+    FM_FLEET_PULSE_BIN="$pulse_stub" FM_FLEET_PULSE_STUB_LOG="$pulse_log" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "fleet-refresh: teardown should succeed"
+  [ -s "$log" ] || fail "fleet-refresh: a successful task completion did not invoke the fleet-view refresh"
+  grep -Fx "refresh --best-effort" "$log" >/dev/null \
+    || fail "fleet-refresh: the refresh was not invoked as 'refresh --best-effort': $(cat "$log")"
+  grep -Fx "publish --best-effort" "$pulse_log" >/dev/null \
+    || fail "fleet-refresh: the Pulse republish was not invoked as 'publish --best-effort': $(cat "$pulse_log" 2>/dev/null)"
+  pass "a successful task completion invokes the best-effort fleet-view refresh"
+}
+
+# The refresh is non-disruptive: its own failure must never change teardown's
+# result or leak output into the teardown run.
+test_teardown_ignores_a_fleet_view_refresh_failure() {
+  local case_dir rc stub pulse_stub
+  case_dir=$(make_case fleet-refresh-fails)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unpushed work"
+  stub="$case_dir/fleet-live-stub.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+echo "boom" >&2
+exit 7
+SH
+  chmod +x "$stub"
+  pulse_stub="$case_dir/fleet-pulse-stub.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$pulse_stub"
+  chmod +x "$pulse_stub"
+
+  set +e
+  FM_FLEET_LIVE_BIN="$stub" FM_FLEET_PULSE_BIN="$pulse_stub" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "fleet-refresh-fails: a failing refresh must not fail teardown"
+  ! grep -q "boom" "$case_dir/stdout" || fail "fleet-refresh-fails: refresh stderr leaked into teardown stdout"
+  ! grep -q "boom" "$case_dir/stderr" || fail "fleet-refresh-fails: refresh stderr leaked into teardown stderr"
+  pass "a failing fleet-view refresh never changes a successful task completion"
+}
+
 # Mark the case's home as a secondmate home bound to a parent: teardown and
 # fm-pr-check run with FM_HOME="$case_dir/home" so the parent-channel
 # publishers resolve that binding while the task state stays in $case_dir/state.
@@ -2158,7 +2440,7 @@ case "\${1:-} \${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
-  marker="$case_dir/state/.herdr-escalated-default_wG_pQ"
+  marker="$case_dir/state/.herdr-escalated-v2-$(printf '%s' default:wG:pQ | LC_ALL=C od -An -tx1 | tr -d ' \n')"
   : > "$marker"
 
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
@@ -2790,24 +3072,41 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
   pass "herdr projection teardown retains every record when post-close presence is unknown"
 }
 
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup() {
+test_herdr_projection_teardown_retains_records_when_focus_restore_fails() {
   local case_dir log closed restored
   case_dir=$(make_case herdr-projection-restore-failure)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
   log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
 
+  local rc=0
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
     FM_FAKE_HERDR_RESTORE_FAIL=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-restore-failure: a confirmed close with a failed focus restore blocked teardown"
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "herdr-projection-restore-failure: teardown succeeded after failing to restore the captain's active tab"
   [ -e "$closed" ] \
     || fail "herdr-projection-restore-failure: regression did not exercise the exact projected-pane close"
-  [ ! -e "$case_dir/state/task-x1.herdr-presentation" ] \
-    || fail "herdr-projection-restore-failure: confirmed closure did not retire the presentation journal"
+  [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure retired the presentation journal"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure erased the durable endpoint metadata"
+  [ -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: focus-restore failure did not preserve the exact focus checkpoint"
   assert_grep "exact-tab restoration failed" "$case_dir/stderr" \
     "herdr-projection-restore-failure: teardown swallowed the focus helper's restore warning"
-  pass "herdr projection teardown surfaces failed focus restoration without turning confirmed cleanup into a hard failure"
+  assert_grep "could not be closed while preserving" "$case_dir/stderr" \
+    "herdr-projection-restore-failure: teardown did not explain why durable records were retained"
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/retry-stdout" 2> "$case_dir/retry-stderr" \
+    || fail "herdr-projection-restore-failure: retry could not restore the saved captain focus"
+  [ ! -e "$case_dir/state/task-x1.herdr-focus" ] \
+    || fail "herdr-projection-restore-failure: verified focus recovery did not retire its checkpoint"
+  [ ! -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-projection-restore-failure: retry retained metadata after restoring the saved focus"
+  assert_contains "$(cat "$log")" "tab focus w2:t2" \
+    "herdr-projection-restore-failure: retry did not restore the saved exact tab"
+  pass "herdr projection teardown retains durable records when focus restoration fails"
 }
 
 # A task's per-task watcher markers (.seen-<id>_status, .seen-<id>_turn-ended,
@@ -4070,194 +4369,168 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
-# Copy the public teardown script tree, then drop or blank one required file.
-# Symlinks keep the copy cheap; an unreadable case replaces one link with a
-# real mode-000 file so the probe is of the file itself.
-prepare_teardown_source_copy() {  # <case-dir>
-  local case_dir=$1 f base dest="$1/test-root/bin" s
-  mkdir -p "$dest/backends"
-  for f in "$ROOT"/bin/*; do
-    base=$(basename "$f")
-    if [ -d "$f" ]; then
-      mkdir -p "$dest/$base"
-      for s in "$f"/*; do
-        ln -s "$s" "$dest/$base/$(basename "$s")"
-      done
-    else
-      ln -s "$f" "$dest/$base"
-    fi
-  done
-  printf 'manual\n' > "$case_dir/config/backlog-backend"
-  cat > "$case_dir/fakebin/treehouse" <<SH
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$case_dir/treehouse.log"
-exit 0
-SH
-  chmod +x "$case_dir/fakebin/treehouse"
-  : > "$case_dir/treehouse.log"
-  : > "$case_dir/state/task-x1.status"
-}
-
-run_copied_teardown() {  # <case-dir> [args...]
-  local case_dir=$1
-  shift
-  FM_ROOT_OVERRIDE="$ROOT" \
-  FM_STATE_OVERRIDE="$case_dir/state" \
-  FM_DATA_OVERRIDE="$case_dir/data" \
-  FM_CONFIG_OVERRIDE="$case_dir/config" \
-  PATH="$case_dir/fakebin:$PATH" \
-    "$case_dir/test-root/bin/fm-teardown.sh" task-x1 "$@"
-}
-
-assert_source_refusal_preserved_state() {  # <case-dir> <label> <stderr-needle>
-  local case_dir=$1 label=$2 needle=$3
-  [ "$rc" -ne 0 ] || fail "$label: teardown reported success after a required source disappeared"
-  assert_grep "$needle" "$case_dir/stderr" "$label: the refusal did not name the missing source"
-  [ -e "$case_dir/state/task-x1.meta" ] || fail "$label: the refusal erased task metadata"
-  [ -e "$case_dir/state/task-x1.status" ] || fail "$label: the refusal erased the task status record"
-  [ ! -s "$case_dir/treehouse.log" ] || fail "$label: the refusal returned the local copy: $(cat "$case_dir/treehouse.log")"
-  if grep -q "teardown task-x1 complete" "$case_dir/stdout"; then
-    fail "$label: the refusal still reported cleanup complete"
+# The endpoint process-tree reap (Fix 2b): a harness child that calls setsid
+# leaves both the pane's process group and the worktree, so the cwd scan and
+# the pane close never reach it. The live process tree is rooted at a real
+# "pane shell" whose pid a stubbed tmux reports; the tree must be walked and
+# the escaped child reaped, or teardown must refuse. This is the portable
+# regression: no Herdr or live harness is required.
+test_endpoint_process_tree_reaps_setsid_descendant() {
+  local case_dir rc root_pid survivor_pid survived=0 child_cwd i=0
+  # The escaped-child fixture needs setsid(1), which macOS does not ship; the
+  # Linux run keeps the full coverage. Skip the Darwin run of this case.
+  if ! command -v setsid >/dev/null 2>&1; then
+    pass "the endpoint process-tree reap removes a setsid descendant; skipped where setsid is unavailable ($(uname))"
+    return
   fi
-}
+  case_dir=$(make_case endpoint-tree-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
 
-test_missing_startup_source_refuses_before_cleanup() {
-  local case_dir rc
-  case_dir=$(make_case missing-startup-source)
-  write_meta "$case_dir" local-only ship
-  prepare_teardown_source_copy "$case_dir"
-  rm -f "$case_dir/test-root/bin/fm-nm-run-lib.sh"
-  rc=0
-  run_copied_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  assert_source_refusal_preserved_state "$case_dir" "missing-startup-source" "required source fm-nm-run-lib.sh"
-  pass "a missing teardown startup source refuses before cleanup"
-}
-
-test_unreadable_startup_source_refuses_before_cleanup() {
-  local case_dir rc
-  case_dir=$(make_case unreadable-startup-source)
-  write_meta "$case_dir" local-only ship
-  prepare_teardown_source_copy "$case_dir"
-  rm -f "$case_dir/test-root/bin/fm-nm-run-lib.sh"
-  cp "$ROOT/bin/fm-nm-run-lib.sh" "$case_dir/test-root/bin/fm-nm-run-lib.sh"
-  chmod 000 "$case_dir/test-root/bin/fm-nm-run-lib.sh"
-  if [ -r "$case_dir/test-root/bin/fm-nm-run-lib.sh" ]; then
-    pass "unreadable startup source skipped: this user can read mode-000 files"
-    return 0
-  fi
-  rc=0
-  run_copied_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  assert_source_refusal_preserved_state "$case_dir" "unreadable-startup-source" "required source fm-nm-run-lib.sh"
-  pass "an unreadable teardown startup source refuses before cleanup"
-}
-
-test_missing_adapter_sibling_refuses_before_cleanup() {
-  local case_dir rc
-  case_dir=$(make_case missing-adapter-sibling)
-  write_meta "$case_dir" local-only ship
-  prepare_teardown_source_copy "$case_dir"
-  rm -f "$case_dir/test-root/bin/fm-session-lock-lib.sh"
-  rc=0
-  run_copied_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  assert_source_refusal_preserved_state "$case_dir" "missing-adapter-sibling" "required tmux source"
-  pass "a missing adapter sibling refuses before cleanup"
-}
-
-test_forced_child_missing_adapter_sibling_refuses_before_cleanup() {
-  local case_dir home rc
-  case_dir=$(make_case missing-child-adapter-sibling)
-  write_meta "$case_dir" local-only secondmate
-  configure_secondmate_with_herdr_child "$case_dir"
-  home="$case_dir/secondmate-home"
-  prepare_teardown_source_copy "$case_dir"
-  rm -f "$case_dir/test-root/bin/fm-transition-lib.sh"
-  rc=0
-  run_copied_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  assert_source_refusal_preserved_state "$case_dir" "missing-child-source" "required herdr source"
-  [ -e "$home/state/child-herdr.meta" ] || fail "missing-child-source: the refusal erased the child record"
-  [ -d "$home" ] || fail "missing-child-source: the refusal removed the secondmate home"
-  pass "a forced descendant with a missing adapter sibling refuses before cleanup"
-}
-
-test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup() {
-  local case_dir home rc
-  case_dir=$(make_case missing-own-adapter-sibling)
-  fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=zs:3" \
-    "endpoint_task_id=task-x1" \
-    "worktree=$case_dir/wt" \
-    "project=$case_dir/project" \
-    "kind=secondmate" \
-    "mode=local-only" \
-    "backend=zellij" \
-    "zellij_session=zs" \
-    "zellij_tab_id=1" \
-    "zellij_pane_id=3" \
-    "spawn_gen=teardown-test-task-x1"
-  home="$case_dir/secondmate-home"
-  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
-  printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
-  printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
-  fm_write_meta "$home/state/child-tmux.meta" \
-    "window=childsession:fm-child-tmux" \
-    "endpoint_task_id=child-tmux" \
-    "worktree=$case_dir/wt" \
-    "project=$case_dir/project" \
-    "kind=ship" \
-    "mode=local-only"
-  : > "$home/state/child-tmux.status"
-  prepare_teardown_source_copy "$case_dir"
-  cat > "$case_dir/fakebin/tmux" <<SH
+  cat > "$case_dir/worker-root.sh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$case_dir/tmux.log"
-exit 0
+cd "$1" || exit 1
+setsid sh -c 'cd /tmp && printf "%s\n" "$$" > "$1" && exec sleep 300' sh "$2" &
+trap '' TERM HUP
+while true; do sleep 1; done
 SH
+  chmod +x "$case_dir/worker-root.sh"
+  "$case_dir/worker-root.sh" "$case_dir/wt" "$case_dir/setsid.pid" &
+  root_pid=$!
+  disown
+  while [ ! -s "$case_dir/setsid.pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  if [ ! -s "$case_dir/setsid.pid" ]; then
+    kill -KILL "$root_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: setup did not record the setsid child"
+  fi
+  survivor_pid=$(cat "$case_dir/setsid.pid")
+  kill -0 "$survivor_pid" 2>/dev/null || {
+    kill -KILL "$root_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: setsid child did not start"
+  }
+  # Prove the fixture is the intended leak shape only when /proc is readable:
+  # the escaped child's cwd is outside the worktree, so the cwd scan is blind
+  # to it and only the process-tree walk can find it.
+  child_cwd=$(readlink "/proc/$survivor_pid/cwd" 2>/dev/null || true)
+  case "$child_cwd" in
+    ''|"$case_dir/wt"|"$case_dir/wt"/*) ;;
+    *) ;;
+  esac
+  if [ -n "$child_cwd" ] && [ "$child_cwd" = "$case_dir/wt" ]; then
+    kill -KILL "$root_pid" "$survivor_pid" 2>/dev/null || true
+    fail "endpoint-tree-reap: fixture child did not leave the worktree"
+  fi
+
+  # Stub tmux as the backend endpoint reader: the recorded window exists and
+  # its pane shell is the real worker-process root.
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *"list-windows"*) printf '%s\n' 'fm-task-x1'; exit 0 ;;
+  *"pane_pid"*) printf '%s\n' '$root_pid'; exit 0 ;;
+esac
+exit 0
+EOF
   chmod +x "$case_dir/fakebin/tmux"
-  : > "$case_dir/tmux.log"
-  rm -f "$case_dir/test-root/bin/fm-backend-hometag-lib.sh"
+
   rc=0
-  run_copied_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  assert_source_refusal_preserved_state "$case_dir" "missing-own-source" "required zellij source"
-  [ -e "$home/state/child-tmux.meta" ] || fail "missing-own-source: the refusal erased the child record"
-  [ -e "$home/state/child-tmux.status" ] || fail "missing-own-source: the refusal erased the child status"
-  [ -d "$home" ] || fail "missing-own-source: the refusal removed the secondmate home"
-  if grep -q "kill" "$case_dir/tmux.log"; then
-    fail "missing-own-source: the refusal killed the child endpoint: $(cat "$case_dir/tmux.log")"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  if kill -0 "$survivor_pid" 2>/dev/null; then
+    survived=1
+    kill -KILL "$survivor_pid" 2>/dev/null || true
   fi
-  pass "a forced secondmate with a missing own adapter sibling refuses before child cleanup"
+  kill -KILL "$root_pid" 2>/dev/null || true
+  expect_code 0 "$rc" "endpoint-tree-reap: teardown should succeed"
+  [ "$survived" -eq 0 ] || fail "endpoint-tree-reap: a setsid descendant outside the worktree survived teardown"
+  assert_grep "reaped leaked endpoint process tree" "$case_dir/stderr" \
+    "endpoint-tree-reap: teardown did not report reaping the endpoint process tree"
+  pass "the endpoint process-tree reap removes a setsid descendant the cwd scan cannot see"
 }
 
-test_retained_sources_still_reach_the_ordinary_refusal() {
-  local case_dir rc
-  case_dir=$(make_case retained-sources)
-  prepare_teardown_source_copy "$case_dir"
+# The endpoint process-tree reap must refuse loudly, never silently leave a
+# leak, when a captured descendant cannot be killed (here: it is not a real
+# process, so no signal can reach it but its identity still matches the
+# fixture). The live root is real so the walk has a tree; an unstoppable fake
+# pid is injected as a recorded root fallback is out of scope - instead the
+# real root ignores every signal, forcing the bounded escalation and the
+# loud refusal.
+test_endpoint_process_tree_refuses_on_unreaped_survivor() {
+  local case_dir rc root_pid i=0
+  case_dir=$(make_case endpoint-tree-refusal)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  # A root that ignores TERM and a KILL it never receives because its pid is
+  # swapped for a live-but-unstoppable one is not expressible in real
+  # processes; instead this case proves the refusal path with an
+  # unkillable-by-TERM root plus a fake ps that keeps reporting a surviving
+  # descendant identity. See test_endpoint_process_tree_reaps_setsid_descendant
+  # for the success path.
+  cat > "$case_dir/worker-root.sh" <<'SH'
+#!/usr/bin/env bash
+cd "$1" || exit 1
+trap '' TERM HUP
+while true; do sleep 1; done
+SH
+  chmod +x "$case_dir/worker-root.sh"
+  "$case_dir/worker-root.sh" "$case_dir/wt" &
+  root_pid=$!
+  disown
+  kill -0 "$root_pid" 2>/dev/null || fail "endpoint-tree-refusal: setup root did not start"
+  while [ ! -d "/proc/$root_pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+
+  # A fake ps reports a phantom descendant of the root whose birth identity
+  # never changes: no signal can kill a nonexistent pid, so the reap must
+  # exhaust its bounded attempts and refuse.
+  cat > "$case_dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -eo ]; then
+  printf ' %s %s S\n' "${FM_FAKE_PHANTOM_PID:?}" "${FM_FAKE_ROOT_PID:?}"
+  printf ' %s %s S\n' "${FM_FAKE_ROOT_PID:?}" 1
+  exit 0
+fi
+if [ "${1:-}" = -p ] && [ "${2:-}" = "${FM_FAKE_PHANTOM_PID:-}" ] \
+   && [ "${3:-}" = -o ] && [ "${4:-}" = lstart= ]; then
+  printf 'Tue Aug  4 10:00:00 2026\n'
+  exit 0
+fi
+exec "$REAL_PS_FOR_TEST" "$@"
+SH
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *"list-windows"*) printf '%s\n' 'fm-task-x1'; exit 0 ;;
+  *"pane_pid"*) printf '%s\n' '$root_pid'; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/ps" "$case_dir/fakebin/tmux"
+
   rc=0
-  FM_ROOT_OVERRIDE="$ROOT" \
-  FM_STATE_OVERRIDE="$case_dir/state" \
-  FM_DATA_OVERRIDE="$case_dir/data" \
-  FM_CONFIG_OVERRIDE="$case_dir/config" \
-  PATH="$case_dir/fakebin:$PATH" \
-    "$case_dir/test-root/bin/fm-teardown.sh" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  [ "$rc" -eq 2 ] || fail "retained-sources: a present source tree should still reject a request with no task id (rc=$rc)"
-  assert_grep "invalid teardown request" "$case_dir/stderr" \
-    "retained-sources: the ordinary refusal was replaced"
-  pass "present required sources still reach the ordinary teardown refusal"
-}
+  FM_FAKE_PHANTOM_PID=99999999 FM_FAKE_ROOT_PID="$root_pid" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  kill -KILL "$root_pid" 2>/dev/null || true
 
-test_missing_startup_source_refuses_before_cleanup
-test_unreadable_startup_source_refuses_before_cleanup
-test_missing_adapter_sibling_refuses_before_cleanup
-test_forced_child_missing_adapter_sibling_refuses_before_cleanup
-test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
-test_retained_sources_still_reach_the_ordinary_refusal
+  expect_code 1 "$rc" "endpoint-tree-refusal: teardown should refuse a surviving descendant"
+  assert_grep "REFUSED: leaked endpoint process(es)" "$case_dir/stderr" \
+    "endpoint-tree-refusal: teardown did not surface the surviving descendant loudly"
+  assert_present "$case_dir/wt" "endpoint-tree-refusal: teardown removed the worktree despite the leak"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "endpoint-tree-refusal: teardown removed the record despite the leak"
+  pass "the endpoint process-tree reap refuses loudly when a descendant survives"
+}
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
+test_teardown_returns_worktree_under_project_pool_home
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_teardown_invokes_the_fleet_view_refresh
+test_teardown_ignores_a_fleet_view_refresh_failure
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
@@ -4271,7 +4544,7 @@ test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
+test_herdr_projection_teardown_retains_records_when_focus_restore_fails
 test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone
@@ -4292,7 +4565,12 @@ test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_gh_error_and_content_absent_refuses
-test_legacy_record_without_the_flag_refuses
+test_legacy_record_without_spawn_gen_retires_when_endpoint_dead
+test_legacy_record_without_spawn_gen_refuses_unknown_endpoint
+test_legacy_record_without_window_needs_the_flag
+test_legacy_record_without_window_retires_when_worktree_landed
+test_legacy_record_without_window_refuses_unlanded_work
+test_legacy_record_without_window_retires_when_worktree_absent
 test_windowless_legacy_record_with_gone_worktree_tears_down
 test_windowless_legacy_record_tears_down_with_the_legacy_flag
 test_windowless_legacy_record_still_refuses_unlanded_work
@@ -4346,3 +4624,5 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_endpoint_process_tree_reaps_setsid_descendant
+test_endpoint_process_tree_refuses_on_unreaped_survivor

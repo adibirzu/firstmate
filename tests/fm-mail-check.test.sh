@@ -306,7 +306,6 @@ SH
   done
   pass "fm-mail-check: large repeated polls drain every reader without output noise"
 }
-
 test_repeated_timeout_still_wakes() {
   # A timeout can kill the poll after wake_for queued mail and before the
   # woke-for line is printed. Difference-record silence would then leave that

@@ -97,7 +97,10 @@ case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh gh-axi no-mistakes
+  # fm-spawn.sh leases the worktree itself and reads the path off treehouse's
+  # stdout, so keep fm_fakebin's worktree-emitting treehouse stub rather than a
+  # no-op exit-0 one.
+  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes
 
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
@@ -1353,12 +1356,22 @@ test_dispatch_reports_an_incomplete_record_rollback() {
   meta="$(home_of "$case_dir")/state/$id.meta"
   break_verb "$case_dir" start
   break_meta_removal "$case_dir" "$meta"
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  get) printf '%s\n' "$case_dir/wt" ;;
+  return) : > "$case_dir/treehouse-returned" ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though transition and rollback failed"
   assert_contains "$out" "failed-dispatch cleanup is incomplete" \
     "spawn did not report that its provisional record remained"
   assert_present "$meta" "failed record removal was reported as successful"
+  assert_absent "$case_dir/treehouse-returned" \
+    "incomplete rollback returned the leased worktree under its retained task record"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "record-removal failure prevented busy-state rollback"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
@@ -1603,10 +1616,21 @@ test_completion_refuses_a_legacy_record_without_an_incarnation() {
   start_item "$case_dir" "$id"
   write_task_meta "$case_dir" "$id" ship local-only
   meta="$(home_of "$case_dir")/state/$id.meta"
+  # A legacy record with no published incarnation is retirable only when its
+  # endpoint is confidently gone or agent-less. Make that probe unreadable so
+  # the completion must refuse rather than guess the record is safe to close.
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) echo "error connecting to fixture: permission denied" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown accepted a record with no durable incarnation"
-  assert_contains "$out" "record has no spawn_gen" \
+  assert_contains "$out" "not confidently dead or agent-less" \
     "teardown did not explain why the legacy record cannot close automatically"
   assert_present "$meta" "legacy-record refusal removed the task record"
   assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \
@@ -2776,6 +2800,11 @@ test_spawn_refuses_a_special_file_tasks_config() {
   rm -f "$home/.tasks.toml"
   mkfifo "$home/.tasks.toml"
 
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
+    CLAUDE_CONFIG_DIR='' \
+    PATH="$case_dir/fakebin:$PATH" \
+    timeout 60 "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1) || rc=$?
   out=$(fm_run_timed 60 env FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \

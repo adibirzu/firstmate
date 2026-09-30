@@ -98,6 +98,8 @@ fm_test_fake_gh_axi() {
 # is set, each send-keys TEXT-LINE payload (the pre-launch pane exports, which
 # carry no -l) is appended there instead, one per line in send order. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
+# FM_FAKE_TMUX_COMPOSER=pending makes submit-confirmation reads show an unsent
+# composer; otherwise they show an empty composer.
 #
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
@@ -109,6 +111,7 @@ fm_test_fake_tmux_spawn() {
 set -u
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{cursor_y}"*) printf '1\n'; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -120,34 +123,49 @@ case "${1:-}" in
     ;;
   has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          # A spawn types a short line sourcing its staged launch file; log
-          # the staged command itself so suites assert what the pane runs.
-          # Direct literals past the terminal line buffer are truncated, so a
-          # long launch only survives when it arrived through that short source.
-          case "$a" in
-            ". '"*"'")
-              staged=${a#". '"}
-              staged=${staged%"'"}
-              if [ -f "$staged" ]; then
-                a=$(cat "$staged")
-              elif [ "${#a}" -gt 1024 ]; then
-                a=${a:0:1024}
-              fi
-              ;;
-            *)
-              if [ "${#a}" -gt 1024 ]; then
-                a=${a:0:1024}
-              fi
-              ;;
-          esac
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
+    payload=
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = "-l" ]; then
+        payload=$a
+        logged=$a
+        case "$logged" in
+          ". '"*"'")
+            staged=${logged#". '"}
+            staged=${staged%"'"}
+            [ ! -f "$staged" ] || logged=$(cat "$staged")
+            ;;
+        esac
+        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$logged" >> "$FM_FAKE_LAUNCH_LOG"
+      fi
+      prev=$a
+    done
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" != pending ] &&
+       printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
+      session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
+      if [ -n "$session" ]; then
+        root=$(awk -F= '$1 == "projects_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        workspace=$(awk -F= '$1 == "workspace_root" { print substr($0, index($0, "=") + 1); exit }' "$session")
+        project="$root/fake-cursor-project"
+        mkdir -p "$project/agent-transcripts/fake-conversation"
+        printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
+        printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+          > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+        # Mirror the fabricated turn into every OTHER project dir claiming
+        # this workspace (e.g. a pre-seeded slug dir): the transcript binding
+        # resolves one claimant, and whichever it picks must hold exactly one
+        # conversation for the confirmation callback to observe the turn.
+        for _claim_marker in "$root"/*/.workspace-trusted; do
+          [ -f "$_claim_marker" ] || continue
+          _claim=$(LC_ALL=C sed -n 's/.*"workspacePath"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$_claim_marker" | head -1)
+          [ "$_claim" = "$workspace" ] || continue
+          _claim_dir=${_claim_marker%/.workspace-trusted}
+          [ "$_claim_dir" = "$project" ] && continue
+          mkdir -p "$_claim_dir/agent-transcripts/fake-conversation"
+          printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
+            > "$_claim_dir/agent-transcripts/fake-conversation/fake-conversation.jsonl"
+        done
+      fi
     fi
     # The pre-launch pane exports ride the text-line form
     # (`send-keys -t <target> <text> Enter`), which carries no -l flag, so a
@@ -167,6 +185,38 @@ case "${1:-}" in
           *) [ -n "$literal" ] || printf '%s\n' "$a" >> "$FM_FAKE_PANE_LOG" ;;
         esac
       done
+    fi
+    exit 0
+    ;;
+  capture-pane)
+    # FM_FAKE_TMUX_SCREEN_DIR: serve $DIR/<n> for the nth capture call
+    # (1-based), holding the highest-numbered screen once the sequence is
+    # exhausted. Lets a suite script a pane's evolving screen (a dialog that
+    # clears into a ready composer) through the real spawn. Unset preserves
+    # the legacy pending/empty composer behavior below.
+    if [ -n "${FM_FAKE_TMUX_SCREEN_DIR:-}" ] && [ -d "$FM_FAKE_TMUX_SCREEN_DIR" ]; then
+      _screen_count_file="$FM_FAKE_TMUX_SCREEN_DIR/.count"
+      _screen_count=0
+      [ ! -f "$_screen_count_file" ] || _screen_count=$(cat "$_screen_count_file" 2>/dev/null || echo 0)
+      case "$_screen_count" in ''|*[!0-9]*) _screen_count=0 ;; esac
+      _screen_count=$((_screen_count + 1))
+      printf '%s\n' "$_screen_count" > "$_screen_count_file"
+      if [ -f "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_count" ]; then
+        cat "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_count"
+      else
+        _screen_last=$(ls "$FM_FAKE_TMUX_SCREEN_DIR" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
+        if [ -n "$_screen_last" ]; then
+          cat "$FM_FAKE_TMUX_SCREEN_DIR/$_screen_last"
+        else
+          printf '╭────╮\n│    │\n╰────╯\n'
+        fi
+      fi
+      exit 0
+    fi
+    if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
+      printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0
     ;;
@@ -292,14 +342,14 @@ EOF
 }
 
 # fm_test_make_spawn_fakebin <dir> [extra-exit0-tool...]
-# Creates <dir>/fakebin with the spawn tmux stub, a no-op treehouse, and any
-# extra exit-0 tools. Echoes the fakebin path.
+# Creates <dir>/fakebin with the spawn tmux stub and any extra exit-0 tools
+# named by the caller. Echoes the fakebin path.
 fm_test_make_spawn_fakebin() {
   local dir=$1 fakebin
   shift
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
-  fm_fake_exit0 "$fakebin" treehouse "$@"
+  fm_fake_exit0 "$fakebin" "$@"
   printf '%s\n' "$fakebin"
 }
 

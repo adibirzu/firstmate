@@ -267,7 +267,7 @@ make_remote_ledger_fleet() {  # <parent-home> <count>
 }
 
 make_remote_ledger_ssh() {  # <dir>
-  local dir=$1 fb="$1/fakebin"
+  local fb="$1/fakebin"
   mkdir -p "$fb"
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
@@ -634,8 +634,10 @@ test_bad_secondmate_homes_never_revive_parent_work() {
       and (.in_flight | map(.id) | all(. != "invalid" and . != "unreadable" and . != "malformed" and . != "unknown-child"))
       and (.secondmates | any(.[]; .id == "missing" and .provenance == "unknown"
         and .freshness == "unknown" and (.reason | contains("invalid home"))))
-      and ([.secondmates[] | select(.id == "invalid" or .id == "unreadable" or .id == "malformed")]
+      and ([.secondmates[] | select(.id == "invalid" or .id == "unreadable")]
         | all(.provenance == "parent-event-fallback" and .freshness == "historical-event"))
+      and (.secondmates | any(.[]; .id == "malformed" and .provenance == "structured-home"
+        and .freshness == "fresh" and (.reason | contains("unstructured current backlog row"))))
       and (.secondmates | any(.[]; .id == "unknown-child" and .provenance == "structured-home"
         and .freshness == "fresh"))
       and (.secondmates | any(.[]; .id == "invalid" and (.reason | contains("marked for"))))
@@ -3191,8 +3193,10 @@ test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache() {
   : > "$parent/ledger-pids.log"
 
   json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
-  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
-    || fail "a healthy snapshot did not issue exactly one remote file read per home"
+  [ "$(awk -F'\t' '$2 == "fm-remote-file.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
+    || fail "a healthy snapshot did not issue exactly one remote ledger read per home"
+  [ "$(awk -F'\t' '$2 == "fm-remote-secondmate-control.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
+    || fail "a healthy snapshot did not issue exactly one live mate-endpoint probe per home"
   printf '%s' "$json" | jq -e '
     (.secondmates | length) == 5
       and all(.secondmates[]; .freshness == "fresh" and .age_seconds == 100)
@@ -3263,7 +3267,8 @@ EOF
     ([.secondmates[] | select(.id == "ledger-1" and .freshness == "cached" and .age_seconds == 100)] | length) == 1
       and ([.secondmates[] | select(.id != "ledger-1" and .freshness == "fresh")] | length) == 4
   ' >/dev/null || fail "a multi-document live ledger bypassed the valid cache: $json"
-  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+  [ "$(awk -F'\t' '$2 == "fm-remote-file.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
+    && [ "$(awk -F'\t' '$2 == "fm-remote-secondmate-control.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
     || fail "rejecting a multi-document live ledger added remote reads"
   mv "$duplicate_base" "$TMP_ROOT/remote-ledger-home-1/state/home-summary.json"
 
@@ -3274,7 +3279,8 @@ EOF
     ([.secondmates[] | select(.id == "ledger-1" and .freshness == "cached")] | length) == 1
       and ([.secondmates[] | select(.id != "ledger-1" and .freshness == "fresh")] | length) == 4
   ' >/dev/null || fail "an unbounded primary ledger stream consumed the shared collector budget: $json"
-  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+  [ "$(awk -F'\t' '$2 == "fm-remote-file.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
+    && [ "$(awk -F'\t' '$2 == "fm-remote-secondmate-control.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
     || fail "bounding one faulty primary ledger added remote reads"
   rm -f "$TMP_ROOT/remote-ledger-home-1/state/unbounded-ledger-read"
 
@@ -3324,7 +3330,8 @@ EOF
         and .age_seconds == 1000 and .provenance == "structured-home-cache")] | length) == 1
       and ([.omitted[] | select(.surface == "secondmate ledger-1 served from cached home ledger")] | length) == 1
   ' >/dev/null || fail "one slow home prevented four fresh rows or hid its cache disclosure: $json"
-  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+  [ "$(awk -F'\t' '$2 == "fm-remote-file.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
+    && [ "$(awk -F'\t' '$2 == "fm-remote-secondmate-control.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 5 ] \
     || fail "the mixed-speed snapshot made more than one remote read per ledger home"
   pass "remote ledgers collect concurrently under one budget, reuse aged cache, and cancel wedged collectors"
 }
@@ -3347,11 +3354,82 @@ test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_co
       and (.secondmates[0].reason | contains("home ledger is missing, unreadable, or invalid"))
       and (.omitted | any(.surface == "secondmate home(s) with unreadable structured state: 1"))
   ' >/dev/null || fail "a no-ledger remote home was not explicitly disclosed as unreadable: $json"
-  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 1 ] \
+  [ "$(awk -F'\t' '$2 == "fm-remote-file.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 1 ] \
     || fail "a no-ledger remote home issued more than its single ledger read"
-  [ "$(awk -F '\t' 'NR == 1 { print $2 }' "$parent/ledger-calls.log")" = "fm-remote-file.sh" ] \
+  [ "$(awk -F '\t' '$2 != "fm-remote-file.sh" && $2 != "fm-remote-secondmate-control.sh"' "$parent/ledger-calls.log" | wc -l | tr -d ' ')" -eq 0 ] \
     || fail "a no-ledger remote home triggered remote summary computation: $(cat "$parent/ledger-calls.log")"
   pass "a missing remote ledger stays explicitly unreadable without remote summary computation"
+}
+
+test_remote_home_that_times_out_is_reported_timeout_not_unknown() {
+  local parent fakebin remote_home json
+  parent=$(make_home remote-ledger-timeout)
+  make_remote_ledger_fleet "$parent" 2
+  remote_home=$(cd "$TMP_ROOT/remote-ledger-home-2" && pwd -P)
+  rm -f "$remote_home/state/home-summary.json"
+  : > "$remote_home/state/slow-ledger-read"
+  fakebin=$(make_remote_ledger_ssh "$parent/remote-ssh")
+  mkdir -p "$parent/ledger-active"
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+
+  json=$(FM_HOME="$parent" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_TEST_LEDGER_CALL_LOG="$parent/ledger-calls.log" \
+    FM_TEST_LEDGER_PID_LOG="$parent/ledger-pids.log" \
+    FM_TEST_LEDGER_ACTIVE_DIR="$parent/ledger-active" \
+    FM_SNAPSHOT_CACHE_DIR="$parent/state/summary-cache" \
+    FM_SNAPSHOT_SECONDMATE_TIMEOUT=2 FM_SNAPSHOT_NOW_EPOCH=1100 \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$json" | jq -e --arg home "$remote_home" '
+    ([.secondmate_current.records[] | select(.id == "ledger-2" and .current.state == "timeout")] | length) == 1
+      and ([.secondmate_current.records[] | select(.id == "ledger-2" and (.current.reason | contains("timed out")))] | length) == 1
+      and ([.secondmate_current.records[] | select(.id == "ledger-2" and .current.state == "unknown")] | length) == 0
+      and ([.secondmate_landed.timed_out[] | select(. == $home)] | length) == 1
+      and ([.secondmate_current.records[] | select(.id == "ledger-1" and .provenance.summary_source == "remote-ledger")] | length) == 1
+  ' >/dev/null \
+    || fail "a timed-out remote home was not reported as a distinct timeout: $json"
+
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
+  printf '%s' "$json" | jq -e '
+    (.secondmates | any(.id == "ledger-2" and .state == "timeout" and (.reason | contains("timed out"))))
+      and (.secondmates | any(.id == "ledger-1" and .state != "timeout"))
+      and (.omitted | any(.surface | test("timed out reading")))
+      and ([.omitted[] | select(.surface | test("unreadable structured state"))] | length) == 0
+  ' >/dev/null || fail "bearings did not disclose the timed-out home as timed out: $json"
+  pass "a remote home that times out is reported timed out, never unknown"
+}
+
+test_remote_ledger_read_default_bound_is_45_seconds() {
+  local parent fakebin timeout_log json
+  parent=$(make_home remote-ledger-default-bound)
+  make_remote_ledger_fleet "$parent" 1
+  fakebin=$(make_remote_ledger_ssh "$parent/remote-ssh")
+  timeout_log="$parent/timeout.log"
+  cat > "$fakebin/timeout" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$3" >> "$FM_TEST_TIMEOUT_LOG"
+shift 3
+exec "$@"
+SH
+  chmod +x "$fakebin/timeout"
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+  mkdir -p "$parent/ledger-active"
+
+  json=$(PATH="$fakebin:$PATH" FM_HOME="$parent" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_TEST_TIMEOUT_LOG="$timeout_log" \
+    FM_TEST_LEDGER_CALL_LOG="$parent/ledger-calls.log" \
+    FM_TEST_LEDGER_PID_LOG="$parent/ledger-pids.log" \
+    FM_TEST_LEDGER_ACTIVE_DIR="$parent/ledger-active" \
+    FM_SNAPSHOT_CACHE_DIR="$parent/state/summary-cache" \
+    FM_SNAPSHOT_NOW_EPOCH=1100 \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$json" | jq -e '
+    ([.secondmate_current.records[] | select(.id == "ledger-1" and .provenance.summary_source == "remote-ledger")] | length) == 1
+  ' >/dev/null || fail "the default-bound fixture did not read its healthy ledger: $json"
+  grep -qx '45' "$timeout_log" \
+    || fail "the remote ledger read was not bounded at the 45s default: $(cat "$timeout_log")"
+  pass "the remote ledger read default bound is 45 seconds"
 }
 
 test_task_teardown_during_metadata_capture_does_not_abort_snapshot
@@ -3360,6 +3438,8 @@ test_relaunched_task_does_not_inherit_reused_endpoint_state
 test_large_local_snapshot_overlaps_local_reads_without_projection_drift
 test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache
 test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_compute
+test_remote_home_that_times_out_is_reported_timeout_not_unknown
+test_remote_ledger_read_default_bound_is_45_seconds
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed

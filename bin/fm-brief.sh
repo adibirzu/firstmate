@@ -77,25 +77,22 @@
 # on that forge. bin/fm-spawn.sh reads that line and refuses to launch a ship task
 # whose explicit --mode or registered forge disagrees, so an adjusted brief and the
 # recorded task metadata cannot drift apart.
-# Ship briefs begin with a worktree-isolation assertion before the branch step.
-# Both crewmate scaffolds carry one shared rule against administering the
-# infrastructure every lane shares - the no-mistakes daemon and the worktree pool
-# their own slot came from - so ship and scout cannot drift apart. A secondmate
-# charter omits it: that home allocates and returns slots for its own crewmates.
-# --mode, --forge, and --shape are refused on scout and secondmate scaffolds: a
-# scout's deliverable is a report rather than a merge, and a charter is not a
-# delivery contract.
+# Ship and scout briefs begin with a worktree-isolation assertion before the
+# branch step. It names the exact assigned worktree through a {WORKTREE}
+# placeholder that bin/fm-spawn.sh substitutes with the leased path when it
+# renders the launch brief, and it runs bin/fm-worker-isolation-check.sh against
+# that path as the worker's first command.
+# --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
+# report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
-# "blocked:": pause for a known wait expected to clear on its own, including
-# the worker's own background work, pipeline or long command; blocked when
-# firstmate must act. The first-sight alert remains; repeats use the long cadence.
-# Emission-time syntax and legacy unknown-time handling are owned by
-# bin/fm-classify-lib.sh; each scaffold renders the stamp as a literal <epoch>
-# placeholder the worker replaces with a numeric Unix time as it appends, so a
-# scaffold never emits a substitution a file-write tool would copy through.
+# "blocked:": pause for a known external wait expected to clear on its own,
+# blocked when firstmate must act.
+# Ship and scout scaffolds carry a shared graph-first context section: the
+# crewmate queries the DevViz code graph before broad file reads, and falls
+# back to normal targeted file reads when the graph surface is unreachable.
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
@@ -441,6 +438,7 @@ If its first reportable event is \`working [key=<work-slug>]: {material phase}\`
 When a keyed phase ends without another reportable state, append \`resolved [key=<work-slug>] [at=<epoch>]: {why it is no longer active}\`.
 \`resolved\` separately closes an escalated decision or blocker, and only a \`resolved\` line carrying that decision's exact key closes it: a later \`done\` or \`working\` event never does, even when the answer is what started that work.
 The main firstmate's answer normally writes that closing line at answer time; when a blocker or wait clears WITHOUT an answer from the main firstmate, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (keyed with \`[key=<slug>]\` if you opened it with one) as your domain resumes.
+Give every escalation after your first one its own \`[key=<slug>]\`, because all unkeyed escalations share one identity and a second one cannot be tracked separately.
 Routine internal supervision, heartbeats, retries, and crewmate churn stay inside your own home and must not touch that status file.
 
 # Definition of done
@@ -495,6 +493,42 @@ Do not add Herdr lifecycle commands to this unguarded brief by hand.
 EOF
 HERDR_SECTION=${HERDR_SECTION%$'\n'}
 fi
+
+# Graph-first context, defined once and included in both the scout and ship
+# scaffolds below (one-owner rule; firstmate-coding-guidelines): every crewmate
+# queries the DevViz code graph before broad file reads, and falls back to
+# normal file reads when the graph surface is unreachable (fail-soft, never a
+# blocker).
+IFS= read -r -d '' GRAPH_FIRST_SECTION <<'EOF' || true
+# Graph-first context
+Before reading files to understand this project, query the code graph first: call the `graph_first` MCP tool, or run `devviz graph-first "<question>"`, or POST to `http://127.0.0.1:8000/api/kag/graph-first`.
+It returns a bounded set of relevant files with freshness; use it to target your file reads, and never parse `data/graphs/*/graph.json` directly.
+If the graph-first surface is unreachable, proceed with normal targeted file reads - it is an accelerator, never a blocker.
+EOF
+GRAPH_FIRST_SECTION=${GRAPH_FIRST_SECTION%$'\n'}
+
+# Worktree-isolation assertion, defined once and included in both the scout and
+# ship scaffolds below (one-owner rule; firstmate-coding-guidelines): the worker's
+# first command checks that its shell is the exact worktree it was launched in,
+# so a worker misdirected into a firstmate home or the primary checkout stops
+# before branching or editing. bin/fm-spawn.sh substitutes the {WORKTREE}
+# placeholder with the leased path when it renders the launch brief; the
+# __FM_ROOT__ token is replaced here with the scaffold-time helper path.
+IFS= read -r -d '' ISOLATION_SECTION <<'EOF' || true
+**Verify isolation before anything else.** Your assigned worktree is {WORKTREE}.
+Run `"__FM_ROOT__/bin/fm-worker-isolation-check.sh" {WORKTREE}` as your first command; it stops you when your shell is not exactly that worktree or when it is a firstmate home or a primary checkout.
+The path check is authoritative: the check compares your `pwd -P` and `git rev-parse --show-toplevel` against the assigned path, because `git rev-parse --git-dir` and `git rev-parse --git-common-dir` can help inspect the repo but do not prove you are outside the primary checkout.
+If it fails, STOP - do not branch or commit here - append `blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree` to the status file and stop.
+EOF
+ISOLATION_SECTION=${ISOLATION_SECTION%$'\n'}
+ISOLATION_SECTION=${ISOLATION_SECTION//__FM_ROOT__/$FM_ROOT}
+
+# Shared worker-safety rules, defined once and referenced by both the scout
+# and ship Rules sections below (one-owner rule; firstmate-coding-guidelines).
+RULE_NO_PROMPT="8. A decision above your authority is reported only through rule 6's status-file mechanism, then you stop.
+   Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply - nobody reads this pane, so a prompt just burns your window idling for a reply that never comes."
+RULE_NO_POLL="9. Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off, such as a validation run or CI.
+   Firstmate already supervises every task centrally, and a worker-side loop burns turns for no signal firstmate lacks - follow that step's own response flow, or report and stop."
 
 IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 # Task
@@ -555,10 +589,17 @@ This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
 
+$ISOLATION_SECTION
+
+$GRAPH_FIRST_SECTION
+
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Never let a gh or gh-axi PR command fall back to its default repository: pass
+   \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
+   so a fork checkout can never resolve a bare number against the upstream parent's PR.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -575,7 +616,10 @@ $CREWMATE_PAUSE_INSTRUCTIONS
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   If you already escalated an earlier decision or blocker on this task, give the new one its own \`[key=<slug>]\`, because every unkeyed escalation shares one identity and a second one cannot be tracked separately.
 $SHARED_INFRA_RULE
+$RULE_NO_PROMPT
+$RULE_NO_POLL
 
 $INBOX_SECTION
 
@@ -623,9 +667,11 @@ $HERDR_SECTION
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 
-**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
-The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+$ISOLATION_SECTION
+
+Prove your base is current before branching: run \`"$FM_ROOT/bin/fm-base-check.sh" .\` and follow what it prints; only create your branch after it reports current (exit 0).
+
+$GRAPH_FIRST_SECTION
 
 1. First action: create your branch: \`git checkout -b $BRANCH_Q --\`$SETUP2
 
@@ -633,6 +679,9 @@ If the top-level path is the primary checkout or not the worktree you were launc
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Never let a gh or gh-axi PR command fall back to its default repository: pass
+   \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
+   so a fork checkout can never resolve a bare number against the upstream parent's PR.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -653,7 +702,10 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   If you already escalated an earlier decision or blocker on this task, give the new one its own \`[key=<slug>]\`, because every unkeyed escalation shares one identity and a second one cannot be tracked separately.
 $SHARED_INFRA_RULE
+$RULE_NO_PROMPT
+$RULE_NO_POLL
 
 $INBOX_SECTION
 

@@ -51,6 +51,10 @@ command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
 command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (required by fm-spawn.sh)"; exit 0; }
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 
@@ -182,7 +186,7 @@ SM_WSID=$(herdr pane get "$SM_PANE" --session "$SESSION" 2>/dev/null | jq -r '.r
 [ -n "$SM_WSID" ] || fail "could not read e2esm1's pane workspace_id"
 [ "$SM_WSID" != "$CM1_WSID" ] || fail "the secondmate's tab must NOT land in the primary's workspace, but it shares $CM1_WSID"
 SM_WS_LABEL=$(herdr workspace list --session "$SESSION" 2>&1 | jq -r --arg id "$SM_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
-[ "$SM_WS_LABEL" = "2ndmate-e2esm1" ] || fail "a --secondmate spawn should land in '2ndmate-<id>', got '$SM_WS_LABEL'"
+[ "$SM_WS_LABEL" = "2m-e2esm1" ] || fail "a --secondmate spawn should land in '2m-<id>', got '$SM_WS_LABEL'"
 pass "real herdr E2E: a --secondmate spawn by the PRIMARY lands in the SECONDMATE's own labeled workspace, distinct from the primary's"
 
 # --- 3. a crewmate spawned FROM the secondmate-shaped home lands in the SAME
@@ -215,15 +219,15 @@ pass "real herdr E2E: a crewmate spawned FROM the secondmate-shaped home lands i
 # --- 4. list-live recovery: each home sees only its own tabs ---------------
 
 PRIMARY_LIVE=$(FM_HOME="$PRIMARY_HOME" fm_backend_herdr_list_live "$SESSION")
-assert_contains_local "$PRIMARY_LIVE" "fm-cm1" "the primary home's list_live did not see its own task"
-assert_not_contains_local "$PRIMARY_LIVE" "fm-e2esm1" "the primary home's list_live must not see the secondmate's own task"
-assert_not_contains_local "$PRIMARY_LIVE" "fm-cm2" "the primary home's list_live must not see the secondmate-owned crewmate's task"
+assert_contains_local "$PRIMARY_LIVE" "-cm1" "the primary home's list_live did not see its own task"
+assert_not_contains_local "$PRIMARY_LIVE" "-e2esm1" "the primary home's list_live must not see the secondmate's own task"
+assert_not_contains_local "$PRIMARY_LIVE" "-cm2" "the primary home's list_live must not see the secondmate-owned crewmate's task"
 pass "real herdr E2E: list_live from the primary's own context sees only the primary's own task"
 
 SM_LIVE=$(FM_HOME="$SM_HOME" fm_backend_herdr_list_live "$SESSION")
-assert_contains_local "$SM_LIVE" "fm-e2esm1" "the secondmate home's list_live did not see its own task"
-assert_contains_local "$SM_LIVE" "fm-cm2" "the secondmate home's list_live did not see the crewmate spawned from it"
-assert_not_contains_local "$SM_LIVE" "fm-cm1" "the secondmate home's list_live must not see the primary's task"
+assert_contains_local "$SM_LIVE" "-e2esm1" "the secondmate home's list_live did not see its own task"
+assert_contains_local "$SM_LIVE" "-cm2" "the secondmate home's list_live did not see the crewmate spawned from it"
+assert_not_contains_local "$SM_LIVE" "-cm1" "the secondmate home's list_live must not see the primary's task"
 pass "real herdr E2E: list_live from the secondmate's own context sees only tasks in the secondmate's own workspace (both its own tab and its crewmate's)"
 
 # --- 5. teardown closes the RIGHT tab, and no other ------------------------

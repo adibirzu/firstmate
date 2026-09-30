@@ -566,9 +566,12 @@ pass "the worker drains bounded output without changing command results"
 
 SIDE_EFFECT="$TMP_ROOT/side-effect"
 WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
-fm_remote_job_stop_worker_tree "$WORKER_PID" \
-  || fail "the worker tree did not stop before the staged-record tamper"
-assert_absent "$STATE_ROOT/worker.pid" "the worker did not clear its pid before the staged-record tamper"
+kill -TERM "$WORKER_PID"
+for _ in $(seq 1 100); do
+  [ ! -f "$STATE_ROOT/worker.pid" ] && break
+  sleep 0.05
+done
+assert_absent "$STATE_ROOT/worker.pid" "the worker did not stop before the staged-record tamper"
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
@@ -1185,6 +1188,7 @@ RESTART_HOME="$TMP_ROOT/restart-account"
 RESTART_STATE="$TMP_ROOT/restart-state"
 RESTART_CHILD_LOG="$TMP_ROOT/restart-children"
 mkdir -p "$RESTART_ROOT/bin" "$RESTART_HOME"
+: > "$RESTART_CHILD_LOG"
 cp "$ROOT/bin/fm-remote-job-lib.sh" "$RESTART_ROOT/bin/"
 cp "$ROOT/bin/fm-remote-job-worker.sh" "$RESTART_ROOT/bin/fm-remote-job-supervisor-under-test.sh"
 printf 'fixture\n' > "$RESTART_ROOT/AGENTS.md"

@@ -1,5 +1,6 @@
 Mode: Pi extension background wake.
 
+When this session owns supervision and no legacy away daemon flag is active:
 When this session owns supervision, in either posture:
 1. Drain first with `bin/fm-wake-drain.sh`.
    After handling all emitted wakes and reconciling open decisions and unread status lines, run the exact `--ack-through` command printed as `WAKE_ACK_REQUIRED`; until then the work remains durable for idempotent re-handling after interruption.
@@ -19,8 +20,7 @@ When this session owns supervision, in either posture:
 11. Never use shell `&` for watcher supervision.
    The arm mechanism above is extension-owned, not a model tool call, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, wired into the turn-end guard extension at `__FM_PI_TURNEND_EXT__`).
 
-The supervision branch is default-on (docs/pi-supervision-branch.md): whenever this session owns the fleet lock, the watcher extension hands eligible task-local rows from ordinary actionable wakes, plus selected fleet-wide heartbeat reviews, to the in-process supervision branch while main-only rows remain queued for this conversation.
-While the away-posture record `state/.afk-contract` exists the branch takes every row instead, this conversation receives no processing request, and main's standing authority relocates to the branch through the guarded scripts; a wake the branch cannot take and every watcher-failure alarm still reach this conversation, and the first run boundary after the record is archived presents what accumulated (docs/pi-supervision-branch.md "Postures").
+The supervision branch is default-on (docs/pi-supervision-branch.md): whenever this session owns the fleet lock and no legacy away daemon flag is active, the watcher extension hands eligible task-local rows from ordinary actionable wakes, plus selected fleet-wide heartbeat reviews, to the in-process supervision branch while main-only rows remain queued for this conversation; the away-posture record alone leaves this path active.
 Decision-owned signal and stale routing, including whole-batch precedence and the independent heartbeat exception, is owned by [docs/pi-supervision-branch.md](../pi-supervision-branch.md#components-and-their-owners).
 A task-level routine outcome that says the worker is still busy, nothing new has happened since the last outcome, and no action was taken may use `silent=true`; an unchanged heartbeat may do the same with `task=fleet`.
 Both are stored but delivered without a rendered note, while routine outcomes reporting an action, state change, or new result stay rendered with ⛵ then the dim outcome text, and captain outcomes are never silent.
@@ -31,6 +31,7 @@ Where that persisted entry is in this transcript it is already the captain-visib
 Regression example - keep verbatim and never condense away: `[seq 41] claude-mod: implementation complete, ready for review` requires relaying a captain-facing outcome response, not just `Captain, shipshape.`.
 A merge ask with no URL that leans on the dim anchor violates `AGENTS.md` section 9.
 Before MAIN steers, controls lifecycle, or cleans up a task, claim its lease with `bin/fm-lease.sh claim <task>` and release it afterwards; a refused claim means the branch is acting on that task right now.
+This conversation still receives every other fleet-wide or unresolvable wake, the branch's wakes when it is unavailable or a legacy away daemon flag is active, and every watcher-failure alarm regardless, so the arm and repair contract above is unchanged.
 This conversation still receives every other fleet-wide or unresolvable wake, the branch's wakes when it is unavailable, and every watcher-failure alarm regardless of posture, so the arm and repair contract above is unchanged.
 Treat the merged fleet event as already handled for fleet operations: MAIN must not re-drain, re-run, or acknowledge it.
 Separately, MAIN applies judgment about whether and how to surface, summarize, reference, or incorporate a merged sailboat outcome in the captain conversation; event ownership does not decide the conversational treatment.

@@ -44,13 +44,9 @@ When the guard acts, the harness integration must do one of two things:
 - Force one bounded follow-up that uses the recovery instruction from the emitted session-start protocol.
 
 The mid-turn pull warning uses the model-aware supervision verdict described below, while the turn-end guard keeps the PID-strict watcher predicate.
-
-Away and quiet mode are the one place the turn-end guard accepts a different supervisor.
-While `state/.afk` exists, in either mode (`bin/fm-wake-lib.sh`'s `fm_afk_mode`), the daemon owns supervision.
-A live identity-matched daemon with a fresh beacon then satisfies that boundary in place of a watcher process holding the lock.
-
-The guard remains a backstop.
-[`watcher-continuity.md`](watcher-continuity.md) owns normal continuity.
+Away mode is the one place the turn-end guard accepts a different supervisor: while `state/.afk` exists the away-mode daemon owns supervision, so a live identity-matched daemon with a fresh beacon satisfies that boundary in place of a watcher process holding the lock.
+A session without verified ownership of the home session lock while a live other session holds it is read-only: the guard reports the lapse as advisory wording only and lets the turn end with no shared-state mutation, because the inert Stop-owned auto-arm there never advances the epoch ledger the re-block budget keys off.
+The guard remains a backstop; [`watcher-continuity.md`](watcher-continuity.md) owns normal continuity.
 
 ## Guard predicates
 
@@ -83,68 +79,17 @@ The default cross-harness mode exits silently with no supervision need.
 
 ### Strict watcher check at the turn boundary
 
-Otherwise the guard calls `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
-It is the same PID-strict identity-matched lock and fresh-beacon check used by `bin/fm-watch-arm.sh`.
-Under that check:
-
-- A stale beacon blocks even when a watcher pid is live.
-- A fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
-
-The turn-end guard needs that strict check because it fires at the turn boundary.
-At that boundary the auto-arm is bringing a fresh watcher up for the upcoming idle period.
-The guard cooperates with that arm rather than trusting a beacon left by the cycle that just ended.
-
-### Foreign session-lock owner
-
-When an active home instead has a live session lock held by a verified harness that the current session does not own, the Claude guard emits a read-only ownership diagnostic and allows the turn to end safely.
-
-Ownership is the shared `fm_session_lock_owned_by_self` verdict in `bin/fm-session-lock-lib.sh`.
-The current session owns the lock when either of these holds:
-
-- The recorded pid is a member of the current session's contiguous harness ancestry.
-- The trusted Claude session id recorded beside the lock in `state/.lock-session` matches this hook's own environment while the recorded pid is still a live harness.
-
-That second signal keeps a background Claude session owning its own lock after the transient helper chain between its hooks and its recorded owner is recycled.
-The library's header owns the trust gate (`CLAUDE_PID` must be a Claude-shaped member of the current run).
-`bin/fm-lock.sh` owns the sidecar and the line-1 anchor it records for such a session.
-
-A Claude session that does not own the lock cannot arm or repair the home without stealing the live owner's lock, so blocking it would create an unbounded loop.
-The lock-owning session remains responsible for restoring supervision.
-
-The exception has these limits:
-
-- Malformed, absent, dead, or ancestry-uncertain lock records do not satisfy this Claude-specific exception and retain the ordinary guard behavior.
-- A missing or mismatched sidecar or an untrusted id adds nothing to the verdict, so a live owner outside the ancestry still takes this exit exactly as before.
+Otherwise it calls `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`, the same PID-strict identity-matched lock and fresh-beacon check used by `bin/fm-watch-arm.sh`: a stale beacon blocks even when a watcher pid is live, and a fresh leftover beacon blocks when the lock is missing, dead, or identity-mismatched.
+The turn-end guard needs that strict check because it fires at the turn boundary, where the auto-arm is bringing a fresh watcher up for the upcoming idle period, and it cooperates with that arm rather than trusting a beacon left by the cycle that just ended.
 
 ### Pull-warning verdict by supervision model
 
-`bin/fm-guard.sh`, the pull warning, instead uses the model-aware `fm_watcher_supervision_verdict` from `bin/fm-wake-lib.sh`.
-It needs a different verdict because it fires mid-turn, when the auto-arm model runs no watcher at all.
-The verdict depends on the supervision model.
-
-#### Claude Stop auto-arm model
-
+`bin/fm-guard.sh`, the pull warning, instead uses the model-aware `fm_watcher_supervision_verdict` from the same library, because it fires mid-turn when the auto-arm model runs no watcher at all.
 Under the Claude Stop auto-arm model a beacon fresh within grace is healthy even with no live watcher process.
-A stale beacon is still healthy while `fm_autoarm_midturn_healthy` in `bin/fm-wake-lib.sh` proves a Claude rewake explains the mid-turn gap.
-That proof requires both of these:
-
-- The rewake is bound to the current recovery generation and live session-lock owner.
-- No later watcher beacon or exhausted-failure marker supersedes it.
-
-The tolerance holds because that session's turn-end will re-arm.
+A stale beacon is still healthy while `fm_autoarm_midturn_healthy` in `bin/fm-wake-lib.sh` proves a Claude rewake explains the mid-turn gap: the rewake is bound to the current recovery generation and live session-lock owner, and no later watcher beacon or exhausted-failure marker supersedes it, because that session's turn-end will re-arm.
 Without that proof a stale or absent beacon is a genuine lapse and alarms.
-
-#### Extension model
-
-Under the extension model (Pi, pi-signed, and omp) a live identity-matched watcher is the ordinary healthy state.
-A genuinely unheld lock with a beacon fresh within grace is also healthy while a live Pi or omp session provably owns continuity.
-That hand-off is benign because `.pi/extensions/fm-primary-pi-watch.ts` and `.omp/extensions/fm-primary-omp-watch.ts` tear the watcher down on every actionable wake and spawn the replacement themselves.
-
-A lock is genuinely unheld only in one of these cases:
-
-- The lock directory or its symlinked owner directory is absent.
-- The existing lock records no pid at all.
-
+Under the extension model (Pi, pi-signed, and omp) a live identity-matched watcher is the ordinary healthy state, but a genuinely unheld lock with a beacon fresh within grace is also healthy while a live Pi or omp session provably owns continuity, because `.pi/extensions/fm-primary-pi-watch.ts` and `.omp/extensions/fm-primary-omp-watch.ts` tear the watcher down on every actionable wake and spawn the replacement themselves.
+A lock is genuinely unheld only when the lock directory or its symlinked owner directory is absent, or when the existing lock records no pid at all.
 Any lock with a recorded pid remains down when its pid, home, watcher path, or process identity fails the strict watcher health check.
 
 That ownership proof is `fm_extension_owns_supervision` in `bin/fm-wake-lib.sh`.
@@ -206,20 +151,13 @@ With `state/.afk` absent the daemon lock proves nothing and the strict watcher p
 
 ### Guard grace and the poll cadence
 
-`bin/fm-watch.sh` touches `state/.last-watcher-beat` once per cycle, immediately before its terminal wait (`event_wait_or_sleep`) as well as at the top of the next cycle.
-A healthy watcher's beacon can therefore legitimately age up to `FM_POLL` seconds between touches.
-
-A fixed 300-second grace default stops correctly bounding staleness once a home's `FM_POLL` reaches or exceeds it.
-A perfectly healthy watcher mid-wait would then read stale at the edge of every full poll cycle by definition.
-That is exactly what a long-poll home (`FM_POLL=300`) hit against the Claude Stop-hook auto-arm (`bin/fm-claude-stop-autoarm.sh`).
-
-Two readers derive their default grace from the configured poll instead of a bare constant:
-
-- That hook.
-- `bin/fm-watch.sh`'s own pre-acquisition staleness check (the "lock held by live pid but heartbeat is stale" refusal).
-
-Both use `max(300, FM_POLL + 60)`.
-The default never drops below the historical 300-second floor for the common short-poll case, but grows with the poll cadence once that cadence would otherwise outrun it.
+`bin/fm-watch.sh` touches `state/.last-watcher-beat` unconditionally at the top of every cycle, then re-beats it only at stage boundaries within the cycle (between remote per-home observations, between slow per-task checks, between recorded-window captures, and immediately before the terminal wait `event_wait_or_sleep`) once the beacon has aged past `FM_WATCHER_BEAT_SUBCADENCE` (default 60, clamped to a third of the resolved grace).
+A top-of-cycle-only touch lets a large registered fleet's inline per-home work - the remote secondmate busy observations over SSH and the per-task check sweep - age the beacon past the grace within a single still-running, still-delivering cycle, so the guard reports a live watcher stale.
+The in-cycle beat keeps that gap bounded by the slowest single stage rather than the whole cycle, and each remote per-home read is additionally bounded by `FM_PENDING_REPLY_OBSERVE_TIMEOUT` (see `bin/fm-pending-reply-lib.sh`) so one hung or slow remote home costs only its own probe and cannot starve the beacon or the rest of the fleet.
+Because a beat fires only where a stage actually returned, a watcher wedged inside a single unbounded call reaches no further boundary and still crosses the grace, so the stale verdict keeps its meaning and only the false-stale-while-alive case changes.
+Operators who lower `FM_WATCHER_STALE_GRACE` below its default should keep `FM_PENDING_REPLY_OBSERVE_TIMEOUT` and `FM_CHECK_TIMEOUT` well under it, since one stage's bound is the floor of a healthy cycle's beacon gap.
+A fixed 300-second grace default stops correctly bounding staleness once a home's `FM_POLL` reaches or exceeds it: a perfectly healthy watcher mid-wait would then read stale at the edge of every full poll cycle by definition, which is exactly what a long-poll home (`FM_POLL=300`) hit against the Claude Stop-hook auto-arm (`bin/fm-claude-stop-autoarm.sh`).
+That hook and `bin/fm-watch.sh`'s own pre-acquisition staleness check (the "lock held by live pid but heartbeat is stale" refusal) both derive their default grace from the configured poll instead of a bare constant: `max(300, FM_POLL + 60)`, so the default never drops below the historical 300-second floor for the common short-poll case but grows with the poll cadence once that cadence would otherwise outrun it.
 `fm_poll_derived_grace` in `bin/fm-wake-lib.sh` is the single owner of that formula.
 
 That refusal has a ceiling.
@@ -267,7 +205,13 @@ The registrations in detail:
 
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
-- OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
+- OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`.
+  The watch-arm coordinator suppresses the shell guard and model follow-up only for `retrying`, `pending-silent-rearm`, `not-needed`, and `healthy`.
+  `observeArmOutput` classifies a healthy watcher as `healthy` at the source, so an `external` outcome is not a second silent path.
+  Other outcomes reach the shell guard, which evaluates scope and supervision health.
+  A genuine failed arm result is not in that silent set: it reaches the shell guard and its existing `client.session.promptAsync` fail-safe when the guard returns 2.
+  The coordinator's arm predicate mirrors `bin/fm-supervision-lib.sh` (task metadata, an X-mode relay poll, or a registered process-event source), so a procevent-only home arms without a model turn.
+  When the coordinator declines to arm - it sees no supervision need, or this session does not own the lock - or when no coordinator is loaded, the plugin runs the shell guard and calls `client.session.promptAsync` once only when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
 - omp answers its blocking `session_stop` hook in `.omp/extensions/fm-primary-turnend-guard.ts`, passing the payload's own `stop_hook_active` to the shared guard.
   When the guard returns 2, it returns `{ continue: true, additionalContext }`, so the continuation is compelled rather than requested.
@@ -307,78 +251,17 @@ In the default Codex mode, a true value lets the second stop finish after one fo
 ### Claude cooperative mode
 
 Claude runs the guard with `--claude`, which ignores `stop_hook_active` and cooperates with the Stop-owned auto-arm.
-Claude Code sets `stop_hook_active=true` on every stop after any stop-hook continuation, including `asyncRewake` rewakes.
-Under the default one-shot behavior, that re-opened the 2026-07-21 blind window.
-
-Before the Claude cooperative budget can re-block a Stop, the guard checks for a live foreign session-lock owner and takes the same safe diagnostic exit described under "Guard predicates" ([foreign session-lock owner](#foreign-session-lock-owner)).
-
-The Claude mode waits up to `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS` (default 800 milliseconds).
-It allows the stop when any of these holds:
-
-- The watcher is healthy.
-- The auto-arm's generation claim is open.
-- `state/.claude-autoarm-epoch` contains a fresh actionable rewake owned by this event epoch.
-
-#### Auto-arm generation claim
-
-The claim is the ledger entry itself.
-The ledger is `state/.claude-autoarm-epoch`:
-
-- Its epoch sequence is a monotonic claim generation.
-- Line 1 records the claim and terminal outcome.
-- Line 2 records the claiming process's mandatory pid-identity.
-
-`fm_autoarm_claim_open` and `fm_autoarm_claim_next` in `bin/fm-wake-lib.sh` own the format contract.
-
-A claim is open while all of these hold:
-
-- Its outcome is `arming`.
-- Its owner pid is alive.
-- Its recorded identity successfully recomputes and matches that pid.
-- It is not stuck.
-
-Stuck means the entry and the watcher beacon are both older than the guard grace, which proves the owner hung mid-arm.
-A healthy hours-long foregrounded cycle keeps the beacon beating, and every arming phase with no watcher is bounded in seconds.
-
-Anything else lets the next Stop-owned firing take the next generation and arm.
-That covers a finished outcome, a dead or identity-mismatched owner, a stuck owner, an identityless entry, or no entry.
-Taking a newer generation is the reclaim, and a steady-state predecessor is never signalled or revoked.
-
-No mutex is held across arming or output.
-`state/.claude-autoarm.lock` survives only as a micro-mutex serializing individual ledger writes.
-A superseded owner goes completely silent.
-Ownership is re-verified before every arm invocation, episode-state mutation, ledger write, and continuation.
-
-#### Exit status as the commit point
-
-The irrevocable commit point of a translation is the exit status, because the harness delivers the collected stderr banner only on exit 2.
-An owned terminal commit therefore decides the exit:
-
-- Markerless outcomes commit with the ledger write.
-- The once-per-episode failure notice commits only when its marker is created after the winning failed write in the same critical section.
-
-A generation whose required marker cannot be created is refused and exits 0 silently even after printing.
-Its terminal ledger entry is superseded by a later firing, which retries the notice.
-
-#### Why the claim boundaries exist
-
-Without those boundaries, two failures occurred:
-
-- A cycle that armed, delivered one rewake, and exited left both Stop participants deferring to its leftover lock indefinitely.
-  On 2026-08-14 two tasks were in flight, a beacon was 40 minutes cold, and every turn was blind until an operator intervened.
-- A hook that hung mid-arm kept a live pid on the lock, so the watcher was never auto-re-armed again (2026-08-26).
-
-Two bounded residuals are accepted intent, each costing at most one extra continuation turn absorbed by the durable idempotent wake queue:
-
-- An owner that dies between its owned terminal write and its own process exit.
-- A hung old-build owner that resumes during the one legacy upgrade window.
-
-A legacy build's lock-holding claim (recognizable by its `autoarm` role file) still defers or reclaims under the legacy abandonment proof.
-A live identity-verified stuck legacy owner is retired via TERM before its lock is removed, and an unverified pid is never signalled.
-An upgrade mid-session can therefore neither double-arm nor deadlock, and a failed reclaim re-blocks rather than allowing a blind stop.
-
-#### Failure progression and block budget
-
+Claude Code sets `stop_hook_active=true` on every stop after any stop-hook continuation, including `asyncRewake` rewakes, which re-opened the 2026-07-21 blind window under the default one-shot behavior.
+The Claude mode waits up to `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS` (default 800 milliseconds) and allows the stop when the watcher is healthy, the auto-arm's generation claim is open, or `state/.claude-autoarm-epoch` contains a fresh actionable rewake owned by this event epoch.
+The claim is the ledger entry itself: the epoch sequence in `state/.claude-autoarm-epoch` is a monotonic claim generation, line 1 records the claim and terminal outcome, and line 2 records the claiming process's mandatory pid-identity; `fm_autoarm_claim_open` and `fm_autoarm_claim_next` in `bin/fm-wake-lib.sh` own the format contract.
+A claim is open while its outcome is `arming`, its owner pid is alive, its recorded identity successfully recomputes and matches that pid, and it is not stuck - stuck meaning the entry and the watcher beacon are both older than the guard grace, which proves the owner hung mid-arm (a healthy hours-long foregrounded cycle keeps the beacon beating, and every arming phase with no watcher is bounded in seconds).
+Anything else - a finished outcome, a dead or identity-mismatched owner, a stuck owner, an identityless entry, or no entry - lets the next Stop-owned firing take the next generation and arm; taking a newer generation is the reclaim, and a steady-state predecessor is never signalled or revoked.
+No mutex is held across arming or output: `state/.claude-autoarm.lock` survives only as a micro-mutex serializing individual ledger writes, and a superseded owner goes completely silent - ownership is re-verified before every arm invocation, episode-state mutation, ledger write, and continuation.
+The irrevocable commit point of a translation is the exit status, because the harness delivers the collected stderr banner only on exit 2, so an owned terminal commit decides the exit: markerless outcomes commit with the ledger write, while the once-per-episode failure notice commits only when its marker is created after the winning failed write in the same critical section.
+A generation whose required marker cannot be created is refused and exits 0 silently even after printing; its terminal ledger entry is superseded by a later firing, which retries the notice.
+Without those boundaries a cycle that armed, delivered one rewake, and exited left both Stop participants deferring to its leftover lock indefinitely (2026-08-14: two tasks in flight, a beacon 40 minutes cold, every turn blind until an operator intervened), and a hook that hung mid-arm kept a live pid on the lock so the watcher was never auto-re-armed again (2026-08-26).
+Two bounded residuals are accepted intent, each costing at most one extra continuation turn absorbed by the durable idempotent wake queue: an owner that dies between its owned terminal write and its own process exit, and a hung old-build owner that resumes during the one legacy upgrade window.
+A legacy build's lock-holding claim (recognizable by its `autoarm` role file) still defers or reclaims under the legacy abandonment proof, with a live identity-verified stuck owner retired via TERM before its lock is removed and an unverified pid never signalled, so an upgrade mid-session can neither double-arm nor deadlock, and a failed reclaim re-blocks rather than allowing a blind stop.
 Fresh `failed` and `failed-suppressed` outcomes enter or advance the failure progression instead of acting as unconditional recovery proof.
 The auto-arm itself rechecks the healthy watcher predicate and retries a bounded number of times before reporting a genuine failure.
 
@@ -538,39 +421,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 
 ## Regression coverage
 
-`tests/fm-turnend-guard.test.sh` covers:
-
-- The predicate.
-- Main and secondmate primary scope.
-- Child-worktree exclusion.
-- `FM_HOME` and `FM_STATE_OVERRIDE` precedence.
-- The live-lock and fresh-beacon guard predicate.
-- The cooperative `--claude` open-generation claim wait.
-- Monotonic failed-epoch progression.
-- Bounded attended fail-open.
-- The same bound against a ledger frozen by an inert auto-arm with and without a verified failure episode.
-- Post-alarm continuation suppression.
-- Positive recovery reset.
-- Generation and legacy claim cases that must block or clear instead of allowing a blind stop.
-- Away-mode daemon ownership between watcher cycles and over a watcher lock left behind by an exited watcher, plus its dead, pid-reused, absent, stale-beacon, and away-mode-off negatives.
-- The away-mode beacon's poll-derived grace widening for a live daemon still mid-cycle and its bound against a dead daemon, a beacon older than that wider grace, and FM_POLL's inapplicability with away mode off.
-- Pi logical-run latching.
-- Missing-`jq` behavior.
-- All five primary registrations.
-- Grok native and legacy selection.
-- Typed field precedence.
-- Malformed input.
-- Exactly-one-path safety.
-
-`tests/fm-turnend-foreign-owner-arm-fix.test.sh` runs the extracted isolated executable reproduction against real auto-arm and turn-end guard scripts.
-It proves that a live foreign owner still prevents arming while repeated non-owner Stops receive a diagnostic and exit safely.
-
-`tests/fm-guard-stale-banner.test.sh` covers the pull-guard predicate for each supervision model:
-
-- The persistent model's fresh-leftover-beacon negative control.
-- The auto-arm model's healthy fresh-beacon-without-a-watcher case, session-and-recovery-bound long-turn rewake tolerance, independently broken tolerance signals, open-claim negative control, stale-beacon alarm, and isolation from other models.
-- The extension model's live-watcher path, ownership-qualified fresh hand-off, held-lock failures, independently broken ownership signals, stale-beacon alarm, queued-wake warning, and Pi and pi-signed harness routing.
-
+`tests/fm-turnend-guard.test.sh` covers the predicate, main and secondmate primary scope, child-worktree exclusion, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the live-lock and fresh-beacon guard predicate, the cooperative `--claude` open-generation claim wait, monotonic failed-epoch progression, bounded attended fail-open, post-alarm continuation suppression, positive recovery reset, generation and legacy claim cases that must block or clear instead of allowing a blind stop, away-mode daemon ownership between watcher cycles and over a watcher lock left behind by an exited watcher, plus its dead, pid-reused, absent, stale-beacon, and away-mode-off negatives, the away-mode beacon's poll-derived grace widening for a live daemon still mid-cycle and its bound against a dead daemon, a beacon older than that wider grace, and FM_POLL's inapplicability with away mode off, Pi logical-run latching, missing-`jq` behavior, all five primary registrations, Grok native and legacy selection, typed field precedence, malformed input, exactly-one-path safety, and lock-refused advisory-only turns with their owned-lock and dead-owner blocking negatives.
+`tests/fm-guard-stale-banner.test.sh` covers the pull-guard predicate, including the persistent-model fresh-leftover-beacon negative control; the auto-arm model's healthy fresh-beacon-without-a-watcher case, session-and-recovery-bound long-turn rewake tolerance, independently broken tolerance signals, open-claim negative control, stale-beacon alarm, and isolation from other models; and the extension model's live-watcher path, ownership-qualified fresh hand-off, held-lock failures, independently broken ownership signals, stale-beacon alarm, queued-wake warning, and Pi and pi-signed harness routing.
 It also covers true-reason banner wording and reason-keyed episode dedup surviving a beacon mtime change.
 
 `tests/fm-cursor-primary.test.sh` covers the Cursor park end to end over real processes with no harness installed:

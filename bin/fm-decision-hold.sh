@@ -105,8 +105,8 @@ recorded_field() {
 }
 
 command_resolve() {
-  local origin=${1:-} key=${2:-} decision_file='' routed='' routed_csv id dep tmp answer_file show state blocked hold_show hold_body
-  local resolution_recorded=0 legacy_replay=0 decision_text decision_digest recorded_digest recorded_routes
+  local origin=${1:-} key=${2:-} decision_file='' routed='' routed_csv id dep tmp answer_file show state blocked hold_show hold_body body
+  local resolution_recorded=0 legacy_replay=0 decision_text decision_digest legacy_digest recorded_digest recorded_routes
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   shift 2
   while [ "$#" -gt 0 ]; do
@@ -125,19 +125,36 @@ command_resolve() {
   routed_csv=$(printf '%s' "$routed" | tr ' ' ',')
   decision_text=$(cat "$decision_file")
   [ -n "$decision_text" ] || fail "decision file must not be empty"
-  decision_digest=$(sha256_text "$decision_text")
+  legacy_digest=$(sha256_text "$decision_text")
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-hold-resolve.XXXXXX") \
+    || fail "cannot stage the captain decision"
+  RESOLVE_TMP=$tmp
+  trap 'rm -f -- "${RESOLVE_TMP:-}"' EXIT
+  if ! { cat "$decision_file" && printf '\n\nRouted work:\n' \
+    && printf '%s\n' "$routed" | tr ' ' '\n' | sed 's/^/- /'; } > "$tmp"; then
+    fail "cannot stage the captain decision for $id"
+  fi
+  # captain-hold digests the bytes it is handed, so the shim's own record must
+  # digest the same staged answer text or an exact replay reads as drift.
+  decision_digest=$(sha256_text "$(cat "$tmp")")
   hold_show=$(task_show "$id") || fail "captain decision $id does not exist in the active home"
   hold_body=$(show_field "$hold_show" body)
   case "$hold_body" in
     *"Resolution recorded by fm-decision-hold."*"Routed identities: "*)
       recorded_digest=$(recorded_field "$hold_body" "Decision digest" || true)
       recorded_routes=$(recorded_field "$hold_body" "Routed identities" || true)
-      [ "$recorded_digest" = "$decision_digest" ] \
-        || fail "captain decision $id records a different captain decision"
+      # The staged digest covers the routed ids, so route drift is reported
+      # from the recorded route list rather than as decision drift.
       [ "$recorded_routes" = "$routed_csv" ] \
         || fail "captain decision $id records different routed work"
+      if [ "$recorded_digest" = "$decision_digest" ]; then
+        :
+      elif [ "$recorded_digest" = "$legacy_digest" ]; then
+        legacy_replay=1
+      else
+        fail "captain decision $id records a different captain decision"
+      fi
       resolution_recorded=1
-      legacy_replay=1
       ;;
     *"Resolution recorded by fm-captain-hold."*)
       resolution_recorded=1
@@ -152,20 +169,20 @@ command_resolve() {
     list_has_key "$blocked" "$id" || [ "$resolution_recorded" = 1 ] \
       || fail "routed task $dep is not durably blocked by $id"
   done
-  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-decision-hold-resolve.XXXXXX") \
-    || fail "cannot stage the captain decision"
-  if ! { cat "$decision_file" && printf '\n\nRouted work:\n' \
-    && printf '%s\n' "$routed" | tr ' ' '\n' | sed 's/^/- /'; } > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot stage the captain decision for $id"
-  fi
   answer_file=$tmp
   [ "$legacy_replay" = 0 ] || answer_file=$decision_file
-  if ! "$CAPTAIN_HOLD" answer "$id" --decision-file "$answer_file"; then
-    rm -f -- "$tmp"
-    exit 1
+  if [ "$resolution_recorded" = 0 ]; then
+    body=$(printf 'Resolution recorded by fm-decision-hold.\nDecision digest: %s\nRouted identities: %s\nResolution mode: routed\n\nCaptain decision:\n%s\n\nRouted work:\n' \
+      "$decision_digest" "$routed_csv" "$decision_text")
+    for dep in $routed; do
+      body="${body}- ${dep}"$'\n'
+    done
+    (cd "$FM_HOME" && tasks-axi update "$id" --body "$body" >/dev/null) \
+      || fail "could not record the captain decision on $id"
+    resolution_recorded=1
   fi
-  rm -f -- "$tmp"
+  # Unblock while the hold is still open. A partial routing failure must leave
+  # the hold queued so resolve can be retried, matching the pre-collapse order.
   for dep in $routed; do
     show=$(task_show "$dep") || fail "routed task $dep disappeared before routing"
     if list_has_key "$(normalized_blocked_by "$show")" "$id"; then
@@ -173,6 +190,12 @@ command_resolve() {
         || fail "could not route the recorded decision to $dep"
     fi
   done
+  if ! "$CAPTAIN_HOLD" answer "$id" --decision-file "$answer_file"; then
+    exit 1
+  fi
+  rm -f -- "$tmp"
+  RESOLVE_TMP=''
+  trap - EXIT
   printf 'resolved: %s -> %s\n' "$id" "$routed"
 }
 
@@ -186,10 +209,58 @@ command_complete() {
   fi
   for key in "$@"; do
     [ "$key" != --none ] || fail "--none cannot be combined with decision keys"
-    mapped="${mapped}${mapped:+ }$(compose "$origin" "$key")"
+    validate_slug decision-key "$key"
+    mapped="${mapped}${mapped:+ }$key"
   done
+  # Captain-hold resolves a missing task id through the legacy
+  # <origin>-decision-<key> identity, so passing the original keys keeps
+  # pre-collapse inventory metadata and still finds the composed hold.
   # shellcheck disable=SC2086  # mapped is a validated space-separated slug list.
   exec "$CAPTAIN_HOLD" complete "$origin" $mapped
+}
+
+# Sets CLOSE_DECISION_FILE. Must run in the caller, not a subshell, so usage
+# and exit stay on the shim process.
+parse_decision_file_flag() {
+  CLOSE_DECISION_FILE=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --decision-file) shift; CLOSE_DECISION_FILE=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+}
+
+tasks_axi() {
+  (cd "$FM_HOME" && tasks-axi "$@")
+}
+
+# Work still blocked by this hold. Decline must refuse that set rather than
+# closing the hold and silently releasing routed follow-up work.
+tasks_blocked_by() {  # <hold-id>
+  local id=$1 rows row candidate show found=''
+  rows=$(tasks_axi list --fields blocked_by) \
+    || fail "could not read backlog work while checking what $id still blocks"
+  while IFS= read -r row; do
+    case "$row" in
+      *"$id"*) : ;;
+      *) continue ;;
+    esac
+    candidate=${row%%,*}
+    candidate=${candidate// /}
+    [ -n "$candidate" ] || continue
+    [ "$candidate" != "$id" ] || continue
+    case "$candidate" in
+      *[!A-Za-z0-9._-]*) continue ;;
+    esac
+    show=$(task_show "$candidate") || continue
+    list_has_key "$(normalized_blocked_by "$show")" "$id" || continue
+    found="${found}${found:+ }$candidate"
+  done <<EOF
+$rows
+EOF
+  printf '%s' "$found"
 }
 
 command_close() {  # <origin> <key> <flag-args...>
@@ -197,15 +268,33 @@ command_close() {  # <origin> <key> <flag-args...>
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   id=$(compose "$origin" "$key")
   shift 2
-  local decision_file=''
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --decision-file) shift; decision_file=${1:-} ;;
-      *) usage >&2; exit 2 ;;
-    esac
-    shift
-  done
-  exec "$CAPTAIN_HOLD" answer "$id" --decision-file "$decision_file"
+  parse_decision_file_flag "$@"
+  exec "$CAPTAIN_HOLD" answer "$id" --decision-file "$CLOSE_DECISION_FILE"
+}
+
+command_decline() {
+  local origin=${1:-} key=${2:-} id dependents
+  [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+  id=$(compose "$origin" "$key")
+  shift 2
+  parse_decision_file_flag "$@"
+  dependents=$(tasks_blocked_by "$id") || exit 1
+  [ -z "$dependents" ] \
+    || fail "captain hold $id still blocks routed work ($dependents); use resolve to record that work"
+  exec "$CAPTAIN_HOLD" answer "$id" --decision-file "$CLOSE_DECISION_FILE"
+}
+
+command_repair() {
+  local origin=${1:-} key=${2:-} id show state
+  [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+  id=$(compose "$origin" "$key")
+  shift 2
+  parse_decision_file_flag "$@"
+  show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
+  state=$(show_field "$show" state)
+  [ "$state" = "done" ] \
+    || fail "captain hold $id is still open (state=$state); use resolve or decline to close it with the captain's decision"
+  exec "$CAPTAIN_HOLD" answer "$id" --decision-file "$CLOSE_DECISION_FILE"
 }
 
 command_hold() {
@@ -222,7 +311,9 @@ case "${1:-}" in
   complete) shift; command_complete "$@" ;;
   verify) shift; exec "$CAPTAIN_HOLD" verify "$@" ;;
   resolve) shift; command_resolve "$@" ;;
-  answer|decline|repair) shift; command_close "$@" ;;
+  answer) shift; command_close "$@" ;;
+  decline) shift; command_decline "$@" ;;
+  repair) shift; command_repair "$@" ;;
   answers) shift; exec "$CAPTAIN_HOLD" answers "$@" ;;
   bind) shift; exec "$CAPTAIN_HOLD" bind "$@" ;;
   unbind) shift; exec "$CAPTAIN_HOLD" unbind "$@" ;;

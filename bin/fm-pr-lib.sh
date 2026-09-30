@@ -259,6 +259,52 @@ fm_pr_url_parse() {
   FM_PR_NUMBER=${BASH_REMATCH[3]}
 }
 
+# Derive the explicit GitHub owner/repository slug a PR read must target. It
+# accepts a git remote URL (https or scp-like ssh) or a canonical pull URL,
+# strips any trailing .git and "/pull/<n>" suffix, and prints owner/repo. The
+# result is validated with the same GitHub owner and repository rules
+# fm_pr_url_parse applies, so a non-GitHub or unparseable remote yields no slug
+# rather than an unvalidated argument a forge CLI would resolve against its own
+# default repository. Passing an explicit slug is what keeps a fork checkout's
+# PR read on the fork instead of the parent when the CLI's default differs.
+fm_pr_github_repo_slug() {  # <remote-or-url>
+  local raw=${1-} slug owner repo
+  local LC_ALL=C
+  slug=$(printf '%s' "$raw" \
+    | sed 's#.*@##' \
+    | sed 's#^[A-Za-z][A-Za-z0-9+.-]*://##' \
+    | sed 's#^github\.com\(:[0-9][0-9]*\)\?[/:]##' \
+    | sed 's#\.git$##; s#/pull/.*$##; s#/$##')
+  [ -n "$slug" ] || return 1
+  owner=${slug%%/*}
+  repo=${slug#*/}
+  [ "$owner" != "$slug" ] || return 1
+  [ -n "$owner" ] && [ -n "$repo" ] || return 1
+  [ "${#owner}" -le 39 ] || return 1
+  case "$owner" in
+    *[!A-Za-z0-9-]*|-*|*-|*--*) return 1 ;;
+  esac
+  [ "${#repo}" -le 100 ] || return 1
+  case "$repo" in
+    .|..|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  printf '%s/%s' "$owner" "$repo"
+}
+
+# The explicit GitHub owner/repository slug for a checkout's origin remote.
+# Reads the declared remote.origin.url rather than `git remote get-url`, which
+# applies any url.<base>.insteadOf transport rewrite and would report a local
+# mirror path instead of the GitHub repository this checkout represents.
+# Prints nothing and returns non-zero when origin is absent, is not a GitHub
+# remote, or cannot be validated, so a caller treats it as "no repository
+# found" and refuses rather than falling back to a CLI default repository.
+fm_pr_github_repo_from_checkout() {  # <dir>
+  local url
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
+  [ -n "$url" ] || return 1
+  fm_pr_github_repo_slug "$url"
+}
+
 fm_pr_head_valid() {
   local head=${1-}
   local LC_ALL=C
@@ -358,6 +404,15 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# Parse the canonical pr=<url> identity, plus an optional pr_head=<sha>, out of
+# a task meta. The identity is whichever single pr= line the file carries; no
+# other key contributes to it. A task meta is shared by many writers, and some
+# of them (fallback_cursor=, decisions_reviewed=, decision_keys=, spawn_gen=,
+# and the X link keys) legitimately append after the identity block, so any
+# non-identity key is ignored rather than treated as corruption. Rejecting the
+# whole record because unrelated metadata follows the identity is the silent
+# disarm this parser must never reintroduce: bin/fm-pr-check.sh arms the merge
+# poll on a successful parse, and a failed parse leaves the poll unwatched.
 fm_pr_metadata_identity_parse() {
   local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
   FM_PR_META_PROVIDER=
@@ -388,10 +443,9 @@ fm_pr_metadata_identity_parse() {
           fm_pr_head_valid "$value" || post_pr_invalid=1
         fi
         ;;
-      x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
-        ;;
       *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
+        # Ordinary task metadata carries no identity, so it is ignored whether
+        # it precedes or follows pr=. Only identity keys are load-bearing.
         ;;
     esac
   done < "$file"

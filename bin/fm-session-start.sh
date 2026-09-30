@@ -50,6 +50,8 @@
 #                       every state/*.meta, a bounded state/*.status tail,
 #                       the away posture (state/.afk-contract and the legacy
 #                       state/.afk daemon flag), and a cheap per-task
+#                       endpoint-liveness read:
+#                       read-only, always runs.
 #                       endpoint-liveness read, each bounded and crash-
 #                       isolated so one task's read can never abort the
 #                       digest: read-only, always runs. The per-task reads
@@ -286,6 +288,8 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-startup-memory-budget-lib.sh
+. "$SCRIPT_DIR/fm-startup-memory-budget-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
@@ -421,6 +425,87 @@ print_file_or_absent() {
 
 print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: bin/fm-tasks-axi.sh show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
+}
+
+# the budget decision treats it as over-allowance.
+FM_CONTEXT_UNMEASURABLE_TOKENS=999999999
+
+# fm_context_measure_tokens <path>: the budget library's portable estimate for
+# one memory file. A file the measurement refuses (a symlink, a non-regular
+# file, or an unreadable one) is counted as consuming the whole allowance
+# rather than as zero: a silent zero would under-count and wrongly let a huge
+# learnings file print in full, while print_file_or_absent still follows a
+# symlinked captain file and inlines it. Failing safe here forces truncation.
+fm_context_measure_tokens() {
+  local out
+  out=$(fm_startup_memory_measure_file "$1" 2>/dev/null) || { printf '%s\n' "$FM_CONTEXT_UNMEASURABLE_TOKENS"; return 0; }
+  printf '%s\n' "$out" | awk '{ print $2 + 0 }'
+}
+
+# print_file_budgeted <path> <label> <token-budget>: print a file in full when it
+# fits the allowance, otherwise print as many leading lines as fit and an
+# explicit pointer naming the file, the omitted line count, and the full size,
+# so a truncated digest never hides that more exists.
+print_file_budgeted() {
+  local path=$1 label=$2 budget=$3 bytes limit total line linebytes used=0 shown=0 truncated=0
+  subsection "$label"
+  if [ ! -f "$path" ]; then
+    printf 'ABSENT\n'
+    return 0
+  fi
+  if [ ! -s "$path" ]; then
+    printf '(present, empty)\n'
+    return 0
+  fi
+  case "$budget" in ''|*[!0-9]*) budget=0 ;; esac
+  bytes=$(LC_ALL=C wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
+  case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+  total=$(LC_ALL=C wc -l < "$path" 2>/dev/null | tr -d '[:space:]')
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  limit=$(( budget * 3 ))
+  while IFS= read -r line || [ -n "$line" ]; do
+    linebytes=$(( ${#line} + 1 ))
+    if [ "$shown" -gt 0 ] && [ $(( used + linebytes )) -gt "$limit" ]; then
+      truncated=1
+      break
+    fi
+    if [ "$shown" -eq 0 ] && [ "$limit" -le 0 ]; then
+      truncated=1
+      break
+    fi
+    printf '%s\n' "$line"
+    used=$(( used + linebytes ))
+    shown=$(( shown + 1 ))
+  done < "$path"
+  if [ "$truncated" -eq 1 ] || [ "$shown" -lt "$total" ]; then
+    printf '(%s truncated by config/startup-memory-budget: showing %s of %s line(s), ~%s estimated tokens total; read the full file at %s)\n' \
+      "$label" "$shown" "$total" "$(( (bytes + 2) / 3 ))" "$path"
+  fi
+}
+
+# print_context_memory: the startup prompt-memory surface, enforced against
+# config/startup-memory-budget. The allowance's documented scope is captain.md,
+# captain-shared.md, and learnings.md together. The two captain preference files
+# are small and load-bearing, so they always print in full; learnings - curated,
+# prunable, and fully readable on demand - absorbs the truncation when the three
+# exceed the allowance. An absent or malformed budget uses the documented
+# default rather than disabling the bound.
+print_context_memory() {
+  local budget captain captain_shared learnings remaining
+  print_file_or_absent "$DATA/captain.md" "data/captain.md"
+  print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
+  budget=$(fm_startup_memory_budget_read "$CONFIG" 2>/dev/null) || budget=$FM_STARTUP_MEMORY_BUDGET_DEFAULT
+  case "$budget" in ''|*[!0-9]*) budget=$FM_STARTUP_MEMORY_BUDGET_DEFAULT ;; esac
+  captain=$(fm_context_measure_tokens "$DATA/captain.md")
+  captain_shared=$(fm_context_measure_tokens "$DATA/captain-shared.md")
+  learnings=$(fm_context_measure_tokens "$DATA/learnings.md")
+  if [ $(( captain + captain_shared + learnings )) -le "$budget" ]; then
+    print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+    return 0
+  fi
+  remaining=$(( budget - captain - captain_shared ))
+  [ "$remaining" -lt 0 ] && remaining=0
+  print_file_budgeted "$DATA/learnings.md" "data/learnings.md" "$remaining"
 }
 
 # A queued title line whose own text already marks it held or blocked. The
@@ -682,6 +767,9 @@ LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
+COMPLETION_LOCK_KIND=
+COMPLETION_LOCK_PID=
+COMPLETION_LOCK_SESSION=
 if [ "$LOCK_RC" -ne 0 ]; then
   READ_ONLY=1
   BAR='●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
@@ -698,7 +786,15 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
   }
 fi
-REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
+if [ "$READ_ONLY" -eq 0 ] && fm_session_lock_read_record "$STATE"; then
+  COMPLETION_LOCK_KIND=$FM_SESSION_LOCK_RECORD_KIND
+  COMPLETION_LOCK_PID=$FM_SESSION_LOCK_RECORD_PID
+  COMPLETION_LOCK_SESSION=$FM_SESSION_LOCK_RECORD_SESSION
+fi
+REBUILDING_SESSION_PID=
+if fm_session_lock_prepare_acquisition_identity 2>/dev/null; then
+  REBUILDING_SESSION_PID=$FM_SESSION_LOCK_OWNER_PID
+fi
 print_agents_refresh_if_required "$REBUILDING_SESSION_PID"
 
 if [ "$READ_ONLY" -eq 0 ]; then
@@ -889,7 +985,16 @@ for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
   META_FOUND=1
   id=$(basename "$meta" .meta)
-  printf '\n--- %s ---\n' "$id"
+  # The crew name is a readable handle for chat and for glancing at a busy
+  # screen; the id stays the identity everywhere. Derived, never stored, and
+  # deliberately best-effort: a missing or failing fm-name.sh must never be able
+  # to break session start, so the header falls back to the bare id.
+  name=$("$SCRIPT_DIR/fm-name.sh" "$id" 2>/dev/null) || name=""
+  if [ -n "$name" ]; then
+    printf '\n--- %s (%s) ---\n' "$id" "$name"
+  else
+    printf '\n--- %s ---\n' "$id"
+  fi
   cat "$meta"
 
   window=$(fm_meta_get "$meta" window)
@@ -938,7 +1043,8 @@ subsection "AFK"
 # The away posture is the record (bin/fm-afk-contract.sh); the legacy flag
 # still marks a running daemon on the harnesses that launch one.
 # A quiet record (bin/fm-afk-contract.sh mode) is a present captain: it holds
-# nothing for a return.
+# nothing for a return. Fork AFK v1 remains the writer; this block only names
+# the record the way the merged quiet/away digest tests expect.
 if [ -f "$STATE/.afk-contract" ]; then
   if [ "$("$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = quiet ]; then
     printf 'present - quiet mode recorded at %s (the captain is present and nothing is held for a return: requested actions proceed under ordinary attended authority; only an explicit /quiet off exits it)' \
@@ -1012,9 +1118,7 @@ stage context
 section "CONTEXT"
 print_file_or_absent "$DATA/projects.md" "data/projects.md"
 print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
-print_file_or_absent "$DATA/captain.md" "data/captain.md"
-print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
-print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+print_context_memory
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step
@@ -1062,13 +1166,11 @@ EOF
 
 if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   COMPLETION_RECORDED=0
-  COMPLETION_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$COMPLETION_PID" in
-    ''|*[!0-9]*) COMPLETION_PID= ;;
-  esac
+  COMPLETION_PID=$COMPLETION_LOCK_PID
   COMPLETION_TMP=$(mktemp "$STATE/.session-start-complete.XXXXXX" 2>/dev/null || true)
   if [ -n "$COMPLETION_PID" ] && [ -n "$COMPLETION_TMP" ] \
-    && printf '%s\n' "$COMPLETION_PID" > "$COMPLETION_TMP" 2>/dev/null \
+    && fm_session_lock_record_matches "$STATE" "$COMPLETION_LOCK_KIND" "$COMPLETION_LOCK_PID" "$COMPLETION_LOCK_SESSION" \
+    && fm_session_lock_print_binding "$COMPLETION_LOCK_KIND" "$COMPLETION_LOCK_PID" "$COMPLETION_LOCK_SESSION" > "$COMPLETION_TMP" \
     && mv -f "$COMPLETION_TMP" "$COMPLETION_FILE" 2>/dev/null; then
     COMPLETION_RECORDED=1
   else

@@ -39,6 +39,10 @@ command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
 command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (required by fm-spawn.sh)"; exit 0; }
 
+# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
+# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
+# shellcheck source=tests/capacity-pin.sh
+. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 
@@ -363,8 +367,8 @@ spawn_from_launcher "" "$PRIMARY_HOME" dupD "$PROJ" --mode no-mistakes --yolo of
 assert_contains_local "$(cat "$SPAWN_ERR")" "labeled 'firstmate'" \
   "the refusal did not name the duplicated home label"
 [ ! -e "$PRIMARY_HOME/state/dupD.meta" ] || fail "a refused spawn must not publish task metadata"
-DUP_TABS=$(lab tab list --workspace "$WS_PRIMARY" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD")] | length')
-DUP_TABS2=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD")] | length')
+DUP_TABS=$(lab tab list --workspace "$WS_PRIMARY" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD" or (.label | endswith("-dupD")))] | length')
+DUP_TABS2=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-dupD" or (.label | endswith("-dupD")))] | length')
 [ "$DUP_TABS" = 0 ] && [ "$DUP_TABS2" = 0 ] || fail "a refused spawn created a worker endpoint anyway"
 pass "real herdr E2E: an ambiguous home label with no launcher identity refuses before any worker endpoint exists"
 
@@ -387,17 +391,17 @@ spawn_from_launcher "$STALE_PANE" "$PRIMARY_HOME" staleF "$PROJ" --mode no-mista
 assert_contains_local "$(cat "$SPAWN_ERR")" "$STALE_PANE" \
   "the stale-identity refusal did not name the launcher pane it could not resolve"
 [ ! -e "$PRIMARY_HOME/state/staleF.meta" ] || fail "a refused spawn must not publish task metadata"
-STALE_TABS=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-staleF")] | length')
+STALE_TABS=$(lab tab list --workspace "$WS_PRIMARY_DUP" 2>/dev/null | jq -r '[.result.tabs[]? | select(.label == "fm-staleF" or (.label | endswith("-staleF")))] | length')
 [ "$STALE_TABS" = 0 ] || fail "a refused spawn created a worker endpoint anyway"
 pass "real herdr E2E: a launcher pane that no longer exists refuses before any worker endpoint exists"
 
 # --- 6. a secondmate launching its own worker gets the same guarantee -------
 
 read -r WS_SM_DECOY _ _ <<EOF
-$(make_workspace "2ndmate-$SM_ID")
+$(make_workspace "2m-$SM_ID")
 EOF
 read -r WS_SM_LAUNCH _ LAUNCH_SM_PANE <<EOF
-$(make_workspace "2ndmate-$SM_ID")
+$(make_workspace "2m-$SM_ID")
 EOF
 [ -n "$WS_SM_DECOY" ] && [ -n "$WS_SM_LAUNCH" ] || fail "could not create the two secondmate-labeled workspaces"
 WS_SM_DECOY_TABS_BEFORE=$(tab_labels_of_workspace "$WS_SM_DECOY")
@@ -423,8 +427,8 @@ SM2_PANE=$(grep '^herdr_pane_id=' "$SM2_META" | cut -d= -f2-)
 SM2_WS=$(workspace_of_pane "$SM2_PANE")
 [ "$SM2_WS" != "$WS_PRIMARY_DUP" ] \
   || fail "a --secondmate launch must stand up the secondmate's own workspace, not join the launcher's"
-[ "$(label_of_workspace "$SM2_WS")" = "2ndmate-$SM2_ID" ] \
-  || fail "a --secondmate launch should land in '2ndmate-$SM2_ID', got '$(label_of_workspace "$SM2_WS")'"
+[ "$(label_of_workspace "$SM2_WS")" = "2m-$SM2_ID" ] \
+  || fail "a --secondmate launch should land in '2m-$SM2_ID', got '$(label_of_workspace "$SM2_WS")'"
 pass "real herdr E2E: a --secondmate launch still stands up that secondmate's own workspace instead of inheriting the launcher's"
 
 # --- 8. teardown closes only the worker's own pane --------------------------

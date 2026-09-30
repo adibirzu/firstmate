@@ -373,11 +373,7 @@ fm_composer_strip_ghost() {
 # part of that union for the same reason the others are: without it a cursor
 # submit could never be acknowledged, because cursor parks its terminal cursor
 # outside its composer and the composer verdict is therefore always `unknown`.
-# agy's `esc to cancel` is part of the union for the same reason: an explicit
-# tmux agy endpoint reaches the submit core with no recorded harness, and its
-# bare `>` composer verdict is `unknown`, so the busy footer is the only
-# turn-started acknowledgement that path can read.
-FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
+FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|esc to cancel|ctrl\+c to stop'
 FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 # Devin 3000.11.1: the working composer and interrupt hint are independent
 # delivery signals. Neither is used as semantic worker-state evidence.
@@ -420,6 +416,24 @@ FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
 # agy-regex fold in bin/fm-busy-lib.sh.
 FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc[[:space:]]+to[[:space:]]+cancel'
 FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
+# Fork-added harnesses (agy/cline/copilot). Values verified via tmux capture on
+# the fork; see docs/verification/{agy,copilot}-adapter.md. cline (Cline CLI): esc
+# interrupts (ctrl-c exits), so "esc to cancel" is the stable busy anchor. copilot
+# (GitHub Copilot CLI): compound "Working … esc interrupt" — "esc interrupt" alone
+# EXACT-collides with opencode, so both tokens in order are required. agy
+# (Antigravity CLI): "esc to cancel" busy anchor (idle footer is "? for shortcuts").
+FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT='esc to cancel'
+FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT='Working.*esc interrupt'
+FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc to cancel'
+# Fork-only bare-prompt default; upstream has no equivalent. This is the
+# published, fleet-wide list of glyphs a harness may use to draw an UNBORDERED
+# (bare) composer row: an adapter verification records a new harness's glyph
+# against this set, and the classifier's own promotion set
+# (FM_COMPOSER_AGENT_PROMPT_GLYPHS below) carries the same glyphs in the shape
+# it needs them. It is a constant this library publishes rather than one it
+# consumes, so ShellCheck sees no use for it here.
+# shellcheck disable=SC2034 # Published fleet-wide constant; no in-file reader by design.
+FM_COMPOSER_BARE_PROMPT_RE_DEFAULT='^(❯|›|→|⟩)'
 
 fm_busy_lines_match() {  # [harness]
   local harness=${1:-} lines regex
@@ -435,9 +449,11 @@ fm_busy_lines_match() {  # [harness]
       pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
       omp) regex=$FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT ;;
-      agy) regex=$FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT ;;
       cursor) regex=$FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT ;;
+      cline) regex=$FM_DELIVERY_CLINE_BUSY_REGEX_DEFAULT ;;
+      copilot) regex=$FM_DELIVERY_COPILOT_BUSY_REGEX_DEFAULT ;;
+      agy) regex=$FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_DELIVERY_BUSY_REGEX_DEFAULT ;;
       *)
         # A supplied harness must never borrow another harness's signature.
@@ -465,11 +481,16 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # hence the unanchored tail). cursor-agent renders
 # two, both anchored: `Plan, search, build anything` in a fresh session and
 # `Add a follow-up` once a turn has completed (verified live on cursor-agent
-# 2026.08.11-e8db854). Devin renders the anchored `Ask Devin to build features,
-# fix bugs, or work on your code` as dim text after its `❭` glyph (verified
-# live, devin 3000.11.1). FM_COMPOSER_IDLE_RE overrides for an unverified harness;
-# matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$'
+# 2026.08.11-e8db854). cline renders `What can I do for you?` on first ready and
+# `Ask anything...` thereafter, plus `Plan something...` whenever it is in plan
+# mode rather than act (verified live on cline 3.0.55). firstmate forces act mode
+# at launch, so a crewmate should never show the plan placeholder - it is listed
+# because the classifier must still read an operator's own plan-mode pane as an
+# EMPTY composer, and because a plan-mode pane misread as pending input would
+# make away-mode supervision refuse to deliver into it.
+# FM_COMPOSER_IDLE_RE overrides for an unverified harness; matching is
+# case-insensitive.
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^What can I do for you\?$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Plan something\.\.\.$|^Ask Devin to build features, fix bugs, or work on your code$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed

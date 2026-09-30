@@ -37,6 +37,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
+  AgentSession,
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
@@ -123,10 +124,70 @@ function installCalmPresentationAdapter(name: string, install: () => void): void
   }
 }
 
+const CALM_EXPORT_CONVERSATION_BOUNDARY = Symbol.for(
+  "firstmate:calm-export-conversation-boundary",
+);
+const HIDDEN_HOOK_STRIP_SCRIPT = `<script data-firstmate-calm-export-boundary="1">
+(function () {
+  var strip = function () {
+    var messages = document.getElementById("messages");
+    if (!messages) return;
+    messages.querySelectorAll(".hook-message-hidden").forEach(function (node) { node.remove(); });
+  };
+  var messages = document.getElementById("messages");
+  if (messages) new MutationObserver(strip).observe(messages, { childList: true, subtree: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", strip);
+  else strip();
+})();
+</script>`;
+
+type HtmlExportSession = {
+  exportToHtml(outputPath?: string, options?: object): Promise<string>;
+};
+
+function installCalmExportConversationBoundary(): void {
+  const registry = globalThis as typeof globalThis & {
+    [CALM_EXPORT_CONVERSATION_BOUNDARY]?: true;
+  };
+  if (registry[CALM_EXPORT_CONVERSATION_BOUNDARY]) return;
+  if (typeof AgentSession !== "function") {
+    throw new Error("Firstmate Calm requires Pi AgentSession");
+  }
+  const proto = AgentSession.prototype as HtmlExportSession;
+  const original = proto.exportToHtml;
+  if (typeof original !== "function") {
+    throw new Error("Firstmate Calm requires AgentSession.exportToHtml");
+  }
+  proto.exportToHtml = async function exportToHtmlWithConversationBoundary(outputPath, options) {
+    const filePath = await original.call(this, outputPath, options);
+    let html = readFileSync(filePath, "utf8");
+    // Pi serializes display:false custom_message rows as hidden hook messages
+    // inside #messages. Remove those serialized rows so dump-dom cannot leak
+    // synthetic provenance even if page JS never runs, then keep the observer
+    // for rows Pi injects after load.
+    html = html.replace(
+      /<div class="hook-message hook-message-hidden"[^>]*>[\s\S]*?<\/div>/g,
+      "",
+    );
+    if (!html.includes('data-firstmate-calm-export-boundary="1"')) {
+      const marker = "</body>";
+      const index = html.lastIndexOf(marker);
+      if (index === -1) {
+        throw new Error("exported HTML is missing a body close tag");
+      }
+      html = `${html.slice(0, index)}${HIDDEN_HOOK_STRIP_SCRIPT}\n${html.slice(index)}`;
+    }
+    writeFileSync(filePath, html, "utf8");
+    return filePath;
+  };
+  registry[CALM_EXPORT_CONVERSATION_BOUNDARY] = true;
+}
+
 export default function (pi: ExtensionAPI) {
   installCalmPresentationAdapter("collapsed-thinking", installCalmAssistantLayout);
   installCalmPresentationAdapter("operational-user-row", installCalmOperationalUserLayout);
   installCalmPresentationAdapter("queued-operational-row", installCalmPendingOperationalLayout);
+  installCalmPresentationAdapter("export-conversation-boundary", installCalmExportConversationBoundary);
 
   let exportRendering = false;
   let removeTerminalInputHandler: (() => void) | undefined;

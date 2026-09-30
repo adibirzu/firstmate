@@ -10,55 +10,18 @@
 #
 # Merge method on GitHub defaults to --squash when the caller passes none of
 # --squash, --merge, --rebase, or --method after the optional -- separator.
-# A GitHub merge is refused unless every pre-merge condition holds, each read
-# live at merge time rather than taken from recorded metadata: the pull request
-# is open, not a draft, mergeable, free of conflicts, every unwaived check
-# is green at the exact current head commit, where github_checks_not_green below
-# owns what makes a check green and judges each one by its current run, and
-# every unwaived check the forge requires for the base branch has reported at
-# that head. When mergeable is the only failing condition and reads UNKNOWN,
-# meaning GitHub has not finished recomputing it, the caller re-reads and
-# re-checks every condition after a short bounded wait instead of refusing;
-# once that bound is spent it reports mergeability still pending rather than
-# unmergeable, with the same nonzero exit as any other refusal.
-# A required check that never reported is absent from the checks
-# list rather than red, so github_read_required_contexts below reads the
-# required set from classic branch protection and active rulesets. Check-run
-# requirements retain their producer app binding: a same-named check run from another app cannot
-# satisfy them, and a duplicate name-only entry cannot weaken that binding.
-# Unbound requirements match by name. A bound requirement reported as a check
-# run also needs a matching producer in the check-runs read at the verified
-# head, while one reported as a commit status matches by name, because the
-# status carries no app id to compare. Status-creator app binding is not verified
-# here, so an attended --attended-override -- --admin merge can bypass that
-# protection without a missing-check waiver when a same-named status reported.
-# An unreadable producer read still refuses.
-# Successfully read requirements remain checked even if another
-# source fails, so known missing checks and all read errors are reported together.
-# github_branch_rules_unavailable_on_plan owns the narrow plan-unavailable
-# exception; every other unreadable required source refuses.
-# Every failing condition is reported, not just the first.
-# The verified head is then passed to gh as
-# --match-head-commit, so a push that lands between that read and the merge
-# fails the merge instead of landing commits nothing verified. Reading that
-# state needs gh and jq, and either one absent stops the merge before any
-# state is recorded. An attended --allow-red <check-name> may be passed once,
-# with the name as a separate argument; it waives only checks with that exact
-# name, still requires every other check green, and still binds the head. Its
-# twin, an attended --allow-missing <check-name>, follows the same rules for one
-# required check that has not reported: it waives only that exact name, still
-# requires every other required check to have reported and every check to be
-# green unless separately waived by --allow-red. It matches the required
-# context name even for an app-bound requirement, and never waives an unreadable
-# required source or producer read. Both are
-# refused while the away-posture record exists, and neither
-# applies on GitLab, where a merge already requires the head pipeline to have
-# succeeded. After gh returns success, GitHub's live state is read back and
-# accepted only when the pull request is merged or in the merge queue. gh's
-# GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
-# own view still proves a landed merge, and every outcome it cannot prove
-# refuses, reporting the failed gh read and naming both failed reads when the
-# gh-axi view could not prove the outcome either.
+# The gh-axi merge abstraction always performs the merge; the outcome read that
+# follows it never becomes a prerequisite for reaching that abstraction. After
+# gh-axi returns success, GitHub's live state is read back and accepted only
+# when the pull request is merged or in the merge queue. gh's GraphQL API
+# supplies that queue-aware read when gh is on PATH; when gh is absent or its
+# read fails, gh-axi's own view still proves a landed merge, and every outcome
+# it cannot prove refuses, reporting the single failed read when gh is absent
+# and naming both failed reads when gh is present and its own read failed.
+# A non-zero merge command is recovered as landed only when a best-effort live
+# read before it showed merged=false and the authoritative read after it shows
+# merged=true; the command diagnostic stays visible as a notice, and an unknown
+# or already-merged pre-state keeps the non-zero status fail-closed.
 # If the pull request remains open and the base branch has an effective
 # merge_queue rule, an attended refusal names the queue's configured merge
 # method and exact --attended-override -- --auto --<method> retry flags. While
@@ -99,26 +62,9 @@
 # Before either forge merge, the task's existing per-task control lock
 # serializes the captain-hold check through the forge command. A still-held or
 # unreadable row refuses before that command, so a captain approval must be
-# recorded as an `answer --release` before this entrypoint is invoked. While
-# an away record exists (a quiet-mode record is a present captain, so its
-# merges stay attended: bin/fm-afk-contract.sh mode) any green merge may
-# proceed under away authority:
-# the record's presence is the whole mechanical fact, and which merge the
-# captain's away words meant is the supervision session's reading
-# (bin/fm-branch-prompt.sh "Postures"). An unreadable record refuses rather
-# than being skipped, neither posture releases a captain hold, and away
-# authority lapses when the record is archived.
-# The authority read and synchronous forge command share the away record's
-# cross-subsystem lock, which bin/fm-afk-contract.sh owns, closing the common
-# live-owner TOCTOU; failure to take it refuses before the forge call. Async and
-# queued paths are refused while away. Two confused-agent-grade limitations are
-# accepted rather than hidden: queue or base changes after GitHub's preflight can
-# still enqueue, and killing this shell can orphan a forge child after stale-lock
-# recovery. docs/architecture.md owns those away-merge limits, while
-# docs/captain-hold-lifecycle.md owns the separate merge-to-cleanup residual.
-# A failed forge command releases the lock after it returns. A successful one
-# retains the lock until the accepted merge authority is persisted against the
-# still-matching task metadata.
+# recorded as an `answer --release` before this entrypoint is invoked. The lock
+# ends when the local forge command returns; docs/captain-hold-lifecycle.md owns
+# the accepted asynchronous-landing and merge-to-cleanup residuals.
 #
 # Extra args must not include --repo or -R in any form, including a bundled
 # short-option cluster such as -yR, because the repository comes only from the
@@ -149,6 +95,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -160,6 +108,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -1221,6 +1171,24 @@ $output
 OUTPUT
 }
 
+# A non-zero merge command normally remains a refusal. The one terminal state
+# that outranks that command status is a live read-back proving the PR landed:
+# the forge can complete the merge and then fail while rendering its own
+# post-merge response. Keep that diagnostic visible, but do not turn an already
+# proved landed outcome back into a failed merge.
+github_report_recovered_landed_output() {
+  local output=$1 status=$2 line
+  printf 'notice: the GitHub merge command exited %s, but live read-back proved %s landed\n' \
+    "$status" "$URL" >&2
+  [ -n "$output" ] || return 0
+  echo "notice: the command's output follows as diagnostics:" >&2
+  while IFS= read -r line; do
+    printf 'notice: > %s\n' "$line" >&2
+  done <<OUTPUT
+$output
+OUTPUT
+}
+
 github_state_is_open() {
   case "$FM_PR_GITHUB_STATE" in
     [oO][pP][eE][nN]) return 0 ;;
@@ -1343,6 +1311,8 @@ require_released_captain_hold || exit 1
 case "$PROVIDER" in
   github)
     merge_output=
+    github_premerge_merged=unknown
+    github_outcome_already_read=false
     merge_args=()
     if ! caller_has_merge_method "$@"; then
       merge_args=(--squash)
@@ -1377,6 +1347,7 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    require_released_captain_hold || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
@@ -1384,32 +1355,46 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
-    merge_status=0
-    merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+    # A failed command can be recovered as a landed success only when two live
+    # reads prove the transition happened across this attempt. The preliminary
+    # read is deliberately best-effort: losing it must not add a new merge
+    # prerequisite, but it leaves recovery fail-closed instead of treating a PR
+    # that was already merged as evidence that this failed command succeeded.
+    if github_read_outcome >/dev/null 2>&1; then
+      github_premerge_merged=$FM_PR_GITHUB_MERGED
+    fi
+    if merge_output=$(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
-      "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
-    if [ "$merge_status" -eq 0 ]; then
+      "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1); then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
       persist_accepted_merge_authority || exit 1
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
     else
+      merge_status=$?
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
       [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
       if github_read_outcome; then
-        if [ "$FM_PR_GITHUB_MERGED" != true ] && [ "$FM_PR_GITHUB_QUEUED" != true ]; then
+        if [ "$github_premerge_merged" = false ] && [ "$FM_PR_GITHUB_MERGED" = true ]; then
+          github_outcome_already_read=true
+          github_report_recovered_landed_output "$merge_output" "$merge_status"
+        elif [ "$FM_PR_GITHUB_QUEUED" != true ] && [ "$FM_PR_GITHUB_MERGED" != true ]; then
+          [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
           github_report_unmerged_outcome
         else
+          [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
         fi
+      else
+        [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
       fi
-      exit "$merge_status"
+      [ "$github_outcome_already_read" = true ] || exit "$merge_status"
     fi
-    if ! github_read_outcome; then
+    if [ "$github_outcome_already_read" != true ] && ! github_read_outcome; then
       github_report_forge_output "$merge_output"
       exit 1
     fi
@@ -1432,6 +1417,7 @@ case "$PROVIDER" in
     # in between is refused by GitLab instead of merged unverified. --yes only
     # skips the interactive confirmation, which no supervised run can answer;
     # the conditions above are what authorize the merge.
+    require_released_captain_hold || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
@@ -1481,3 +1467,10 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+# A merged task is a task boundary: queue a compact for this home's own
+# long-lived agent, which the watcher delivers at the next idle moment. Durable,
+# so a boundary reached while the agent is busy is not lost.
+if [ -d "$STATE" ] && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
+fi

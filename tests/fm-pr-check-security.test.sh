@@ -210,6 +210,9 @@ case "${1:-} ${2:-}" in
     [ "$#" -eq 5 ] && [ "${4:-}" = --repo ] || exit 2
     printf 'pull_request:\n  number: %s\n  state: %s\n' "$3" "${FM_TEST_GH_MERGE_STATE:-merged}"
     ;;
+  "pr merge")
+    [ -z "${FM_TEST_GH_MERGE_HOOK:-}" ] || "$FM_TEST_GH_MERGE_HOOK"
+    ;;
 esac
 exit "${FM_TEST_GH_AXI_RC:-0}"
 SH
@@ -539,6 +542,50 @@ EOF
   pass "raw-byte parser accepts canonical URLs and rejects the complete adversarial matrix"
 }
 
+# A task meta is written by many owners, and some legitimately append after the
+# canonical pr=/pr_head= block (bin/fm-model-fallback.sh's fallback_cursor=,
+# bin/fm-captain-hold.sh's decisions_reviewed=/decision_keys=,
+# bin/fm-teardown.sh's spawn_gen=). The PR identity parser arms and validates
+# the merge poll, so rejecting a record merely because unrelated metadata
+# follows the identity silently disarms the watcher. This pins tolerance both
+# on the parser and on an armed poll, while duplicate or malformed identity
+# stays refused.
+test_metadata_identity_tolerates_trailing_keys() {
+  local dir state meta
+  dir=$(make_case metadata-identity-trailing)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  meta="$state/task-a.meta"
+  printf 'pr_head=0123456789abcdef0123456789abcdef01234567\nfallback_cursor=4096\n' >> "$meta"
+  fm_pr_metadata_identity_parse "$meta" \
+    || fail "a trailing fallback_cursor= rejected the whole PR identity record"
+  [ "$FM_PR_META_URL" = https://github.com/o/r/pull/1 ] || fail "trailing-key parse lost the PR URL"
+  [ "$FM_PR_META_NUMBER" = 1 ] || fail "trailing-key parse lost the PR number"
+
+  printf 'decisions_reviewed=1\ndecision_keys=hold-1\nspawn_gen=7\n' >> "$meta"
+  fm_pr_metadata_identity_parse "$meta" \
+    || fail "further trailing non-identity keys rejected the PR identity record"
+
+  # The armed poll validates through the same parser: a trailing cursor must
+  # not disarm an otherwise canonical registration.
+  write_poll_meta "$state" task-b https://github.com/o/r/pull/2
+  seed_canonical_poll "$dir" task-b https://github.com/o/r/pull/2
+  printf 'fallback_cursor=99\n' >> "$state/task-b.meta"
+  fm_pr_poll_artifacts_valid "$state" task-b "$POLL" \
+    || fail "a trailing fallback_cursor= disarmed an otherwise valid merge poll"
+
+  # Tolerance is only for keys that carry no identity.
+  fm_write_meta "$meta" \
+    'pr=https://github.com/o/r/pull/1' \
+    'pr=https://github.com/o/r/pull/2'
+  ! fm_pr_metadata_identity_parse "$meta" || fail "a duplicate pr= line was tolerated"
+  fm_write_meta "$meta" \
+    'pr=https://github.com/o/r/pull/1' \
+    'pr_head=not-a-sha'
+  ! fm_pr_metadata_identity_parse "$meta" || fail "a malformed pr_head= was tolerated"
+  pass "PR identity parsing tolerates trailing non-identity keys and still refuses bad identity"
+}
+
 test_invalid_entrypoints_have_zero_side_effects() {
   local dir before after value rc
   dir=$(make_case invalid-entrypoints)
@@ -769,9 +816,10 @@ test_valid_recording_and_merge_derivation() {
   [ "$count" -eq 1 ] || fail "duplicate pr_head metadata was appended"
 
   : > "$dir/gh.log"
+  : > "$dir/gh-axi.log"
   run_merge_entry "$dir" task-a https://github.com/my-org/repo_name.with-dots/pull/37 -- --merge \
     >/dev/null 2>/dev/null || fail "valid merge wrapper failed"
-  grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh.log" \
+  grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh-axi.log" \
     || fail "merge wrapper did not preserve repository derivation, live head, and method"
   # A merge this home performed leaves its own durable outcome, so the poll's
   # confirmation is no longer the first the captain hears of it. Acknowledge that
@@ -3209,7 +3257,7 @@ SH
     || fail "re-recorded registration differs from the one published on the live device"
   [ "$(file_mode "$state/task-a.pr-poll-registration")" = 600 ] || fail "re-recorded registration is not private"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "re-recorded poll is not strictly authenticated"
-  grep -F 'pr view https://github.com/o/r/pull/1 --json state' "$dir/gh.log" >/dev/null \
+  grep -F 'pr view https://github.com/o/r/pull/1 --repo o/r --json state' "$dir/gh.log" >/dev/null \
     || fail "re-recorded poll did not run its validated check in the same cycle"
   grep -F 're-recorded PR poll identity for task-a' "$state/.watch-triage.log" >/dev/null \
     || fail "re-record left no triage evidence"
@@ -3440,6 +3488,7 @@ SH
 }
 
 test_parser_matrix
+test_metadata_identity_tolerates_trailing_keys
 test_gitlab_merge_watch
 test_gerrit_merge_watch
 test_gerrit_arming_records_no_patch_set_revision

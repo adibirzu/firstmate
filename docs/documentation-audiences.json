@@ -141,6 +141,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/federation/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/firstmate-codexapp/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -154,6 +158,10 @@
     },
     {
       "path": ".agents/skills/fmx-respond/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/graphify-orientation/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -185,7 +193,19 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/harness-adapters/references/harness/cline.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/harness-adapters/references/harness/codex.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/copilot.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cursor-agent.md",
       "audience": "agent-runtime"
     },
     {
@@ -229,6 +249,58 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/harness-creator/README-UK.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/README.md",
+      "audience": "public-product"
+    },
+    {
+      "path": ".agents/skills/harness-creator/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/context-engineering-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/gotchas.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/lifecycle-bootstrap-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/memory-persistence-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/multi-agent-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/skill-runtime-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/references/tool-registry-pattern.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/agents.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/progress.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-creator/templates/session-handoff.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -242,6 +314,10 @@
     },
     {
       "path": ".agents/skills/quota-array-dispatch/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/router-dispatch/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -309,6 +385,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/captain-hold-lifecycle.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
     },
@@ -317,7 +397,15 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/code-review.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/codex-app-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/commandopc-wsl-ssh.md",
       "audience": "operator-current"
     },
     {
@@ -325,19 +413,19 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/captain-hold-lifecycle.md",
-      "audience": "maintainer-architecture"
-    },
-    {
       "path": "docs/documentation-audiences.md",
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/extension-bindings.md",
-      "audience": "maintainer-architecture"
+      "path": "docs/examples/accounts.json",
+      "audience": "operator-example"
     },
     {
       "path": "docs/examples/crew-dispatch.json",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/model-surfaces.json",
       "audience": "operator-example"
     },
     {
@@ -349,6 +437,10 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/quota-overrides.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/watched-tools.json",
       "audience": "operator-example"
     },
@@ -357,12 +449,32 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/extension-bindings.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/fleet-addon.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/fleet-quickstart.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/fleet-token-economy.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/fm-test-isolation-proof.md",
       "audience": "maintainer-verification"
     },
     {
       "path": "docs/fm-test-portable-shards.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/fork-layer.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/gerrit-change-watch.md",
@@ -381,6 +493,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/graphify.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
     },
@@ -395,6 +511,10 @@
     {
       "path": "docs/pi-supervision-branch.md",
       "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/remote-dev-sessions.md",
+      "audience": "operator-current"
     },
     {
       "path": "docs/remote-secondmates.md",
@@ -469,7 +589,23 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/verification/agy-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cline-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/copilot-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/agy.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cursor-agent-adapter.md",
       "audience": "maintainer-verification"
     },
     {
@@ -493,6 +629,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/openrouter-quota.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/process-event-sources.md",
       "audience": "maintainer-verification"
     },
@@ -502,6 +642,10 @@
     },
     {
       "path": "docs/verification/rovo.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/fm-harness-usage-bar.md",
       "audience": "maintainer-verification"
     },
     {

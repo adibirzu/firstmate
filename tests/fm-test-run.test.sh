@@ -16,12 +16,13 @@ assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
 
 test_list_all_exact_suite_coverage() {
-  local listed expected missing extra f
+  local listed expected missing extra f rel
   listed=$("$RUNNER" --list --all | LC_ALL=C sort)
   expected=$(
-    for f in "$ROOT"/tests/*.test.sh; do
+    for f in "$ROOT"/tests/*.test.sh "$ROOT"/tests/federation/test_*.sh; do
       [ -f "$f" ] || continue
-      printf 'tests/%s\n' "$(basename "$f")"
+      rel=${f#"$ROOT"/}
+      printf '%s\n' "$rel"
     done | LC_ALL=C sort
   )
   [ -n "$listed" ] || fail "--list --all printed nothing"
@@ -124,6 +125,23 @@ init_changed_fixture_repo() {
     printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
+  mkdir -p "$repo/tests/federation/golden" "$repo/bin/quota-sources" "$repo/scripts"
+  for script in \
+    test_accounts.sh \
+    test_account_quota.sh \
+    test_fleet.sh \
+    test_fleet_guards.sh \
+    test_fleet_ops.sh \
+    test_quota_surfaces.sh \
+    test_spawn_account.sh; do
+    printf '#!/usr/bin/env bash\n# federation test fixture\n' >"$repo/tests/federation/$script"
+    chmod +x "$repo/tests/federation/$script"
+  done
+  : >"$repo/tests/federation/golden/v2-quota.golden"
+  : >"$repo/bin/fm-account-env.sh"
+  : >"$repo/bin/fm-fleet-lib.sh"
+  : >"$repo/bin/quota-sources/cursor.sh"
+  : >"$repo/scripts/fleet-root-prereq.sh"
   : >"$repo/tests/lib.sh"
   : >"$repo/tests/fm-backend-herdr-eventwait.test.py"
   : >"$repo/bin/fm-supervisor-target-lib.sh"
@@ -161,6 +179,7 @@ init_changed_fixture_repo() {
     "$repo/.agents/skills/harness-adapters/references/common" \
     "$repo/.claude" "$repo/.pi/extensions" "$repo/docs" "$repo/src"
   : >"$repo/.agents/skills/example/SKILL.md"
+  : >"$repo/.agents/skills/example/README-UK.md"
   : >"$repo/.agents/skills/harness-adapters/SKILL.md"
   : >"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
   : >"$repo/.claude/settings.json"
@@ -238,6 +257,99 @@ test_task_marker_refuses_the_primary_checkout() {
 
   rm -rf "$tmp"
   pass "a task marker refuses execution in the primary checkout and leaves worktrees and inspection alone"
+}
+
+# A fixture repo whose only test is one cheap pure-contract-unit script that
+# records that it ran, so a full-suite admission round can be exercised without
+# running the real suite. bin/fm-router-lib.sh ships beside the runner because
+# the suite-start gate resolves the router through it.
+init_suite_admission_fixture() {  # <repo> <ran-marker>
+  local repo=$1 ran=$2
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-router-lib.sh" "$repo/bin/fm-router-lib.sh"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/git-config-helpers.sh"
+  chmod +x "$repo/bin/fm-test-run.sh"
+  cat > "$repo/tests/fm-brief.test.sh" <<PROBE
+#!/usr/bin/env bash
+echo "ok - fixture suite"
+: >"$ran"
+PROBE
+  chmod +x "$repo/tests/fm-brief.test.sh"
+}
+
+# The one-suite-at-a-time rule serializes suite STARTS, not agent spawns. The
+# runner asks the purpose-scoped `--for suite` verdict before it starts a
+# --lane/--family/--all suite, so a second full suite cannot begin; spawn
+# admission keeps asking the bare verdict (tests/fm-spawn-capacity.test.sh pins
+# that side).
+test_suite_start_refuses_while_the_slot_is_occupied() {
+  local tmp repo ran router log out rc calls
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-suite-slot.XXXXXX")
+  repo="$tmp/repo"
+  ran="$tmp/ran"
+  log="$tmp/decided"
+  init_suite_admission_fixture "$repo" "$ran"
+
+  # A router that records the purpose it was asked for and refuses `suite`.
+  router="$tmp/llm-router-axi"
+  cat > "$router" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_SUITE_ADMISSION_LOG"
+case "$*" in
+  *"--for suite"*) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$router"
+
+  # Occupied slot: refuse before any suite work runs.
+  set +e
+  out=$(cd "$repo" && \
+    FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$router" \
+    FM_SUITE_ADMISSION_LOG="$log" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a suite start on an occupied slot must refuse, rc=$rc: $out"; }
+  assert_contains "$out" "one-suite-at-a-time slot" "the refusal names the occupied suite slot"
+  assert_not_contains "$out" "FM_TEST_BEGIN" "the refusal must happen before any suite runs"
+  assert_absent "$ran" "the refused run still executed a suite"
+  calls=$(cat "$log" 2>/dev/null || true)
+  assert_contains "$calls" "capacity --for suite" "the runner asked the purpose-scoped suite verdict"
+
+  # Free slot: the same selection runs.
+  cat > "$router" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_SUITE_ADMISSION_LOG"
+exit 0
+SH
+  chmod +x "$router"
+  : >"$log"
+  set +e
+  out=$(cd "$repo" && \
+    FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$router" \
+    FM_SUITE_ADMISSION_LOG="$log" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "the same suite must start on a free slot, rc=$rc: $out"; }
+  assert_contains "$out" "FM_TEST_BEGIN" "an admitted suite must begin"
+  assert_present "$ran" "the admitted suite did not execute its script"
+
+  # An unresolvable router refuses rather than running the suite unguarded.
+  rm -f "$ran"
+  set +e
+  out=$(cd "$repo" && FM_TEST_SKIP_ROUTER_AXI_ENSURE=1 FM_LLM_ROUTER_AXI="$tmp/absent-router" \
+    bin/fm-test-run.sh --family pure-contract-unit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "an absent router must refuse the suite start, rc=$rc"; }
+  assert_contains "$out" "not installed" "the refusal names the missing router"
+  assert_absent "$ran" "the unguarded run still executed a suite"
+
+  rm -rf "$tmp"
+  pass "a full-suite start is gated on the one-suite-at-a-time slot and refuses before any work"
 }
 
 test_changed_runner_surfaces_select_their_family() {
@@ -341,6 +453,25 @@ test_changed_dependency_selection_and_unmapped_failure() {
   git -C "$repo" add bin/fm-supervisor-target-lib.sh
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm supervisor-change
 
+  printf '\n' >>"$repo/bin/fm-account-env.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/federation/test_accounts.sh" "account script selects federation coverage"
+  assert_contains "$listed" "tests/federation/test_quota_surfaces.sh" "account script selects quota-surface coverage"
+  git -C "$repo" add bin/fm-account-env.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm account-change
+
+  printf '\n' >>"$repo/tests/federation/golden/v2-quota.golden"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/federation/test_account_quota.sh" "quota golden selects federation quota coverage"
+  git -C "$repo" add tests/federation/golden/v2-quota.golden
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm federation-golden-change
+
+  printf '\n' >>"$repo/scripts/fleet-root-prereq.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/federation/test_fleet.sh" "fleet prereq script selects federation coverage"
+  git -C "$repo" add scripts/fleet-root-prereq.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm federation-script-change
+
   printf '\n' >>"$repo/.agents/skills/example/SKILL.md"
   printf '\n' >>"$repo/.claude/settings.json"
   printf '\n' >>"$repo/.pi/extensions/fm-primary-pi-watch.ts"
@@ -360,6 +491,13 @@ test_changed_dependency_selection_and_unmapped_failure() {
     "operational-input extension selects native-Windows shell coverage"
   git -C "$repo" add .pi/extensions/lib/fm-operational-input.ts
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm operational-input-source-change
+
+  printf '\n' >>"$repo/.agents/skills/example/README-UK.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "skill support file selects pure contract coverage"
+  git -C "$repo" add .agents/skills/example/README-UK.md
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm skill-support-change
 
   printf '\n' >>"$repo/.agents/skills/harness-adapters/references/common/dispatch.md"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
@@ -1078,6 +1216,12 @@ test_portable_shard_union_and_coverage_guard() {
   # No duplicates across the four partitions.
   [ "$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
     || fail "lanes must not duplicate scripts"
+  # LPT order: first script of shard 1 is the longest proven script by the
+  # CI-measured maxima the shards are balanced from
+  # (docs/fm-test-portable-shards.md), not by the local isolation proof.
+  first=$(printf '%s\n' "$s1" | head -n 1)
+  [ "$first" = "tests/fm-captain-hold-lifecycle.test.sh" ] \
+    || fail "shard 1 must start with the longest proven script, got $first"
   # LPT execution order, asserted against the runner's own measured schedule
   # rather than against a script name: naming the current longest script here is
   # what let the recorded lane duration go stale unnoticed in the first place.
@@ -1831,6 +1975,7 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_task_marker_refuses_the_primary_checkout
+test_suite_start_refuses_while_the_slot_is_occupied
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure

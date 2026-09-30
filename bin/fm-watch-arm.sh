@@ -32,6 +32,8 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor
+#   watcher: FAILED - cycle reason could not be read     - the terminal-delivery ledger was locked
+#                                                          past its bound, so the close is unresolved
 #   watcher: FAILED - attached watcher pid=<N> stalled (beacon <age>s at or past hard bound <bound>s)
 #                                                        - the followed holder is alive but its beacon
 #                                                          reached the stall bound
@@ -86,6 +88,11 @@
 # exported by tests/lib.sh.
 set -u
 
+# pwd -P so the recorded watcher path and home are canonical: this script both
+# publishes the lock identity (through the watcher it forks) and re-reads it, and
+# a home reached through a symlinked ancestor would otherwise be recorded under
+# whichever route armed it. fm_lock_paths_equal is the comparison contract.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
@@ -277,8 +284,10 @@ clear_stale_recorded_watcher_lock() {
   lock_home=$(cat "$WATCH_LOCK/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$WATCH_LOCK/watcher-path" 2>/dev/null || true)
   lock_identity=$(cat "$WATCH_LOCK/pid-identity" 2>/dev/null || true)
-  [ "$lock_home" = "$FM_HOME" ] || return 0
-  [ "$lock_path" = "$WATCH" ] || return 0
+  # Same comparison contract as fm_watcher_lock_matches_pid: a lock this home
+  # published through a symlinked route is still this home's lock to clear.
+  fm_lock_paths_equal "$lock_home" "$FM_HOME" || return 0
+  fm_lock_paths_equal "$lock_path" "$WATCH" || return 0
   [ -n "$lock_identity" ] || return 0
   fm_recovery_transition "$STATE/.watcher-down" clear-stale-lock "$WATCH_LOCK" downtime
 }
@@ -324,6 +333,13 @@ fail_unexplained_cycle() {
   return 1
 }
 
+# The ledger itself was unreadable, so whether the closing watcher published a
+# reason is unknown. That is a persistence failure, not an empty cycle.
+fail_unreadable_cycle_reason() {
+  echo "watcher: FAILED - cycle reason could not be read"
+  return 1
+}
+
 # Close a cycle whose reason line this arm could not read against the bounded
 # terminal-delivery ledger the watcher publishes before releasing its lock.
 close_unobserved_cycle() {
@@ -332,7 +348,7 @@ close_unobserved_cycle() {
   i=0
   while ! fm_lock_try_acquire "$WATCH_DELIVERY_LOCK"; do
     [ "$i" -lt 20 ] || {
-      fail_unexplained_cycle
+      fail_unreadable_cycle_reason
       return 1
     }
     sleep 0.02

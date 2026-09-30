@@ -340,28 +340,8 @@ fm_tasks_axi() {
   fm_exec_timed "$bound" "$bound" tasks-axi "$@"
 }
 
-# Print one row's `tasks-axi show` output (plus stderr) from the addressing
-# fm_backlog_tasks_axi_addressing resolved, with `--file` only for the markdown
-# backend. Addressing or backend-resolution errors return before tasks-axi runs;
-# otherwise its exit status is preserved. Extra flags (--full) pass through.
-#
-# Every read is bounded, because a wedged backend read here is what blinds a
-# whole session start: bin/fm-bootstrap.sh's reconcile and close-replay sweeps
-# call this once per item, and one unbounded read consumes the entire
-# FM_SESSION_START_TIMEOUT and truncates the digest before the wake queue,
-# supervision instructions, fleet state and context sections ever print. The
-# bound turns that into a loud partial reconcile: the caller reports the item it
-# could not read and moves to the next one.
-#
-# A per-item bound alone is not enough on a home carrying a large fleet, because
-# N wedged items still cost N bounds and the digest is truncated anyway. So the
-# first bound hit latches FM_BACKLOG_ROW_SHOW_WEDGED and every later read in the
-# same sweep returns immediately, still naming its own item so nothing is
-# silently skipped. This function only READS that latch: it runs inside a
-# command substitution, and a write here would die with the subshell, so the
-# callers that capture its status set it. The latch is deliberately
-# process-wide because these scripts are short-lived and a backend that wedged
-# once will wedge again within the same run.
+# Print one row's `tasks-axi show` output (plus stderr); the exit status is
+# tasks-axi's. Extra flags (such as --full) are passed through.
 fm_backlog_row_show() {  # <resolved-data-dir> <id> [flag...]
   local data=$1 id=$2 out status addressing_status secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
   shift 2

@@ -1620,6 +1620,29 @@ reconcile_note() {
   printf 'still-open: %s\n' "$id"
 }
 
+origin_open_decisions() {  # <origin-id>
+  local origin=$1 meta="$STATE/$1.meta" status_file="$STATE/$1.status" open kind last verb
+  open=$(status_open_decisions "$status_file")
+  [ -n "$open" ] || return 0
+  [ -f "$meta" ] || { printf '%s' "$open"; return 0; }
+  kind=$(meta_value "$meta" kind)
+  [ -n "$kind" ] || kind=ship
+  if [ "$kind" != secondmate ]; then
+    last=$(last_status_line "$status_file")
+    verb=$(status_line_verb "$last")
+    case "$verb" in
+      done|failed) return 0 ;;
+    esac
+  fi
+  printf '%s' "$open"
+}
+
+require_unspent_decision_key() {  # <origin-id> <status-file> <decision-key>
+  local origin=$1 status_file=$2 key=$3
+  status_captain_held_keys "$status_file" | grep -Fxq -- "$key" || return 0
+  fail "open structured decision $origin/$key reuses the spent identity $(legacy_hold_id "$origin" "$key"); close it with a resolved [key=$key] status event and reopen it under an unused decision key"
+}
+
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved
   local resolved_how attested_by_prefix=''
@@ -1665,8 +1688,15 @@ EOF
   fi
 
   status_file="$STATE/$origin.status"
-  open=$(status_open_decisions "$status_file")
-  if [ -n "$open" ] && [ -z "$keys" ]; then
+  raw_open=$(status_open_decisions "$status_file")
+  open=$(origin_open_decisions "$origin")
+  while IFS=$'\t' read -r key _verb _summary; do
+    [ -n "$key" ] || continue
+    require_unspent_decision_key "$origin" "$status_file" "$key"
+  done <<EOF
+$open
+EOF
+  if [ -n "$open" ] && [ -z "$supplied" ]; then
     fail "origin $origin still has open captain decisions in its status stream; hold a captain task for what remains, or answer them, before attesting --none"
   fi
 
@@ -1688,7 +1718,7 @@ EOF
         [ -n "$key" ] || continue
         transfers+=("captain-held [key=$key]: tracked by $keys")
       done <<EOF
-$open
+$raw_open
 EOF
       if [ "${#transfers[@]}" -gt 0 ]; then
         transfer_rc=0
@@ -1719,9 +1749,10 @@ command_verify() {
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
   fi
-  open=$(status_open_decisions "$STATE/$origin.status")
+  open=$(origin_open_decisions "$origin")
   while IFS=$'\t' read -r key _verb _summary; do
     [ -n "$key" ] || continue
+    require_unspent_decision_key "$origin" "$STATE/$origin.status" "$key"
     fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run complete"
   done <<EOF
 $open

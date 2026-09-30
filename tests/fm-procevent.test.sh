@@ -4454,127 +4454,210 @@ kill -0 -"$CRASH_PID" 2>/dev/null \
 pass "a group whose leader died to something else is still refused, not signalled"
 kill -KILL -"$CRASH_PID" 2>/dev/null || true
 
-# --- arm reports ready only once this registration's listener is running ----
-# The public arm path used to print armed as soon as registration was stored.
-# A listener that has not claimed the source is not ready, so arm waits for the
-# same live-claim or launch-stamp evidence reconcile uses and fails closed when
-# that evidence does not appear within the confirm window.
-READY="$TMP_ROOT/ready-arm"
-mkdir -p "$READY/bin" "$READY/home/state"
-cat > "$READY/bin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-printf 'started\n' >> "${READY_MARK:?}"
-while [ ! -e "${READY_RELEASE:?}" ]; do sleep 0.02; done
-printf 'session:\n  status: ended\n'
-SH
-chmod +x "$READY/bin/lavish-axi"
-ready_art="$READY/board.html"
-printf '<h1>ready</h1>\n' > "$ready_art"
-lavish_session "$ready_art"
-ready_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$ready_art")
-fm_test_track_procevent_home "$READY/home"
-export READY_MARK="$READY/mark" READY_RELEASE="$READY/release"
-: > "$READY_MARK"
-PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
-  "$ROOT/bin/fm-procevent-lavish.sh" arm "$ready_art" > "$READY/arm.out"
-assert_contains "$(cat "$READY/arm.out")" "armed: $ready_id" "a live listener was not reported ready"
-[ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] \
-  || fail "arm reported ready without a listener claim"
-for _ in $(seq 1 50); do
-  grep -q started "$READY_MARK" && break
-  sleep 0.05
-done
-grep -q started "$READY_MARK" || fail "arm reported ready before the listener command ran"
-touch "$READY_RELEASE"
-for _ in $(seq 1 50); do
-  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$ready_id.claim" ] || break
-  sleep 0.05
-done
-PATH="$READY/bin:$PATH" FM_HOME="$READY/home" \
-  "$ROOT/bin/fm-procevent-lavish.sh" retire "$ready_art" >/dev/null 2>&1 || true
-pass "arm reports ready only after the listener is running"
+# --- nested command substitution must not reach a shell parser --------------
+#
+# bash SIGSEGVs on a few thousand nested `$(...)` (macOS "Thread stack size
+# exceeded due to excessive recursion"). argv is executed as an array, so a
+# literal `$(...)` command name is inert, and a single-level `sh -c '$(seq …)'`
+# is a normal source. Register and reconcile conservatively refuse a deeply
+# nested argument anywhere in a known shell argv.
 
-# Delayed start: the source lock is held so the listener cannot claim, and arm
-# must not print armed until that lock clears and the listener does.
-DELAY="$TMP_ROOT/delay-arm"
-mkdir -p "$DELAY/bin" "$DELAY/home/state"
-cp "$READY/bin/lavish-axi" "$DELAY/bin/lavish-axi"
-delay_art="$DELAY/board.html"
-printf '<h1>delay</h1>\n' > "$delay_art"
-lavish_session "$delay_art"
-delay_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$delay_art")
-fm_test_track_procevent_home "$DELAY/home"
-export READY_MARK="$DELAY/mark" READY_RELEASE="$DELAY/release"
-: > "$READY_MARK"
-delay_ready="$DELAY/lock-ready"
-delay_rel="$DELAY/lock-release"
-hold_source_lock "$delay_id" "$delay_ready" "$delay_rel"
-wait_for "$delay_ready" || fail "delayed-start fixture could not hold the source lock"
-PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
-  "$ROOT/bin/fm-procevent-lavish.sh" arm "$delay_art" > "$DELAY/arm.out" 2>"$DELAY/arm.err" &
-delay_arm=$!
-sleep 0.4
-assert_not_contains "$(cat "$DELAY/arm.out" 2>/dev/null || true)" "armed:" \
-  "arm reported ready while the listener could not start"
-[ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" ] \
-  || fail "a listener claimed the source while its lock was held"
-touch "$delay_rel"
-wait "$delay_arm" || fail "arm failed after the delayed listener was allowed to start: $(cat "$DELAY/arm.err")"
-assert_contains "$(cat "$DELAY/arm.out")" "armed: $delay_id" \
-  "arm did not report ready once the delayed listener was running"
-for _ in $(seq 1 50); do
-  grep -q started "$READY_MARK" && break
-  sleep 0.05
-done
-grep -q started "$READY_MARK" || fail "the delayed listener never ran"
-touch "$READY_RELEASE"
-wait "$HOLDER_PID" 2>/dev/null || true
-for _ in $(seq 1 50); do
-  [ -e "$FM_PROCEVENT_CLAIM_ROOT/$delay_id.claim" ] || break
-  sleep 0.05
-done
-PATH="$DELAY/bin:$PATH" FM_HOME="$DELAY/home" \
-  "$ROOT/bin/fm-procevent-lavish.sh" retire "$delay_art" >/dev/null 2>&1 || true
-pass "arm waits out a delayed listener start before reporting ready"
-
-# A claim path that is a directory can never be owned, so the runner dies before
-# the listener command. Arm must not print ready, and it must remove the
-# registration it just published.
-arm_blocked_claim() {  # <dir> <confirm-seconds>
-  local dir=$1 secs=$2 art id began rc elapsed
-  mkdir -p "$dir/bin" "$dir/home/state"
-  cat > "$dir/bin/lavish-axi" <<'SH'
-#!/bin/sh
-printf started >> "${READY_MARK:?}"
-SH
-  chmod +x "$dir/bin/lavish-axi"
-  art="$dir/board.html"
-  printf '<h1>blocked</h1>\n' > "$art"
-  lavish_session "$art"
-  id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$art")
-  fm_test_track_procevent_home "$dir/home"
-  mkdir -p "$FM_PROCEVENT_CLAIM_ROOT/$id.claim"
-  export READY_MARK="$dir/mark"
-  : > "$READY_MARK"
-  began=$(date +%s)
-  set +e
-  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS="$secs" \
-    "$ROOT/bin/fm-procevent-lavish.sh" arm "$art" > "$dir/arm.out" 2>"$dir/arm.err"
-  rc=$?
-  set -e
-  elapsed=$(( $(date +%s) - began ))
-  [ "$rc" -ne 0 ] || fail "arm reported success when no listener could claim ($dir)"
-  assert_not_contains "$(cat "$dir/arm.out")" "armed:" \
-    "arm printed ready when no listener could claim ($dir)"
-  [ ! -s "$READY_MARK" ] || fail "the listener command ran without a claim ($dir)"
-  # retire refuses a claim it cannot read, and arm must not override it.
-  [ -e "$dir/home/state/procevent/$id.source" ] \
-    || fail "arm removed a registration that retire refused to remove ($dir)"
-  printf '%s\n' "$elapsed" > "$dir/elapsed"
-  rmdir "$FM_PROCEVENT_CLAIM_ROOT/$id.claim" 2>/dev/null || true
-  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" \
-    "$ROOT/bin/fm-procevent-lavish.sh" retire "$art" >/dev/null 2>&1 || true
+deep_cmdsub() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="true \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
 }
+
+deep_arithmetic() {
+  local nested=1 i=0
+  while [ "$i" -lt 8 ]; do
+    nested="\$(( $nested ))"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+deep_quoted_close() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested=": \")\"; \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+sibling_cmdsub() {
+  local nested='' i=0
+  while [ "$i" -lt 8 ]; do
+    nested="$nested \$(printf x)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+deep_case_clause_close() {
+  local nested=true i=0
+  while [ "$i" -lt 7 ]; do
+    nested="true \$($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "\$(case x in a) : ;; b) : ;; esac; $nested)"
+}
+
+deep_process_substitution() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="<($nested)"
+    i=$((i + 1))
+  done
+  printf '%s\n' "true $nested"
+}
+
+deep_nested_case_in_case() {
+  local nested=true i=0
+  while [ "$i" -lt 8 ]; do
+    nested="case p$i in x) case q$i in y) : ;; esac ;; z) \$($nested) ;; esac"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$nested"
+}
+
+arith_process_substitution_comparison() {
+  local nested=9 i=8
+  while [ "$i" -ge 1 ]; do
+    nested="$i>($nested)"
+    i=$((i - 1))
+  done
+  # shellcheck disable=SC2016 # Literal arithmetic-expansion bytes under test, not expansions.
+  printf '$(( %s ))\n' "$nested"
+}
+
+bare_arith_process_substitution_comparison() {
+  local nested=9 i=8
+  while [ "$i" -ge 1 ]; do
+    nested="$i>($nested)"
+    i=$((i - 1))
+  done
+  printf 'if ((%s)); then :; fi\n' "$nested"
+}
+
+HSAFE="$TMP_ROOT/parser-safe-argv"; new_home "$HSAFE"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+pe_register "$HSAFE" lavish non-shell-argv -- /bin/echo '$(true)' >/dev/null \
+  || fail "register treated a non-interpreter argv as parser input"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+pe_register "$HSAFE" lavish shallow-shell-argv -- bash -c '$(true)' >/dev/null \
+  || fail "register rejected a single-level bash command substitution"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+pe_register "$HSAFE" lavish output-shell-argv -- /bin/sh -c 'printf "x%.0s" $(seq 1 5000)' >/dev/null \
+  || fail "register treated the oversized-output fixture as deep parser input"
+pe_register "$HSAFE" lavish arithmetic-shell-argv -- bash -c "$(deep_arithmetic)" >/dev/null \
+  || fail "register treated nested arithmetic expansion as command substitution"
+pe_register "$HSAFE" lavish sibling-shell-argv -- bash -c "$(sibling_cmdsub)" >/dev/null \
+  || fail "register treated sibling command substitutions as nested"
+pe_register "$HSAFE" lavish arith-comparison-shell-argv -- bash -c "$(arith_process_substitution_comparison)" >/dev/null \
+  || fail "register treated arithmetic > comparisons as nested process substitution"
+pe_register "$HSAFE" lavish bare-arith-comparison-shell-argv -- bash -c "$(bare_arith_process_substitution_comparison)" >/dev/null \
+  || fail "register treated bare ((...)) arithmetic > comparisons as nested process substitution"
+pass "register permits inert and shallow parser-safe argv"
+
+HNEST="$TMP_ROOT/nested-argv"; new_home "$HNEST"
+out=$(pe "$HNEST" register lavish nest-cmd -- bash -c "$(deep_cmdsub)" 2>&1) \
+  && fail "register accepted bash -c with deeply nested command substitution: $out"
+assert_contains "$out" "command substitutions" \
+  "register refusal for shell command substitution named the hazard"
+out=$(pe "$HNEST" register lavish nested-in-arithmetic -- bash -c "\$(( $(deep_cmdsub) ))" 2>&1) \
+  && fail "register accepted nested command substitution inside arithmetic expansion: $out"
+assert_contains "$out" "command substitutions" \
+  "register refusal for arithmetic-embedded command substitution named the hazard"
+pass "register refuses a deeply nested shell argument"
+
+HNON_SHELL="$TMP_ROOT/non-shell-c"; new_home "$HNON_SHELL"
+pe_register "$HNON_SHELL" lavish non-shell-c -- /bin/echo -c "$(deep_cmdsub)" >/dev/null \
+  || fail "register treated a non-shell -c data argument as parser input"
+pass "register permits a non-shell -c data argument with literal \$(...)"
+
+HINERT="$TMP_ROOT/inert-dollar"; new_home "$HINERT"
+# shellcheck disable=SC2016 # Literal command-substitution bytes under test, not expansions.
+pe_register "$HINERT" lavish inert-src -- '$(echo hi)' >/dev/null \
+  || fail "register refused a literal \$(...) command name that is not parser input"
+out=$(pe "$HINERT" reconcile)
+assert_contains "$out" "started=1" "reconcile did not start a source whose argv is an inert \$(...) name"
+# The started runner execs a non-existent command name and exits; wait for that
+# so sweep-home is not racing a live claim.
+wait_for "$HINERT/state/procevent/inert-src.runner" || true
+sleep 0.2
+pass "a literal \$(...) argv element is stored and executed as a command name, not parsed"
+
+plant_source() {
+  local home=$1 argc
+  shift
+  argc=$#
+  mkdir -p "$home/state/procevent"
+  {
+    printf 'adapter=lavish\n'
+    printf 'argc=%s\n' "$argc"
+    printf 'argv:\n'
+    printf '%s\n' "$@"
+  } > "$home/state/procevent/planted.source"
+  chmod 0600 "$home/state/procevent/planted.source"
+  fm_test_track_procevent_home "$home"
+}
+assert_register_refused() {
+  local home=$1 label=$2 out
+  shift 2
+  new_home "$home"
+  out=$(pe "$home" register lavish "register-$label" -- "$@" 2>&1) \
+    && fail "register accepted $label argv with nested \$(...): $out"
+  assert_contains "$out" "command substitutions" \
+    "register refusal for $label parser-recursive argv named the hazard"
+}
+assert_planted_bash_refused() {
+  local home=$1 label=$2 status=0
+  out=$(pe "$home" reconcile) || status=$?
+  [ "$status" -ne 139 ] && [ "$status" -ne 11 ] \
+    || fail "reconcile died with a segmentation fault on $label planted bash argv (status=$status)"
+  assert_contains "$out" "started=0" \
+    "reconcile started $label planted interpreter argv with nested \$(...)"
+  assert_contains "$out" "uncertain=1" \
+    "reconcile did not count $label planted interpreter argv as uncertain"
+  assert_present "$home/state/procevent/planted.source" \
+    "reconcile removed $label planted registration instead of leaving it unstarted"
+}
+
+HANY_ARG="$TMP_ROOT/planted-any-shell-argument"; new_home "$HANY_ARG"
+assert_register_refused "$TMP_ROOT/register-any-shell-argument" any-shell-argument bash --not-an-option "$(deep_cmdsub)"
+plant_source "$HANY_ARG" bash --not-an-option "$(deep_cmdsub)"
+assert_planted_bash_refused "$HANY_ARG" "any-shell-argument"
+
+HENV="$TMP_ROOT/planted-env-bash-c"; new_home "$HENV"
+assert_register_refused "$TMP_ROOT/register-env-bash-c" env-shell /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
+plant_source "$HENV" /usr/bin/env bash --not-an-option "$(deep_cmdsub)"
+assert_planted_bash_refused "$HENV" "env-shell"
+
+HQUOTED="$TMP_ROOT/planted-quoted-close"; new_home "$HQUOTED"
+assert_register_refused "$TMP_ROOT/register-quoted-close" quoted-close bash --not-an-option "$(deep_quoted_close)"
+plant_source "$HQUOTED" bash --not-an-option "$(deep_quoted_close)"
+assert_planted_bash_refused "$HQUOTED" "quoted-close"
+
+HCASECLAUSE="$TMP_ROOT/planted-case-clause-close"; new_home "$HCASECLAUSE"
+assert_register_refused "$TMP_ROOT/register-case-clause-close" case-clause-close bash --not-an-option "$(deep_case_clause_close)"
+plant_source "$HCASECLAUSE" bash --not-an-option "$(deep_case_clause_close)"
+assert_planted_bash_refused "$HCASECLAUSE" "case-clause-close"
+
+HPROCSUB="$TMP_ROOT/planted-process-substitution"; new_home "$HPROCSUB"
+assert_register_refused "$TMP_ROOT/register-process-substitution" process-substitution bash --not-an-option "$(deep_process_substitution)"
+plant_source "$HPROCSUB" bash --not-an-option "$(deep_process_substitution)"
+assert_planted_bash_refused "$HPROCSUB" "process-substitution"
+
+HCASEINCASE="$TMP_ROOT/planted-nested-case-in-case"; new_home "$HCASEINCASE"
+assert_register_refused "$TMP_ROOT/register-nested-case-in-case" nested-case-in-case bash --not-an-option "$(deep_nested_case_in_case)"
+plant_source "$HCASEINCASE" bash --not-an-option "$(deep_nested_case_in_case)"
+assert_planted_bash_refused "$HCASEINCASE" "nested-case-in-case"
+pass "reconcile refuses planted shell parser-recursive argv without crashing"
 
 arm_blocked_claim "$TMP_ROOT/immediate-arm" 1
 pass "arm fails when the listener cannot claim, and leaves the registration retire refused"

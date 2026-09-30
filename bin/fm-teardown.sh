@@ -180,32 +180,21 @@
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
-#   --legacy-record accepts a task record that predates the spawn_gen field:
-#   teardown then proceeds only when the recorded endpoint is confirmed dead or
-#   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
-#   --force the worktree still passes the ordinary landed-work checks. The
-#   accepted legacy incarnation is stamped into the record before its close is
-#   recorded and named in the teardown line; the flag never relaxes the
-#   unlanded-work refusal, which --force alone can authorize. A legacy- stamp
-#   an abandoned attempt left behind never counts as a published incarnation:
-#   the record still reads as a legacy record, so a recorded endpoint runs the
-#   endpoint gate again and the retry still needs --legacy-record. The safe
-#   windowless exception below retries its retained stamp without the flag.
-#   A tmux record with no window names no live endpoint, so there is nothing
-#   for that classifier to inspect and nothing to kill. Combined with a
-#   missing spawn_gen, that leftover would otherwise deadlock: automatic
-#   teardown refuses for want of spawn_gen, and --legacy-record then refuses
-#   for want of a window. When backlog incarnation validation applies, such a
-#   leftover (no window, no spawn_gen or only a retained legacy stamp, no
-#   backend other than tmux, no Orca terminal= or other backend's <backend>_*
-#   endpoint identity, and every other identity field passing the shared
-#   endpoint validator as if it named the task's own window) is accepted as a
-#   missing-endpoint legacy record with or without --legacy-record; the shared
-#   endpoint validator is skipped so it cannot be read as the current window,
-#   kill is skipped, and a still-present worktree still faces the ordinary
-#   landed-work checks. Every other windowless record, including one with a
-#   spawn_gen, a non-tmux backend, or an ambiguous field, still faces the
-#   validator and refuses.
+#   --legacy-record accepts a task record that predates the spawn_gen field and
+#   records no window endpoint at all (a pre-update husk): teardown then
+#   proceeds only when the worktree is clean and landed or already absent, and
+#   without --force the ordinary landed-work checks still apply. A legacy record
+#   that DOES record an endpoint needs no flag at all: both plain and flagged
+#   teardowns accept it once the recovery-grade classifier reads that endpoint
+#   dead or agent-less, and every ambiguous, unreadable, or unverified endpoint
+#   state refuses while the record is intact. The accepted legacy incarnation is
+#   stamped into the record before its close is recorded and named in the
+#   teardown line; the flag never relaxes the unlanded-work refusal, which
+#   --force alone can authorize. A legacy- stamp an abandoned attempt left
+#   behind never counts as a published incarnation: the record still reads as a
+#   legacy record, so the endpoint/worktree gate runs again on the retry.
+#   A pre-spawn_gen husk that reused its pool slot for a later task no longer
+#   pins that slot: the slot-exclusivity scan ignores such a retirable husk.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -281,6 +270,23 @@
 #     roots are unique per task and never
 #     shared, so this can never reach another task's or the primary's
 #     processes. Idempotent: nothing left to find is a silent no-op.
+#   Fix 2b - reap the endpoint's whole worker process TREE. Fix 2 only reaches
+#     processes whose cwd is still inside the worktree or tasktmp; a harness
+#     child that calls setsid (a detached MCP server or poll shell) leaves
+#     both the pane's process group and the task's working directory, so the
+#     cwd scan never sees it and the pane close never signals it, and it
+#     reparents to init and leaks for the life of the host (observed
+#     2026-09-13: idle cursor-agent and claude workers alive hours after their
+#     tasks closed). task_endpoint_capture snapshots every descendant of the
+#     endpoint's validated pane shell, with each process's birth identity,
+#     BEFORE any destructive step; reap_task_endpoint_processes then TERMs
+#     them on up to three bounded passes (stopping early once the tree is
+#     gone), KILLs any survivor whose identity still matches, and refuses the
+#     teardown loudly if one remains. The root is the
+#     pane shell resolved live through the backend, or the pid recorded at
+#     spawn (worker_root_pid=) when the pane can no longer be queried; only a
+#     descendant of this task's own endpoint is ever signalled. Idempotent:
+#     an unresolvable root is a silent no-op.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -302,16 +308,20 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
-# A missing `.` target is not a teardown result. Stock Bash 3.2 can abort it
-# into an EXIT trap whose status is 0, and a newer Bash can print the
-# diagnostic and continue into cleanup. Refuse by name before sourcing.
-teardown_require_source() {  # <path>
-  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
-    echo "error: teardown refused: required source $(basename "$1") is missing or unreadable; nothing was changed" >&2
-    exit 1
-  fi
-}
+# Return a worktree/home to its treehouse pool under the repo's own pool HOME,
+# so the lease is released on the same pool fm-spawn leased it from rather than
+# on the ambient HOME (bin/fm-treehouse-lib.sh).
+# shellcheck source=bin/fm-treehouse-lib.sh
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
+# shellcheck source=bin/fm-tasks-axi-lib.sh
+. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-backlog-transition-lib.sh
+. "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 
+# The recorded backend, including every sibling its adapter sources, has to be
+# readable before the first destructive step. --force does not override this.
 teardown_require_backend_prerequisites() {  # <backend> <task-id>
   local backend=$1 task_id=$2
   if ! fm_backend_source "$backend"; then
@@ -319,47 +329,14 @@ teardown_require_backend_prerequisites() {  # <backend> <task-id>
     return 1
   fi
 }
-for _teardown_source in \
-  fm-tasks-axi-lib.sh \
-  fm-backlog-transition-lib.sh \
-  fm-timeout-lib.sh \
-  fm-backend.sh \
-  fm-control-lib.sh \
-  fm-lock-lib.sh \
-  fm-classify-lib.sh \
-  fm-gate-refuse-lib.sh \
-  fm-pr-lib.sh \
-  fm-public-followup-lib.sh \
-  fm-x-lib.sh \
-  fm-env-lib.sh \
-  fm-secondmate-registry-lib.sh \
-  fm-secondmate-parent-lib.sh \
-  fm-pending-reply-lib.sh \
-  fm-operational-input.sh \
-  fm-marker-lib.sh \
-  fm-tmux-lib.sh \
-  fm-composer-lib.sh \
-  fm-cursor-lib.sh \
-  fm-nm-run-lib.sh \
-  fm-wake-lib.sh \
-  fm-path-lib.sh \
-  fm-lease-lib.sh
-do
-  teardown_require_source "$SCRIPT_DIR/$_teardown_source"
-done
-unset _teardown_source
-# shellcheck source=bin/fm-tasks-axi-lib.sh
-. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
-# shellcheck source=bin/fm-backlog-transition-lib.sh
-. "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-# shellcheck source=bin/fm-backend.sh
-. "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-context-hygiene-lib.sh
+. "$SCRIPT_DIR/fm-context-hygiene-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -536,6 +513,7 @@ TEARDOWN_LEGACY_ACCEPTED=0
 TEARDOWN_LEGACY_ENDPOINT=
 TEARDOWN_LEGACY_RETAINED_STAMP=
 TEARDOWN_LEGACY_PRESTAMP_SIZE=0
+TEARDOWN_ENDPOINT_MISSING=0
 TEARDOWN_BACKLOG_APPLIES=0
 TEARDOWN_BACKLOG_SKIP_REASON=
 TEARDOWN_WINDOWLESS=0
@@ -579,22 +557,33 @@ fi
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   if ! fm_backlog_meta_spawn_gen "$META" "$STATE"; then
     TEARDOWN_LEGACY_GEN_COUNT=$(LC_ALL=C awk -F= '$1 == "spawn_gen" { count++ } END { print count + 0 }' "$META" 2>/dev/null || printf '0\n')
-    if [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ] && [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ]; then
-      # A tmux record with no window names no live endpoint, so there is no
-      # incarnation for spawn_gen to identify and nothing for --legacy-record
-      # to classify. Accept it as a missing-endpoint leftover, with or without
-      # the flag; a still-present worktree still faces the ordinary landed-work
-      # checks below.
-      TEARDOWN_WINDOWLESS=1
-      TEARDOWN_LEGACY_PENDING=1
-    elif [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ] && [ "$LEGACY_RECORD_GIVEN" = 1 ]; then
-      # A record that predates the incarnation field: acceptance is gated later,
-      # once the recorded endpoint is known, so its state can be confirmed dead
-      # or agent-less before any cleanup decision is made.
-      TEARDOWN_LEGACY_PENDING=1
-    elif [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ]; then
-      echo "error: task $ID's record has no spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
-      exit 1
+    if [ "$TEARDOWN_LEGACY_GEN_COUNT" = 0 ]; then
+      # A record that predates the incarnation field. Its acceptance is gated
+      # later: a recorded endpoint must be confirmed dead or agent-less, and a
+      # still-present worktree with no window is retirable only with
+      # --legacy-record once that worktree is clean and landed. A windowless
+      # leftover whose worktree is already gone names no live endpoint, so
+      # there is nothing for --legacy-record to classify; accept it as a
+      # missing-endpoint leftover with or without the flag. A no-window
+      # record outside that leftover class (foreign backend identity, extra
+      # bindings) is not a husk --legacy-record can prove gone.
+      if [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ]; then
+        TEARDOWN_WINDOWLESS_WT=$(fm_meta_get "$META" worktree)
+        if [ "$LEGACY_RECORD_GIVEN" != 1 ] \
+           && [ -n "$TEARDOWN_WINDOWLESS_WT" ] \
+           && [ ! -e "$TEARDOWN_WINDOWLESS_WT" ] && [ ! -L "$TEARDOWN_WINDOWLESS_WT" ]; then
+          TEARDOWN_WINDOWLESS=1
+        fi
+        TEARDOWN_LEGACY_PENDING=1
+      elif [ "$TEARDOWN_WINDOW_COUNT" = 1 ] \
+           && [ -n "$(fm_meta_get "$META" window)" ]; then
+        TEARDOWN_LEGACY_PENDING=1
+      elif [ "$LEGACY_RECORD_GIVEN" = 1 ]; then
+        TEARDOWN_LEGACY_PENDING=1
+      else
+        echo "error: task $ID's record has no spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
+        exit 1
+      fi
     else
       echo "error: task $ID's record has an unreadable spawn_gen that identifies one exact incarnation ($FM_BACKLOG_TRANSITION_ERROR); refusing automatic teardown - fix the record, then retry teardown" >&2
       exit 1
@@ -611,9 +600,6 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
         # the abandoned attempt's own stamp.
         if [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ]; then
           TEARDOWN_WINDOWLESS=1
-        elif [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
-          echo "error: task $ID's record carries the legacy incarnation stamp $FM_BACKLOG_META_SPAWN_GEN left by an abandoned --legacy-record teardown, not an incarnation published by a spawn; refusing automatic teardown - relaunch the task to publish an unambiguous incarnation, then retry teardown, or pass --legacy-record once its recorded endpoint is confirmed dead or agent-less" >&2
-          exit 1
         fi
         TEARDOWN_LEGACY_PENDING=1
         TEARDOWN_LEGACY_RETAINED_STAMP=$FM_BACKLOG_META_SPAWN_GEN
@@ -1065,6 +1051,7 @@ remote_secondmate_teardown() {
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
   status_retire_presentation_task "$STATE" "$ID" || return 1
   fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || return 1
+  rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress"
   rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
     "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
     "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
@@ -1103,9 +1090,36 @@ fi
 # This is the first cleanup authorization check. It is metadata-only and must
 # complete before fm-guard, a backend command, file removal, branch deletion,
 # worktree return, registry change, or process termination can run.
-# A windowless record names no endpoint: the shared validator would refuse it
-# (and must keep refusing it for control/kill callers), so teardown skips the
-# validator rather than probing or closing an ambient current window.
+#
+# A legacy record with no window endpoint at all cannot offer the
+# dead-or-agent-less endpoint proof, so a plain teardown refuses and points at
+# --legacy-record. With the flag, identity is still validated exactly (only the
+# missing window is tolerated) and the ordinary landed-work gate below then
+# decides whether the worktree is clean and landed or already gone. An ambiguous
+# (duplicated) window field is never a missing endpoint and stays refused.
+TEARDOWN_WINDOW_COUNT=$(grep -c '^window=' "$META" 2>/dev/null || true)
+TEARDOWN_WINDOW_MISSING=0
+if [ "$TEARDOWN_WINDOW_COUNT" = 0 ]; then
+  TEARDOWN_WINDOW_MISSING=1
+elif [ "$TEARDOWN_WINDOW_COUNT" = 1 ] \
+     && ! fm_backend_meta_exact_value "$META" window >/dev/null 2>&1; then
+  TEARDOWN_WINDOW_MISSING=1
+fi
+if [ "$TEARDOWN_LEGACY_PENDING" = 1 ] && [ "$TEARDOWN_WINDOW_MISSING" = 1 ]; then
+  if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
+    :
+  elif [ "$LEGACY_RECORD_GIVEN" != 1 ]; then
+    echo "REFUSED: task $ID's record predates spawn_gen and records no window endpoint; a plain teardown cannot prove its endpoint gone. Pass --legacy-record once its worktree is clean and landed or already gone. Nothing was changed." >&2
+    exit 1
+  else
+    fm_backend_validate_task_endpoint "$META" "$ID" --allow-missing-window || exit 1
+    TEARDOWN_ENDPOINT_MISSING=1
+  fi
+elif [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
+  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+fi
+BACKEND=$FM_BACKEND_VALIDATED_BACKEND
+T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 T_ORCA=
@@ -1113,9 +1127,6 @@ if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
   BACKEND=tmux
   T=
 else
-  fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
-  BACKEND=$FM_BACKEND_VALIDATED_BACKEND
-  T=$FM_BACKEND_VALIDATED_TARGET
   [ "$BACKEND" != orca ] || T_ORCA=$T
 fi
 # The recorded backend, including every sibling its adapter sources, has to
@@ -1158,25 +1169,33 @@ fi
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
 
-# A record accepted as a legacy incarnation (no spawn_gen, and either
-# --legacy-record given or the record is windowless) may be torn down only
-# when its recorded endpoint is confidently gone or agent-less. Windowless
-# leftovers name no endpoint and are treated as missing. For a recorded
-# window, only the recovery-grade classifier's dead and missing license
-# that, and every ambiguous, unreadable, or unverified endpoint state refuses
-# while the record is still intact. Acceptance resolves the incarnation token
-# here; the record itself is stamped only once every landed-work refusal has
-# passed, immediately before the close marker binds to it, so any refusal
-# leaves the record byte-identical.
+# A record accepted as a legacy incarnation (no spawn_gen, or only a
+# teardown-minted legacy- stamp) may be torn down when its recorded endpoint is
+# confidently gone or agent-less, or - with --legacy-record - when it records no
+# window endpoint at all and the ordinary landed-work gate below finds the
+# worktree clean and landed or already gone. Only the recovery-grade
+# classifier's dead and missing license the endpoint branch, and every
+# ambiguous, unreadable, or unverified endpoint state refuses while the record
+# is still intact. Acceptance resolves the incarnation token here; the record
+# itself is stamped only once every landed-work refusal has passed, immediately
+# before the close marker binds to it, so any refusal leaves the record
+# byte-identical.
 if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
-  if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
+  if [ "$TEARDOWN_ENDPOINT_MISSING" = 1 ]; then
+    # No recorded endpoint to classify. The records-lost proof is the
+    # --legacy-record flag plus the landed-work gate below (which prints the
+    # exact unlanded evidence and refuses); there is no agent that could be
+    # bound to an endpoint this record never named.
+    TEARDOWN_LEGACY_ENDPOINT=absent
+  elif [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
+    # A leftover with no window and no worktree names no endpoint.
     TEARDOWN_LEGACY_ENDPOINT=missing
   else
     TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
     case "$TEARDOWN_LEGACY_ENDPOINT" in
       dead|missing) ;;
       *)
-        echo "REFUSED: task $ID's record predates spawn_gen and its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; --legacy-record teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
+        echo "REFUSED: task $ID's record predates spawn_gen and its recorded endpoint reads '$TEARDOWN_LEGACY_ENDPOINT', not confidently dead or agent-less; teardown is refused while an agent may still be bound to it. Nothing was changed." >&2
         echo "Reconcile the endpoint first (bin/fm-crew-state.sh $ID), or relaunch the task to publish an unambiguous incarnation, then retry teardown." >&2
         exit 1
         ;;
@@ -1455,13 +1474,16 @@ remove_pr_poll_artifacts() {
     "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust" || return 1
 }
 
-# Resolve the PR number for a worktree branch via gh-axi. Echoes the number on a
-# single match and returns 0; returns non-zero on no match or any lookup failure,
-# so the caller treats it as "no PR found" (fail-safe).
+# Resolve the PR number for a worktree branch via gh-axi, scoped to the
+# checkout's own origin repository so a fork checkout never matches the
+# parent's PR for the same branch name. Echoes the number on a single match and
+# returns 0; returns non-zero on no match or any lookup failure, so the caller
+# treats it as "no PR found" (fail-safe).
 pr_number_from_branch() {
-  local branch=$1 out n
+  local branch=$1 out n repo
   [ -n "$branch" ] && [ "$branch" != HEAD ] || return 1
-  out=$( cd "$WT" && gh-axi pr list --state all --head "$branch" --limit 1 2>/dev/null ) || return 1
+  repo=$(fm_pr_github_repo_from_checkout "$WT") || return 1
+  out=$( cd "$WT" && gh-axi pr list --state all --head "$branch" --repo "$repo" --limit 1 2>/dev/null ) || return 1
   n=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),.*/\1/p' | head -1)
   [ -n "$n" ] || return 1
   printf '%s' "$n"
@@ -1531,14 +1553,21 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+  local branch=$1 target view state remainder head resolved_url current landed=0 repo
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
     target=$(pr_number_from_branch "$branch") || return 1
   fi
   [ -n "$target" ] || return 1
-  view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid,url -q '.state + "\t" + .headRefOid + "\t" + .url' 2>/dev/null) || return 1
+  # Address the pull request by an explicit repository: the recorded URL's own
+  # GitHub slug when available, otherwise the checkout's origin remote. Without
+  # this a bare number would resolve against gh's default repository, which can
+  # be the parent of a fork checkout.
+  repo=$(fm_pr_github_repo_slug "$target" 2>/dev/null) \
+    || repo=$(fm_pr_github_repo_from_checkout "$WT") \
+    || return 1
+  view=$(cd "$WT" && gh pr view "$target" --repo "$repo" --json state,headRefOid,url -q '.state + "\t" + .headRefOid + "\t" + .url' 2>/dev/null) || return 1
   state=${view%%$'\t'*}
   remainder=${view#*$'\t'}
   [ "$state" != "$view" ] || return 1
@@ -1794,7 +1823,7 @@ teardown_treehouse_return() {
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+  if out=$( fm_treehouse_return "$cd_dir" "$dir" 2>&1 ); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
   fi
@@ -1819,7 +1848,7 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+    if out=$( fm_treehouse_return "$cd_dir" "$dir" 2>&1 ); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -1846,7 +1875,7 @@ teardown_treehouse_return() {
           return 1
         fi
       fi
-      if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+      if out=$( fm_treehouse_return "$cd_dir" "$dir" 2>&1 ); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
@@ -2080,30 +2109,34 @@ $out
 EOF
 }
 
+# The single owner is bin/fm-backend.sh's fm_process_birth_identity, which
+# bin/fm-spawn.sh also uses to record the worker process-tree root; both must
+# agree on the token format for the recorded root to be provable at teardown.
 task_process_identity() {  # <pid>
-  local pid=$1 proc_root stat_line starttime value
-  local -a stat_fields
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  if [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
-    read -r -a stat_fields <<< "${stat_line##*)}"
-    [ "${#stat_fields[@]}" -ge 20 ] || return 1
-    starttime=${stat_fields[19]}
-    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
-    printf 'starttime=%s\n' "$starttime"
-    return 0
-  fi
-  value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-  value=$(fm_nm_trim "$value")
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf 'lstart=%s\n' "$value"
+  fm_process_birth_identity "$1"
 }
 
 task_process_identity_matches() {  # <pid> <identity>
   local current
   current=$(task_process_identity "$1") || return 1
   [ "$current" = "$2" ]
+}
+
+# Like task_process_identity_matches, but a zombie (Linux stat state Z, or a
+# dead state X) is treated as already gone: it keeps a /proc entry until its
+# parent reaps it, yet it is not a leak. Without this the endpoint-tree reap
+# could force-kill and then falsely REFUSE a teardown over a process that has
+# already exited. Reads the state char directly so it stays portable.
+task_process_live_identity_matches() {  # <pid> <identity>
+  local proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} stat_line fields
+  task_process_identity_matches "$1" "$2" || return 1
+  if [ -r "$proc_root/$1/stat" ]; then
+    stat_line=$(cat "$proc_root/$1/stat" 2>/dev/null) || return 1
+    fields=${stat_line##*)}
+    fields=${fields#"${fields%%[![:space:]]*}"}
+    case "$fields" in Z*|X*) return 1 ;; esac
+  fi
+  return 0
 }
 
 task_pid_list_contains() {  # <pid-list> <pid>
@@ -2273,6 +2306,181 @@ EOF
   return 1
 }
 
+# Every pid descended (transitively, by ppid) from <root>, one per line and
+# excluding <root> itself. One bounded process-table snapshot, then an
+# in-memory closure; bash 3.2 has no associative arrays, so membership is a
+# whitespace-delimited string scan and the closure iterates until no new pid
+# appears. A zombie (stat Z) is skipped: it is already dead and would
+# otherwise look like a survivor its parent has not reaped yet. Nonzero only
+# when the process table cannot be read.
+descendant_pids_of() {  # <root-pid>
+  local root=$1 snapshot pid ppid stat frontier result changed
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  snapshot=$(LC_ALL=C ps -eo pid=,ppid=,stat= 2>/dev/null) || return 1
+  frontier=" $root "
+  result=""
+  changed=1
+  while [ "$changed" -eq 1 ]; do
+    changed=0
+    while read -r pid ppid stat; do
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      case "$ppid" in ''|*[!0-9]*) continue ;; esac
+      case "$stat" in Z*) continue ;; esac
+      case "$frontier" in *" $ppid "*) ;; *) continue ;; esac
+      case "$frontier" in *" $pid "*) continue ;; esac
+      frontier="$frontier$pid "
+      result="$result$pid
+"
+      changed=1
+    done <<EOF
+$snapshot
+EOF
+  done
+  printf '%s' "$result"
+}
+
+# The root pid of this task's worker process tree: the endpoint's pane shell
+# resolved live through the backend, or - when the pane cannot be queried - the
+# pid recorded at spawn, accepted only while its birth identity still matches.
+# Nonzero when neither is provable, which is a silent no-op for the reaper.
+task_endpoint_root_pid() {
+  local root recorded recorded_start
+  if root=$(fm_backend_task_process_root "$BACKEND" "$T" 2>/dev/null); then
+    case "$root" in
+      ''|*[!0-9]*) ;;
+      *) [ "$root" -gt 1 ] && { printf '%s\n' "$root"; return 0; } ;;
+    esac
+  fi
+  recorded=$(meta_value "$META" worker_root_pid)
+  recorded_start=$(meta_value "$META" worker_root_start)
+  case "$recorded" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$recorded_start" ] || return 1
+  task_process_identity_matches "$recorded" "$recorded_start" || return 1
+  printf '%s\n' "$recorded"
+}
+
+# Capture this task's WHOLE worker process tree - every descendant of the
+# endpoint's pane shell, plus the shell itself - with each process's birth
+# identity, BEFORE any destructive step (the focus-preserving projected pane
+# close can kill the shell and reparent a surviving setsid child to init, at
+# which point a live walk can no longer find it). Reads only; never signals.
+# A best-effort no-op when the root is unresolvable. Results live in the
+# TASK_ENDPOINT_* globals consumed by reap_task_endpoint_processes.
+TASK_ENDPOINT_ROOT_CAPTURED=""
+TASK_ENDPOINT_PIDS_CAPTURED=()
+TASK_ENDPOINT_IDS_CAPTURED=()
+task_endpoint_capture() {
+  local root pids pid identity
+  TASK_ENDPOINT_ROOT_CAPTURED=""
+  TASK_ENDPOINT_PIDS_CAPTURED=()
+  TASK_ENDPOINT_IDS_CAPTURED=()
+  root=$(task_endpoint_root_pid) || return 0
+  [ -n "$root" ] || return 0
+  TASK_ENDPOINT_ROOT_CAPTURED=$root
+  pids=$(descendant_pids_of "$root") || return 0
+  pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" != "$$" ] || continue
+    identity=$(task_process_identity "$pid") || continue
+    TASK_ENDPOINT_PIDS_CAPTURED+=("$pid")
+    TASK_ENDPOINT_IDS_CAPTURED+=("$identity")
+  done <<EOF
+$pids
+EOF
+}
+
+# Fix 2b (see script header): reap the endpoint's whole WORKER process tree,
+# not only the processes whose cwd is still inside the worktree. A harness
+# child that calls setsid - a detached MCP server or poll shell - leaves both
+# the pane's process group and the task's working directory, so the cwd scan
+# in reap_task_worktree_processes never sees it and the pane close never
+# signals it; it then reparents to init and leaks for the life of the host
+# (observed 2026-09-13: idle cursor-agent and claude workers alive hours after
+# their tasks closed). This seeds from task_endpoint_capture's pre-destructive
+# snapshot, discovers any further descendant on three bounded passes, TERMs
+# each, then KILLs every captured pid whose birth identity still matches, and
+# finally verifies none survives. Identity matching (never a bare pid) is what
+# keeps a reused pid and a concurrently replaced process safe. Scoping to this
+# task's own validated endpoint pane can never reach another task's or the
+# primary's processes. Best-effort: an unresolvable root is a silent no-op.
+reap_task_endpoint_processes() {  # <label>
+  local label=$1 root pids pid identity i pass max_passes=3 alive
+  local -a tracked_pids tracked_identities survivors
+  tracked_pids=("${TASK_ENDPOINT_PIDS_CAPTURED[@]+"${TASK_ENDPOINT_PIDS_CAPTURED[@]}"}")
+  tracked_identities=("${TASK_ENDPOINT_IDS_CAPTURED[@]+"${TASK_ENDPOINT_IDS_CAPTURED[@]}"}")
+  root=${TASK_ENDPOINT_ROOT_CAPTURED:-}
+  if [ -z "$root" ]; then
+    root=$(task_endpoint_root_pid) || return 0
+  fi
+  [ -n "$root" ] || return 0
+  pass=1
+  while [ "$pass" -le "$max_passes" ]; do
+    pids=$(descendant_pids_of "$root") || return 0
+    pids=$(printf '%s\n%s\n' "$root" "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      [ "$pid" != "$$" ] || continue
+      task_pid_list_contains "$(printf '%s\n' "${tracked_pids[@]+"${tracked_pids[@]}"}")" "$pid" && continue
+      identity=$(task_process_identity "$pid") || continue
+      tracked_pids+=("$pid")
+      tracked_identities+=("$identity")
+    done <<EOF
+$pids
+EOF
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done
+    # Settle only while something is still alive: a tree that is already gone
+    # must not cost the teardown three bounded sleeps every time.
+    alive=0
+    for i in "${!tracked_pids[@]}"; do
+      if task_process_live_identity_matches "${tracked_pids[$i]}" "${tracked_identities[$i]}"; then
+        alive=1
+        break
+      fi
+    done
+    [ "$alive" -eq 1 ] || break
+    sleep 1
+    pass=$((pass + 1))
+  done
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "teardown: force-killing leaked $label process(es) for $ID: ${survivors[*]}" >&2
+    for i in "${!tracked_pids[@]}"; do
+      pid=${tracked_pids[$i]}
+      identity=${tracked_identities[$i]}
+      if task_process_live_identity_matches "$pid" "$identity"; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    done
+    sleep 1
+  fi
+  survivors=()
+  for i in "${!tracked_pids[@]}"; do
+    pid=${tracked_pids[$i]}
+    identity=${tracked_identities[$i]}
+    task_process_live_identity_matches "$pid" "$identity" && survivors+=("$pid")
+  done
+  if [ "${#survivors[@]}" -gt 0 ]; then
+    echo "REFUSED: leaked $label process(es) for $ID remain after reaping the endpoint process tree: ${survivors[*]}; preserving the worktree for manual inspection or retry." >&2
+    return 1
+  fi
+  if [ "${#tracked_pids[@]}" -gt 0 ]; then
+    echo "teardown: reaped leaked $label process tree for $ID: ${tracked_pids[*]}" >&2
+  fi
+  return 0
+}
+
 require_orca_worktree_path_match() {
   local worktree_id=$1 inspected=$2 resolved inspected_abs resolved_abs
   resolved=$(fm_backend_worktree_path orca "$worktree_id") || {
@@ -2356,6 +2564,33 @@ collect_local_firstmate_states() {
   done
 }
 
+# True when <meta> is a stale pre-incarnation husk that cannot be a live task:
+# it carries no spawn_gen published by a spawn (absent entirely, or only a
+# teardown-minted legacy- stamp) and its recorded endpoint is absent or
+# confidently dead/agent-less. The slot-exclusivity scan ignores such a record
+# so a pre-update husk that reused its pool slot for a later task does not pin
+# that slot forever. A live task always carries a published spawn_gen (or a live
+# endpoint), so it is never skipped.
+teardown_record_is_retirable_legacy_husk() {  # <meta>
+  local meta=$1 count value window backend
+  count=$(LC_ALL=C awk -F= '$1 == "spawn_gen" { count++ } END { print count + 0 }' "$meta" 2>/dev/null) || return 1
+  case "$count" in
+    0) ;;
+    1)
+      value=$(fm_meta_get "$meta" spawn_gen)
+      case "$value" in legacy-*) ;; *) return 1 ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+  window=$(fm_meta_get "$meta" window)
+  [ -n "$window" ] || return 0
+  backend=$(fm_backend_of_meta "$meta")
+  case "$(fm_backend_agent_state "$backend" "$window")" in
+    dead|missing) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_exclusive_worktree_slot_record() {
   local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
   local slot state_dir other other_id field other_path other_slot
@@ -2381,6 +2616,14 @@ require_exclusive_worktree_slot_record() {
         [ -n "$other_path" ] || continue
         other_slot=$(canonical_existing_dir "$other_path") || continue
         [ "$other_slot" = "$slot" ] || continue
+        # Same inode under another task name is a second claim, not a husk.
+        # A retirable pre-spawn_gen husk is not a live owner of the slot; the
+        # task being torn down proves the slot's work is safe through its own
+        # landed-work gate, so a different-inode husk must not pin the slot.
+        if [ ! "$other" -ef "$record_meta" ] \
+           && teardown_record_is_retirable_legacy_husk "$other"; then
+          continue
+        fi
         echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
         echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
         echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
@@ -3049,6 +3292,47 @@ FMEOF
   return 1
 }
 
+teardown_herdr_focus_checkpoint_write() {  # <path> <session> <snapshot>
+  local path=$1 session=$2 snapshot=$3 workspace tab tmp
+  workspace=${snapshot%%$'\t'*}
+  tab=${snapshot#*$'\t'}
+  [ -n "$workspace" ] && [ -n "$tab" ] && [ "$workspace" != "$snapshot" ] || return 1
+  case "$session:$workspace:$tab" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  tmp=$(mktemp "$STATE/.${ID}.herdr-focus.XXXXXX") || return 1
+  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  {
+    printf 'version=1\n'
+    printf 'session=%s\n' "$session"
+    printf 'workspace_id=%s\n' "$workspace"
+    printf 'tab_id=%s\n' "$tab"
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path"
+}
+
+teardown_herdr_focus_checkpoint_restore() {  # <path> <session>
+  local path=$1 session=$2 version saved_session workspace tab
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  version=$(meta_value "$path" version)
+  saved_session=$(meta_value "$path" session)
+  workspace=$(meta_value "$path" workspace_id)
+  tab=$(meta_value "$path" tab_id)
+  [ "$version" = 1 ] && [ "$saved_session" = "$session" ] || return 1
+  [ -n "$workspace" ] && [ -n "$tab" ] || return 1
+  case "$workspace:$tab" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  case "$workspace" in
+    *:*) return 1 ;;
+  esac
+  case "$tab" in
+    "$workspace":?*) ;;
+    *) return 1 ;;
+  esac
+  fm_backend_herdr_projection_focus_restore "$session" "$workspace"$'\t'"$tab" "pane close"
+}
+
 teardown_herdr_require_prerequisites() {  # <task-id>
   local task_id=$1 prerequisite
   teardown_require_backend_prerequisites herdr "$task_id" || return 1
@@ -3473,6 +3757,55 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+# teardown_herdr_journal_orphaned: true when the task's own journal names
+# nothing the session-start sweep could still close - a version 1 attempt whose
+# token-bearing projected workspace is confirmed gone, or a version 2 binding of
+# exactly the recorded pane this teardown proves gone. Unreadable, malformed, or
+# otherwise-bound journals, and a version 1 workspace still present or
+# unreadable, are not orphans.
+teardown_herdr_journal_orphaned() {
+  fm_backend_source herdr || return 1
+  fm_backend_herdr_projection_journal_snapshot "$HERDR_PRESENTATION_JOURNAL" "$ID" || return 1
+  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 1 ]; then
+    fm_backend_herdr_projection_token_workspace_gone \
+      "$TEARDOWN_HERDR_SESSION" "$HERDR_PRESENTATION_JOURNAL" "$ID"
+  else
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION:$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$T" ]
+  fi
+}
+HERDR_FOCUS_CHECKPOINT="$STATE/$ID.herdr-focus"
+HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_PANE=
+if [ "$BACKEND" = herdr ] \
+   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+  fm_backend_source herdr || true
+  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
+  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_PANE" ] \
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+  fi
+fi
+
+if [ "$BACKEND" = herdr ] && { [ -e "$HERDR_FOCUS_CHECKPOINT" ] || [ -L "$HERDR_FOCUS_CHECKPOINT" ]; }; then
+  if ! teardown_herdr_focus_checkpoint_restore "$HERDR_FOCUS_CHECKPOINT" "$TEARDOWN_HERDR_SESSION"; then
+    echo "error: herdr focus recovery for $ID could not restore the captain's active workspace and tab; retaining every durable task record" >&2
+    exit 1
+  fi
+  rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+    echo "error: herdr focus recovery for $ID could not retire its verified checkpoint; retaining every durable task record" >&2
+    exit 1
+  }
+fi
+
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
 BACKLOG_TRANSITION_FLAGS=()
@@ -3560,6 +3893,64 @@ fi
 # not by task-worktree cleanup.
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
+fi
+
+# Snapshot the worker's whole process tree BEFORE any destructive step below
+# can kill its shell and orphan a setsid child to init. Fix 2b reaps what this
+# captures. Not for kind=secondmate, whose child tree is owned by the dedicated
+# machinery further below.
+if [ "$KIND" != secondmate ]; then
+  task_endpoint_capture
+fi
+
+# A projected pane must close while its session lock is held and before any
+# worktree cleanup can kill its shell.
+# Killing that shell first lets Herdr remove the last pane outside the exact
+# focus-restore path, which can switch the captain to a neighboring workspace.
+if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+  if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
+    HERDR_FOCUS_SNAPSHOT=$(fm_backend_herdr_projection_focus_snapshot "$HERDR_PRESENTATION_SESSION") || {
+      echo "error: herdr pane $T for $ID has no unambiguous active workspace and tab to preserve; retaining every durable task record" >&2
+      exit 1
+    }
+    teardown_herdr_focus_checkpoint_write "$HERDR_FOCUS_CHECKPOINT" \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_FOCUS_SNAPSHOT" || {
+      echo "error: herdr pane $T for $ID could not persist its focus recovery checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
+    if fm_backend_herdr_projection_close_pane_focus_preserving \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" "$HERDR_FOCUS_SNAPSHOT"; then
+      HERDR_PROJECTED_CLOSE_RC=0
+    else
+      HERDR_PROJECTED_CLOSE_RC=$?
+    fi
+    # Exit status 2 means the exact prior focus itself could not be restored -
+    # the captain may now be looking at the wrong workspace/tab, so this must
+    # stop immediately and keep the checkpoint for the next run to recover
+    # from. Exit status 1 (pane close issued but not yet confirmed gone, focus
+    # already back where it was) is not fatal here: the presence classification
+    # and the endpoint-confirmation gate further below are what decide whether
+    # any durable record may be removed, exactly as before this reordering.
+    if [ "$HERDR_PROJECTED_CLOSE_RC" -eq 2 ]; then
+      echo "error: herdr pane $T for $ID could not be closed while preserving the captain's active workspace and tab; retaining every durable task record" >&2
+      exit 1
+    fi
+    rm -f "$HERDR_FOCUS_CHECKPOINT" || {
+      echo "error: herdr pane $T for $ID could not retire its verified focus checkpoint; retaining every durable task record" >&2
+      exit 1
+    }
+  else
+    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    exit 1
+  fi
+fi
+
+# Fork endpoint capture (above) snapshots the worker tree before any close.
+# Do not TERM that tree before the recorded close: killing the pane first makes
+# a blocked kill-window look like success and strands the durable record.
+# Worktree cwd reaping stays on the upstream owns-worktree gate so a
+# close-only fixture with no worktree cannot harvest the tmux pane by cwd.
+if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 elif [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes tasktmp "$TASK_TMP"
@@ -3622,78 +4013,40 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
 
-HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
-# teardown_herdr_journal_orphaned: true when the task's own journal names
-# nothing the session-start sweep could still close - a version 1 attempt whose
-# token-bearing projected workspace is confirmed gone, or a version 2 binding of
-# exactly the recorded pane this teardown proves gone. Unreadable, malformed, or
-# otherwise-bound journals, and a version 1 workspace still present or
-# unreadable, are not orphans.
-teardown_herdr_journal_orphaned() {
-  fm_backend_source herdr || return 1
-  fm_backend_herdr_projection_journal_snapshot "$HERDR_PRESENTATION_JOURNAL" "$ID" || return 1
-  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 1 ]; then
-    fm_backend_herdr_projection_token_workspace_gone \
-      "$TEARDOWN_HERDR_SESSION" "$HERDR_PRESENTATION_JOURNAL" "$ID"
-  else
-    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION:$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$T" ]
-  fi
-}
-HERDR_PRESENTATION_RETIRE_CANDIDATE=0
-HERDR_PRESENTATION_SESSION=
-HERDR_PRESENTATION_PANE=
-if [ "$BACKEND" = herdr ] \
-   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  fm_backend_source herdr || true
-  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
-  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
-  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
-     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
-     && [ -n "$HERDR_PRESENTATION_PANE" ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
-     && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
-  fi
-fi
-
-if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  # The presentation lock was acquired before the worktree return above; a
-  # contended lock already refused this teardown while everything was intact.
-  if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
-    # stderr is deliberately NOT discarded here. This is the highest-frequency
-    # projected-close call site, and the helper's only stderr output is a real
-    # warning - unverifiable workspace.move support, a refused focus-unsafe
-    # close, an unconfirmed repositioned-workspace removal, or a failed exact
-    # restore.
-    # Swallowing them left a wrong active workspace with no operator-visible
-    # signal at all. The close stays non-fatal exactly as before: the presence
-    # gate below is what decides whether any durable record may be removed.
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || true
-  else
-    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
-  fi
-elif [ "$BACKEND" = herdr ]; then
+if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] && [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
-    || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
+elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ] \
+     && [ "$TEARDOWN_ENDPOINT_MISSING" != 1 ]; then
+  if fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"; then
+    :
+  else
+    TEARDOWN_ENDPOINT_CLOSE_OK=0
+    endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
+  fi
+fi
+# Fork endpoint-tree reap is the leak net for setsid children the pane close
+# never signals. Run it only after a close that actually succeeded: a failed
+# close (including --force continuing past it) must leave the recorded window
+# alive so the refusal still names a surviving endpoint.
+if [ "$KIND" != secondmate ] && [ "${TEARDOWN_ENDPOINT_CLOSE_OK:-1}" = 1 ]; then
+  reap_task_endpoint_processes endpoint
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
+  if [ "$(fm_backend_herdr_pane_presence_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
   else
     echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
   fi
 elif [ "$BACKEND" = herdr ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+  # Close did not retire this journal. A version 2 binding of some other pane,
+  # or a version 1 attempt whose token-bearing workspace is still present, is
+  # not the closed endpoint; teardown_herdr_journal_orphaned below owns the
+  # leftover-journal verdict so a drifted pane is not treated as gone.
   echo "warning: herdr presentation journal for $ID was not retired by its close; no workspace cleanup was attempted" >&2
 fi
 # A refused, skipped, or failed Herdr close must never erase a live task's
@@ -3845,6 +4198,24 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  # A completed task changes the live fleet view, so refresh it on this
+  # existing completion boundary rather than adding a service. One guarded line
+  # into the one owner of the refresh contract (bin/fm-fleet-live.sh's header):
+  # `refresh --best-effort` refreshes only an already-recorded view tab, never
+  # opens one, and is a silent, bounded no-op on any failure or absence.
+  "${FM_FLEET_LIVE_BIN:-$SCRIPT_DIR/fm-fleet-live.sh}" refresh --best-effort >/dev/null 2>&1 || true
+  # A completed task also changes the published Pulse fleet page, so republish
+  # it on this same boundary through its own silent best-effort form.
+  "${FM_FLEET_PULSE_BIN:-$SCRIPT_DIR/fm-fleet-pulse.sh}" publish --best-effort >/dev/null 2>&1 || true
+fi
+# A completed ship or scout is a task boundary: queue a compact for this home's
+# own long-lived agent, which the watcher delivers at the next idle moment. A
+# secondmate retirement is not an ordinary boundary and is skipped. The marker
+# is durable, so a boundary reached while the agent is busy is not lost.
+if [ "$KIND" != secondmate ] && [ -d "$STATE" ] \
+  && ! fm_context_hygiene_disabled "$CONFIG"; then
+  fm_context_hygiene_mark_compact "$STATE" \
+    "$(fm_context_hygiene_focus_line "$DATA" "$STATE")" || true
 fi
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window ${T:-none}, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"

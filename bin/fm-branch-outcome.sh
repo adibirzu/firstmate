@@ -6,6 +6,11 @@
 #   - Store: $STATE/branch-outcomes.jsonl, strictly APPEND-ONLY. One JSON
 #     object per line: {"seq":N,"epoch":N,"task":"...","wake":"...",
 #     "verdict":"routine"|"captain","summary":"...","silent":true|false,
+#     "statusEndpoint":N,"statusIdent":"...","eventId":"..."}. `eventId` is
+#     optional and binds a retry to one logical wake-row report: a matching
+#     interrupted append returns its existing sequence after rebuilding any
+#     missing bounded index. Legacy rows without `silent`, status provenance,
+#     or `eventId` remain valid and are treated as visible.
 #     "statusEndpoint":N,"statusIdent":"..."}. Legacy rows without `silent`
 #     or status provenance remain valid and are treated as visible. A silent
 #     row must have verdict `routine`; the branch prompt and delivery consumers
@@ -33,8 +38,10 @@
 #     delivered and shown, not yet acted on. Routine rows never wait on this
 #     marker. It only advances through an explicit sequence-bound
 #     acknowledgement naming a currently unprocessed captain row at or below
-#     the read cursor; a routine, unread, or already-processed target is
-#     refused. It never moves past the read cursor or backwards, so an
+#     the read cursor; the target itself must be a captain, and advancing
+#     through it covers every earlier unprocessed captain in that range. A
+#     routine, unread, or already-processed target is refused. It never moves
+#     past the read cursor or backwards, so an
 #     unrelated or empty model answer cannot move it. An absent marker reads as
 #     0 (every delivered captain row is unprocessed, the safe direction), and
 #     nothing ever creates it from the read cursor: the Pi branch's visible
@@ -77,7 +84,7 @@
 #
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
-#       --summary <text> [--wake <text>] [--silent true|false]
+#       --summary <text> [--wake <text>] [--silent true|false] [--event-id <id>]
 #     Append one outcome record; prints the assigned seq.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
@@ -163,7 +170,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--event-id <id>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -240,8 +247,10 @@ last_seq() { # [<file> [<first expected seq, or null for a bounded suffix>]]
         keys == ["epoch", "seq", "summary", "task", "verdict", "wake"]
         or (keys == ["epoch", "seq", "silent", "summary", "task", "verdict", "wake"] and (.silent | type) == "boolean")
         or (
-          keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
+          (keys == ["epoch", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"]
+            or keys == ["epoch", "eventId", "seq", "silent", "statusEndpoint", "statusIdent", "summary", "task", "verdict", "wake"])
           and (.silent | type) == "boolean"
+          and (.eventId == null or ((.eventId | type) == "string" and (.eventId | test("[\\t\\n]") | not) and (.eventId | length) > 0))
           and ((.statusEndpoint | type) == "number" and .statusEndpoint >= 0 and .statusEndpoint <= 9007199254740991 and .statusEndpoint == (.statusEndpoint | floor))
           and ((.statusIdent | type) == "string" and (.statusIdent | test("[\\t\\n]") | not))
         )
@@ -309,6 +318,28 @@ publish_outcome_index_ready() { # <seq>
   tmp=$(mktemp "$STATE/.branch-outcome-index-ready.XXXXXX") || return 1
   printf '%s\n' "$1" > "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$OUTCOME_INDEX_READY"
+}
+
+recover_unpublished_append() { # <task> <verdict> <summary> <wake> <silent>
+  local task=$1 verdict=$2 summary=$3 wake=$4 silent=$5 event_id=${6:-} row seq endpoint ident
+  [ -n "$event_id" ] || return 1
+  [ -s "$STORE" ] || return 1
+  row=$(jq -c -s --arg event_id "$event_id" --arg task "$task" \
+    --arg verdict "$verdict" --arg summary "$summary" --arg wake "$wake" \
+    --argjson silent "$silent" '
+    map(select(.eventId == $event_id and .task == $task and .verdict == $verdict
+      and .summary == $summary and .wake == $wake
+      and ((.silent // false) == $silent)))
+    | if length == 0 then empty else .[0] end' "$STORE" 2>/dev/null) || return 1
+  [ -n "$row" ] || return 1
+  seq=$(printf '%s\n' "$row" | jq -er '.seq') || return 1
+  endpoint=$(printf '%s\n' "$row" | jq -er '.statusEndpoint // 0') || return 1
+  ident=$(printf '%s\n' "$row" | jq -er '.statusIdent // "-"') || return 1
+  if [ -e "$STATE/$task.meta" ] || [ -e "$STATE/$task.status" ]; then
+    write_outcome_index "$task" "$seq" "$endpoint" "$ident" || return 1
+  fi
+  publish_outcome_index_ready "$seq" || return 1
+  printf '%s\n' "$seq"
 }
 
 rebuild_outcome_indexes() {
@@ -503,6 +534,7 @@ case "$CMD" in
     SUMMARY=''
     WAKE=''
     SILENT=false
+    EVENT_ID=''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -510,6 +542,7 @@ case "$CMD" in
         --summary) SUMMARY=${2:-}; shift 2 || usage ;;
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
+        --event-id) EVENT_ID=${2:-}; shift 2 || usage ;;
         *) usage ;;
       esac
     done
@@ -518,6 +551,7 @@ case "$CMD" in
     [ -n "$SUMMARY" ] || usage
     case "$VERDICT" in routine|captain) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
+    case "$EVENT_ID" in *$'\t'*|*$'\n'*) usage ;; esac
     if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
       echo "error: silent outcomes must have the routine verdict" >&2
       exit 2
@@ -533,13 +567,35 @@ case "$CMD" in
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
       exit 1
     fi
+    if [ -n "$EVENT_ID" ] && RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT" "$EVENT_ID"); then
+      fm_lock_release "$LOCK"
+      printf '%s\n' "$RECOVERED"
+      exit 0
+    fi
+    if [ ! -e "$OUTCOME_INDEX_READY" ]; then
+      if ! rebuild_outcome_indexes; then
+        fm_lock_release "$LOCK"
+        echo "error: refusing append because the outcome indexes are not recoverable" >&2
+        exit 1
+      fi
+      if ! LAST_SEQ=$(last_seq); then
+        fm_lock_release "$LOCK"
+        echo "error: refusing append because the outcome store is malformed or non-sequential" >&2
+        exit 1
+      fi
+      if [ -n "$EVENT_ID" ] && RECOVERED=$(recover_unpublished_append "$TASK" "$VERDICT" "$SUMMARY" "$WAKE" "$SILENT" "$EVENT_ID"); then
+        fm_lock_release "$LOCK"
+        printf '%s\n' "$RECOVERED"
+        exit 0
+      fi
+    fi
     SEQ=$(( LAST_SEQ + 1 ))
     capture_status_position "$TASK"
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
-    printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
+    printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"%s}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
-      "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
+      "$(json_escape "$CAPTURED_STATUS_IDENT")" "$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi)" >> "$STORE"
     write_outcome_tail || echo "warning: outcome $SEQ was stored but its display tail copy could not be refreshed" >&2
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would

@@ -1136,7 +1136,9 @@ make_primary_home() {  # <name>
 start_hook_session() {  # <home>
   local home=$1
   FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_CREW_STATE_BIN="$home/fakebin/fm-crew-state.sh" \
-    PATH="$home/fakebin:$PATH" "$FAKE_CLAUDE" -c '
+    PATH="$home/fakebin:$PATH" CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-host-hook \
+    "$FAKE_CLAUDE" -c '
+      export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=sess-host-hook CLAUDE_PID=$$
       printf "%s\n" "$$" > "$FM_HOME/state/.lock"
       printf "%s\n" "$$" >> "$FM_HOME/claude-pids"
       for seed in "$FM_HOME"/mirror-seed.*; do

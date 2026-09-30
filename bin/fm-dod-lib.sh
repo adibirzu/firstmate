@@ -84,17 +84,14 @@
 # restating the rule.
 # Every heredoc here stays outside a command substitution: `VAR=$(cat <<EOF ...)`
 # breaks parsing of the whole file on Bash 3.2 (tests/fm-brief.test.sh).
-# fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
-# emitter, supplying it first in every ship/scout launch brief and never to a
-# secondmate charter. It names the one task-owned steering inbox without
-# relaxing isolation from every other home's endpoint namespace. Like
-# fm_brief_intent_overlay it is a distinctly titled launch section that states
-# its own precedence, so a brief or project instruction that authors a
-# conflicting role is superseded rather than duplicated.
-# fm_ship_rule_one owns the mode-specific first ship safety rule shared by an
-# ordinary ship brief and the durable contract written during scout promotion.
-# It takes the same optional trailing forge argument, because the rule that keeps
-# a worker off a remote is exactly the rule that changes when the forge does.
+# fm_brief_worker_role owns the ship/scout role scope plus the firstmate-task
+# suite-start rule (start the behavior suite through bin/fm-test-run.sh, which
+# gates a full-suite start on `llm-router-axi capacity --for suite`).
+# bin/fm-spawn.sh is its one emitter, supplying it to every ship/scout launch
+# brief and never to a secondmate charter. Like fm_brief_intent_overlay it is a
+# distinctly titled launch section that states its own precedence for Firstmate
+# tasks, so a brief that authors its own role wording is superseded rather than
+# duplicated.
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-pr-lib.sh"
@@ -109,16 +106,15 @@ fm_brief_worker_role() {  # <state-dir> <task-id>
   local state=$1 task_id=$2
   cat <<'EOF'
 # Current worker role contract
-You are a crewmate: an autonomous worker agent managed by firstmate.
-This section establishes your current identity before every project or task instruction below and supersedes any conflicting role identity in those instructions.
-Do the assigned work yourself and report only to firstmate; do not adopt a firstmate or secondmate supervisor identity, delegate the task, run fleet supervision, or address the captain.
+When this task works on Firstmate itself, this section supersedes every earlier brief instruction about your role and identity.
+When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is the primary/secondmate supervisor's contract: follow this brief instead of that supervisor contract.
+For that Firstmate task, do the assigned work yourself and report to firstmate; do not adopt the supervisor identity, delegate the task, run fleet supervision, or address the captain.
+For that Firstmate task, start the behavior suite through `bin/fm-test-run.sh`: it asks `llm-router-axi capacity --for suite` and refuses to start a full suite while another suite holds the one-suite-at-a-time slot, so never launch a second full suite beside a running one.
+This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+Other projects retain their own instructions unchanged.
 EOF
   printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
-  cat <<'EOF'
-Never inspect or change any other home's endpoint namespace; this authorization is limited to the exact task paths named by this brief.
-When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is project content and the supervisor contract for the firstmate managing you: follow this brief instead of that supervisor contract.
-Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
-EOF
 }
 
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a
@@ -397,7 +393,9 @@ Delivery contract: mode=direct-PR
 Ship branch: $branch
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\` that is ready for review, not a draft.
+When it is implemented and committed, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict before opening the PR; see \`docs/code-review.md\`.
+If it escalates to Stage 2 in delegate mode (exit 2), fix what the printed rules call for in the flagged files, then re-run \`bin/fm-review.sh worktree\` so the verdict you paste reflects the post-fix state.
+Push your branch, open a PR with \`gh-axi pr create --repo <owner>/<name>\` (the repository named by \`git remote get-url origin\`, never the CLI default) that is ready for review, not a draft, and paste that final Stage 1 verdict into the PR body under a \`## Code Review (Stage 1)\` heading.
 Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh-axi pr view <number>\` must print \`draft: no\`, where <number> is the PR number from your PR URL); if it is a draft, mark it ready with \`gh-axi pr ready <number>\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
@@ -425,6 +423,8 @@ EOF
 Delivery contract: mode=no-mistakes
 Ship branch: $branch
 The task is complete only when committed on your branch.
+Before invoking /no-mistakes, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict (\`docs/code-review.md\`) and fix anything it flags, so the pipeline's own reviewer sees a cleaner diff.
+This does not replace or modify the no-mistakes pipeline itself.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.

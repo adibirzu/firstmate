@@ -34,7 +34,7 @@
 # is checked against the wrong quota row. This is an accepted limitation of the
 # optional helper. Authoritative multi-provider routing - including provider
 # discovery from the harness catalog and quota matching by that explicit
-# provider - is owned by AGENTS.md section 4 and the quota-array-dispatch skill,
+# provider - is owned by AGENTS.md section 4 and the router-dispatch skill,
 # not by this helper. Use this helper only when the brief already fixed the
 # candidate order and every candidate's provider is the harness's primary family.
 #
@@ -323,6 +323,9 @@ printf '%s\n' "$QUOTA_JSON" | fm_quota_json_valid || die "invalid quota-axi prov
 # The harness -> primary provider family table is owned by
 # fm_quota_provider_for_harness in bin/fm-quota-axi-lib.sh; see the header
 # limitation note for why one family per harness is all this helper checks.
+# omp is keyed on the candidate model prefix instead and has no family for any
+# other prefix. Authoritative multi-provider routing is owned by AGENTS.md
+# section 4 and the router-dispatch skill, not this helper.
 provider_for_harness() {
   fm_quota_provider_for_harness "$@"
 }

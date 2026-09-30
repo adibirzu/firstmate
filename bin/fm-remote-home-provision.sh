@@ -179,8 +179,13 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
 else
   # Clone into a staging path this attempt owns, then publish by rename: a
   # competing cleanup or rollback aimed at the absent public home cannot
-  # remove a directory a live clone is still writing. Verify the sentinel
-  # after mv: if the destination appeared meanwhile, mv may nest our stage
+  # remove a directory a live clone is still writing.
+  # Reserve the name with mktemp -d, then remove that empty directory so git
+  # clone creates the destination itself.
+  # Cloning into a pre-created directory makes git init then hardlink objects,
+  # which fails with "failed to copy file to .../.git/objects/...: No such file
+  # or directory" on some filesystems.
+  # Verify the sentinel after mv: if the destination appeared meanwhile, mv may nest our stage
   # inside it instead of publishing, so rollback must remove only that stage.
   STAGE_HOME=$(mktemp -d "$HOME_PARENT/.fm-home-provisioning.XXXXXX") \
     || die "cannot create remote home staging directory"

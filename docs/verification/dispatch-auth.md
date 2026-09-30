@@ -2,12 +2,12 @@
 
 Audience: maintainer verification.
 
-This record supports the dispatch judgment rules in `.agents/skills/quota-array-dispatch/SKILL.md` and the bounded vendor probe in `bin/fm-vendor-auth-probe.sh`.
+This record supports the dispatch judgment rules in `.agents/skills/router-dispatch/SKILL.md` and the bounded vendor probe in `bin/fm-vendor-auth-probe.sh`.
 It records only facts that must be re-established when a producer or vendor version changes.
 Task chronology, incident transcripts, and credential metadata stay in private reports or PR evidence.
 
 Firstmate resolves a candidate's provider family, credential surface, and applicable quota by reading the evidence below and reasoning in the open.
-The [worker helper](../../bin/fm-quota-choose.sh) and [typed resolver](../configuration.md#typed-dispatch-resolution-env-typesafe_api_key) document their deterministic mapping boundaries; the [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns the remaining catalog and credential judgments.
+The [worker helper](../../bin/fm-quota-choose.sh) and [typed resolver](../configuration.md#typed-dispatch-resolution-env-typesafe_api_key) document their deterministic mapping boundaries; the [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns the remaining catalog and credential judgments.
 Credential paths below are shown with the home directory replaced by `<home>`.
 
 ## Quota granularity the judgment depends on
@@ -31,7 +31,7 @@ Current dispatch reads the TOON scope and `limitedBy` fields; the JSON fallback'
 }
 ```
 
-The [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns account and scope applicability; this capture illustrates those scope bounds:
+The [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns account and scope applicability; this capture illustrates those scope bounds:
 
 - The captured Codex account reports an `all_models` bound of 64% even for models without their own window.
 - A `model:`-scoped entry is an additional bound for that one model. `model:codex_bengalfox` is the GPT-5.3-Codex-Spark window and bounds nothing else.
@@ -109,7 +109,7 @@ This live snapshot was all `through_reset`, so finite-runway fields were omitted
 There is no `projectionBasis` field; its absence means `cycle_average`.
 `runway` and `selection` are nested under each effective-availability scope, so the same provider/model applicability rules govern headroom, runway, and `spendPriority`.
 Projection confidence is not present on every known runway, so selection must preserve that absence as uncertainty rather than fabricate it.
-The schema compatibility and account-matching contract is owned by [`quota-array-dispatch`](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility); this schema-5 evidence does not reinterpret an absent runway, pace, or selection field.
+The older-schema fallback contract and the account-matching contract are owned by [`router-dispatch`](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array); this schema-5 evidence does not reinterpret an absent runway, pace, or selection field.
 
 ## Provider-family counterfactual that this producer schema supports
 
@@ -167,7 +167,7 @@ Observed source statuses are `available`, `expired` (with an `error` slug), and 
 - A provider can carry a healthy source beside a missing or expired one, so a provider must not be collapsed to a single status. Claude's `oauth-file` is missing while its keychain source is available, and Kimi's standalone CLI credential is expired while its Pi source is available.
 - In this captured setup, only `pi:xai` and `pi:kimi-coding` have `pi:`-prefixed sources.
   The Pi `openai-codex` candidate used the Codex store listed above; this observation does not establish the credential source for another account or setup.
-  The [eligibility procedure](../../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility) owns how missing authentication evidence affects dispatch.
+  The [eligibility procedure](../../.agents/skills/router-dispatch/SKILL.md#matched-profile-array) owns how missing authentication evidence affects dispatch.
 
 Neither this per-source shape nor `state.authStatus` exists before quota-axi 0.1.16.
 `bin/fm-bootstrap.sh` enforces the current compatibility floor through `bin/fm-quota-axi-lib.sh`.
@@ -195,10 +195,71 @@ These discriminator strings are un-owned vendor UI text.
 `bin/fm-vendor-auth-probe.sh` pins the verified version, reports `versionVerified=no` when the running CLI differs, and classifies any unrecognized first line as `indeterminate` rather than authenticated.
 Re-run the two commands above and update this section and the pinned version together when the vendor CLI changes.
 
+## A provider whose pools are billed separately
+
+Verified 2026-08-15 against quota-axi 0.1.28 schema 3 and Cursor Agent CLI 2026.08.11-e8db854.
+
+Cursor reports three separate windows, and the producer's own bounding rule says every one of them binds every model:
+
+```sh
+quota-axi --json | jq -c '.providers[] | select(.provider == "cursor")
+  | {windows: [.windows[] | {id, percentRemaining}],
+     rule: .quotaSemantics.description,
+     effective: .quotaSemantics.effectiveAvailability[0]}'
+```
+
+```json
+{
+  "windows": [
+    { "id": "included_usage", "percentRemaining": 84 },
+    { "id": "auto_usage", "percentRemaining": 97 },
+    { "id": "api_usage", "percentRemaining": 0 }
+  ],
+  "rule": "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  "effective": { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "limitingWindowIds": ["api_usage"] }
+}
+```
+
+A Cursor-native model answered normally in that exact state, so the stated joint bound is not what the account enforces for such a model:
+
+```sh
+cd "$(mktemp -d)" && cursor-agent -p --trust --mode ask --model cursor-grok-4.6-high hi
+```
+
+```text
+Hi — what can I help you with?
+```
+
+Two facts follow, and both are load-bearing for the `quotaWindow` field owned by `docs/configuration.md`:
+
+- Pricing a Cursor candidate on the provider-wide minimum refuses every Cursor route whenever the API pool is spent, including routes that demonstrably still work.
+- The producer's stated rule is therefore not sufficient evidence on its own, so no correct pool can be derived from it or from a model name; the pool the route draws on is declared in configuration, where an operator can check and correct it.
+
+This is an operator-declared override of a producer-stated bounding rule, resting on the probe above rather than on the telemetry.
+Re-establish it, and revisit any configured `quotaWindow`, whenever the vendor's billing split, quota-axi's Cursor semantics, or that probe's outcome changes.
+The declaration stays conservative in one direction on purpose: a declared window that the live telemetry does not carry blocks the candidate rather than falling back to a different window.
+
+## Harness model catalogs drift
+
+Verified 2026-08-15 with `bin/fm-model-refresh.sh`, which is the command that refreshes every model claim in `.agents/skills/harness-adapters/SKILL.md`.
+
+On that date `cursor-agent --list-models` returned 204 ids for this account on Cursor Agent CLI 2026.08.11-e8db854, including a full `cursor-grok-4.6-{low,medium,high,xhigh}` ladder with `-fast` variants.
+That contradicts the earlier recorded observation that the live catalog carried only `-high` Grok ids, which is the second time that list has drifted, so no remembered model family may be treated as current.
+`grok models` returned 2 ids on grok 1.0.4, and `agy models` returned 14 on agy 1.1.13.
+
+A listing establishes only that a model is offered.
+The probe above is what established that a listed model actually answers, and the two differ in practice, which is why probing exists as an opt-in flag rather than a default.
+An installed harness whose listing yields no recognizable id is reported as an error rather than an empty catalog, because a changed output format and an account with no models are indistinguishable from the ids alone; that is what `pi --list-models` produced here with no provider logged in.
+A listing command that exits non-zero is reported as an error on its exit status alone and its output is never parsed, so a usage or error message printed by a failing CLI cannot enter the catalog as a model id.
+The same rule governs a probe verdict: only a clean exit carrying output records `usable`, a clean exit carrying nothing records `unusable`, and a timeout or any other non-zero exit records `error` with the exit status kept in the reason, because a broken CLI and a rejected model cannot be told apart without parsing vendor output.
+
 ## Regression coverage
 
 `tests/fm-vendor-auth-probe.test.sh` drives the real script against a fake vendor CLI that records every invocation's argv and anything readable on stdin.
 It asserts that the script accepts no harness, model, or provider input, never calls `quota-axi`, exits alike for every probe result because it renders no verdict, invokes only the two fixed non-destructive argv forms with stdin closed, holds a real bound even when the configured bound is zero or malformed, and never echoes raw vendor output.
+`tests/fm-dispatch-select.test.sh` owns the selector's pricing contract, including the case where a declared window and the provider's worst window disagree, the case where a declared window is missing from the telemetry, ranking by known `spendPriority` among eligible candidates, and least-recent rotation when those scalars tie or are absent.
+`tests/fm-model-refresh.test.sh` drives the refresh tool against listing shims that reproduce the real output shapes, and covers absent-harness reporting, the new-since-last-run diff, the refusal of a run that checked nothing, and the guarantee that probing never runs without its flag.
+It also covers a listing command that exits non-zero while printing parseable-looking prose, the `--json` contract that stdout carries the catalog document alone, and a probe whose command fails recording `error` rather than a durable `unusable` claim.
 `tests/fm-spawn-dispatch-profile.test.sh` owns spawn's deterministic profile and harness refusals.
 `tests/fm-bootstrap.test.sh` owns the quota-axi version-floor diagnostic.
 `tests/fm-quota-array-dispatch-live-e2e.test.sh` drives the public Pi skill-loading interface against one fake schema-5 snapshot per case, served as quota-axi's default TOON.

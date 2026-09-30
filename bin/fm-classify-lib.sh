@@ -414,7 +414,6 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
   done
   return 1
 }
-
 # A condition-aware declared wait: a `paused:` line may say WHEN it expects to
 # clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` anywhere in its text (UTC only, so
 # no local-zone guess is ever recorded). Prints that time as epoch seconds so a
@@ -430,6 +429,55 @@ status_paused_until() {  # <status-line> -> epoch on stdout
     | head -1)
   [ -n "$token" ] || return 1
   fm_utc_iso_to_epoch "$token"
+}
+
+# Verbs that genuinely SUPERSEDE an earlier declared wait (paused or
+# captain-held): real state transitions, not the declared-wait verbs
+# themselves. FM_CLASSIFY_SUPERSEDING_VERBS overrides the whole set.
+FM_CLASSIFY_SUPERSEDING_VERBS_DEFAULT='working done blocked failed'
+
+# The DECLARED wait a task's status log currently governs by: the most recent
+# line whose verb is the pause verb, the captain-held verb, or one of the
+# superseding verbs above - never simply the file's last non-blank line
+# (last_status_line above). A `paused:` or `captain-held:` declaration keeps
+# governing across any number of LATER lines whose verb is none of those: an
+# intervening `resolved:` line (closing some unrelated open decision on the
+# same task, per status_open_decisions above), a bare no-verb signal, or any
+# other unrecognized verb never supersedes a still-standing declared wait.
+# Only a later working/done/blocked/failed line - the worker itself moving on
+# - genuinely supersedes it. Forward whole-file fold, the same shape as
+# status_open_decisions' fold: the winning line is simply overwritten every
+# time a recognized verb is seen, so whichever one the loop saw last is the
+# latest one. Returns the winning line (empty when the log holds none of
+# these verbs at all), for a caller to run through status_is_paused /
+# status_is_captain_held / status_is_paused_or_captain_held exactly as it
+# would previously have run last_status_line's result through them.
+status_paused_governing_line() {  # <status-file>
+  local f=$1 line verb paused_verb held_verb winning='' v
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
+  paused_verb=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  held_verb=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *[![:space:]]*) ;;
+      *) continue ;;
+    esac
+    verb=$(status_line_verb "$line")
+    case "$verb" in
+      "$paused_verb"|"$held_verb")
+        winning=$line
+        ;;
+      *)
+        for v in ${FM_CLASSIFY_SUPERSEDING_VERBS:-$FM_CLASSIFY_SUPERSEDING_VERBS_DEFAULT}; do
+          if [ "$verb" = "$v" ]; then
+            winning=$line
+            break
+          fi
+        done
+        ;;
+    esac
+  done < "$f"
+  printf '%s' "$winning"
 }
 
 # --- optional event emission time -------------------------------------------
@@ -1353,6 +1401,28 @@ $open
 EOF
   done
   return 0
+}
+
+# Print every decision key already CLOSED by a captain-held transfer in this
+# stream, one per line, first-seen order, de-duplicated. A key in this set has
+# SPENT its durable identity: fm-captain-hold.sh writes the transfer only after
+# binding that key to a verified backlog hold, so a LATER needs-decision or blocked
+# event carrying the same key is a DIFFERENT decision that the existing hold cannot
+# represent. Untagged events all carry the key "default", so this is the only
+# mechanical signal separating a second untagged decision from the first one. Pure
+# read of the file, no globals beyond the optional captain-held verb override.
+status_captain_held_keys() {  # <status-file>
+  local f=$1 line verb key held seen=''
+  [ -f "$f" ] || return 0
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    verb=$(status_line_verb "$line")
+    [ "$verb" = "$held" ] || continue
+    key=$(_fm_decision_key "$line") || continue
+    case " $seen " in *" $key "*) continue ;; esac
+    seen="$seen $key"
+    printf '%s\n' "$key"
+  done < "$f"
 }
 
 status_presentation_snapshot() {  # <state>

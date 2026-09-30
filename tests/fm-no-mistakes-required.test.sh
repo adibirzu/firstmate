@@ -66,7 +66,73 @@ test_missing_head_fails() {
   pass "shared action rejects an attestation with no head_sha"
 }
 
+DIRECT_PR_VALID='## Code Review (Stage 1)
+
+# Code Review Verdict
+
+**Stage 1: Deterministic Review (zero LLM tokens)**
+
+- Files reviewable: 2 / 2
+- Changes: +50 / -5 (55 lines)
+- Linter: ran, 0 finding(s)
+- LLM tokens: 0
+
+No escalation: Stage 1 alone gates this change.
+
+## Independent Second-Level Review
+
+Reviewer: crewmate delegate review (host-agent lane)
+Report: data/fm-ci-review-attestation-check/report.md'
+
+run_attestation() {
+  printf '%s' "$1" | "$ROOT/bin/fm-direct-pr-attestation.sh" 2>&1
+}
+
+test_direct_pr_valid_attestation_passes() {
+  local output rc
+  rc=0
+  output=$(run_attestation "$DIRECT_PR_VALID") || rc=$?
+  expect_code 0 "$rc" "validator rejected a valid two-stage attestation body"
+  pass "direct-PR validator accepts a valid Stage 1 verdict plus named second-level review"
+}
+
+test_direct_pr_empty_body_fails() {
+  local output rc
+  rc=0
+  output=$(run_attestation "") || rc=$?
+  [ "$rc" -ne 0 ] || fail "validator accepted an empty PR body"
+  assert_contains "$output" "empty" \
+    "empty-body failure did not explain the body is empty"
+  pass "direct-PR validator rejects an empty PR body"
+}
+
+test_direct_pr_placeholder_reviewer_fails() {
+  local body output rc
+  body='## Code Review (Stage 1)
+
+# Code Review Verdict
+
+**Stage 1: Deterministic Review (zero LLM tokens)**
+
+- Files reviewable: 2 / 2
+- Changes: +50 / -5 (55 lines)
+
+## Independent Second-Level Review
+
+Reviewer: TBD
+Report: data/fm-ci-review-attestation-check/report.md'
+  rc=0
+  output=$(run_attestation "$body") || rc=$?
+  [ "$rc" -ne 0 ] || fail "validator accepted a placeholder second-level reviewer"
+  assert_contains "$output" "Reviewer" \
+    "placeholder-reviewer failure did not name the Reviewer field"
+  pass "direct-PR validator rejects a placeholder second-level reviewer"
+}
+
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
+test_direct_pr_valid_attestation_passes
+test_direct_pr_empty_body_fails
+test_direct_pr_placeholder_reviewer_fails

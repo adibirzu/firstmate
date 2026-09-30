@@ -2,8 +2,14 @@
 # Shared durable wake queue and portable lock helpers.
 # docs/watcher-continuity.md owns the recovery-episode state contract.
 
-FM_WAKE_LIB_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
-FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
+# pwd -P so this default root is canonical.
+# A home is routinely reachable through a symlinked ancestor, and a logical pwd
+# keeps whichever route the caller happened to use, so two scripts in the same
+# home can derive two different strings for it.
+# fm_lock_paths_equal below is what keeps that survivable for lock identity;
+# deriving canonically here removes the divergence at the source.
+FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd -P)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
@@ -122,6 +128,45 @@ fm_path_age() {
   echo $(( now - m ))
 }
 
+# Compare two watcher-lock identity paths for "names the same place".
+#
+# The home and watcher-path recorded in the lock come from whichever script forked
+# the watcher, and are re-read by whichever script is checking it. Those scripts do
+# not agree on symlink resolution: bin/fm-arm-pretool-check.sh and
+# bin/fm-cd-pretool-check.sh resolve with pwd -P, while most of bin/ derives its
+# root with a logical pwd. When a home is reachable through a symlinked ancestor
+# (a real fleet layout, not a hypothetical), the two styles produce two different
+# strings for one directory, and a raw string comparison then reports the home's
+# own live watcher as somebody else's forever - every identity check fails, and
+# nothing can repair it because re-arming records the same divergent pair again.
+#
+# Resolving both sides makes any mix of the two styles agree. Equal raw strings
+# short-circuit, so the common case costs nothing. A path that cannot be resolved
+# (a stale lock naming a removed home) keeps its raw value rather than becoming
+# empty, so an unresolvable path never matches a different unresolvable path.
+# Resolve a lock identity path as far as it can be resolved.
+# A home is a directory whose own final component can be the symlink (~/dev ->
+# an external volume), so it must be resolved too - fm_lock_abs_path deliberately
+# leaves the final component alone, which is right for the watcher-path file but
+# would leave a symlinked home unresolved.
+fm_lock_resolve_path() {  # <path>
+  local path=$1 real
+  if [ -d "$path" ] && real=$(CDPATH='' cd -- "$path" 2>/dev/null && pwd -P); then
+    printf '%s\n' "$real"
+    return 0
+  fi
+  fm_lock_abs_path "$path"
+}
+
+fm_lock_paths_equal() {  # <a> <b>
+  local a=$1 b=$2 a_real b_real
+  [ "$a" = "$b" ] && return 0
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  a_real=$(fm_lock_resolve_path "$a" 2>/dev/null) || a_real=$a
+  b_real=$(fm_lock_resolve_path "$b" 2>/dev/null) || b_real=$b
+  [ "$a_real" = "$b_real" ]
+}
+
 # fm_poll_derived_grace [poll-seconds]
 # Default guard-grace derivation: max(300, poll + 60). A watcher touches its
 # liveness beacon once per poll cycle, so a fixed 300s grace stops correctly
@@ -174,8 +219,8 @@ fm_watcher_lock_matches_pid() {
   lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$lockdir/watcher-path" 2>/dev/null || true)
   lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
-  [ "$lock_home" = "$home" ] || return 1
-  [ "$lock_path" = "$watch_path" ] || return 1
+  fm_lock_paths_equal "$lock_home" "$home" || return 1
+  fm_lock_paths_equal "$lock_path" "$watch_path" || return 1
   [ -n "$lock_identity" ] || return 1
   current_identity=$(fm_pid_identity "$pid") || return 1
   [ "$current_identity" = "$lock_identity" ] || return 1
@@ -1399,13 +1444,24 @@ fm_firstmate_root_home() {
 # It is anchored in the local root home's state directory so that every home on
 # this machine that can reach the same pool - the root, and each secondmate home
 # below it, including a remote-seeded home and its own local descendants -
-# derives the identical path. Its identity is the project's resolved origin, so
-# separate clones of one origin share a single lock; an origin-less local-only
-# project falls back to its own worktree top instead of failing to resolve.
+# derives the identical path. That state directory is the effective one: a home
+# may redirect its state via FM_STATE_OVERRIDE, and the redirect applies to the
+# anchor exactly when the anchor IS this home (no local parent hop). A
+# descendant home keeps anchoring on the literal root, so it can never retarget
+# the shared lock with a local override. Its identity is the project's resolved
+# origin, so separate clones of one origin share a single lock; an origin-less
+# local-only project falls back to its own worktree top instead of failing to
+# resolve.
 fm_treehouse_project_lock_path() {  # <project-dir>
-  local project=$1 root origin identity hash top
+  local project=$1 root origin identity hash top home_real state
   [ -d "$project" ] || return 1
   root=$(fm_firstmate_root_home "$FM_HOME") || return 1
+  home_real=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || return 1
+  if [ "$root" = "$home_real" ]; then
+    state=${FM_STATE_OVERRIDE:-$root/state}
+  else
+    state="$root/state"
+  fi
   origin=$(git -C "$project" remote get-url origin 2>/dev/null || true)
   if [ -n "$origin" ]; then
     case "$origin" in
@@ -1420,8 +1476,8 @@ fm_treehouse_project_lock_path() {  # <project-dir>
     identity=$top
   fi
   hash=$(printf '%s' "$identity" | git hash-object --stdin 2>/dev/null) || return 1
-  [ -d "$root/state" ] || return 1
-  printf '%s/.treehouse-project-%s.lock\n' "$root/state" "$hash"
+  [ -d "$state" ] || return 1
+  printf '%s/.treehouse-project-%s.lock\n' "$state" "$hash"
 }
 
 # A Treehouse slot has the managed pool's fixed <pool>/<slot>/<repo> layout.
@@ -2023,6 +2079,7 @@ fm_wake_append_locked() {
   recovery_marker="$STATE/.watcher-down"
   status=0
 
+  _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
   _fm_recovery_marker_publish "$recovery_marker" downtime "" append || status=$?
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)

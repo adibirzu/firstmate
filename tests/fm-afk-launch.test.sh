@@ -25,10 +25,6 @@ START="$ROOT/bin/fm-afk-start.sh"
 CONTRACT="$ROOT/bin/fm-afk-contract.sh"
 # The daemon paths refuse on a Pi primary, so pin a daemon-running harness for
 # every unit below; the Pi refusal has its own units (unit_pi_never_launches_the_daemon).
-# FM_TEST_HARNESS is the launch path's test-only seam (bin/fm-afk-launch.sh
-# fm_afk_launch_primary_harness): the suite calls the entrypoints directly, so a
-# real harness ancestor - a no-mistakes gate agent run under Pi - would outrank
-# the CLAUDECODE=1 marker below and refuse the daemon paths under test.
 unset PI_CODING_AGENT FM_PI_HARNESS CURSOR_AGENT CURSOR_INVOKED_AS GEMINI_CLI ATLASSIAN_AGENT_TYPE ROVODEV_CLI
 export CLAUDECODE=1 FM_TEST_HARNESS=claude FM_TEST_SEAM=1
 # A Claude home runs the supervision host unless config/supervision-host-off
@@ -49,7 +45,6 @@ chmod +x "$SLEEPER"
 TRACK_TMUX_SESSIONS=""
 GLOBAL_CLEANUP() {
   rm -f "$SLEEPER" 2>/dev/null || true
-  rm -rf "$OFF_CONFIG" 2>/dev/null || true
   local s
   for s in $TRACK_TMUX_SESSIONS; do
     tmux kill-session -t "$s" 2>/dev/null || true
@@ -57,72 +52,47 @@ GLOBAL_CLEANUP() {
 }
 trap GLOBAL_CLEANUP EXIT
 
-enter_posture() {  # <home>
-  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$CONTRACT" enter >/dev/null 2>&1
+confirm_posture() {  # <home>
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$CONTRACT" propose >/dev/null 2>&1 \
+    && FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$CONTRACT" confirm >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
-# UNIT 0: /afk is itself the go. `enter` writes the away-posture record in the
-# same call, with no separate confirmation, and prints the announcement and the
-# read-back after the record exists; on Pi the entry ends there, and every
-# daemon path requires that record.
+# UNIT 0: the away-posture record is the entry. `propose` reads the mandate
+# back, `confirm` records it and announces hold-for-return; on Pi the entry
+# ends there, and every daemon path requires that confirmed record.
 # ---------------------------------------------------------------------------
-unit_enter_records_the_posture_in_one_step_without_a_daemon() {
+unit_propose_confirm_records_the_posture_without_a_daemon() {
   local st out rc
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-enter.XXXXXX")
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-propose.XXXXXX")
   mkdir -p "$st/state"
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter \
-    --words 'merge the windows fix when green' --expected-return 2026-09-08T08:00Z --spend 2 2>&1)
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose \
+    --words 'merge the windows fix when green' --action merge --object 'task fix-windows PR' --when 'checks green' \
+    --action merge --object regardless 2>&1)
+  rc=$?
+  if [ "$rc" -eq 3 ] && [ -f "$st/state/.afk-contract.proposed" ] \
+    && printf '%s' "$out" | grep -F '1. merge task fix-windows PR when checks green' >/dev/null \
+    && printf '%s' "$out" | grep -F '2. "action=merge object=regardless when=(none)" - refused: missing when' >/dev/null \
+    && [ ! -e "$st/state/.afk-contract" ]; then
+    pass "propose: the read-back lists accepted and refused clauses and writes only a proposal"
+  else
+    fail "propose: read-back or proposal wrong (rc=$rc): $out"
+  fi
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" confirm 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f "$st/state/.afk-contract" ] && [ ! -e "$st/state/.afk-contract.proposed" ] \
-    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" words)" = 'merge the windows fix when green' ] \
-    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" field expected_return)" = 2026-09-08T08:00Z ] \
-    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" field spend_max_concurrent_workers)" = 2 ] \
     && [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ] \
-    && printf '%s' "$out" | grep -F 'hold-for-return only. No phone channel is configured; anything that needs you waits for your return.' >/dev/null \
-    && printf '%s' "$out" | grep -F '    merge the windows fix when green' >/dev/null \
-    && ! printf '%s' "$out" | grep -iE 'say go|to confirm|not yet confirmed' >/dev/null; then
-    pass "enter: one call writes the record with the words, expected return, and spend cap, reads it back without asking for a go, and launches no daemon"
+    && printf '%s' "$out" | grep -F 'hold-for-return only. No phone channel is configured; anything that needs you waits for your return.' >/dev/null; then
+    pass "confirm: records the posture, announces hold-for-return only, and launches no daemon"
   else
-    fail "enter: record, read-back, or daemon state wrong (rc=$rc): $out"
-  fi
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --words 'merge it' --grant fix-windows 2>&1)
-  rc=$?
-  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -F -- '--grant was retired' >/dev/null \
-    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" words)" = 'merge the windows fix when green' ]; then
-    pass "enter: the retired --grant flag is refused by name and leaves the standing record alone"
-  else
-    fail "enter: --grant was not refused by name (rc=$rc): $out"
+    fail "confirm: record, announcement, or daemon state wrong (rc=$rc): $out"
   fi
   printf 'schema\tfm-afk-return.v1\nphase\tblocked\n' > "$st/state/.afk-return-catchup"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --words 'merge task a PR when green' >/dev/null 2>&1; then
-    fail "enter: accepted a new mandate while the prior return catch-up was pending"
-  elif [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" words)" = 'merge the windows fix when green' ]; then
-    pass "enter: refuses while the prior return catch-up is pending"
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" propose --action merge --object 'task a PR' --when 'checks green' >/dev/null 2>&1; then
+    fail "propose: accepted a new mandate while the prior return catch-up was pending"
   else
-    fail "enter: a refused entry changed the standing record"
+    pass "propose: refuses while the prior return catch-up is pending"
   fi
-  rm -rf "$st"
-}
-
-# No launch path waits for a separate go: the retired two-step subcommands are
-# refused by name and write nothing, so no caller can stage a mandate that then
-# waits on a human response before it binds.
-unit_retired_two_step_entry_is_refused() {
-  local st cmd out rc
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-retired.XXXXXX")
-  mkdir -p "$st/state"
-  for cmd in propose confirm; do
-    out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" "$cmd" --words 'merge it when green' 2>&1)
-    rc=$?
-    if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -F "'$cmd' was retired" >/dev/null \
-      && [ ! -e "$st/state/.afk-contract" ] && [ ! -e "$st/state/.afk-contract.proposed" ] \
-      && [ ! -d "$st/state/.afk-launch.lock" ]; then
-      pass "$cmd: the retired wait-for-go step is refused by name, writes nothing, and releases the launcher lock"
-    else
-      fail "$cmd: the retired step was not refused cleanly (rc=$rc): $out"
-    fi
-  done
   rm -rf "$st"
 }
 
@@ -153,86 +123,41 @@ unit_pi_never_launches_the_daemon() {
   done
 }
 
-# A leaked FM_TEST_HARNESS in a real primary's environment must stay inert: the
-# seam fires only alongside the FM_TEST_SEAM marker that test suites set.
-unit_test_harness_seam_requires_the_marker() {
-  local ref stray pinned
-  # shellcheck disable=SC2016 # positional params expand in the child shell.
-  ref=$(env -u FM_TEST_SEAM -u FM_TEST_HARNESS CLAUDECODE=1 \
-    bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
-  # shellcheck disable=SC2016 # positional params expand in the child shell.
-  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS=omp \
-    bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
-  [ "$stray" = "$ref" ] \
-    || fail "FM_TEST_HARNESS without FM_TEST_SEAM changed harness detection ($stray != $ref)"
-  # shellcheck disable=SC2016 # positional params expand in the child shell.
-  stray=$(env -u FM_TEST_SEAM CLAUDECODE=1 FM_TEST_HARNESS='1 omp' \
-    bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
-  [ "$stray" = "$ref" ] \
-    || fail "a marker-shaped FM_TEST_HARNESS without FM_TEST_SEAM changed harness detection ($stray != $ref)"
-  # shellcheck disable=SC2016 # positional params expand in the child shell.
-  pinned=$(FM_TEST_SEAM=1 CLAUDECODE=1 FM_TEST_HARNESS=omp \
-    bash -c '. "$1"; fm_afk_launch_primary_harness' _ "$LAUNCH")
-  [ "$pinned" = omp ] \
-    || fail "FM_TEST_SEAM-armed FM_TEST_HARNESS did not pin the harness ($pinned)"
-  pass "FM_TEST_HARNESS seam is inert without the test marker"
-}
-
-unit_pi_enter_stop_does_not_claim_a_daemon_terminal() {
-  local st out rc
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-pi-stop.XXXXXX")
-  mkdir -p "$st/state"
-  enter_posture "$st" || fail "pi stop: could not enter fixture posture"
-  [ ! -e "$st/state/.afk" ] || fail "pi stop: fixture error: enter wrote the away flag"
-  [ ! -e "$st/state/.afk-daemon-terminal" ] || fail "pi stop: fixture error: enter recorded a daemon terminal"
-  [ ! -e "$st/state/.supervise-daemon.log" ] || fail "pi stop: fixture error: a daemon log already existed"
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop 2>&1)
-  rc=$?
-  if [ "$rc" -eq 0 ] \
-    && printf '%s' "$out" | grep -F 'no daemon terminal was running' >/dev/null \
-    && ! printf '%s' "$out" | grep -F 'daemon terminal torn down' >/dev/null \
-    && [ ! -e "$st/state/.afk-contract" ]; then
-    pass "pi enter stop: reports that no daemon terminal was running"
-  else
-    fail "pi enter stop: claimed a daemon teardown or failed (rc=$rc): $out"
-  fi
-  rm -rf "$st"
-}
-
-unit_daemon_entry_requires_the_record() {
+unit_daemon_entry_requires_confirmation() {
   local st out rc
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-entry-record.XXXXXX")
   mkdir -p "$st/state"
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" propose --action merge --object 'task a PR' --when 'checks green' >/dev/null 2>&1
   out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native 2>&1)
   rc=$?
-  if [ "$rc" -ne 0 ] && [ ! -e "$st/state/.afk-contract" ] && [ ! -e "$st/state/.afk" ] \
-    && printf '%s' "$out" | grep -F 'an away-posture record is required; run enter' >/dev/null; then
-    pass "daemon entry: no daemon lifecycle starts without the away-posture record"
+  if [ "$rc" -ne 0 ] && [ -f "$st/state/.afk-contract.proposed" ] && [ ! -e "$st/state/.afk-contract" ] \
+    && [ ! -e "$st/state/.afk" ] && printf '%s' "$out" | grep -F 'a confirmed away-posture record is required' >/dev/null; then
+    pass "daemon entry: a pending proposal cannot bypass captain confirmation"
   else
-    fail "daemon entry: started without a record or the refusal was unclear (rc=$rc): $out"
+    fail "daemon entry: pending proposal was promoted or refusal was unclear (rc=$rc): $out"
   fi
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter --words 'merge task a PR when green' >/dev/null 2>&1 \
-    && FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" confirm >/dev/null 2>&1
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
     && [ -e "$st/state/.afk" ]; then
-    pass "daemon entry: enter then start-native run back to back with no confirmation between them"
+    pass "daemon entry: an explicitly confirmed record permits lifecycle preparation"
   else
-    fail "daemon entry: the record enter wrote did not permit lifecycle preparation"
+    fail "daemon entry: rejected an explicitly confirmed record"
   fi
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
   rm -rf "$st"
 }
 
-unit_failed_daemon_launch_preserves_the_record() {
+unit_failed_daemon_launch_preserves_confirmed_record() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-failed-record.XXXXXX")
   mkdir -p "$st/state"
-  enter_posture "$st" || fail "failed start: could not enter fixture posture"
+  confirm_posture "$st" || fail "failed start: could not confirm fixture posture"
   if ! FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
     FM_SUPERVISOR_BACKEND=unsupported "$LAUNCH" start >/dev/null 2>&1 \
     && [ -f "$st/state/.afk-contract" ] && [ ! -e "$st/state/afk-contracts" ]; then
-    pass "failed start: preserves the posture record enter wrote"
+    pass "failed start: preserves the pre-confirmed posture record"
   else
-    fail "failed start: changed the posture record enter wrote"
+    fail "failed start: changed the pre-confirmed posture record"
   fi
   rm -rf "$st"
 }
@@ -241,7 +166,7 @@ unit_stop_archives_the_record_last() {
   local st epoch
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-stop-archive.XXXXXX")
   mkdir -p "$st/state"
-  enter_posture "$st" || fail "stop archive: could not enter fixture posture"
+  confirm_posture "$st" || fail "stop archive: could not confirm fixture posture"
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 || fail "stop archive: native entry failed"
   epoch=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" field entered_epoch)
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1 \
@@ -255,7 +180,7 @@ unit_stop_archives_the_record_last() {
 }
 
 # ---------------------------------------------------------------------------
-# UNIT 1: fm_afk_clear_stale_artifacts removes exactly the four stale artifacts.
+# UNIT 1: fm_afk_clear_stale_artifacts removes exactly the three stale artifacts.
 # ---------------------------------------------------------------------------
 unit_clear_stale() {
   local st
@@ -264,7 +189,6 @@ unit_clear_stale() {
   : > "$st/state/.subsuper-escalations"
   : > "$st/state/.subsuper-escalations.since"
   : > "$st/state/.subsuper-inject-wedged"
-  : > "$st/state/.subsuper-unknown-acked"
   : > "$st/state/.wake-queue"          # durable queue must be untouched
   # Source fm-afk-start.sh inside a child bash (it sets `set -eu` and would
   # otherwise leak that into this test shell) and call the clear helper.
@@ -272,9 +196,8 @@ unit_clear_stale() {
     bash -c '. "$1"; fm_afk_clear_stale_artifacts "$2"' _ "$START" "$st/state"
   if [ ! -e "$st/state/.subsuper-escalations" ] \
      && [ ! -e "$st/state/.subsuper-escalations.since" ] \
-     && [ ! -e "$st/state/.subsuper-inject-wedged" ] \
-     && [ ! -e "$st/state/.subsuper-unknown-acked" ]; then
-    pass "clear-stale: removes escalations buffer, sidecar, wedge marker, and unknown-wake acknowledgements"
+     && [ ! -e "$st/state/.subsuper-inject-wedged" ]; then
+    pass "clear-stale: removes escalations buffer, sidecar, and wedge marker"
   else
     fail "clear-stale: stale artifacts survived"
   fi
@@ -344,7 +267,6 @@ unit_fresh_vs_refresh() {
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
   : > "$st/state/.subsuper-inject-wedged"
-  : > "$st/state/.subsuper-unknown-acked"
   # A live "daemon": a real process whose identity the lock records, so
   # daemon_lock_held_by_live_daemon returns true (a refresh).
   sleep 600 &
@@ -355,169 +277,13 @@ unit_fresh_vs_refresh() {
   # shellcheck source=/dev/null
   ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$sleep_pid" > "$lock/pid-identity" 2>/dev/null ) || true
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$START" >/dev/null 2>&1
-  if [ -e "$st/state/.subsuper-escalations" ] && [ -e "$st/state/.subsuper-inject-wedged" ] \
-     && [ -e "$st/state/.subsuper-unknown-acked" ]; then
+  if [ -e "$st/state/.subsuper-escalations" ] && [ -e "$st/state/.subsuper-inject-wedged" ]; then
     pass "refresh: daemon already alive - stale artifacts preserved (current session's buffer kept)"
   else
     fail "refresh: incorrectly cleared the current session's buffered escalations"
   fi
   kill "$sleep_pid" 2>/dev/null || true
   wait "$sleep_pid" 2>/dev/null || true
-  rm -rf "$st"
-}
-
-# ---------------------------------------------------------------------------
-# UNIT 2a: away/quiet mode plumbing (kunchenguid/firstmate#2356). fm_afk_mode
-# is the single owner of reading the mode; these pin its write side
-# (fm_afk_launch_flag_write / fm_afk_flag_write) against the exact double-
-# write risk a live entry hits - the launcher writes the flag, then the
-# terminal-side fm-afk-start.sh entry re-writes it a second time on every
-# real (non-native) entry, per UNIT 2 above.
-# ---------------------------------------------------------------------------
-read_mode() {  # <state-dir>
-  bash -c '. "$1"; fm_afk_mode "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$1"
-}
-
-unit_mode_explicit_write() {
-  local st out
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-mode-explicit.XXXXXX")
-  mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_MODE=quiet \
-    bash -c '. "$1"; fm_afk_launch_flag_write' _ "$LAUNCH"
-  out=$(read_mode "$st/state")
-  if [ "$out" = quiet ]; then
-    pass "mode: a fresh entry with FM_AFK_MODE=quiet writes quiet"
-  else
-    fail "mode: explicit FM_AFK_MODE=quiet fresh entry wrote '$out' instead of quiet"
-  fi
-  rm -rf "$st"
-}
-
-unit_mode_fresh_defaults_away() {
-  local st out
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-mode-default.XXXXXX")
-  mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
-    bash -c '. "$1"; fm_afk_launch_flag_write' _ "$LAUNCH"
-  out=$(read_mode "$st/state")
-  if [ "$out" = away ]; then
-    pass "mode: a fresh entry with FM_AFK_MODE unset defaults to away"
-  else
-    fail "mode: fresh unset-mode entry wrote '$out' instead of away"
-  fi
-  rm -rf "$st"
-}
-
-unit_mode_refresh_preserves_quiet() {
-  local st sleep_pid lock out
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-mode-preserve.XXXXXX")
-  mkdir -p "$st/state"
-  printf 'quiet\n%s\n' "$(date '+%s')" > "$st/state/.afk"
-  sleep 600 &
-  sleep_pid=$!
-  lock="$st/state/.supervise-daemon.lock"
-  mkdir -p "$lock"
-  printf '%s' "$sleep_pid" > "$lock/pid"
-  ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$sleep_pid" > "$lock/pid-identity" 2>/dev/null ) || true
-  # The exact real-entry shape: a bare direct re-write with no explicit mode,
-  # simulating the terminal-side fm-afk-start.sh redundant write that would
-  # silently clobber quiet back to away if it were not preserve-on-refresh.
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$START" >/dev/null 2>&1
-  out=$(read_mode "$st/state")
-  if [ "$out" = quiet ]; then
-    pass "mode: a bare refresh (FM_AFK_MODE unset) of an already-running quiet daemon preserves quiet, never resets to away"
-  else
-    fail "mode: refresh incorrectly changed quiet mode to '$out'"
-  fi
-  kill "$sleep_pid" 2>/dev/null || true
-  wait "$sleep_pid" 2>/dev/null || true
-  rm -rf "$st"
-}
-
-# A live quiet daemon must follow the record when /afk turns it into away;
-# a refresh before that entry must not silently turn quiet into away.
-unit_mode_quiet_daemon_to_away() {
-  local command st sleep_pid lock mode rc
-  for command in start start-native; do
-    st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-quiet-to-away.XXXXXX")
-    mkdir -p "$st/state"
-    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_MODE=quiet "$LAUNCH" enter >/dev/null 2>&1 \
-      || fail "$command: could not enter quiet mode"
-    printf 'quiet\n%s\n' "$(date '+%s')" > "$st/state/.afk"
-    sleep 600 &
-    # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
-    sleep_pid=$!
-    lock="$st/state/.supervise-daemon.lock"
-    mkdir -p "$lock"
-    printf '%s' "$sleep_pid" > "$lock/pid"
-    ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$sleep_pid" > "$lock/pid-identity" 2>/dev/null ) || true
-
-    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
-      FM_SUPERVISOR_BACKEND=tmux "$LAUNCH" "$command" >/dev/null 2>&1
-    rc=$?
-    mode=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" mode)
-    if [ "$rc" -eq 0 ] && [ "$mode" = quiet ] && [ "$(head -n 1 "$st/state/.afk")" = quiet ]; then
-      pass "$command: an unset-mode quiet refresh preserves the quiet record and flag"
-    else
-      fail "$command: quiet refresh changed the record or flag (rc=$rc, record=$mode)"
-    fi
-
-    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" enter >/dev/null 2>&1
-    rc=$?
-    mode=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" mode)
-    if [ "$rc" -ne 0 ] || [ "$mode" != away ]; then
-      fail "$command: /afk did not convert the live quiet record to away (rc=$rc, record=$mode)"
-    fi
-    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
-      FM_SUPERVISOR_BACKEND=tmux "$LAUNCH" "$command" >/dev/null 2>&1
-    rc=$?
-    if [ "$rc" -eq 0 ] && [ "$(head -n 1 "$st/state/.afk")" = away ] \
-      && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" mode)" = away ]; then
-      pass "$command: /afk over a running quiet daemon refreshes the flag to away"
-    else
-      fail "$command: /afk record and daemon flag disagree after refresh (rc=$rc)"
-    fi
-    kill "$sleep_pid" 2>/dev/null || true
-    wait "$sleep_pid" 2>/dev/null || true
-    rm -rf "$st"
-  done
-}
-
-unit_mode_garbage_and_legacy_content_reads_away() {
-  local st out
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-mode-garbage.XXXXXX")
-  mkdir -p "$st/state"
-
-  : > "$st/state/.afk"
-  out=$(read_mode "$st/state")
-  if [ "$out" = away ]; then
-    pass "mode: an empty (legacy pre-mode) flag reads as away"
-  else
-    fail "mode: empty flag read as '$out' instead of away"
-  fi
-
-  date '+%s' > "$st/state/.afk"
-  out=$(read_mode "$st/state")
-  if [ "$out" = away ]; then
-    pass "mode: a bare-epoch-timestamp (legacy pre-mode) flag reads as away"
-  else
-    fail "mode: legacy timestamp flag read as '$out' instead of away"
-  fi
-
-  printf 'nonsense-mode\n' > "$st/state/.afk"
-  out=$(read_mode "$st/state")
-  if [ "$out" = away ]; then
-    pass "mode: unrecognized content falls back to away"
-  else
-    fail "mode: unrecognized content read as '$out' instead of away"
-  fi
-
-  out=$(read_mode "$st/state/missing")
-  if [ "$out" = away ]; then
-    pass "mode: a missing flag reads as away"
-  else
-    fail "mode: missing flag read as '$out' instead of away"
-  fi
   rm -rf "$st"
 }
 
@@ -595,7 +361,7 @@ unit_failed_start_rolls_back_state() {
   mkdir -p "$st/state"
   printf 'pending\n' > "$st/state/.subsuper-escalations"
   printf 'wedged\n' > "$st/state/.subsuper-inject-wedged"
-  enter_posture "$st" || fail "failed start: could not enter fixture posture"
+  confirm_posture "$st" || fail "failed start: could not confirm fixture posture"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
     FM_SUPERVISOR_BACKEND=unsupported "$LAUNCH" start >/dev/null 2>&1; then
     fail "failed start: unsupported backend unexpectedly succeeded"
@@ -617,7 +383,7 @@ unit_concurrent_start_serialized() {
   tmux new-session -d -s "$cap_session" 2>/dev/null || { fail "concurrent start: captain session creation failed"; rm -rf "$st"; return 0; }
   TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $cap_session"
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
-  enter_posture "$st" || fail "concurrent start: could not enter fixture posture"
+  confirm_posture "$st" || fail "concurrent start: could not confirm fixture posture"
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET="$cap_pane" \
     FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" "$LAUNCH" start >/dev/null 2>&1 &
   # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
@@ -796,45 +562,6 @@ unit_herdr_run_failure_preserves_unconfirmed_record() {
   rm -rf "$st"
 }
 
-# The daemon terminal is outside the captain's process tree, so it cannot detect
-# the captain's harness itself; each backend's launch must hand it over.
-unit_daemon_terminal_receives_the_primary_harness() {
-  local st entry backend got
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-daemon-harness.XXXXXX")
-  entry="$st/entry"
-  # shellcheck disable=SC2016 # expands in the entry script.
-  printf '#!/usr/bin/env bash\nprintf "%%s" "${FM_DAEMON_PRIMARY_HARNESS-unset}" > "$FM_HOME/daemon-harness"\n' > "$entry"
-  chmod +x "$entry"
-  # shellcheck disable=SC2016 # positional params expand in the child shell.
-  for backend in herdr tmux; do
-    rm -f "$st/daemon-harness"
-    env -u FM_DAEMON_PRIMARY_HARNESS FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_LAUNCH_ENTRY="$entry" \
-      FM_TEST_HARNESS=claude bash -c '
-      . "$1"
-      fm_backend_source() { return 0; }
-      fm_backend_herdr_server_ensure() { return 0; }
-      fm_backend_herdr_cli() {
-        if [ "$2 $3" = "workspace create" ]; then
-          printf %s '\''{"result":{"workspace":{"workspace_id":"ws-exact"},"root_pane":{"pane_id":"pane-exact"}}}'\''
-        elif [ "$2 $3" = "pane run" ]; then
-          bash -c "$5"
-        fi
-      }
-      tmux() { [ "$1" = new-session ] && bash -c "$5"; }
-      fm_afk_launch_record_write() { return 0; }
-      fm_afk_launch_commit_terminal() { return 0; }
-      fm_afk_launch_create_"$2" lab:captain "$2"
-    ' _ "$LAUNCH" "$backend" >/dev/null 2>&1
-    got=$(cat "$st/daemon-harness" 2>/dev/null || true)
-    if [ "$got" = claude ]; then
-      pass "$backend daemon terminal: runs with the captain's primary harness"
-    else
-      fail "$backend daemon terminal: primary harness not handed over (got '${got:-nothing}')"
-    fi
-  done
-  rm -rf "$st"
-}
-
 unit_record_failure_closes_terminal() {
   local st closed
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-record-fail.XXXXXX")
@@ -909,11 +636,11 @@ unit_tmux_absence_distinguishes_probe_failure() {
 }
 
 unit_native_lifecycle() {
-  local st out
+  local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
-  enter_posture "$st" || fail "native lifecycle: could not enter fixture posture"
+  confirm_posture "$st" || fail "native lifecycle: could not confirm fixture posture"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
     && [ "$(cut -f1 "$st/state/.afk-daemon-terminal")" = none ] \
     && [ -e "$st/state/.afk" ] \
@@ -922,10 +649,8 @@ unit_native_lifecycle() {
   else
     fail "native lifecycle: state preparation or no-terminal record failed"
   fi
-  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop 2>&1)
-  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ] \
-    && printf '%s' "$out" | grep -F 'no daemon terminal was running' >/dev/null \
-    && ! printf '%s' "$out" | grep -F 'daemon terminal torn down' >/dev/null; then
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
+  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
     pass "native lifecycle: uniform stop clears state without closing a terminal"
   else
     fail "native lifecycle: uniform stop retained state or claimed a teardown: $out"
@@ -1621,6 +1346,33 @@ unit_flag_write_failure_aborts() {
   rm -rf "$st"
 }
 
+# Quiet-check and enter stay callable so /quiet can enter after the fork kept
+# propose/confirm for /afk. Host-off means quiet mode uses the daemon path.
+unit_quiet_check_and_enter_shims() {
+  local st out rc
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-quiet-shim.XXXXXX")
+  mkdir -p "$st/state" "$st/config"
+  printf 'off\n' > "$st/config/supervision-host"
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" \
+    "$LAUNCH" quiet-check 2>&1)
+  rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$out" ]; then
+    pass "quiet-check: a home that opted the host off exits 1 with no line"
+  else
+    fail "quiet-check: host-off should exit 1 silently (rc=$rc): $out"
+  fi
+  out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" \
+    FM_AFK_MODE=quiet "$LAUNCH" enter --words 'stay quiet' 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f "$st/state/.afk-contract" ] \
+    && [ "$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$CONTRACT" mode)" = quiet ]; then
+    pass "enter: FM_AFK_MODE=quiet writes a quiet record when the host is off"
+  else
+    fail "enter: quiet shim did not write a quiet record (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
 # ---------------------------------------------------------------------------
 # E2E herdr: topology invariant.
 # ---------------------------------------------------------------------------
@@ -1654,7 +1406,7 @@ e2e_herdr() {
   cap_pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty')
   if [ -z "$cap_ws" ] || [ -z "$cap_pane" ]; then E2E_HERDR_CLEANUP; fail "herdr e2e: could not create captain workspace"; return 0; fi
   target="$SESSION:$cap_pane"
-  enter_posture "$home_tmp" || fail "herdr e2e: could not enter fixture posture"
+  confirm_posture "$home_tmp" || fail "herdr e2e: could not confirm fixture posture"
   before=$(fm_backend_herdr_cli "$SESSION" pane list --workspace "$cap_ws" 2>/dev/null | jq --arg t "$cap_tab" '[.result.panes[]?|select(.tab_id==$t)]|length')
   ws_before=$(fm_backend_herdr_cli "$SESSION" workspace list 2>/dev/null | jq '[.result.workspaces[]?]|length')
 
@@ -1696,7 +1448,7 @@ e2e_tmux() {
   tmux new-session -d -s "$cap_session" 2>/dev/null || { fail "tmux e2e: could not create captain session"; rm -rf "$home_tmp"; return 0; }
   TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $cap_session"
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
-  enter_posture "$home_tmp" || fail "tmux e2e: could not enter fixture posture"
+  confirm_posture "$home_tmp" || fail "tmux e2e: could not confirm fixture posture"
   before=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
 
   FM_HOME="$home_tmp" FM_STATE_OVERRIDE="$home_tmp/state" \
@@ -1722,21 +1474,13 @@ e2e_tmux() {
 }
 
 unit_clear_stale
-unit_enter_records_the_posture_in_one_step_without_a_daemon
-unit_retired_two_step_entry_is_refused
+unit_propose_confirm_records_the_posture_without_a_daemon
 unit_pi_never_launches_the_daemon
-unit_test_harness_seam_requires_the_marker
-unit_pi_enter_stop_does_not_claim_a_daemon_terminal
-unit_daemon_entry_requires_the_record
-unit_failed_daemon_launch_preserves_the_record
+unit_daemon_entry_requires_confirmation
+unit_failed_daemon_launch_preserves_confirmed_record
 unit_stop_archives_the_record_last
 unit_relative_paths_are_absolute_before_daemon_launch
 unit_fresh_vs_refresh
-unit_mode_explicit_write
-unit_mode_fresh_defaults_away
-unit_mode_refresh_preserves_quiet
-unit_mode_quiet_daemon_to_away
-unit_mode_garbage_and_legacy_content_reads_away
 unit_stop_ordering
 unit_stop_rejects_reused_pid
 unit_failed_start_rolls_back_state
@@ -1746,19 +1490,11 @@ unit_signal_exits_with_lock_cleanup
 unit_herdr_partial_create_recovery
 unit_herdr_error_with_exact_ids_closes_exact
 unit_herdr_run_failure_preserves_unconfirmed_record
-unit_daemon_terminal_receives_the_primary_harness
 unit_record_failure_closes_terminal
 unit_readiness_failure_rolls_back_terminal
 unit_readiness_failure_preserves_unconfirmed_record
 unit_tmux_absence_distinguishes_probe_failure
 unit_native_lifecycle
-unit_supervision_host_claude_home_runs_no_away_daemon
-unit_supervision_host_other_harnesses_run_no_away_daemon
-unit_daemon_quiet_entry_holds_nothing_for_a_return
-unit_supervision_host_quiet_statement
-unit_supervision_host_quiet_fallback
-unit_supervision_host_quiet_after_afk
-unit_supervision_host_quiet_failed_start
 unit_native_entry_preserves_prepared_state
 unit_close_failure_preserves_record
 unit_record_publication_atomic
@@ -1774,6 +1510,7 @@ unit_clear_failure_aborts_entry
 unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
 unit_flag_write_failure_aborts
+unit_quiet_check_and_enter_shims
 e2e_herdr
 e2e_tmux
 

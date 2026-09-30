@@ -11,7 +11,7 @@
 # with full dataflow over the whole canonical set. An ordinary local branch
 # (changed-file mode, including the no-mistakes lint step) drops
 # --external-sources, keeps dataflow, and excludes SC1091, SC2034, SC2153,
-# and SC2329, the codes that need library context. Those codes still run in
+# SC2154, and SC2329, the codes that need library context. Those codes still run in
 # CI over the whole set. Explicit paths keep --external-sources with the
 # selected dataflow mode.
 # Tests stop source analysis at imported production modules because CI analyzes
@@ -31,7 +31,7 @@
 #     only the canonical-set files changed since that merge-base, including
 #     uncommitted local edits, via plain local `git diff` (no network, no
 #     `gh`). That local pass drops --external-sources and excludes SC1091,
-#     SC2034, SC2153, and SC2329. A branch with zero matching changed files
+#     SC2034, SC2153, SC2154, and SC2329. A branch with zero matching changed files
 #     skips ShellCheck and prints a "no changed lint targets" note, then
 #     still runs the backend-purity check and validates workflows.
 # Explicit paths always bypass this file-set selection and lint exactly the
@@ -103,7 +103,7 @@ set -u
 REQUIRED_SHELLCHECK=0.11.0
 # Cross-file codes that need --external-sources. Local changed-file mode
 # cannot judge them, so they stay CI-only.
-LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
+LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2154,SC2329
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF="$SELF_DIR/fm-lint.sh"
 ROOT="$(cd "$SELF_DIR/.." && pwd -P)"
@@ -392,6 +392,58 @@ fm_lint_run_workflows() {
   "$SELF_DIR/fm-lint-workflows.sh"
 }
 
+# Default no-args lint also refuses to pass while any git-tracked file carries
+# a real OpenRouter key literal: the sk-or-v1- prefix followed by key material.
+# The fake sk-or-test- fixture prefix never matches. Only path and line number
+# are reported, never the matched text. Failing to enumerate tracked files is a
+# hard failure, so the guard never silently degrades to "nothing found".
+OPENROUTER_KEY_PATTERN='sk-or-v1-[A-Za-z0-9_-]{20,}'
+fm_lint_run_key_guard() {
+  [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
+  local tracked matches path line found=0
+  tracked=$(mktemp "${TMPDIR:-/tmp}/fm-lint-tracked.XXXXXX") || return 2
+  matches=$(mktemp "${TMPDIR:-/tmp}/fm-lint-matches.XXXXXX") || {
+    rm -f "$tracked"
+    return 2
+  }
+  if ! git ls-files -z > "$tracked" 2>/dev/null; then
+    rm -f "$tracked" "$matches"
+    printf 'fm-lint.sh: could not enumerate tracked files; the OpenRouter key guard cannot run.\n' >&2
+    return 2
+  fi
+  # shellcheck disable=SC2094 # $tracked and $matches are distinct mktemp files; the loop only reads the former.
+  while IFS= read -r -d '' path; do
+    [ -f "$path" ] || continue
+    : > "$matches" || {
+      rm -f "$tracked" "$matches"
+      return 2
+    }
+    grep -I -n -E -e "$OPENROUTER_KEY_PATTERN" -- "$path" 2>/dev/null | cut -d: -f1 > "$matches" || true
+    while IFS=: read -r line _; do
+      [ -n "$line" ] || continue
+      printf 'fm-lint.sh: OpenRouter key literal (sk-or-v1-) in tracked file %s:%s; remove it before push.\n' \
+        "$path" "$line" >&2
+      found=1
+    done < "$matches"
+  done < "$tracked"
+  rm -f "$tracked" "$matches"
+  [ "$found" -eq 0 ] || return 1
+  printf 'fm-lint.sh: no OpenRouter key literal in tracked files\n'
+  return 0
+}
+
+# Both default-lane gates always run, so a key literal and a broken workflow are
+# each reported in one pass; the first nonzero status is the result.
+fm_lint_run_default_gates() {
+  local rc=0
+  fm_lint_run_key_guard || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    fm_lint_run_workflows || rc=$?
+  else
+    fm_lint_run_workflows || true
+  fi
+  return "$rc"
+}
 # Backend adapters belong behind tasks-axi. Keep direct Beads CLI invocations
 # out of firstmate's core scripts so every configured backend follows the same
 # lifecycle path.
@@ -854,7 +906,7 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   printf 'fm-lint.sh: no changed lint targets\n'
   overall_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_default_gates || overall_rc=$?
   exit "$overall_rc"
 fi
 
@@ -1189,9 +1241,9 @@ if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
 fi
 
 if [ "$overall_rc" -eq 0 ]; then
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_default_gates || overall_rc=$?
 else
-  fm_lint_run_workflows || true
+  fm_lint_run_default_gates || true
 fi
 
 if [ -n "$TELEMETRY" ]; then
@@ -1312,7 +1364,7 @@ EOF
   fi
 fi
 
-if [ -s "$ROOTS_LOG" ]; then
+if [ -n "$ROOTS_LOG" ]; then
   printf 'meta\t%s\t%s\n' 'result_exit' "$overall_rc" >> "$ROOTS_LOG"
 fi
 

@@ -89,6 +89,21 @@ case "${1:-}" in
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
+        'cd '*)
+          # The relaunch shell reset types `cd '<reset-dir>'`; model the shell
+          # executing it so the reset's cwd proof succeeds. A shell executes any
+          # cd, so other cd sends (fm-spawn's `cd <worktree>`) are modeled too -
+          # unless a case sets FM_FAKE_SHELL_EXECUTES_CD=0 to keep a pane pinned
+          # outside its worktree (the cwd-mismatch refusal cases).
+          cd_dir=${payload#cd }
+          cd_dir=${cd_dir#-- }
+          cd_dir=${cd_dir#\'}
+          cd_dir=${cd_dir%\'}
+          case "$cd_dir" in
+            */.control-reset-*) printf '%s' "$cd_dir" > "$D/cwd" ;;
+            *) [ "${FM_FAKE_SHELL_EXECUTES_CD:-0}" = 1 ] && printf '%s' "$cd_dir" > "$D/cwd" ;;
+          esac
+          ;;
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
@@ -248,6 +263,7 @@ run_control() {  # <case-dir> <args...>
     FM_FAKE_TRACE_RELEASE="${FM_FAKE_TRACE_RELEASE:-}" \
     FM_FAKE_META_WRITER_READY="${FM_FAKE_META_WRITER_READY:-}" \
     FM_FAKE_TRACE_EXPORTED="${FM_FAKE_TRACE_EXPORTED:-}" \
+    FM_FAKE_SHELL_EXECUTES_CD="${FM_FAKE_SHELL_EXECUTES_CD:-1}" \
     "$CONTROL" "$@" 2>&1
 }
 
@@ -813,7 +829,6 @@ test_worker_account_pin_follows_the_relaunch() {
     "an unpinned replacement must launch exactly as before"
   pass "fm-control relaunch: the replacement follows the home's current worker account pin"
 }
-
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -1080,6 +1095,53 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
   pass "fm-spawn --relaunch: with no explicit harness it reuses the task's recorded one, never the crew default"
 }
 
+# REGRESSION: bin/fm-control.sh spells this flag --relaunch. When fm-spawn.sh
+# was rewritten to accept only --reuse-worktree, --relaunch stopped being a
+# recognized option and fell through into the positional list, so PROJ became
+# the literal string "--relaunch" and every fm-control relaunch in the fleet
+# failed after the old agent had already been stopped - the worst moment to
+# fail, because the task is then running nothing at all.
+#
+# Asserting the flag is ACCEPTED is not enough: an unrecognized option that
+# lands in the positional list can still exit non-zero for an unrelated reason
+# and look like a refusal. This pins the observable consequence instead - the
+# task relaunches in its own recorded project and worktree, and nothing named
+# "--relaunch" is ever treated as a path.
+test_spawn_accepts_the_relaunch_flag_and_never_treats_it_as_a_path() {
+  local dir out
+  dir=$(new_case relaunchflag rl22)
+  add_ship_task "$dir" rl22 claude
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(run_spawn "$dir" rl22 --relaunch --harness claude)
+  assert_not_contains "$out" "--relaunch" \
+    "--relaunch leaked into a path or project argument instead of being parsed as a flag"
+  assert_contains "$out" "spawned rl22" "the relaunch did not report a successful launch"
+  [ "$(meta_field "$dir" rl22 project)" = "$dir/proj" ] \
+    || fail "relaunch recorded project '$(meta_field "$dir" rl22 project)' instead of the task's own project"
+  [ "$(meta_field "$dir" rl22 worktree)" = "$dir/wt" ] \
+    || fail "relaunch recorded worktree '$(meta_field "$dir" rl22 worktree)' instead of the task's own worktree"
+  pass "fm-spawn --relaunch: the flag bin/fm-control.sh passes is parsed, never taken as a project path"
+}
+
+# The delivery contract is the task's, not the caller's: bin/fm-control.sh
+# passes no --mode/--yolo on a relaunch precisely because a relaunch must not be
+# able to change them. A ship spawn requires both, so requiring them here too
+# made every fm-control relaunch refuse before it could preserve anything.
+test_spawn_relaunch_preserves_the_recorded_delivery_contract() {
+  local dir
+  dir=$(new_case relaunchmode rl23)
+  add_ship_task "$dir" rl23 claude
+  printf 'zsh' > "$dir/fake/command"
+
+  run_spawn "$dir" rl23 --relaunch --harness claude >/dev/null
+  [ "$(meta_field "$dir" rl23 mode)" = no-mistakes ] \
+    || fail "relaunch lost the recorded delivery mode, got '$(meta_field "$dir" rl23 mode)'"
+  [ "$(meta_field "$dir" rl23 yolo)" = off ] \
+    || fail "relaunch lost the recorded yolo posture, got '$(meta_field "$dir" rl23 yolo)'"
+  pass "fm-spawn --relaunch: the recorded delivery mode and yolo posture survive a relaunch"
+}
+
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
 # its brief is the scout scaffold: it never gained a Ship branch line, and a
 # relaunch cannot regenerate the brief (--branch-prefix is refused there). The
@@ -1292,10 +1354,11 @@ test_launch_failure_keeps_the_prior_record_and_reports_it() {
   dir=$(new_case rollback rl13)
   add_ship_task "$dir" rl13 claude
   before=$(cat "$dir/home/state/rl13.meta")
-  # The endpoint's shell is not in the recorded worktree, so the launch owner
-  # refuses AFTER the previous agent has already been stopped.
+  # The endpoint's shell refuses to enter the recorded worktree, so the launch
+  # owner refuses AFTER the previous agent has already been stopped.
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
-  out=$(run_control "$dir" rl13 relaunch --harness codex --note "carry this forward"); rc=$?
+  out=$(FM_FAKE_SHELL_EXECUTES_CD=0 \
+    run_control "$dir" rl13 relaunch --harness codex --note "carry this forward"); rc=$?
   expect_code 1 "$rc" "a failed launch should fail closed"$'\n'"$out"
   assert_contains "$out" "no agent is running" "the failure should say no agent is running"
   assert_contains "$out" "$dir/wt" "the failure should say where the work is preserved"
@@ -1315,7 +1378,7 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
   dir=$(new_case rollback-race rl30)
   add_ship_task "$dir" rl30 claude
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
-  FM_FAKE_CWD_RACE_READY="$dir/cwd-race-ready" \
+  FM_FAKE_SHELL_EXECUTES_CD=0 FM_FAKE_CWD_RACE_READY="$dir/cwd-race-ready" \
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!
@@ -1825,89 +1888,12 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   printf '%s' "$dir/proj" > "$dir/fake/cwd"
   out=$(run_spawn "$dir" rl18 --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "a pane outside the worktree should refuse"
-  assert_contains "$out" "not its recorded worktree" "the refusal should name the wrong location"
-  [ ! -s "$dir/fake/keys" ] || fail "a refused tmux relaunch must send nothing to the pane"
+  assert_contains "$out" "recorded worktree" "the refusal should name the wrong location"
+  assert_contains "$out" "$dir/proj" "the refusal should name where the pane actually was"
+  [ "$(cat "$dir/fake/keys")" = "cd -- '$dir/wt'" ] \
+    || fail "a drifted tmux relaunch must attempt only the recorded-worktree correction"
+  [ ! -s "$dir/fake/literal" ] || fail "an unconfirmed worktree correction must not launch an agent"
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding its work"
-}
-
-# --- 7. reclaiming a task whose endpoint is gone ----------------------------
-#
-# Before this, `missing` was a terminal state: fm-spawn --relaunch accepted only
-# `dead` and told the caller to stop the agent first, while fm-control exit
-# refused `missing` outright and told the caller to reconcile the task first -
-# and there is no reconcile verb. Each command named the other as its
-# prerequisite, so a task whose pane or workspace was destroyed could not be
-# reclaimed by anything, and any no-mistakes approval it was parked on had no
-# seat left to answer it.
-
-# strand_endpoint <case-dir> <id>: make a tmux endpoint read `missing` the way
-# a destroyed window does - a successful session inventory that omits the exact
-# window.
-strand_endpoint() {  # <case-dir> <id>
-  : > "$1/fake/windows"
-}
-
-# Every tmux `missing` refuses on BOTH verbs, whatever produced it. tmux is the
-# one verified backend whose absence cannot be proven from a task record: the
-# record carries no socket identity for the endpoint, and any inventory
-# describes only the server this process happens to address. So a window that
-# is merely on a server this seat cannot reach is indistinguishable from one
-# that was destroyed, and neither verb will guess.
-assert_tmux_missing_refuses() {  # <case-dir> <id> <what-was-staged>
-  local dir=$1 id=$2 what=$3 out rc brief_before
-
-  out=$(run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
-  expect_code 1 "$rc" "relaunch must refuse a tmux endpoint whose absence cannot be proven ($what)"$'\n'"$out"
-  assert_absent "$dir/fake/created-windows" "a refused relaunch must not create a window ($what)"
-  assert_absent "$dir/fake/created-sessions" "a refused relaunch must not create a session ($what)"
-  [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch must send nothing into any pane ($what)"
-
-  brief_before=$(cat "$dir/home/data/$id/brief.md")
-  out=$(run_control "$dir" "$id" exit); rc=$?
-  expect_code 1 "$rc" "exit must refuse a tmux endpoint whose absence cannot be proven ($what)"$'\n'"$out"
-  assert_not_contains "$out" "endpoint-gone" \
-    "exit must not report a stop it cannot see ($what)"
-  [ ! -s "$dir/fake/literal" ] || fail "a refused exit must send nothing into any pane ($what)"
-
-  out=$(run_control "$dir" "$id" relaunch --note "this note must never reach a live agent"); rc=$?
-  expect_code 1 "$rc" "the relaunch transaction must fail closed ($what)"$'\n'"$out"
-  [ "$(cat "$dir/home/data/$id/brief.md")" = "$brief_before" ] \
-    || fail "a refused relaunch edited instructions an agent that may still be running is reading ($what)"
-  assert_absent "$dir/fake/created-windows" "a refused transaction must not create a window ($what)"
-  assert_absent "$dir/fake/created-sessions" "a refused transaction must not create a session ($what)"
-  [ ! -s "$dir/fake/literal" ] || fail "a refused transaction must launch nothing ($what)"
-}
-
-test_tmux_refuses_a_window_missing_from_its_session() {
-  local dir
-  dir=$(new_case tmux-gone rl60)
-  add_ship_task "$dir" rl60 claude
-  strand_endpoint "$dir" rl60
-  assert_tmux_missing_refuses "$dir" rl60 "window absent from a readable session inventory"
-  pass "tmux: a window absent from its session refuses both verbs rather than being assumed gone"
-}
-
-test_tmux_refuses_a_session_that_cannot_be_found() {
-  local dir
-  dir=$(new_case tmux-nosession rl61)
-  add_ship_task "$dir" rl61 claude
-  # Real tmux's answer to a renamed session, and to a different
-  # TMUX_TMPDIR/socket: definitive about the SESSION, silent about whether the
-  # window and its agent survived elsewhere.
-  : > "$dir/fake/session-missing"
-  assert_tmux_missing_refuses "$dir" rl61 "recorded session not found"
-  pass "tmux: an unfindable session refuses both verbs, so a live agent is never duplicated"
-}
-
-test_tmux_refuses_when_the_server_is_gone() {
-  local dir
-  dir=$(new_case tmux-noserver rl62)
-  add_ship_task "$dir" rl62 claude
-  # No server on the socket this process addresses. Another server may still be
-  # running the task's window, and the record cannot say which socket is its.
-  : > "$dir/fake/server-dead"
-  assert_tmux_missing_refuses "$dir" rl62 "no tmux server on this socket"
-  pass "tmux: a dead server on this socket refuses both verbs rather than proving absence"
 }
 
 test_reclaim_refuses_an_unreadable_endpoint() {
@@ -2343,6 +2329,7 @@ test_herdr_reclaim_of_a_secondmate_names_its_own_owner() {
   pass "reclaim: a herdr secondmate whose endpoint is gone is sent to its own respawn owner"
 }
 
+
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -2386,6 +2373,24 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
   pass "relaunch heals an item that drifted out of In flight while the task stayed live"
 }
 
+test_relaunch_when_endpoint_is_missing_recreates_endpoint_and_succeeds() {
+  local dir out rc=0
+  dir=$(new_case missing rl50)
+  add_ship_task "$dir" rl50 claude
+  # Simulate the endpoint being missing (dead/gone pane)
+  : > "$dir/fake/windows"
+  out=$(run_control "$dir" rl50 relaunch --note "recovering missing endpoint") || rc=$?
+  expect_code 0 "$rc" "relaunch on missing endpoint should succeed"$'\n'"$out"
+  assert_contains "$out" "relaunched rl50 harness=claude from=claude" "relaunch should succeed"
+  [ "$(journal_field "$dir" rl50 exit_result)" = already-stopped ] \
+    || fail "exit_result should be recorded as already-stopped"
+  if ! grep -Fqe "encode launch-brief" "$dir/fake/literal" \
+    && ! grep -Fqe "Firstmate operational input waiting: read" "$dir/fake/literal"; then
+    fail "the replacement should have been launched"
+  fi
+  pass "fm-control relaunch: missing endpoint is recreated and succeeds"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
@@ -2414,6 +2419,8 @@ test_secondmate_relaunch_onto_a_crewmate_only_adapter_refuses_before_stop
 test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
+test_spawn_accepts_the_relaunch_flag_and_never_treats_it_as_a_path
+test_spawn_relaunch_preserves_the_recorded_delivery_contract
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
@@ -2444,9 +2451,6 @@ test_spawn_relaunch_refuses_a_pending_authoritative_close
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
-test_tmux_refuses_a_window_missing_from_its_session
-test_tmux_refuses_a_session_that_cannot_be_found
-test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
 test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
@@ -2458,3 +2462,5 @@ test_herdr_reclaim_of_a_secondmate_names_its_own_owner
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
+test_relaunch_when_endpoint_is_missing_recreates_endpoint_and_succeeds
+

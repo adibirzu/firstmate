@@ -231,6 +231,13 @@ if [ "$GUARD_RC" -eq 4 ]; then
 fi
 
 NOW=${FM_BEARINGS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+# Bearings is the human-facing reader that RENDERS the usage bar, and it is an
+# on-demand read, never a poll. It is therefore the one caller that opts into
+# the live per-task context read (bin/fm-crew-usage-lib.sh). Every
+# supervision-path snapshot consumer - notably the two fm-watch.sh backgrounds
+# on each poll - deliberately leaves it off so the canonical snapshot never
+# competes with the watcher for a task's pane capture.
+export FM_CREW_USAGE_ENABLE_CONTEXT=${FM_CREW_USAGE_ENABLE_CONTEXT:-1}
 if [ "$ALL_LANDED" = 1 ] || [ "$ALL_SECONDMATES" = 1 ]; then
   if [ "$ALL_LANDED" = 1 ]; then
     SNAP=$(FM_SNAPSHOT_NOW="$NOW" FM_SNAPSHOT_SECONDMATES=0 FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 "$FLEET" --json) || exit $?
@@ -510,7 +517,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         name:((.backlog.title // "") as $name
               | (if ($name | test("[^[:space:]]")) then $name else .id end) | trunc(70)),
         doing: ((.current_state.detail // "") as $d
-                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
+                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
+        usage_harness: (.usage.harness // ""),
+        usage_model: (.usage.model // ""),
+        usage_context_pct: (.usage.context_pct // "n/a"),
+        usage_quota: (.usage.quota // "n/a")
       } ]
      + [ $secondmate_views[] as $m
          | $m.active_children[]?
@@ -521,7 +532,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             name:((.name // "") as $name
                   | (if (($name | type) == "string" and ($name | test("[^[:space:]]")))
                      then $name else ($m.id + "/" + .id) end) | trunc(70)),
-            doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
+            doing:((.doing // .state) | trunc(90)),
+            usage_harness: (.usage.harness // ""),
+            usage_model: (.usage.model // ""),
+            usage_context_pct: (.usage.context_pct // "n/a"),
+            usage_quota: (.usage.quota // "n/a")} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)
@@ -666,6 +681,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $all_landed == 0 and ($per_home_capped | length) > ($done | length) then {surface:("landed showing \($done | length) of \($per_home_capped | length)" + (($done | map(.home_id) | unique | map(select(. != "(main)")) | length) as $k | if $k > 0 then " (incl. \($k) secondmate home(s))" else "" end)), reveal:"--all-landed"} else empty end),
         (if $all_landed == 0 and $home_cap_dropped > 0 then {surface:("landed per-home capped at \($landed_per_home_n) for \($home_cap_dropped) home(s)"), reveal:"--all-landed"} else empty end),
         (if (($snap.secondmate_landed.unreadable // []) | length) > 0 then {surface:("secondmate home(s) with unreadable structured state: \(($snap.secondmate_landed.unreadable // []) | length)"), reveal:"inspect the listed secondmate home ledgers"} else empty end),
+        (if (($snap.secondmate_landed.timed_out // []) | length) > 0 then {surface:("secondmate home(s) timed out reading - decisions, active work, and landed items for \(($snap.secondmate_landed.timed_out // []) | length) home(s) are NOT reflected above"), reveal:"raise FM_SNAPSHOT_SECONDMATE_TIMEOUT and retry"} else empty end),
         (if $all_landed == 0 and (($snap.secondmate_landed.truncated // []) | length) > 0 then {surface:("secondmate home Done capped at the snapshot layer for \(($snap.secondmate_landed.truncated // []) | length) home(s)"), reveal:"--all-landed"} else empty end),
         ((($snap.main_inventory.orphan_in_flight // []) | length) as $n
          | if $n > 0 then {surface:("main in-flight backlog item(s) have no child metadata: \($n)"), reveal:"inspect main data/backlog.md In flight vs state/*.meta"} else empty end),

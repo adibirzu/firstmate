@@ -600,7 +600,8 @@ export default function (pi: ExtensionAPI) {
   // `fleet` included, so a report typed from memory about a task the wake
   // never named is never stored or delivered. Null outside a wake prompt and
   // during a heartbeat review, which is not scoped by task.
-  let wakeTaskScope: { rows: string[]; tasks: Set<string> } | null = null;
+  let wakeTaskScope: { rows: string[]; tasks: Set<string>; taskRows: Record<string, string[]>; heartbeat: boolean } | null = null;
+  let wakeReportIdentity: string | null = null;
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -1177,7 +1178,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function wakeScopeRefusal(task: string): string {
-    if (!wakeTaskScope || wakeTaskScope.tasks.has(task)) return "";
+    if (!wakeTaskScope || wakeTaskScope.heartbeat || wakeTaskScope.tasks.has(task)) return "";
     const named = [...wakeTaskScope.tasks].sort().join(", ");
     const rows = wakeTaskScope.rows.join(", ");
     return `report refused: the wake being handled (row ${rows}) names ${named}, not ${task}; report only that task, never fleet or a task from memory`;
@@ -1203,6 +1204,7 @@ export default function (pi: ExtensionAPI) {
         silent: Type.Optional(Type.Boolean({
           description: "True only for an eligible routine no-change outcome; captain outcomes are never silent, and actions, state changes, or new results stay rendered",
         })),
+        wakeRow: Type.Optional(Type.String({ description: "The durable wake-queue sequence this report handles" })),
       }),
       execute: async (_toolCallId, params) => {
         const task = String((params as { task: unknown }).task || "").trim();
@@ -1210,6 +1212,7 @@ export default function (pi: ExtensionAPI) {
         const summary = String((params as { summary: unknown }).summary || "").trim();
         const wake = String((params as { wake?: unknown }).wake ?? "").trim();
         const silent = (params as { silent?: unknown }).silent === true;
+        const wakeRow = String((params as { wakeRow?: unknown }).wakeRow ?? "").trim();
         if (!task || !summary || (verdictRaw !== "routine" && verdictRaw !== "captain")) {
           return {
             content: [{ type: "text", text: "invalid report: task, verdict (routine|captain), and summary are required" }],
@@ -1229,7 +1232,12 @@ export default function (pi: ExtensionAPI) {
         if (scopeRefusal) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
+        if (wakeTaskScope && (!/^[0-9]+$/.test(wakeRow) || !wakeTaskScope.rows.includes(wakeRow) || (!wakeTaskScope.heartbeat && !wakeTaskScope.taskRows[task]?.includes(wakeRow)))) {
+          return { content: [{ type: "text", text: "report refused: name the durable wake row being handled" }], details: undefined, isError: true };
+        }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
+        const eventId = wakeReportIdentity && wakeRow ? `${wakeReportIdentity}:${wakeRow}` : "";
+        if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         // Ownership, the durable append, and the delivery it authorizes are
         // ONE unit of the delivery queue: store-before-visible-delivery and
@@ -1538,11 +1546,21 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        // A claimed check row names no task, so a prompt carrying one is not
+        wakeReportIdentity = heartbeat
+          ? `heartbeat:${scope.eligibleSeqs.join(",")}`
+          : `rows:${scope.eligibleSeqs.join(",")}`;
+        // Heartbeat wakes keep the full scope (taskRows + heartbeat) so a
+        // report still has to name a row from this wake. A claimed check row
+        // names no task, so a non-heartbeat prompt carrying one is not
         // scoped by task (only possible in the away posture).
-        wakeTaskScope = heartbeat || scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0
+        wakeTaskScope = !heartbeat && (scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0)
           ? null
-          : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
+          : {
+              rows: [...scope.eligibleSeqs],
+              tasks: new Set(scope.eligibleTasks),
+              taskRows: scope.eligibleTaskSeqs,
+              heartbeat,
+            };
         // Same residual: archive during snapshot publish or read-back still
         // lets this prompt proceed; the guarded scripts revalidate, and the
         // durable queue keeps every row (bin/fm-lease-lib.sh role-partition).
@@ -1551,6 +1569,7 @@ ${context.command}
           await session.prompt(branchWakePrompt(message, "fm_branch_report", postureTail));
         } finally {
           wakeTaskScope = null;
+          wakeReportIdentity = null;
         }
         const providerError = settledPromptProviderError(sessionManager, entryOffset);
         if (providerError) {
@@ -2093,6 +2112,10 @@ ${context.command}
     calmPresentation.active &&
     !calmPresentation.stockExportRendering &&
     !calmTranscriptClassIsVisible(itemClass);
+  // Calm-on hide needs renderShell "self" so an empty Container removes the whole row.
+  // Calm-off and HTML export must keep Pi's stock boxed shell, or throw-to-stock inner content still renders without toolSuccessBg.
+  const outcomesRenderShell = (): "self" | "default" =>
+    calmPresentation.active && !calmPresentation.stockExportRendering ? "self" : "default";
 
   const outcomesToolAnsiPattern = new RegExp(
     "(?:\\u001B\\][\\s\\S]*?(?:\\u0007|\\u001B\\u005C|\\u009C))|[\\u001B\\u009B][[\\]\\()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]",
@@ -2138,6 +2161,8 @@ ${context.command}
         { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
         root,
       );
+      probe.markExecutionStarted();
+      probe.setArgsComplete();
       probe.updateResult({
         content: [{ type: "text", text: probeTokens.join("\n") }],
         isError: false,
@@ -2219,16 +2244,22 @@ ${context.command}
     parameters: Type.Object({
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
-    renderShell: "self",
+    get renderShell() {
+      return outcomesRenderShell();
+    },
     renderCall: (args, theme, context) => {
-      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
+      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+        throw new Error("Use Pi stock export rendering");
+      }
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
       shellState.call = new Text(stockToolCallHeader("fm_branch_outcomes", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
-      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
+      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+        throw new Error("Use Pi stock export rendering");
+      }
       if (calmHides("tool-result")) return new Container();
       const output = result.content
         .filter((item) => item.type === "text")
@@ -2281,16 +2312,22 @@ ${context.command}
     parameters: Type.Object({
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
-    renderShell: "self",
+    get renderShell() {
+      return outcomesRenderShell();
+    },
     renderCall: (args, theme, context) => {
-      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
+      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+        throw new Error("Use Pi stock export rendering");
+      }
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
       shellState.call = new Text(stockToolCallHeader("fm_branch_processed", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
-      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
+      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+        throw new Error("Use Pi stock export rendering");
+      }
       if (calmHides("tool-result")) return new Container();
       const output = result.content
         .filter((item) => item.type === "text")

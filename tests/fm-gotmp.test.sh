@@ -44,6 +44,44 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-gotmp-tests.XXXXXX")
 # state and helper scripts inside it. Stub the helper scripts fm-teardown calls so no
 # live tmux/treehouse/fleet state is touched. A nonexistent worktree path makes both
 # `if [ -d "$WT" ]` guards skip, so teardown runs straight to the cleanup + state rm.
+# Symlink every bin/ sibling a script sources, transitively, into the fake root.
+#
+# The fixtures below hand-maintain a symlink list, and that list rots every time
+# fm-teardown.sh gains a sibling: it had already fallen behind
+# fm-treehouse-lib.sh and fm-wake-lib.sh, so teardown died on a missing `source`
+# and the suite reported the useless "teardown exited non-zero with a valid
+# tasktmp" - its output is swallowed by >/dev/null 2>&1, so the real cause was
+# invisible. Deriving the closure from the actual source lines means the fixture
+# cannot go stale again. Additive: the explicit links stay, this only fills gaps.
+# sed program that extracts `<lib>.sh` from a `. "$SCRIPT_DIR/<lib>.sh"` source
+# line. Single-quoted deliberately: the `\$` is a literal dollar inside the
+# regex, matching the text `$SCRIPT_DIR`, not a shell expansion.
+# shellcheck disable=SC2016
+SOURCED_LIB_SED='s#^[[:space:]]*\.[[:space:]]+"\$(SCRIPT_DIR|FM_ROOT|ROOT)[^"]*/([A-Za-z0-9._-]+\.sh)".*#\2#p'
+link_sourced_siblings() { # <fake-root> <script-name>
+  local fake=$1 pending=$2 seen="" cur lib
+  while [ -n "$pending" ]; do
+    cur=${pending%% *}; pending=${pending#"$cur"}; pending=${pending# }
+    case " $seen " in *" $cur "*) continue ;; esac
+    seen="$seen $cur"
+    [ -f "$ROOT/bin/$cur" ] || continue
+    while IFS= read -r lib; do
+      [ -n "$lib" ] || continue
+      [ -f "$ROOT/bin/$lib" ] || continue
+      # COPY, never symlink. Some of these siblings are deliberately STUBBED
+      # further down with `cat > "$fake/bin/<lib>"`, and a `cat >` onto a symlink
+      # follows it and overwrites the REAL file in bin/ - it truncated the
+      # tracked bin/fm-tasks-axi-lib.sh from 76 lines to a 1-line stub, which
+      # then broke unrelated suites because three shipped scripts call
+      # fm_tasks_axi_compatible from it. A copy is equivalent for a sourced lib
+      # and cannot escape the fixture.
+      [ -e "$fake/bin/$lib" ] || cp "$ROOT/bin/$lib" "$fake/bin/$lib"
+      pending="$pending $lib"
+    done < <(sed -nE "$SOURCED_LIB_SED" "$ROOT/bin/$cur")
+  done
+}
+
+
 make_fake_root() {
   local id=$1 tasktmp=$2
   local fake="$TMP_ROOT/$id"
@@ -99,12 +137,14 @@ SH
   ln -s "$ROOT/bin/fm-inactive-reconcile.sh" "$fake/bin/fm-inactive-reconcile.sh"
   ln -s "$ROOT/bin/fm-parent-channel-lib.sh" "$fake/bin/fm-parent-channel-lib.sh"
   # fm-guard.sh: stub (teardown calls it with `|| true`).
+  rm -f "$fake/bin/fm-guard.sh"   # never write THROUGH a symlink into the real bin/
   cat > "$fake/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
   chmod +x "$fake/bin/fm-guard.sh"
   # fm-fleet-sync.sh: stub (called for non-scout/non-local-only teardowns).
+  rm -f "$fake/bin/fm-fleet-sync.sh"   # never write THROUGH a symlink into the real bin/
   cat > "$fake/bin/fm-fleet-sync.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -113,6 +153,7 @@ SH
   # fm-tasks-axi-lib.sh: stub (teardown sources it). Report no backend so the
   # fused backlog close is skipped and the follow-up echo takes the plain-message
   # path; there is no tasks-axi and no backlog in this fixture.
+  rm -f "$fake/bin/fm-tasks-axi-lib.sh"   # never write THROUGH a symlink into the real bin/
   cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
 FM_TASKS_AXI_MIN=0.2.6
 fm_tasks_axi_backend() { printf 'markdown\n'; }
@@ -120,7 +161,11 @@ fm_tasks_axi_backend_available() { return 1; }
 fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
-  ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  # Fill any remaining bin/ sibling fm-teardown.sh sources the explicit list above
+  # does not cover (e.g. the fork's fm-treehouse-lib.sh). Run last, after every
+  # explicit link and stub already exists, so this only fills genuine gaps and
+  # never clobbers a stub or collides with an explicit link.
+  link_sourced_siblings "$fake" fm-teardown.sh
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
@@ -194,6 +239,7 @@ SH
   ln -s "$ROOT/bin/fm-x-lib.sh" "$fake/bin/fm-x-lib.sh"
   ln -s "$ROOT/bin/fm-env-lib.sh" "$fake/bin/fm-env-lib.sh"
   ln -s "$ROOT/bin/fm-secondmate-registry-lib.sh" "$fake/bin/fm-secondmate-registry-lib.sh"
+  rm -f "$fake/bin/fm-guard.sh"   # never write THROUGH a symlink into the real bin/
   ln -s "$ROOT/bin/fm-secondmate-parent-lib.sh" "$fake/bin/fm-secondmate-parent-lib.sh"
   ln -s "$ROOT/bin/fm-pending-reply-lib.sh" "$fake/bin/fm-pending-reply-lib.sh"
   ln -s "$ROOT/bin/fm-marker-lib.sh" "$fake/bin/fm-marker-lib.sh"
@@ -205,11 +251,13 @@ SH
 exit 0
 SH
   chmod +x "$fake/bin/fm-guard.sh"
+  rm -f "$fake/bin/fm-fleet-sync.sh"   # never write THROUGH a symlink into the real bin/
   cat > "$fake/bin/fm-fleet-sync.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
   chmod +x "$fake/bin/fm-fleet-sync.sh"
+  rm -f "$fake/bin/fm-tasks-axi-lib.sh"   # never write THROUGH a symlink into the real bin/
   cat > "$fake/bin/fm-tasks-axi-lib.sh" <<'SH'
 FM_TASKS_AXI_MIN=0.2.6
 fm_tasks_axi_backend() { printf 'markdown\n'; }
@@ -217,7 +265,11 @@ fm_tasks_axi_backend_available() { return 1; }
 fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
-  ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  # Fill any remaining bin/ sibling fm-teardown.sh sources the explicit list above
+  # does not cover (e.g. the fork's fm-treehouse-lib.sh). Run last, after every
+  # explicit link and stub already exists, so this only fills genuine gaps and
+  # never clobbers a stub or collides with an explicit link.
+  link_sourced_siblings "$fake" fm-teardown.sh
   # No tasktmp= line at all.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id

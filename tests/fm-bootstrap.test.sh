@@ -147,6 +147,13 @@ SH
   chmod +x "$fakebin/jq"
 }
 
+add_real_node() {
+  local fakebin=$1 real_node
+  real_node=$(command -v node 2>/dev/null) || fail "node is required for dispatch profile validation tests"
+  rm -f "$fakebin/node"
+  ln -s "$real_node" "$fakebin/node"
+}
+
 make_fake_fleet_sync_root() {
   local dir=$1 fake_root
   fake_root="$dir/fake-root"
@@ -1121,6 +1128,7 @@ test_crew_dispatch_validation() {
     printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
     fakebin=$(make_fake_toolchain "$case_dir")
     add_real_jq "$fakebin"
+    add_real_node "$fakebin"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
@@ -1138,26 +1146,26 @@ codex Luna max effort is accepted^{"rules":[{"when":"big feature","use":{"harnes
 codex unsupported model max effort is flagged^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-5","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
 unsupported grok max effort is flagged^{"rules":[{"when":"deep current work","use":{"harness":"grok","model":"grok-4","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:max
 unsupported grok xhigh effort is flagged^{"rules":[{"when":"deep current work","use":{"harness":"grok","model":"grok-4","effort":"xhigh"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:xhigh
-native pi ultra is accepted^{"rules":[],"default":{"harness":"pi","model":"codex-native/gpt-6-astra","effort":"ultra","provider":"codex"}}^empty^
-native signed pi ultra is accepted^{"rules":[{"when":"native reasoning","use":{"harness":"pi-signed","model":"codex-native/gpt-6-astra","effort":"ultra","provider":"codex"}}]}^empty^
-ordinary pi ultra is refused^{"default":{"harness":"pi","model":"openai-codex/gpt-6-astra","effort":"ultra","provider":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
-missing native model ultra is refused^{"default":{"harness":"pi","effort":"ultra","provider":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
-empty native model ultra is refused^{"default":{"harness":"pi","model":"codex-native/","effort":"ultra","provider":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
+native pi ultra is accepted^{"rules":[],"default":{"harness":"pi","model":"codex-native/gpt-6-astra","effort":"ultra"}}^empty^
+native signed pi ultra is accepted^{"rules":[{"when":"native reasoning","use":{"harness":"pi-signed","model":"codex-native/gpt-6-astra","effort":"ultra"}}]}^empty^
+ordinary pi ultra is refused^{"default":{"harness":"pi","model":"openai-codex/gpt-6-astra","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
+missing native model ultra is refused^{"default":{"harness":"pi","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
+empty native model ultra is refused^{"default":{"harness":"pi","model":"codex-native/","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: pi:ultra
 codex harness ultra is refused^{"default":{"harness":"codex","model":"codex-native/gpt-6-astra","effort":"ultra"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:ultra
-pi max effort is accepted^{"rules":[{"when":"deep coding","use":{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"max","provider":"codex"}}]}^empty^
-pi-signed max effort is accepted^{"rules":[{"when":"signed coding","use":{"harness":"pi-signed","model":"openai-codex/gpt-5.6-sol","effort":"max","provider":"codex"}}]}^empty^
+pi max effort is accepted^{"rules":[{"when":"deep coding","use":{"harness":"pi","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
+pi-signed max effort is accepted^{"rules":[{"when":"signed coding","use":{"harness":"pi-signed","model":"openai-codex/gpt-5.6-sol","effort":"max"}}]}^empty^
+new verified adapters are accepted^{"rules":[{"when":"cline work","use":{"harness":"cline","model":"anthropic/claude-sonnet-5","effort":"xhigh"}},{"when":"cursor work","use":{"harness":"cursor","model":"claude-opus-4-8"}},{"when":"copilot work","use":{"harness":"copilot","model":"gpt-5.6","effort":"max"}}],"default":{"harness":"copilot"}}^empty^
+unsupported cline max effort is flagged^{"rules":[{"when":"cline work","use":{"harness":"cline","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cline:max
+unsupported cursor effort is flagged^{"rules":[{"when":"cursor work","use":{"harness":"cursor","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor:high
 muse shared efforts are accepted^{"rules":[{"when":"muse low","use":{"harness":"muse","effort":"low"}},{"when":"muse medium","use":{"harness":"muse","effort":"medium"}},{"when":"muse high","use":{"harness":"muse","effort":"high"}},{"when":"muse xhigh","use":{"harness":"muse","effort":"xhigh"}},{"when":"muse max","use":{"harness":"muse","effort":"max"}}]}^empty^
 unsupported muse ultra effort is flagged^{"rules":[{"when":"muse ultra","use":{"harness":"muse","effort":"ultra"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: muse:ultra
-agy model profile is accepted^{"rules":[{"when":"agy work","use":{"harness":"agy","model":"gemini-3.8-flash-high"}}]}^empty^
-gemini profile with explicit provider is accepted^{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}^empty^
-agy low medium high efforts are accepted^{"rules":[{"when":"agy low","use":{"harness":"agy","effort":"low"}},{"when":"agy medium","use":{"harness":"agy","effort":"medium"}},{"when":"agy high","use":{"harness":"agy","effort":"high"}}]}^empty^
-unsupported agy xhigh effort is flagged^{"rules":[{"when":"agy xhigh","use":{"harness":"agy","effort":"xhigh"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: agy:xhigh
-unsupported agy max effort is flagged^{"rules":[{"when":"agy max","use":{"harness":"agy","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: agy:max
-unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high","provider":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
-kimi model profile is accepted^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^empty^
-unsupported kimi effort is flagged^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:high
+unsupported opencode effort is flagged^{"rules":[{"when":"opencode work","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:high
+Kimi model profile is rejected from subscription dispatch^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
+native subscription providers and routing settings are accepted^{"subscriptionRouting":{"reservePercent":15,"telemetryMaxAgeSeconds":120,"cooldownSeconds":600},"default":[{"harness":"claude","provider":"claude"},{"harness":"codex","provider":"codex"}]}^empty^
+ native subscription provider mismatch is flagged^{"default":[{"harness":"codex","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: codex:claude
+ unsupported subscription provider is flagged^{"default":[{"harness":"pi","provider":"moonshot"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unsupported subscription provider: moonshot
+unsupported Kimi effort remains rejected at the subscription boundary^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - Kimi is unsupported for subscription dispatch
 cursor model profile is accepted^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high"}}]}^empty^
-unsupported cursor effort is flagged^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor:high
 array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}]}^empty^
 array use without select is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}]}]}^empty^
 one-element array use is accepted^{"rules":[{"when":"focused feature","use":[{"harness":"claude"}]}]}^empty^
@@ -1166,6 +1174,9 @@ provider-less multi-provider profile remains accepted without opt-in^{"rules":[{
 one-element default array is accepted^{"default":[{"harness":"codex"}]}^empty^
 empty array use is flagged^{"rules":[{"when":"big feature","use":[]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each rule needs at least one use profile
 array profile without harness is flagged^{"rules":[{"when":"big feature","use":[{"model":"gpt-5.5"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile needs harness
+array profile with malformed model is flagged^{"rules":[{"when":"big feature","use":[{"harness":"codex","model":5}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
+declared quota window is accepted^{"rules":[{"when":"cursor work","use":[{"harness":"cursor","model":"cursor-grok-4.6-high","quotaWindow":"auto_usage"}]}]}^empty^
+array profile with malformed quotaWindow is flagged^{"rules":[{"when":"cursor work","use":[{"harness":"cursor","quotaWindow":""}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model, effort, and quotaWindow must be non-empty strings when present
 array profile with malformed model is flagged^{"rules":[{"when":"big feature","use":[{"harness":"codex","model":5}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 resolve fields are accepted^{"rules":[{"when":"hard design","approval":"captain","floor":{"scope":"model:fable","min_percent":20,"provider":"claude"},"use":[{"harness":"pi","model":"openai-codex/gpt-5.6-sol","provider":"codex"},{"harness":"codex","model":"gpt-5.6-sol","floor":{"scope":"all_models","min_percent":50}}]}],"default":[{"harness":"pi","model":"kimi-code/k3","provider":"kimi","floor":{"scope":"all_models","min_percent":10}}]}^empty^
 rule min_confidence is accepted^{"rules":[{"when":"hard design","min_confidence":0.9,"use":{"harness":"claude"}}]}^empty^
@@ -1184,6 +1195,22 @@ array profile codex max without Luna model is flagged^{"rules":[{"when":"big fea
 empty default array is flagged^{"default":[]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default needs at least one profile
 non-object default array entry is flagged^{"default":["codex"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile must be an object
 default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile needs harness
+default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
+agy model profile with quotaWindow is accepted^{"rules":[{"when":"agy work","use":[{"harness":"agy","model":"gemini-3.7-flash-high","effort":"high","quotaWindow":"gemini_5h"}]}]}^empty^
+agy native subscription provider mismatch is flagged^{"default":[{"harness":"agy","provider":"claude"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: agy:claude
+model fallback chains are accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.6-flash-high","gemini-3.5-flash-high"]}}^empty^
+ legacy _model_fallback alias is accepted^{"default":{"harness":"claude"},"_model_fallback":{"claude":["claude-sonnet-5","haiku"]}}^empty^
+ fallback lane order is accepted^{"default":{"harness":"agy"},"modelFallback":{"agy":["gemini-3.7-flash-high","gemini-3.6-flash-high"]},"fallbackLanes":["agy","cursor","opencode"]}^empty^
+ single-entry fallback lane order is accepted^{"default":{"harness":"agy"},"fallbackLanes":["agy"]}^empty^
+ opencode subscription provider identity is accepted^{"default":{"harness":"opencode","provider":"opencode","model":"opencode-go/deepseek-v4.1-flash"}}^empty^
+ opencode native subscription provider mismatch is flagged^{"default":{"harness":"opencode","provider":"claude"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - native harness/provider mismatch: opencode:claude
+ grok with a real model chain can sit in modelFallbackCycles^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6","grok-4.5"]},"modelFallbackCycles":["grok"]}^empty^
+ grok in modelFallbackCycles without a model chain is flagged^{"default":{"harness":"grok"},"modelFallbackCycles":["grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles requires a modelFallback chain with at least two model ids: grok
+ grok in modelFallbackCycles with a one-id chain is flagged^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6"]},"modelFallbackCycles":["grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles requires a modelFallback chain with at least two model ids: grok
+ unverified harness in modelFallback is flagged^{"default":{"harness":"grok"},"modelFallback":{"spaceship":["a","b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback has an unverified harness: spaceship
+ modelFallback and its alias cannot both be declared^{"default":{"harness":"grok"},"modelFallback":{"grok":["a","b"]},"_model_fallback":{"grok":["a","b"]}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallback and its legacy alias _model_fallback cannot both be declared
+ duplicate modelFallbackCycles entries are flagged^{"default":{"harness":"grok"},"modelFallback":{"grok":["grok-4.6","grok-4.5"]},"modelFallbackCycles":["grok","grok"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - modelFallbackCycles has duplicate entries; a cyclic lane must be named once
+ unverified harness in fallbackLanes is flagged^{"default":{"harness":"agy"},"fallbackLanes":["agy","spaceship"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - fallbackLanes has a non-string or unverified harness entry: spaceship
 default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 default profile floor without min_percent is flagged^{"default":[{"harness":"codex","floor":{"scope":"all_models"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
 default profile floor provider override is flagged^{"default":{"harness":"codex","floor":{"scope":"all_models","min_percent":50,"provider":"claude"}}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100

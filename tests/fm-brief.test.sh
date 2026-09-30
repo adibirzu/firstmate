@@ -965,6 +965,146 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 
 # A scout brief offers the Lavish review loop for every compatible board version,
 # including older builds that use the legacy reply path.
+
+test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
+  local home brief
+  home="$TMP_ROOT/worker-safety-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-ship firstmate --mode direct-PR >/dev/null 2>&1
+  brief="$home/data/brief-safety-ship/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_grep "Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply" "$brief" \
+    "ship brief did not forbid rendering a decision as an interactive prompt"
+  assert_grep "nobody reads this pane" "$brief" \
+    "ship brief did not explain why an interactive prompt is unsafe"
+  assert_grep "Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off" "$brief" \
+    "ship brief did not forbid worker-side polling loops"
+  assert_grep "Firstmate already supervises every task centrally" "$brief" \
+    "ship brief did not explain why worker-side polling is unsafe"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-scout firstmate --scout >/dev/null 2>&1
+  brief="$home/data/brief-safety-scout/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep "Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply" "$brief" \
+    "scout brief did not forbid rendering a decision as an interactive prompt"
+  assert_grep "Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off" "$brief" \
+    "scout brief did not forbid worker-side polling loops"
+  pass "fm-brief.sh: ship and scout briefs forbid interactive-prompt decisions and worker-side polling loops"
+}
+
+# The instruction-inbox contract is delivered to the crewmate exactly once per
+# brief. A merge resolution that kept both parents' placement of the section
+# emitted it twice back to back, which spends the home's startup-memory budget
+# on a repeated contract and reads to the agent as a generation bug. The
+# assertion is on the generated brief - the prompt actually handed to the agent
+# - not on the scaffold's source.
+test_instruction_inbox_contract_is_delivered_once_per_brief() {
+  local home brief kind kind_brief count
+  home="$TMP_ROOT/inbox-once-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-ship some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-scout some-proj --scout >/dev/null 2>&1
+  for kind_brief in "ship:$home/data/brief-inbox-ship/brief.md" "scout:$home/data/brief-inbox-scout/brief.md"; do
+    kind=${kind_brief%%:*}
+    brief=${kind_brief#*:}
+    assert_present "$brief" "$kind brief was not scaffolded"
+    count=$(grep -c '^# Firstmate instruction inbox$' "$brief")
+    [ "$count" = 1 ] \
+      || fail "$kind brief delivers the instruction-inbox contract $count times, expected exactly 1"
+    count=$(grep -c 'The move IS the acknowledgement' "$brief")
+    [ "$count" = 1 ] \
+      || fail "$kind brief repeats the inbox acknowledgement rule $count times, expected exactly 1"
+  done
+  pass "fm-brief.sh: ship and scout briefs deliver the instruction-inbox contract exactly once"
+}
+
+# Every ship and scout brief carries the graph-first context instruction: query
+# the DevViz code graph before broad file reads, with a fail-soft fallback to
+# normal file reads when the graph surface is unreachable.
+test_ship_and_scout_carry_graph_first_instruction() {
+  local home brief kind kind_brief
+  home="$TMP_ROOT/graph-first-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-ship some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-scout some-proj --scout >/dev/null 2>&1
+  for kind_brief in "ship:$home/data/brief-graph-ship/brief.md" "scout:$home/data/brief-graph-scout/brief.md"; do
+    kind=${kind_brief%%:*}
+    brief=${kind_brief#*:}
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "# Graph-first context" "$brief" \
+      "$kind brief missing the graph-first context section"
+    assert_grep "query the code graph first" "$brief" \
+      "$kind brief did not instruct querying the graph before reading files"
+    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+    assert_grep 'call the `graph_first` MCP tool, or run `devviz graph-first "<question>"`' "$brief" \
+      "$kind brief lost the concrete graph-first call surfaces"
+    assert_grep "never parse \`data/graphs/*/graph.json\` directly" "$brief" \
+      "$kind brief did not forbid parsing raw graph.json"
+    assert_grep "If the graph-first surface is unreachable, proceed with normal targeted file reads" "$brief" \
+      "$kind brief lost the fail-soft fallback - graph-first must never block work"
+  done
+  pass "fm-brief.sh: ship and scout briefs carry the fail-soft graph-first instruction"
+}
+
+# The worktree-isolation assertion must name the exact assigned worktree through
+# the {WORKTREE} placeholder bin/fm-spawn.sh substitutes, and must run the check
+# that enforces it, so a worker misdirected into a firstmate home or the primary
+# checkout stops at its first command. Both ship and scout carry it.
+test_isolation_assertion_names_the_assigned_worktree() {
+  local home id brief kind count
+  home="$TMP_ROOT/isolation-assert-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-isolation-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "Your assigned worktree is {WORKTREE}." "$brief" \
+      "$kind brief did not name the assigned worktree"
+    assert_grep 'fm-worker-isolation-check.sh" {WORKTREE}`' "$brief" \
+      "$kind brief did not run the isolation check against the assigned worktree"
+    assert_grep "when your shell is not exactly that worktree or when it is a firstmate home or a primary checkout" "$brief" \
+      "$kind brief did not explain what the isolation check rejects"
+    count=$(grep -c -F '{WORKTREE}' "$brief")
+    [ "$count" = 2 ] \
+      || fail "$kind brief must carry exactly two {WORKTREE} usages, found $count"
+  done
+  pass "fm-brief.sh: ship and scout name the assigned worktree and enforce it"
+}
+
+# Scout and secondmate paths still scaffold well-formed briefs.
+test_scout_and_secondmate_scaffold() {
+  local brief
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-scout-q6 alpha --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-scout-q6/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
+  assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
+  assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
+  assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
+
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-sm-q6/brief.md"
+  assert_present "$brief" "secondmate charter was not scaffolded"
+  assert_grep "persistent second mate" "$brief" \
+    "secondmate charter must declare its role"
+  assert_no_grep "## Captain's intent" "$brief" \
+    "secondmate charter must not grow ship/scout Task subsections"
+  assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
+    "secondmate charter must not carry the Firstmate spec placeholder"
+  pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
+}
 test_scout_lavish_line_follows_presentation_floor() {
   local base label version expect case_dir fakebin brief n=0
   local hosting='use the lavish-axi rule'
@@ -997,33 +1137,6 @@ lavish-axi below the board compatibility floor^0.1.76^text
 absent lavish-axi^absent^text
 ROWS
   pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
-}
-
-# Scout and secondmate paths still scaffold well-formed briefs.
-test_scout_and_secondmate_scaffold() {
-  local brief
-  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-scout-q6 alpha --scout >/dev/null 2>&1 \
-    || fail "fm-brief.sh scout scaffold exited non-zero"
-  brief="$BRIEF_HOME/data/brief-scout-q6/brief.md"
-  assert_present "$brief" "scout brief was not scaffolded"
-  assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
-  assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
-  assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
-  assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
-  assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
-
-  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
-    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
-    || fail "fm-brief.sh secondmate scaffold exited non-zero"
-  brief="$BRIEF_HOME/data/brief-sm-q6/brief.md"
-  assert_present "$brief" "secondmate charter was not scaffolded"
-  assert_grep "persistent second mate" "$brief" \
-    "secondmate charter must declare its role"
-  assert_no_grep "## Captain's intent" "$brief" \
-    "secondmate charter must not grow ship/scout Task subsections"
-  assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
-    "secondmate charter must not carry the Firstmate spec placeholder"
-  pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 
 test_worker_role_scope() {
@@ -1350,6 +1463,10 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
+test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
+test_instruction_inbox_contract_is_delivered_once_per_brief
+test_ship_and_scout_carry_graph_first_instruction
+test_isolation_assertion_names_the_assigned_worktree
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_home_brief_include_is_appended_last

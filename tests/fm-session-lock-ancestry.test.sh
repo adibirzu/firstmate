@@ -481,6 +481,9 @@ if [ "${FM_FIXTURE_ORPHAN_HERE:-0}" = 1 ]; then
   done
 fi
 printf '%s\n' "$$" > "$FM_HOME/state/session-pid"
+export CLAUDECODE=1
+export CLAUDE_CODE_SESSION_ID=fixture-session
+export CLAUDE_PID=$$
 printf '%s\n' "$$" > "$FM_HOME/state/.lock"
 "$FM_HOME/bin/fm-claude-stop-autoarm.sh" </dev/null > "$FM_HOME/state/hook.out" 2>&1
 printf '%s\n' "$?" > "$FM_HOME/state/hook.rc"
@@ -573,18 +576,167 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
 }
 
-# --- end-to-end layer: a background session whose helper chain is recycled ---
+# --- end-to-end layer: fm-lock.sh identity and the CLAUDE_PID fallback --------
 #
-# The topology the four issue reports (#3902, #2314, #3398, #4066) recorded with
-# real process listings: a front-end that acquired the lock, a transient daemon
-# under it, the pty-host the daemon spawned, and the bg-spare inside the pty-host
-# that runs the model loop and therefore fires every hook. Every fixture process
-# is the fake claude, so the ancestry walk sees a contiguous claude-named run
-# exactly as in production, and the tree is orphaned before use. The daemon is
-# then ended while the front-end stays alive - the recycling that breaks the run
-# above the pty-host - and the spare fires the real Stop auto-arm, the real
-# turn-end guard, and the real lock script once per phase under a chosen hook
-# environment, recording every verdict for the assertions below.
+# These run the REAL bin/fm-lock.sh inside real, orphaned process trees whose
+# leaf is a genuine Claude-named executable, so the identity verdict comes from
+# the live process table and never from a stub asserting its own assumption. The
+# trees are orphaned to init before fm-lock.sh runs, so the ancestry walk
+# terminates inside the fixture and can never escape into the session running
+# this suite. The live-harness half of this contract - that the real installed
+# Claude Code build, which does not export CLAUDE_PID, still resolves its lock
+# identity - is proven end to end by tests/fm-claude-stop-autoarm-live-e2e.test.sh.
+
+# Install the lock scripts and a reusable probe into <dir>. The probe orphans
+# itself, publishes its own pid, drives the requested CLAUDE_PID / CLAUDECODE /
+# session-id markers, runs fm-lock.sh against FM_LOCK_HOME, and records the exit
+# code; with FM_PROBE_HOLD=1 it then keeps its pid live until a release file
+# appears, so a second session can collide with a genuinely live owner.
+make_lock_home() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/state"
+  install_autoarm_scripts "$dir"
+  cat > "$dir/lock-probe.sh" <<'SH'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+out=$FM_PROBE_OUT
+mkdir -p "$out"
+printf '%s\n' "$$" > "$out/session-pid"
+export CLAUDECODE="${FM_PROBE_CLAUDECODE:-1}"
+export CLAUDE_CODE_SESSION_ID="$FM_PROBE_SESSION_ID"
+if [ "${FM_PROBE_SET_CLAUDE_PID:-0}" = 1 ]; then
+  export CLAUDE_PID=$$
+else
+  unset CLAUDE_PID
+fi
+FM_HOME="$FM_LOCK_HOME" "$FM_LOCK_HOME/bin/fm-lock.sh" </dev/null > "$out/lock.out" 2>&1
+printf '%s\n' "$?" > "$out/lock.rc"
+if [ "${FM_PROBE_HOLD:-0}" = 1 ]; then
+  touch "$out/held"
+  j=0
+  while [ "$j" -lt 600 ] && [ ! -f "$out/release" ]; do
+    sleep 0.05
+    j=$((j + 1))
+  done
+fi
+SH
+  chmod +x "$dir/lock-probe.sh"
+}
+
+# Start a probe detached, so the launcher exits and the tree reparents to init.
+launch_lock_probe() {  # <lock-home> <out> <leaf-bin> <set-claude-pid> <session-id> <hold> [claudecode]
+  local home=$1 out=$2 leaf=$3 set_pid=$4 sid=$5 hold=$6 cc=${7:-1}
+  mkdir -p "$out"
+  FM_LOCK_HOME="$home" FM_PROBE_OUT="$out" FM_PROBE_SET_CLAUDE_PID="$set_pid" \
+    FM_PROBE_SESSION_ID="$sid" FM_PROBE_HOLD="$hold" FM_PROBE_CLAUDECODE="$cc" \
+    bash -c '"$0" "$1" &' "$leaf" "$home/lock-probe.sh"
+}
+
+wait_for_probe() {  # <out>
+  local out=$1 i=0
+  while [ "$i" -lt 600 ] && [ ! -s "$out/lock.rc" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$out/lock.rc" ] || fail "the lock probe never finished"
+}
+
+wait_for_hold() {  # <out>
+  local out=$1 i=0
+  while [ "$i" -lt 600 ] && [ ! -e "$out/held" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -e "$out/held" ] || fail "the holding lock probe never acquired"
+}
+
+test_e2e_claude_pid_set_resolves_identity() {
+  local dir out selfpid lock record
+  dir="$TMP_ROOT/e2e-claude-pid-set"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  launch_lock_probe "$dir" "$out" "$VERSIONED_CLAUDE" 1 pid-set-session 0
+  wait_for_probe "$out"
+  expect_code 0 "$(tr -d '[:space:]' < "$out/lock.rc")" "a claude session that exports CLAUDE_PID must acquire the lock"
+  selfpid=$(tr -d '[:space:]' < "$out/session-pid")
+  lock=$(tr -d '[:space:]' < "$dir/state/.lock")
+  [ "$lock" = "$selfpid" ] || fail "the lock pid did not record the claude session pid: expected $selfpid, got $lock"
+  record=$(cat "$dir/state/.lock.session")
+  [ "$record" = "$(printf 'format=1\nkind=claude\npid=%s\nsession=pid-set-session' "$selfpid")" ] \
+    || fail "the CLAUDE_PID-set path wrote an unexpected binding: $record"
+  pass "session-lock e2e: a claude session that exports CLAUDE_PID resolves its identity unchanged"
+}
+
+test_e2e_claude_pid_absent_resolves_via_ancestry_fallback() {
+  local dir out selfpid lock record
+  dir="$TMP_ROOT/e2e-claude-pid-absent"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  launch_lock_probe "$dir" "$out" "$VERSIONED_CLAUDE" 0 pid-absent-session 0
+  wait_for_probe "$out"
+  expect_code 0 "$(tr -d '[:space:]' < "$out/lock.rc")" "a claude session without CLAUDE_PID must still acquire via the ancestry fallback"
+  selfpid=$(tr -d '[:space:]' < "$out/session-pid")
+  lock=$(tr -d '[:space:]' < "$dir/state/.lock")
+  [ "$lock" = "$selfpid" ] || fail "the fallback recorded a pid other than the live claude ancestor: expected $selfpid, got $lock"
+  record=$(cat "$dir/state/.lock.session")
+  [ "$record" = "$(printf 'format=1\nkind=claude\npid=%s\nsession=pid-absent-session' "$selfpid")" ] \
+    || fail "the fallback wrote an unexpected binding: $record"
+  pass "session-lock e2e: a claude session with no CLAUDE_PID resolves identity from its live ancestry"
+}
+
+test_e2e_claude_markers_without_a_live_ancestor_refuse() {
+  local dir out
+  dir="$TMP_ROOT/e2e-no-claude-ancestor"
+  make_lock_home "$dir"
+  out="$dir/probe-out"
+  # Identical CLAUDECODE and session-id markers to the fallback case and no
+  # CLAUDE_PID, but a non-claude leaf: driving the two cases apart on the
+  # ancestry signal alone proves the env markers cannot mint a claude lock on
+  # their own, so the fallback did not open a hole.
+  launch_lock_probe "$dir" "$out" /bin/bash 0 pid-absent-session 0
+  wait_for_probe "$out"
+  expect_code 1 "$(tr -d '[:space:]' < "$out/lock.rc")" "claude env markers without a live claude ancestor must refuse"
+  case "$(cat "$out/lock.out")" in
+    *"cannot establish this session's lock identity"*) ;;
+    *) fail "the refusal was not the identity refusal: $(cat "$out/lock.out")" ;;
+  esac
+  [ ! -e "$dir/state/.lock" ] || fail "a session with no live claude ancestor wrote a lock"
+  [ ! -e "$dir/state/.lock.session" ] || fail "a session with no live claude ancestor wrote a binding"
+  pass "session-lock e2e: claude env markers without a live claude ancestor still fail closed"
+}
+
+test_e2e_fallback_owner_still_excludes_a_second_live_session() {
+  local dir out_a out_b owner_a i
+  dir="$TMP_ROOT/e2e-fallback-collision"
+  make_lock_home "$dir"
+  out_a="$dir/probe-a"
+  out_b="$dir/probe-b"
+  # Session A acquires through the CLAUDE_PID fallback and holds its pid live.
+  launch_lock_probe "$dir" "$out_a" "$VERSIONED_CLAUDE" 0 owner-a-session 1
+  wait_for_hold "$out_a"
+  expect_code 0 "$(tr -d '[:space:]' < "$out_a/lock.rc")" "the fallback owner must acquire the lock"
+  owner_a=$(tr -d '[:space:]' < "$out_a/session-pid")
+  # Session B is a different live claude session, also using the fallback.
+  launch_lock_probe "$dir" "$out_b" "$NAMED_CLAUDE" 0 intruder-b-session 0
+  wait_for_probe "$out_b"
+  expect_code 1 "$(tr -d '[:space:]' < "$out_b/lock.rc")" "a second live session must be refused"
+  grep -q "another live firstmate session holds the lock (pid $owner_a, session owner-a-session)" "$out_b/lock.out" \
+    || fail "the collision refusal did not name the live fallback owner pid $owner_a: $(cat "$out_b/lock.out")"
+  [ "$(tr -d '[:space:]' < "$dir/state/.lock")" = "$owner_a" ] \
+    || fail "the second session moved the lock off the fallback owner"
+  # Release A and let the held session exit on its own.
+  touch "$out_a/release"
+  i=0
+  while [ "$i" -lt 200 ] && kill -0 "$owner_a" 2>/dev/null; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  pass "session-lock e2e: a fallback-acquired lock still excludes a second live claude session"
+}
 
 BG_FIXTURE_PIDS=()
 reap_background_fixture() {
@@ -617,7 +769,7 @@ while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 
   i=$((i + 1))
 done
 printf '%s\n' "$$" > "$FM_HOME/state/frontend-pid"
-CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_HOME/bin/fm-lock.sh" > "$FM_HOME/state/frontend-lock.out" 2>&1
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_HOME/bin/fm-lock.sh" > "$FM_HOME/state/frontend-lock.out" 2>&1
 printf '%s\n' "$?" > "$FM_HOME/state/frontend-lock.rc"
 "$FM_FIXTURE_CLAUDE" "$FM_HOME/daemon.sh" &
 disown
@@ -647,7 +799,7 @@ while [ ! -e "$FM_HOME/state/stop-spare" ]; do
   if [ -f "$req" ]; then
     out="$FM_HOME/state/phase-$n"
     mkdir -p "$out"
-    unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
+    unset CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDECODE
     # shellcheck disable=SC1090
     . "$req"
     ( . "$FM_HOME/bin/fm-session-lock-lib.sh" && fm_harness_ancestry_pids ) > "$out/ancestry" 2>/dev/null
@@ -761,7 +913,7 @@ test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
   cp "$dir/state/.lock-session" "$dir/sidecar-initial"
 
   # Phase 1: the healthy contiguous chain, the session's own id.
-  fire_phase "$dir" 1 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$'
+  fire_phase "$dir" 1 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$; export CLAUDECODE=1'
   grep -qx "$frontend" "$dir/state/phase-1/ancestry" || fail "the healthy chain did not reach the front-end"
   expect_phase_owned "$dir" 1 2 "$frontend" "healthy chain"
 
@@ -777,21 +929,23 @@ test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
   kill -0 "$frontend" 2>/dev/null || fail "the front-end died with the daemon, so the recycled case cannot be exercised"
 
   # Phase 2: the same session id over the broken chain - the reported drift.
-  fire_phase "$dir" 2 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$'
+  fire_phase "$dir" 2 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$; export CLAUDECODE=1'
   if grep -qx "$frontend" "$dir/state/phase-2/ancestry"; then
     fail "the recycled chain still reached the front-end, so this phase proves nothing"
   fi
   grep -qx "$spare" "$dir/state/phase-2/ancestry" || fail "the hook's ancestry lost its own spare"
   expect_phase_owned "$dir" 2 4 "$frontend" "recycled chain, same session"
 
-  # Phases 3-5: a different id, the right id from a CLAUDE_PID outside the run,
-  # and no id at all are each a non-owner over the same broken chain.
-  fire_phase "$dir" 3 'export CLAUDE_CODE_SESSION_ID=S2; export CLAUDE_PID=$$'
+  # Phase 3: a different session id over the broken chain is a non-owner.
+  # Phase 4: the same session id with the live recorded CLAUDE_PID is still
+  # this session, even though that pid is no longer in this ancestry - Claude's
+  # worker pool is reparented the same way. Phase 5: no id at all is not.
+  fire_phase "$dir" 3 'export CLAUDE_CODE_SESSION_ID=S2; export CLAUDE_PID=$$; export CLAUDECODE=1'
   expect_phase_foreign "$dir" 3 4 "$frontend" "recycled chain, different session"
-  fire_phase "$dir" 4 "export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$frontend"
-  expect_phase_foreign "$dir" 4 4 "$frontend" "recycled chain, untrusted id"
+  fire_phase "$dir" 4 "export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$frontend; export CLAUDECODE=1"
+  expect_phase_owned "$dir" 4 6 "$frontend" "recycled chain, live recorded pid"
   fire_phase "$dir" 5 ''
-  expect_phase_foreign "$dir" 5 4 "$frontend" "recycled chain, no id"
+  expect_phase_foreign "$dir" 5 6 "$frontend" "recycled chain, no id"
 
   # Phase 6: the front-end exits; the same session reclaims its dead anchor
   # onto the spare - the model-loop process - not onto the outermost pty-host.
@@ -802,8 +956,8 @@ test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
     i=$((i + 1))
   done
   kill -0 "$frontend" 2>/dev/null && fail "the front-end did not exit"
-  fire_phase "$dir" 6 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$'
-  expect_phase_owned "$dir" 6 6 "$spare" "dead front-end, same session"
+  fire_phase "$dir" 6 'export CLAUDE_CODE_SESSION_ID=S1; export CLAUDE_PID=$$; export CLAUDECODE=1'
+  expect_phase_owned "$dir" 6 8 "$spare" "dead front-end, same session"
   [ "$spare" != "$ptyhost" ] || fail "fixture collapsed the spare into the pty-host"
 
   : > "$dir/state/stop-spare"
@@ -822,7 +976,7 @@ test_same_session_confirmation_refreshes_rekeyed_id_under_claim_lock() {
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$$" > "$FM_HOME/state/session-pid"
-CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
 acquire_rc=$?
 if [ "$acquire_rc" != 0 ]; then
   printf '%s\n' "$acquire_rc" > "$FM_HOME/state/acquire.rc"
@@ -854,7 +1008,7 @@ if [ ! -e "$FM_HOME/state/holder-ready" ]; then
   exit 2
 fi
 
-CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/confirm.out" 2>&1 &
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/confirm.out" 2>&1 &
 printf '%s\n' "$!" > "$FM_HOME/state/confirm-pid"
 
 i=0
@@ -909,7 +1063,7 @@ test_same_session_confirmation_does_not_steal_after_wait() {
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$$" > "$FM_HOME/state/session-pid"
-CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
 acquire_rc=$?
 if [ "$acquire_rc" != 0 ]; then
   printf '%s\n' "$acquire_rc" > "$FM_HOME/state/acquire.rc"
@@ -958,7 +1112,7 @@ if [ ! -e "$FM_HOME/state/holder-ready" ]; then
   exit 2
 fi
 
-CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/confirm.out" 2>&1 &
+CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/confirm.out" 2>&1 &
 printf '%s\n' "$!" > "$FM_HOME/state/confirm-pid"
 
 i=0
@@ -1018,7 +1172,7 @@ test_failed_lock_write_restores_previous_sidecar() {
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
     FM_HOME="$dir" FM_LOCK="$ROOT/bin/fm-lock.sh" \
     "$NAMED_CLAUDE" -c '
-      CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
+      CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S1 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/acquire.out" 2>&1
       printf "%s\n" "$?" > "$FM_HOME/state/acquire.rc"
       printf "%s\n" "$$" > "$FM_HOME/state/stale-pid"
     '
@@ -1032,7 +1186,7 @@ test_failed_lock_write_restores_previous_sidecar() {
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
     FM_HOME="$dir" FM_LOCK="$ROOT/bin/fm-lock.sh" \
     "$NAMED_CLAUDE" -c '
-      CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
+      CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
       printf "%s\n" "$?" > "$FM_HOME/state/reclaim.rc"
     '
   chmod u+w "$dir/state/.lock" 2>/dev/null || true
@@ -1060,7 +1214,7 @@ test_failed_lock_write_removes_new_sidecar_when_none_existed() {
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
     FM_HOME="$dir" FM_LOCK="$ROOT/bin/fm-lock.sh" \
     "$NAMED_CLAUDE" -c '
-      CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
+      CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
       printf "%s\n" "$?" > "$FM_HOME/state/reclaim.rc"
     '
   chmod u+w "$dir/state/.lock" 2>/dev/null || true
@@ -1086,7 +1240,7 @@ test_verified_reclaim_keeps_new_sidecar() {
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
     FM_HOME="$dir" FM_LOCK="$ROOT/bin/fm-lock.sh" \
     "$NAMED_CLAUDE" -c '
-      CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
+      CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=S2 CLAUDE_PID=$$ "$FM_LOCK" > "$FM_HOME/state/reclaim.out" 2>&1
       printf "%s\n" "$?" > "$FM_HOME/state/reclaim.rc"
       printf "%s\n" "$$" > "$FM_HOME/state/new-pid"
     '
@@ -1109,6 +1263,10 @@ test_anchor_pid_is_the_model_loop_process_only_for_a_trusted_id
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
+test_e2e_claude_pid_set_resolves_identity
+test_e2e_claude_pid_absent_resolves_via_ancestry_fallback
+test_e2e_claude_markers_without_a_live_ancestor_refuse
+test_e2e_fallback_owner_still_excludes_a_second_live_session
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain
 test_same_session_confirmation_refreshes_rekeyed_id_under_claim_lock
 test_same_session_confirmation_does_not_steal_after_wait

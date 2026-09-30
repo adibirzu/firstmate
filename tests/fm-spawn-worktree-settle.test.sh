@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
-# Regression test for the fm-spawn.sh treehouse-get worktree-detection settle
-# loop (bin/fm-spawn.sh, the `for _ in $(seq 1 60)` loop after `treehouse get`).
+# How fm-spawn.sh acquires a task worktree, and where that worktree is allowed
+# to live (bin/fm-spawn.sh's lease + settle block, bin/fm-treehouse-lib.sh).
 #
-# On some tmux/WSL setups a brand-new window's pane_current_path transiently
-# reports a stale, unrelated-but-real path on the very first poll, before the
-# pane actually settles into the worktree treehouse get moved it to. That stale
-# path still passes the loop's "differs from the project" check and
-# validate_spawn_worktree's "is a real, distinct worktree" check (it IS a real
-# git checkout, just the wrong one), so a naive single-read loop silently
-# records the wrong worktree= in state/<id>.meta. This test simulates that
-# transient-then-settled pane_current_path sequence with a fake tmux and
-# asserts the recorded worktree resolves to the real, settled worktree, never
-# the stale first read.
+# Firstmate leases the worktree itself and sends the pane a plain cd, because the
+# pool must land on the repo's own filesystem and the only lever for that is the
+# HOME treehouse runs under - which an interactive `treehouse get` would leak into
+# the crew agent's shell. These tests hold that contract in place:
 #
-# The same loop has a second transient to survive: `treehouse get` reports the
-# REPOSITORY's primary checkout as its own cwd while it is still preparing a
-# slot. From a linked spawning home that path is not the project, so a poll
-# comparing only against the project adopted it and the isolation guard then
-# refused the launch. The cases below cover both the transient and the pane
-# that never leaves the primary at all.
+#   - the lease output, not the pane's cwd, decides worktree= in state/<id>.meta,
+#     so the transient stale pane_current_path some tmux/WSL setups report on a
+#     brand-new window can no longer record another real checkout as the worktree
+#   - the pane is sent a cd and never a command that would change its HOME
+#   - treehouse is invoked under the pool HOME firstmate resolved
+#   - a worktree split from its object store is refused, because git blocks in
+#     read_gitfile_gently there and the validation pipeline hangs forever
+#   - the pane can transiently report the repository primary checkout while a
+#     slot is being prepared, but this is diagnosed and cannot substitute for
+#     the exact path the lease returned
 set -u
 
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
+LIB="$ROOT/bin/fm-treehouse-lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-worktree-settle)
 
 # make_settle_fakebin <dir> builds a fake tmux whose `#{pane_current_path}`
@@ -37,8 +36,12 @@ make_settle_fakebin() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-case "$*" in
-  *"#{pane_current_path}"*)
+case "${1:-}" in
+  display-message)
+    case "$*" in
+      *"#{pane_current_path}"*) ;;
+      *) printf 'firstmate\n'; exit 0 ;;
+    esac
     countfile="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}"
     n=0
     [ -f "$countfile" ] && n=$(cat "$countfile")
@@ -51,17 +54,39 @@ case "$*" in
     fi
     exit 0
     ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
-  send-keys) exit 0 ;;
+  send-keys)
+    # Record everything sent to the pane so a test can prove what the crew's
+    # shell was actually asked to run.
+    printf '%s\n' "$*" >> "${FM_FAKE_SENDKEYS_LOG:-/dev/null}"
+    exit 0
+    ;;
 esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  # Fake treehouse: `get --lease` prints the worktree path on stdout, exactly as
+  # the real one does, and records the HOME it was invoked under - that HOME is
+  # the entire pool-selection mechanism, so a test can assert it arrived.
+	  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  get)
+    printf '%s\n' "${HOME:-}" > "${FM_FAKE_TREEHOUSE_HOMEFILE:-/dev/null}"
+    printf '%s\n' "$*" >> "${FM_FAKE_TREEHOUSE_ARGSFILE:-/dev/null}"
+    printf '%s\n' "${FM_FAKE_TREEHOUSE_WT:-}"
+    exit 0
+    ;;
+  return)
+    printf '%s\n' "${HOME:-}" > "${FM_FAKE_TREEHOUSE_RETURN_HOMEFILE:-/dev/null}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
   printf '%s\n' "$fakebin"
 }
 
@@ -91,25 +116,37 @@ Exercise settled-worktree detection for $id.
 
 ## Firstmate spec
 Record only the pane's stable worktree.
+
+# Definition of done
+Delivery contract: mode=no-mistakes
 EOF
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$stale|$fakebin|$countfile|$stale_reads"
 }
 
 read_settle_record() {
-  IFS='|' read -r _ HOME_DIR PROJ_DIR WT_DIR STALE_DIR FAKEBIN_DIR COUNTFILE STALE_READS <<EOF
+  IFS='|' read -r CASE_DIR HOME_DIR PROJ_DIR WT_DIR STALE_DIR FAKEBIN_DIR COUNTFILE STALE_READS <<EOF
 $1
 EOF
+  SENDKEYS_LOG="$CASE_DIR/sendkeys.log"
+  TREEHOUSE_HOMEFILE="$CASE_DIR/treehouse-home"
+  TREEHOUSE_RETURN_HOMEFILE="$CASE_DIR/treehouse-return-home"
+  TREEHOUSE_ARGSFILE="$CASE_DIR/treehouse-args"
 }
 
 run_settle_spawn() {
-  local id=$1
+  local id=$1 lease_wt=${2:-$WT_DIR}
   FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
     FM_FAKE_PANE_PATH="$WT_DIR" FM_FAKE_PANE_STALE="$STALE_DIR" \
     FM_FAKE_PANE_STALE_READS="$STALE_READS" FM_FAKE_PANE_COUNTFILE="$COUNTFILE" \
+    FM_FAKE_TREEHOUSE_WT="$lease_wt" \
+    FM_FAKE_TREEHOUSE_HOMEFILE="$TREEHOUSE_HOMEFILE" \
+    FM_FAKE_TREEHOUSE_RETURN_HOMEFILE="$TREEHOUSE_RETURN_HOMEFILE" \
+    FM_FAKE_TREEHOUSE_ARGSFILE="$TREEHOUSE_ARGSFILE" \
+    FM_FAKE_SENDKEYS_LOG="$SENDKEYS_LOG" \
     PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1
 }
@@ -134,11 +171,10 @@ test_single_stale_first_read_is_not_accepted() {
   pass "a single transient stale pane_current_path read is not accepted as the worktree"
 }
 
-# A pane that reports the real worktree from the very first read costs exactly
-# one confirming read - not a whole extra polling cycle on top of it. Counting
-# the pane reads measures the loop itself; wall-clock time would fold in every
-# other cost of a spawn (fetch, trust registration) and drift with the machine.
-test_already_settled_pane_costs_one_confirm_read() {
+# The lease identifies the exact destination, so a pane that reports it on its
+# first read needs no second generic-path confirmation. Counting pane reads
+# proves the lease-aware settlement contract without wall-clock drift.
+test_already_settled_pane_is_accepted_on_first_read() {
   local rec id out status reads
   id=settle-already-settled-z2
   rec=$(make_settle_case settle-already-settled "$id" 0)
@@ -150,19 +186,17 @@ test_already_settled_pane_costs_one_confirm_read() {
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
   reads=$(cat "$COUNTFILE")
-  [ "$reads" -eq 3 ] || fail "already-settled pane took $reads reads to confirm - expected the first read, one confirmation, and the launch-boundary cwd check"
-  pass "an already-settled pane confirms on the next read, not a whole extra cycle"
+  [ "$reads" -eq 2 ] || fail "already-settled pane took $reads reads - expected the first matching lease path plus the launch-boundary cwd check"
+  pass "an already-settled pane is accepted on the first exact lease-path read, then re-checked at the launch boundary"
 }
 
 # make_primary_case <name> <id> <stale_reads> builds the linked-home shape: the
 # spawning project is itself a LINKED worktree of the repository, and the path
 # the pane transiently reports is that repository's PRIMARY checkout. `treehouse
-# get` reports the repository it is preparing a slot from as its own cwd while
-# it is still fetching and checking out, so the pane reads the primary for the
-# first seconds. The primary is not the spawning project, so a poll that only
-# compares against the project accepts it as the worktree, and the isolation
-# guard then refuses the launch even though treehouse went on to enter a real
-# slot. The settled path is a second linked worktree of the same repository.
+# get` can leave the pane reporting the repository primary while it is still
+# preparing a slot. Firstmate has already received the leased path, so the
+# primary must be treated as an unaccepted transient and the settled path is a
+# second linked worktree of the same repository.
 make_primary_case() {
   local name=$1 id=$2 stale_reads=$3 case_dir home primary proj wt fakebin countfile
   case_dir="$TMP_ROOT/$name"
@@ -208,11 +242,11 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   read_settle_record "$rec"
   fm_test_fake_sleep_noop "$FAKEBIN_DIR"
 
-  out=$(run_settle_spawn "$id")
+  out=$(FM_SPAWN_SETTLE_POLLS=2 run_settle_spawn "$id")
   status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted a pane that never left the primary checkout"$'\n'"$out"
-  assert_contains "$out" "did not enter an isolated worktree" \
-    "spawn did not explain that the pane never reached an isolated worktree"
+  assert_contains "$out" "did not enter the leased worktree" \
+    "spawn did not explain that the pane never reached the leased worktree"
   assert_contains "$out" "$STALE_DIR" \
     "the refusal did not name the path the pane kept reporting"
   assert_contains "$out" "repository's primary checkout" \
@@ -221,9 +255,401 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   pass "a pane stuck on the primary checkout fails loudly at the deadline"
 }
 
+# The crew agent inherits whatever the pane's shell has. An interactive
+# `treehouse get` runs that shell as a child of treehouse, so the pool HOME would
+# become the agent's HOME - wrong ~/.claude, wrong git config, wrong gh
+# credentials. Firstmate must therefore send the pane a cd and nothing else.
+test_pane_is_sent_a_cd_and_never_a_home_changing_command() {
+  local rec id out status
+  id=settle-pane-cd-z3
+  rec=$(make_settle_case settle-pane-cd "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "spawn should succeed"
+  assert_grep "cd '$WT_DIR'" "$SENDKEYS_LOG" \
+    "the pane was never sent a cd into the leased worktree"
+  # Match the invocation, not the bare word: firstmate's own checkout is itself a
+  # treehouse pool path, so it appears inside the launch command legitimately.
+  assert_no_grep "treehouse get" "$SENDKEYS_LOG" \
+    "the pane was sent a treehouse get, which would run the agent's shell under the pool HOME"
+  assert_no_grep "HOME=" "$SENDKEYS_LOG" \
+    "the pane was sent a HOME assignment, which the agent would inherit"
+  pass "the pane receives a plain cd and nothing that changes its HOME"
+}
+
+# The pool is selected solely by the HOME treehouse runs under, so that override
+# reaching the treehouse process - and carrying --lease - is the mechanism.
+test_treehouse_is_leased_under_the_resolved_pool_home() {
+  local rec id out status expected_home recorded_home
+  id=settle-pool-home-z4
+  rec=$(make_settle_case settle-pool-home "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "spawn should succeed"
+  assert_grep "--lease" "$TREEHOUSE_ARGSFILE" "treehouse was not invoked with --lease"
+  assert_grep "fm-$id" "$TREEHOUSE_ARGSFILE" "the lease did not record this task as its holder"
+  expected_home=$(bash -c '. "$1"; fm_treehouse_pool_home "$2"' _ "$LIB" "$PROJ_DIR")
+  recorded_home=$(cat "$TREEHOUSE_HOMEFILE")
+  [ "$recorded_home" = "$expected_home" ] \
+    || fail "treehouse ran under HOME '$recorded_home', expected the resolved pool home '$expected_home'"
+  pass "treehouse is leased under the pool HOME firstmate resolved for the repo"
+}
+
+# The lease output is the authority for worktree=. A pane that never arrives is a
+# failed spawn, not a spawn that silently records some other path.
+test_pane_that_never_lands_fails_the_spawn() {
+  local rec id out status expected_home recorded_home
+  id=settle-never-lands-z5
+  rec=$(make_settle_case settle-never-lands "$id" 999999)
+  read_settle_record "$rec"
+
+  out=$(FM_SPAWN_SETTLE_POLLS=2 run_settle_spawn "$id")
+  status=$?
+  [ "$status" != 0 ] || fail "spawn reported success though the pane never entered the worktree"
+  assert_contains "$out" "did not enter the leased worktree" \
+    "the failure did not name the pane never reaching the worktree"
+  [ ! -f "$HOME_DIR/state/$id.meta" ] \
+    || fail "a spawn whose pane never landed still published task metadata"
+  expected_home=$(bash -c '. "$1"; fm_treehouse_pool_home "$2"' _ "$LIB" "$PROJ_DIR")
+  recorded_home=$(cat "$TREEHOUSE_RETURN_HOMEFILE")
+  [ "$recorded_home" = "$expected_home" ] \
+    || fail "abort cleanup returned under HOME '$recorded_home', expected '$expected_home'"
+  pass "a pane that never enters the leased worktree fails the spawn loudly"
+}
+
+# Once state/<id>.meta is published the task exists, and bin/fm-teardown.sh owns
+# returning its worktree. bin/fm-spawn.sh must therefore disarm its lease-abort
+# cleanup at that publication point rather than after the side-band home-summary
+# refresh that follows it: an operator interrupt arriving while that refresh is
+# still running would otherwise reach spawn_abort_cleanup with the flag still
+# armed and hand a live task's leased worktree straight back to the pool.
+#
+# The interrupt is delivered from inside the refresh itself - a jq shim that
+# fires once, only while the refresh holds its own lock, and only at the spawn
+# process it finds by walking its own ancestry - so the signal lands in exactly
+# the window under test.
+test_interrupt_during_the_post_publication_refresh_keeps_the_lease() {
+  local rec id out status real_jq
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "skip: jq not found"
+    return 0
+  fi
+  if ! command -v ps >/dev/null 2>&1; then
+    echo "skip: ps not found"
+    return 0
+  fi
+  real_jq=$(command -v jq)
+  id=settle-lease-abort-z6
+  rec=$(make_settle_case settle-lease-abort "$id" 0)
+  read_settle_record "$rec"
+
+  cat > "$FAKEBIN_DIR/jq" <<'SH'
+#!/usr/bin/env bash
+set -u
+lock=${FM_FAKE_JQ_KILL_ON_LOCK:-}
+once=${FM_FAKE_JQ_KILL_ONCE:-}
+require_meta=${FM_FAKE_JQ_REQUIRE_META:-}
+if [ -n "$lock" ] && [ -n "$once" ] && [ ! -e "$once" ] \
+  && { [ -z "$require_meta" ] || [ -f "$require_meta" ]; } \
+  && { [ -e "$lock" ] || [ -L "$lock" ]; }; then
+  : > "$once"
+  pid=$PPID
+  for _ in 1 2 3 4 5 6 7 8; do
+    case "$pid" in ''|0|1) break ;; esac
+    case "$(ps -o args= -p "$pid" 2>/dev/null)" in
+      *fm-spawn.sh*) kill -TERM "$pid" 2>/dev/null || true; break ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+fi
+exec "${FM_FAKE_REAL_JQ:?fake jq needs the real jq}" "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/jq"
+
+  status=0
+  out=$(FM_FAKE_JQ_KILL_ON_LOCK="$HOME_DIR/state/.home-summary-refresh.lock" \
+    FM_FAKE_JQ_KILL_ONCE="$CASE_DIR/interrupt-delivered" \
+    FM_FAKE_JQ_REQUIRE_META="$HOME_DIR/state/$id.meta" \
+    FM_FAKE_REAL_JQ="$real_jq" \
+    run_settle_spawn "$id") || status=$?
+
+  [ -e "$CASE_DIR/interrupt-delivered" ] \
+    || fail "the interrupt was never delivered, so the abort window was not exercised: $out"
+  [ -f "$HOME_DIR/state/$id.meta" ] \
+    || fail "the task record was not published before the interrupt: $out"
+  [ "$status" -ne 0 ] \
+    || fail "the interrupted spawn reported success, so it never reached its abort path: $out"
+  [ ! -e "$TREEHOUSE_RETURN_HOMEFILE" ] \
+    || fail "the abort path returned the leased worktree of a task that already exists in state/"
+  pass "an interrupt during the post-publication refresh never returns a live task's lease"
+}
+
+# --- bin/fm-treehouse-lib.sh decisions --------------------------------------
+#
+# Placement decisions are driven through a stubbed fm_treehouse_device rather than
+# real mounts: a second filesystem is not something a test can rely on having, and
+# the behavior under test is what these functions do with a given pair of device
+# ids. FM_TEST_DEVICES holds "<path-prefix>=<device>" entries, longest-matching
+# intent first. Both the raw and the physically-resolved form of every path are
+# registered, because the library canonicalizes the object store with pwd -P
+# (/var -> /private/var on macOS) while reading $HOME as given.
+phys() {  # <path>
+  (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}
+
+run_lib_with_devices() {  # <arg>...  (FM_TEST_BODY / FM_TEST_DEVICES in env)
+  bash -c '
+    . "$1"
+    shift
+    fm_treehouse_device() {  # <path>
+      local path=$1 entry
+      for entry in $FM_TEST_DEVICES; do
+        case "$path" in
+          "${entry%%=*}"*) printf "%s\n" "${entry#*=}"; return 0 ;;
+        esac
+      done
+      printf "0\n"
+    }
+    eval "$FM_TEST_BODY"
+  ' _ "$LIB" "$@"
+}
+
+test_pool_home_stays_on_the_home_filesystem_when_not_split() {
+  local repo out
+  repo="$TMP_ROOT/pool-home-same"
+  fm_git_init_commit "$repo"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo")
+  case "$out" in
+    "$HOME"/.fm-pools/*) : ;;
+    *) fail "same-filesystem repo should pool under \$HOME/.fm-pools/, got '$out'" ;;
+  esac
+  pass "a repo on \$HOME's filesystem pools on that filesystem"
+}
+
+# Segregation is a safety property: treehouse's prune and destroy act on a pool,
+# so two projects sharing one pool means a cleanup aimed at one can reach the
+# other's worktrees - including work that exists nowhere else yet.
+test_each_project_gets_its_own_pool() {
+  local repo_a repo_b out_a out_b
+  repo_a="$TMP_ROOT/segregation-a"
+  repo_b="$TMP_ROOT/segregation-b"
+  fm_git_init_commit "$repo_a"
+  fm_git_init_commit "$repo_b"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_a=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_a")
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_b=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_b")
+  [ -n "$out_a" ] && [ -n "$out_b" ] || fail "pool home resolution produced an empty path"
+  [ "$out_a" != "$out_b" ] \
+    || fail "two projects resolved to the same pool '$out_a'; a prune for one could reach the other"
+  case "$out_a" in *segregation-a-*) : ;; *) fail "pool '$out_a' does not name its project" ;; esac
+  case "$out_b" in *segregation-b-*) : ;; *) fail "pool '$out_b' does not name its project" ;; esac
+  pass "each project resolves to its own pool root"
+}
+
+# Same directory name, different location: the discriminator must still separate
+# them, or a prune for one project would reach the other's worktrees.
+test_same_named_projects_do_not_share_a_pool() {
+  local repo_a repo_b out_a out_b
+  repo_a="$TMP_ROOT/copy-one/samename"
+  repo_b="$TMP_ROOT/copy-two/samename"
+  fm_git_init_commit "$repo_a"
+  fm_git_init_commit "$repo_b"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_a=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_a")
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out_b=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=10 $(phys "$TMP_ROOT")=10" \
+    run_lib_with_devices "$repo_b")
+  [ "$out_a" != "$out_b" ] \
+    || fail "two same-named projects shared pool '$out_a'"
+  pass "two projects with the same directory name still get separate pools"
+}
+
+test_pool_home_moves_to_the_object_store_filesystem_when_split() {
+  local repo out expected
+  repo="$TMP_ROOT/pool-home-split"
+  fm_git_init_commit "$repo"
+  # Everything under TMP_ROOT is device 77, $HOME is 10, and TMP_ROOT's parent is
+  # unregistered (0) - so the mount-point walk stops exactly at TMP_ROOT.
+  expected=$(phys "$TMP_ROOT")
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  out=$(FM_TEST_BODY='fm_treehouse_pool_home "$1"' \
+    FM_TEST_DEVICES="$HOME=10 $(phys "$HOME")=10 $TMP_ROOT=77 $(phys "$TMP_ROOT")=77" \
+    run_lib_with_devices "$repo")
+  [ -n "$out" ] || fail "split repo produced no pool home"
+  [ "$out" != "$HOME" ] \
+    || fail "a repo on another filesystem must not use \$HOME's pool"
+  case "$out" in
+    "$expected"/.fm-pools/*) : ;;
+    *) fail "split repo should pool under $expected/.fm-pools/, got '$out'" ;;
+  esac
+  pass "a repo on another filesystem pools at that filesystem's mount point"
+}
+
+test_colocation_check_separates_split_from_undeterminable() {
+  local repo repo_phys status
+  repo="$TMP_ROOT/colocation-check"
+  fm_git_init_commit "$repo"
+  repo_phys=$(phys "$repo")
+  status=0
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  FM_TEST_BODY='fm_treehouse_worktree_colocated "$1"' \
+    FM_TEST_DEVICES="$repo=42 $repo_phys=42" \
+    run_lib_with_devices "$repo" >/dev/null || status=$?
+  expect_code 0 "$status" "a worktree sharing its object store's filesystem should report colocated"
+  status=0
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  FM_TEST_BODY='fm_treehouse_worktree_colocated "$1"' \
+    FM_TEST_DEVICES="$repo_phys/.git=99 $repo/.git=99 $repo=42 $repo_phys=42" \
+    run_lib_with_devices "$repo" >/dev/null || status=$?
+  expect_code 1 "$status" "a worktree split from its object store should report split"
+  status=0
+  # shellcheck disable=SC2016  # single quotes are deliberate: the body is eval'd inside the subshell
+  FM_TEST_BODY='fm_treehouse_worktree_colocated "$1"' \
+    FM_TEST_DEVICES="" \
+    run_lib_with_devices "$TMP_ROOT/not-a-repo-at-all" >/dev/null || status=$?
+  expect_code 2 "$status" "a path with no resolvable object store should report undeterminable, not split"
+  pass "the colocation check distinguishes colocated, split, and undeterminable"
+}
+
+test_mount_point_resolves_to_a_real_ancestor() {
+  local out
+  out=$(bash -c '. "$1"; fm_treehouse_mount_point "$2"' _ "$LIB" "$TMP_ROOT")
+  [ -n "$out" ] && [ -d "$out" ] \
+    || fail "mount point of $TMP_ROOT did not resolve to a directory (got '$out')"
+  case "$(phys "$TMP_ROOT")" in
+    "$out"*) : ;;
+    *) fail "mount point '$out' is not an ancestor of $TMP_ROOT" ;;
+  esac
+  pass "the mount-point walk resolves to a real ancestor directory"
+}
+
+# --- worker isolation check --------------------------------------------------
+#
+# The ship/scout brief names the exact assigned worktree (bin/fm-brief.sh emits
+# a {WORKTREE} placeholder that fm-spawn.sh substitutes with the leased path) and
+# runs bin/fm-worker-isolation-check.sh as the worker's first command. A worker
+# misdirected into a firstmate home or the primary checkout must be stopped there
+# rather than editing the wrong copy. These cases drive the rendered launch brief
+# and the executable the brief names - never the scripts' source bytes.
+make_isolation_case() {
+  local name=$1 id=$2 case_dir home proj wt fakebin brief content
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/slot"
+  fakebin=$(make_settle_fakebin "$case_dir/fake")
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" project --mode no-mistakes >/dev/null 2>&1 \
+    || fail "could not scaffold the $id ship brief"
+  brief="$home/data/$id/brief.md"
+  content=$(cat "$brief")
+  content=${content//'{TASK}'/Exercise the worker-isolation check.}
+  content=${content//'{FIRSTMATE_SPEC}'/Name and enforce the assigned worktree.}
+  printf '%s\n' "$content" > "$brief"
+  touch "$home/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$wt|$fakebin|$case_dir/pane-count|0"
+}
+
+test_worker_isolation_check_names_and_enforces_the_assigned_worktree() {
+  local rec id out status helper mate brief launch
+  id=isolation-named-w1
+  rec=$(make_isolation_case isolation-named "$id")
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "the isolation-check spawn should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "the isolation-check spawn did not report success"
+
+  launch="$HOME_DIR/data/$id/launch-brief.md"
+  assert_present "$launch" "the launch brief was not rendered"
+  assert_grep "Your assigned worktree is '$WT_DIR'." "$launch" \
+    "the launch brief did not name the exact assigned worktree"
+  assert_grep "fm-worker-isolation-check.sh\" '$WT_DIR'" "$launch" \
+    "the launch brief did not run the isolation check against the assigned worktree"
+  assert_no_grep '{WORKTREE}' "$launch" \
+    "the launch brief kept the {WORKTREE} placeholder"
+
+  helper="$ROOT/bin/fm-worker-isolation-check.sh"
+
+  # The real assigned pool worktree passes.
+  ( cd "$WT_DIR" && "$helper" "$WT_DIR" ) >/dev/null 2>&1 \
+    || fail "the isolation check rejected the real assigned worktree"
+
+  # A firstmate home - a linked worktree carrying the secondmate-home marker -
+  # trips it even though it is a legitimate worktree of the repository.
+  mate="$CASE_DIR/mate-home"
+  git -C "$PROJ_DIR" worktree add -q -b mate-home "$mate"
+  printf 'mate-w1\n' > "$mate/.fm-secondmate-home"
+  out=$( cd "$mate" && "$helper" "$WT_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted a firstmate home"$'\n'"$out"
+  assert_contains "$out" "is a firstmate home" \
+    "the firstmate-home refusal did not name the firstmate home"
+
+  # The primary checkout of the repository trips it, both as the shell and when
+  # it is (wrongly) passed as the assigned worktree.
+  out=$( cd "$PROJ_DIR" && "$helper" "$WT_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted the primary checkout"$'\n'"$out"
+  assert_contains "$out" "primary checkout" \
+    "the primary-checkout refusal did not name the primary checkout"
+  out=$( cd "$PROJ_DIR" && "$helper" "$PROJ_DIR" 2>&1 ); status=$?
+  [ "$status" -ne 0 ] || fail "the isolation check accepted a primary checkout as the assigned worktree"$'\n'"$out"
+  assert_contains "$out" "the assigned path is a primary checkout" \
+    "the check did not refuse a primary checkout named as the assigned worktree"
+
+  pass "fm-spawn: the launch brief names the assigned worktree and the isolation check enforces it"
+}
+
+# A brief scaffolded before the placeholder existed has no {WORKTREE}: the spawn
+# warns once and still launches, matching the missing delivery-contract pattern,
+# rather than breaking every task briefed before this change.
+test_legacy_brief_warns_about_the_missing_worktree_name() {
+  local rec id out status
+  id=isolation-legacy-w2
+  rec=$(make_settle_case isolation-legacy "$id" 0)
+  read_settle_record "$rec"
+
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "a legacy brief spawn should still succeed"$'\n'"$out"
+  assert_contains "$out" "names no assigned worktree" \
+    "a legacy brief did not warn once about the missing worktree name"
+  assert_contains "$out" "spawned $id" "the legacy brief spawn did not report success"
+  pass "fm-spawn: a brief scaffolded before {WORKTREE} warns once and still launches"
+}
+
 test_single_stale_first_read_is_not_accepted
-test_already_settled_pane_costs_one_confirm_read
+test_already_settled_pane_is_accepted_on_first_read
 test_transient_primary_checkout_is_not_accepted
 test_primary_checkout_that_never_settles_fails_at_the_deadline
+test_pane_is_sent_a_cd_and_never_a_home_changing_command
+test_treehouse_is_leased_under_the_resolved_pool_home
+test_pane_that_never_lands_fails_the_spawn
+test_interrupt_during_the_post_publication_refresh_keeps_the_lease
+test_pool_home_stays_on_the_home_filesystem_when_not_split
+test_each_project_gets_its_own_pool
+test_same_named_projects_do_not_share_a_pool
+test_pool_home_moves_to_the_object_store_filesystem_when_split
+test_colocation_check_separates_split_from_undeterminable
+test_mount_point_resolves_to_a_real_ancestor
+test_worker_isolation_check_names_and_enforces_the_assigned_worktree
+test_legacy_brief_warns_about_the_missing_worktree_name
 
 echo "# all fm-spawn-worktree-settle tests passed"

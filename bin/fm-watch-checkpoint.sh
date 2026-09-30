@@ -16,6 +16,12 @@
 # "supervision-host:" line other than the park boundary passes through as a
 # wake; the boundary alone is the ordinary quiet checkpoint. On a home that
 # does not run the host nothing below changes.
+# An internal continuity wake (`check: rearm-resurface`) is absorbed, not
+# passed through: it announces durable queue content from a watcher-down gap,
+# which the post-checkpoint drain already surfaces, so ending the bounded run
+# on it would trade the full supervision budget for an instant exit and leave
+# the turn-end guard with no live watcher. Absorbed runs retry until the
+# budget expires or a genuine external wake arrives.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +37,9 @@ Usage: fm-watch-checkpoint.sh [--seconds <n>]
 
 Run bin/fm-watch.sh in the foreground for a bounded checkpoint.
 On an actionable watcher wake, pass through the watcher output and exit 0.
+An internal `check: rearm-resurface` continuity wake is absorbed and retried
+until the budget expires: the durable queue it announces is preserved for the
+post-checkpoint drain.
 On a quiet checkpoint, print "checkpoint: no actionable wake within <n>s" and exit 124.
 EOF
 }
@@ -70,7 +79,7 @@ ERR=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.err.XXXXXX") || {
 }
 trap 'rm -f "$OUT" "$ERR"' EXIT
 
-run_with_perl_timeout() {  # <seconds> <command...>
+run_with_perl_timeout() {  # <seconds>
   perl -e '
     my $seconds = shift;
     my $pid = fork;
@@ -96,7 +105,17 @@ run_with_perl_timeout() {  # <seconds> <command...>
     waitpid $pid, 0;
     alarm 0;
     exit($? >> 8);
-  ' "$@"
+  ' "$1" "$SCRIPT_DIR/fm-watch.sh"
+}
+
+run_watcher_once() {  # <seconds>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$1" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$1" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+  else
+    run_with_perl_timeout "$1" >"$OUT" 2>"$ERR"
+  fi
 }
 
 run_bounded() {  # <seconds> <command...>
@@ -105,12 +124,64 @@ run_bounded() {  # <seconds> <command...>
   elif command -v gtimeout >/dev/null 2>&1; then
     gtimeout "$@"
   else
-    run_with_perl_timeout "$@"
+    perl -e '
+      my $seconds = shift;
+      my $pid = fork;
+      die "fork failed\n" unless defined $pid;
+      if (!$pid) {
+        setpgrp(0, 0);
+        exec @ARGV;
+        die "exec failed: $!\n";
+      }
+      local $SIG{ALRM} = sub {
+        kill "TERM", -$pid;
+        exit 124;
+      };
+      alarm $seconds;
+      waitpid $pid, 0;
+      alarm 0;
+      exit($? >> 8);
+    ' "$@"
   fi
 }
 
 positive_or() {  # <value> <default>
   case "$1" in ''|0*|*[!0-9]*) printf '%s\n' "$2" ;; *) printf '%s\n' "$1" ;; esac
+}
+
+out_has_external_wake() {
+  grep -E '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" 2>/dev/null \
+    | grep -v -x 'check: rearm-resurface' | grep -q .
+}
+
+out_has_rearm_only() {
+  grep -qx 'check: rearm-resurface' "$OUT" 2>/dev/null
+}
+
+quiet_exit() {
+  printf 'checkpoint: no actionable wake within %ss\n' "$SECONDS_ARG"
+  if [ "$REARM_ABSORBED" -gt 0 ]; then
+    printf 'checkpoint: absorbed %s internal rearm-resurface event(s); durable queue preserved for drain\n' "$REARM_ABSORBED" >&2
+  fi
+  local lock_pid
+  if [ -f "$STATE/.watch.lock/pid" ]; then
+    lock_pid=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -rf "$STATE/.watch.lock" 2>/dev/null || true
+    fi
+  fi
+  exit 124
+}
+
+# Wall-clock seconds for the retry budget. $EPOCHSECONDS is a bash-builtin
+# clock, so a PATH shim over date(1) - the wake-queue suites freeze time that
+# way - cannot freeze this budget and trap the retry loop.
+now_s() {
+  if [ -n "${EPOCHSECONDS:-}" ]; then
+    printf '%s\n' "$EPOCHSECONDS"
+  else
+    date +%s
+  fi
 }
 
 # shellcheck source=bin/fm-supervision-engine-lib.sh
@@ -122,12 +193,9 @@ if fm_supervision_host_enabled "$CONFIG" codex; then
     AWAY_BOUND=$(positive_or "${FM_CODEX_WATCH_CHECKPOINT_AWAY:-}" 3600)
     [ "$AWAY_BOUND" -le "$BOUND" ] 2>/dev/null || BOUND=$AWAY_BOUND
   fi
-  # The host's park boundary stays below the 28800-second registration.
   [ "$BOUND" -lt 27000 ] 2>/dev/null || BOUND=27000
   LIMIT=$(( BOUND + $(positive_or "${FM_SUPERVISION_HOST_TURN_TIMEOUT:-}" 1200) + $(positive_or "${FM_SUPERVISION_ENGINE_GRACE:-}" 30) ))
   set +e
-  # The host ends its own park; the outer bound only catches a host that
-  # outlived every one of its own bounds.
   FM_SUPERVISION_HOST_PRIMARY=codex FM_SUPERVISION_HOST_PARK_SECONDS=$BOUND FM_SUPERVISION_HOST_PARK_LIMIT=$LIMIT \
     run_bounded $((LIMIT + 120)) "$SCRIPT_DIR/fm-supervision-host.sh" park >"$OUT" 2>"$ERR"
   RC=$?
@@ -152,29 +220,56 @@ if fm_supervision_host_enabled "$CONFIG" codex; then
   exit "$RC"
 fi
 
-set +e
-run_bounded "$SECONDS_ARG" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
-RC=$?
-set -e
+DEADLINE=$(( $(now_s) + SECONDS_ARG ))
+REARM_ABSORBED=0
+RETRY_SLEEP=${FM_POLL:-15}
+case "$RETRY_SLEEP" in ''|*[!0-9]*) RETRY_SLEEP=15 ;; esac
+[ "$RETRY_SLEEP" -gt 0 ] || RETRY_SLEEP=15
 
-if grep -E '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" >/dev/null 2>&1; then
-  cat "$OUT"
-  [ ! -s "$ERR" ] || cat "$ERR" >&2
-  exit 0
-fi
+while :; do
+  NOW=$(now_s)
+  REMAINING=$(( DEADLINE - NOW ))
+  if [ "$REMAINING" -le 0 ]; then
+    quiet_exit
+  fi
 
-if grep -E '^watcher: already running' "$OUT" "$ERR" >/dev/null 2>&1; then
+  set +e
+  run_watcher_once "$REMAINING"
+  RC=$?
+  set -e
+
+  if out_has_external_wake; then
+    cat "$OUT"
+    [ ! -s "$ERR" ] || cat "$ERR" >&2
+    exit 0
+  fi
+
+  if out_has_rearm_only; then
+    REARM_ABSORBED=$((REARM_ABSORBED + 1))
+    NOW=$(now_s)
+    REMAINING=$(( DEADLINE - NOW ))
+    if [ "$REMAINING" -gt 0 ]; then
+      if [ "$RETRY_SLEEP" -gt "$REMAINING" ]; then
+        sleep "$REMAINING" || true
+      else
+        sleep "$RETRY_SLEEP" || true
+      fi
+    fi
+    continue
+  fi
+
+  if grep -E '^watcher: already running' "$OUT" "$ERR" >/dev/null 2>&1; then
+    [ ! -s "$OUT" ] || cat "$OUT"
+    [ ! -s "$ERR" ] || cat "$ERR" >&2
+    echo "checkpoint: watcher is already running outside this foreground checkpoint" >&2
+    exit 1
+  fi
+
+  if [ "$RC" -eq 124 ]; then
+    quiet_exit
+  fi
+
   [ ! -s "$OUT" ] || cat "$OUT"
   [ ! -s "$ERR" ] || cat "$ERR" >&2
-  echo "checkpoint: watcher is already running outside this foreground checkpoint" >&2
-  exit 1
-fi
-
-if [ "$RC" -eq 124 ]; then
-  printf 'checkpoint: no actionable wake within %ss\n' "$SECONDS_ARG"
-  exit 124
-fi
-
-[ ! -s "$OUT" ] || cat "$OUT"
-[ ! -s "$ERR" ] || cat "$ERR" >&2
-exit "$RC"
+  exit "$RC"
+done

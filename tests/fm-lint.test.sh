@@ -162,6 +162,7 @@ test_help_reports_the_complete_interface() {
   assert_contains "$help" "SC1091" "fm-lint.sh --help omitted the local SC1091 exclusion"
   assert_contains "$help" "SC2034" "fm-lint.sh --help omitted the local SC2034 exclusion"
   assert_contains "$help" "SC2153" "fm-lint.sh --help omitted the local SC2153 exclusion"
+  assert_contains "$help" "SC2154" "fm-lint.sh --help omitted the local SC2154 exclusion"
   assert_contains "$help" "SC2329" "fm-lint.sh --help omitted the local SC2329 exclusion"
   pass "fm-lint.sh --help reports the complete executable interface"
 }
@@ -272,12 +273,39 @@ case "$*" in
     fi
     exit 0
     ;;
+  "ls-files -z")
+    [ "${FM_TEST_GIT_LS_FILES_OK:-1}" = 1 ] || exit 128
+    if [ -n "${FM_TEST_GIT_LS_FILES:-}" ] && [ -f "$FM_TEST_GIT_LS_FILES" ]; then
+      cat "$FM_TEST_GIT_LS_FILES"
+    fi
+    exit 0
+    ;;
   *)
     exit 1
     ;;
 esac
 SH
   chmod +x "$fakebin/git"
+}
+
+# fm_lint_stub_actionlint <fakebin>: pinned-version actionlint that accepts
+# every workflow, so key-guard tests never depend on a host actionlint install.
+fm_lint_stub_actionlint() {
+  local fakebin=$1
+  cat > "$fakebin/actionlint" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" != -version ] || { printf '1.7.12\n'; exit 0; }
+exit 0
+SH
+  chmod +x "$fakebin/actionlint"
+}
+
+# fm_lint_fake_openrouter_key echoes a literal shaped like a real OpenRouter key
+# (sk-or-v1- plus 64 hex characters) assembled at run time from a repeating
+# digit pattern, so no contiguous key-shaped literal ever sits in this tracked
+# test source and no real key material is involved.
+fm_lint_fake_openrouter_key() {
+  printf 'sk-or-v1-%s%s%s%s\n' 0123456789abcdef 0123456789abcdef 0123456789abcdef 0123456789abcdef
 }
 
 # fm_lint_write_diff_file <file> <path>...: writes NUL-separated changed paths
@@ -649,7 +677,7 @@ test_changed_mode_drops_external_sources_and_excludes_cross_file_codes() {
     || fail "changed-mode lint did not run ShellCheck on exactly the changed file"$'\n'"logged: $(cat "$log")"
   [ "$(cat "$mode_log")" = on ] \
     || fail "changed-mode local lint disabled dataflow analysis"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
   assert_contains "$out" "source following disabled" \
     "changed-mode local lint did not disclose dropped source following"
   assert_grep $'analysis_mode\tlocal' "$telemetry" \
@@ -683,8 +711,41 @@ test_changed_mode_invokes_shellcheck_once_per_root() {
   invocation_count=$(grep -c '^external-sources=' "$flag_log" || true)
   [ "$invocation_count" -eq 2 ] \
     || fail "changed-mode lint used $invocation_count ShellCheck calls for two roots"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
   pass "fm-lint.sh changed mode invokes ShellCheck once per root"
+}
+
+test_key_guard_does_not_leak_descriptors_per_tracked_file() {
+  local tmp fakebin log diff_file ls_file fixture out rc i
+  tmp=$(fm_test_tmproot fm-lint-key-guard-fds)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  fm_lint_stub_actionlint "$fakebin"
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  : > "$diff_file"
+  ls_file="$tmp/ls-files.nul"
+  fixture="$ROOT/tests/lib.sh"
+  i=0
+  while [ "$i" -lt 128 ]; do
+    printf '%s\0' "$fixture" >> "$ls_file"
+    i=$((i + 1))
+  done
+
+  rc=0
+  out=$( (
+    ulimit -n 64
+    PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
+      FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT"
+  ) 2>&1 ) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "key guard failed under bounded descriptors (exit $rc)"$'\n'"$out"
+  assert_not_contains "$out" "redirection error" \
+    "key guard leaked descriptors while scanning tracked files"
+  assert_contains "$out" "no OpenRouter key literal in tracked files" \
+    "key guard did not complete its tracked-file scan"
+  pass "fm-lint.sh key guard keeps descriptor use bounded per tracked file"
 }
 
 test_ci_keeps_external_sources_without_local_exclusions() {
@@ -886,7 +947,7 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
   while IFS= read -r code; do
     [ -n "$code" ] || continue
     case "$code" in
-      SC1091|SC2034|SC2153|SC2329) ;;
+      SC1091|SC2034|SC2153|SC2154|SC2329) ;;
       *) unexpected="${unexpected}${unexpected:+ }$code" ;;
     esac
   done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)
@@ -1866,6 +1927,82 @@ SH
   pass "seeded dispatcher, adapter, production-owner, and test-local diagnostics preserve parity"
 }
 
+test_key_guard_fails_on_tracked_openrouter_key_literal() {
+  local tmp fakebin log diff_file ls_file leak key out rc lane
+  tmp=$(fm_test_tmproot fm-lint-key-guard-fail)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  fm_lint_stub_actionlint "$fakebin"
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  : > "$diff_file"
+  key=$(fm_lint_fake_openrouter_key)
+  leak="$tmp/notes.md"
+  printf '# notes\n\nexport OPENROUTER_API_KEY_TOKENS=%s\n' "$key" > "$leak"
+  ls_file="$tmp/ls-files.nul"
+  printf '%s\0' "$leak" "tests/fm-openrouter-quota.test.sh" > "$ls_file"
+
+  # Both default lanes must refuse: the zero-changed early exit and the full
+  # CI lint. Explicit paths stay a ShellCheck-only override and are not gated.
+  for lane in changed ci; do
+    rc=0
+    if [ "$lane" = changed ]; then
+      out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
+        FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
+    else
+      out=$(PATH="$fakebin:$PATH" CI=true FM_LINT_JOBS=1 \
+        FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
+    fi
+    [ "$rc" -ne 0 ] || fail "$lane lane passed with an OpenRouter key literal in a tracked file"$'\n'"$out"
+    assert_contains "$out" "OpenRouter key literal" "$lane lane did not name the key-literal finding"
+    assert_contains "$out" "$leak:3" "$lane lane did not report the leaking path and line"
+    assert_not_contains "$out" "$key" "$lane lane printed the key material"
+    assert_not_contains "$out" "${key#sk-or-v1-}" "$lane lane printed key material without its prefix"
+  done
+
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" "$ROOT/bin/fm-lint.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "explicit-path lint must stay a ShellCheck-only override"$'\n'"$out"
+  assert_not_contains "$out" "OpenRouter key literal" "explicit-path lint ran the key guard"
+
+  rc=0
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
+    FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES_OK=0 "$LINT" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "the key guard passed without being able to enumerate tracked files"
+  assert_contains "$out" "could not enumerate tracked files" \
+    "the key guard did not explain why it could not run"
+  pass "fm-lint.sh fails closed on a tracked OpenRouter key literal without printing it"
+}
+
+test_key_guard_ignores_the_fake_test_fixture_prefix() {
+  local tmp fakebin log diff_file ls_file fixture out rc
+  tmp=$(fm_test_tmproot fm-lint-key-guard-pass)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  fm_lint_stub_actionlint "$fakebin"
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  : > "$diff_file"
+  fixture="$tmp/fixture.sh"
+  printf "SECRET='sk-or-test-secret-do-not-print'\nPREFIX_ONLY='sk-or-v1-'\n" > "$fixture"
+  ls_file="$tmp/ls-files.nul"
+  # The real quota test fixture is tracked and carries the deliberately fake
+  # sk-or-test- prefix; it must never trip the guard.
+  printf '%s\0' "tests/fm-openrouter-quota.test.sh" "$fixture" "$tmp/deleted-but-tracked.sh" > "$ls_file"
+
+  rc=0
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
+    FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the key guard false-positived on the fake sk-or-test- fixture (exit $rc)"$'\n'"$out"
+  assert_contains "$out" "no OpenRouter key literal in tracked files" \
+    "the clean run did not report that the key guard ran"
+  assert_not_contains "$out" "OpenRouter key literal (sk-or-v1-) in tracked file" \
+    "the clean run reported a key-literal finding"
+  pass "fm-lint.sh key guard ignores the fake sk-or-test- fixture and a bare prefix"
+}
+
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
@@ -1874,6 +2011,8 @@ test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode
 test_fast_mode_catches_a_real_lint_defect
 test_pins_an_explicit_version
+test_key_guard_fails_on_tracked_openrouter_key_literal
+test_key_guard_ignores_the_fake_test_fixture_prefix
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
@@ -1906,6 +2045,7 @@ test_zero_changed_files_exits_clean
 test_list_files_respects_changed_mode
 test_changed_mode_drops_external_sources_and_excludes_cross_file_codes
 test_changed_mode_invokes_shellcheck_once_per_root
+test_key_guard_does_not_leak_descriptors_per_tracked_file
 test_ci_keeps_external_sources_without_local_exclusions
 test_main_branch_keeps_external_sources
 test_merge_base_less_keeps_external_sources

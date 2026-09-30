@@ -81,7 +81,9 @@
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
 #              Records a durable checkpoint and that note, exits the old agent,
-#              then delegates the launch to its single owner,
+#              resets the endpoint's bare shell so an inherited continuation
+#              prompt or half-typed line cannot swallow the launch command, then
+#              delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
 #              the prior durable record in place and reports the concrete
 #              state; it never leaves a half-transitioned task claiming to be
@@ -159,6 +161,7 @@ fi
 }
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 [ -d "$STATE" ] || {
   echo "error: state dir '$STATE' is missing; fm-control cannot resolve tasks for FM_HOME '$FM_HOME'" >&2
   exit 1
@@ -174,6 +177,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 
@@ -557,7 +562,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
-  local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
+  local state cmd key hazard verdict composer_state cancel absence interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -620,38 +625,78 @@ do_exit() {
       ;;
   esac
   cmd=$(fm_control_exit_command "$HARNESS")
+  key=$(fm_control_exit_key "$HARNESS")
   hazard=$(fm_control_interrupt_hazard_signal "$HARNESS")
   if [ -n "$hazard" ] && rendered_matches "$hazard"; then
     die "task $ID shows the $HARNESS revert picker, where typed text becomes a search and Enter reverts file changes; refusing to type the $cmd exit command. Close it with $(fm_control_interrupt_key "$HARNESS"), never Enter, then retry '$VERB'"
   fi
-  composer_state=$(fm_backend_composer_state "$BACKEND" "$T" "$LABEL" 2>/dev/null) \
-    || composer_state=unknown
-  case "$composer_state" in
-    empty) ;;
-    pending)
-      die "task $ID's composer visibly holds pending text; refusing to type the $cmd exit command because it would concatenate onto that text. Clear or submit the pending text, then retry '$VERB'"
-      ;;
-    *)
-      die "task $ID's composer state is '$composer_state', not proven empty; refusing to type the $cmd exit command because it could concatenate onto existing text. Clear the composer, then retry '$VERB'"
-      ;;
-  esac
-  # The submit verdict is NOT the postcondition here: a successful exit command
-  # destroys the composer the verdict is read from, so a post-exit read can
-  # legitimately report anything. Only a hard transport failure aborts; the
-  # authoritative proof is the agent-state wait below. The retried Enter still
-  # matters, because a slash command opens a completion popup on some TUIs that
-  # swallows the first Enter.
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
-  [ "$verdict" != send-failed ] \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+  if [ -n "$key" ]; then
+    # An adapter with no composer exit command is stopped by its verified exit
+    # key. Refuse before sending anything when the backend cannot deliver that
+    # exact key, rather than substituting a different one: on this adapter the
+    # keys that neighbour it cancel a turn instead of stopping the agent.
+    fm_control_backend_supports_key "$BACKEND" "$key" \
+      || die "harness $HARNESS exits on $key, which the $BACKEND backend cannot deliver; refusing to send a different key"
+    fm_backend_send_key "$BACKEND" "$T" "$key" "$LABEL" \
+      || die "the exit key $key could not be sent to task $ID on $BACKEND"
+  else
+    [ -n "$cmd" ] \
+      || die "harness $HARNESS has neither a verified exit command nor a verified exit key; refusing to guess how to stop task $ID"
+    composer_state=$(fm_backend_composer_state "$BACKEND" "$T" "$LABEL" 2>/dev/null) \
+      || composer_state=unknown
+    case "$composer_state" in
+      empty) ;;
+      pending)
+        die "task $ID's composer visibly holds pending text; refusing to type the $cmd exit command because it would concatenate onto that text. Clear or submit the pending text, then retry '$VERB'"
+        ;;
+      *)
+        die "task $ID's composer state is '$composer_state', not proven empty; refusing to type the $cmd exit command because it could concatenate onto existing text. Clear the composer, then retry '$VERB'"
+        ;;
+    esac
+    # The submit verdict is NOT the postcondition here: a successful exit command
+    # destroys the composer the verdict is read from, so a post-exit read can
+    # legitimately report anything. Only a hard transport failure aborts; the
+    # authoritative proof is the agent-state wait below. The retried Enter still
+    # matters, because a slash command opens a completion popup on some TUIs that
+    # swallows the first Enter.
+    verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
+      || die "the exit command could not be sent to task $ID on $BACKEND"
+    [ "$verdict" != send-failed ] \
+      || die "the exit command could not be sent to task $ID on $BACKEND"
+  fi
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
-    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+    die "exit-delivered $ID interrupt=$interrupt_result exit-${key:+key}${key:-command}=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
   }
   # The incarnation is over: retire its busy wiring so no stale record or
   # orphaned generation survives the agent that produced it.
   retire_busy_incarnation
   printf 'stopped'
+}
+
+# reset_shell_before_launch: after the old agent is confirmed gone and before
+# the replacement is launched, return the endpoint's bare shell to a fresh,
+# empty input state. An exited agent can leave the shell mid-continuation (a
+# `quote>`, `dquote>` or heredoc prompt) or holding a half-typed line, and the
+# launch command fm-spawn types next would be appended to that construct instead
+# of executing - which is how a relaunch once silently did nothing. The reset
+# keys and the cwd proof are owned by the backend adapter
+# (fm_backend_reset_shell); this plane owns only the transaction ordering and
+# the refusal. A missing endpoint needs no reset - fm-spawn creates a fresh one.
+reset_shell_before_launch() {
+  local state reset_dir
+  state=$(agent_state)
+  case "$state" in
+    missing) return 0 ;;
+    dead) ;;
+    *) die "task $ID's endpoint reads '$state' after its agent stopped, not a bare shell; refusing to relaunch into an endpoint whose input state cannot be reset" ;;
+  esac
+  fm_control_backend_supports_key "$BACKEND" C-c \
+    || die "the $BACKEND backend cannot deliver the reset key C-c that relaunch needs to clear a bare shell left by the exited agent; refusing to launch into a shell that could swallow the launch command"
+  reset_dir="$STATE/.control-reset-$ID"
+  mkdir -p "$reset_dir" \
+    || die "could not create the shell-reset directory $reset_dir for task $ID"
+  fm_backend_reset_shell "$BACKEND" "$T" "$reset_dir" "$LABEL" \
+    || die "could not reset the bare shell at task $ID's endpoint on $BACKEND: an inherited continuation prompt or half-typed line could swallow the launch command; refusing to relaunch"
 }
 
 # --- transactional relaunch -------------------------------------------------
@@ -960,11 +1005,19 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line recorded_provider
   local -a spawn_args
 
   require_state_verified_backend relaunch
   resolve_relaunch_profile
+
+  # Consult machine capacity before any mutation or agent stop. A relaunch is an
+  # in-place replacement, but the replacement launch is still a new agent from
+  # the guard's point of view. Running the guard here - before the old agent is
+  # stopped - means a refusal leaves the running agent untouched, instead of
+  # stranding a dead endpoint after a post-stop refusal inside fm-spawn.sh.
+  fm_capacity_guard "$CONFIG" "relaunch of $KIND $ID" \
+    || die "relaunch of $ID refused: machine capacity declined the replacement launch"
 
   case "$KIND" in
     ship|scout)
@@ -998,8 +1051,23 @@ do_relaunch() {
   journal_write noted "${CHECKPOINT_LINES[@]}" "$note_line"
 
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
-  exit_result=$(do_exit)
+  state=$(agent_state)
+  if [ "$state" = missing ]; then
+    if [ "$BACKEND" = herdr ]; then
+      # Herdr can prove a pane is gone; record that proven outcome so reclaim
+      # journal lines distinguish destroyed endpoints from already-stopped shells.
+      exit_result=$(do_exit)
+    else
+      exit_result="already-stopped"
+    fi
+  else
+    exit_result=$(do_exit)
+  fi
   journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+
+  # The old agent is gone; clear whatever its bare shell was left holding before
+  # the launch command is typed (see reset_shell_before_launch).
+  reset_shell_before_launch
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.
@@ -1008,6 +1076,20 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  # spawn drops provider= on every reuse, so the replacement's routing provider
+  # is re-declared whenever it can be proven: a native target runs on its own
+  # provider, and keeping the recorded adapter keeps the recorded provider. A
+  # cross-harness move into an adapter with no native credit identity gets no
+  # guess - the stale provider stays dropped.
+  case "$TARGET_HARNESS" in
+    claude|codex|opencode|grok|cursor|agy) spawn_args+=(--provider "$TARGET_HARNESS") ;;
+    *)
+      if [ "$TARGET_HARNESS" = "$PRIOR_RECORDED_HARNESS" ]; then
+        recorded_provider=$(fm_meta_get "$META" provider)
+        [ -z "$recorded_provider" ] || spawn_args+=(--provider "$recorded_provider")
+      fi
+      ;;
+  esac
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
@@ -1033,6 +1115,8 @@ do_relaunch() {
       || RELAUNCH_META_PUBLISHED=1
     die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
   fi
+
+  T=$(fm_backend_target_of_meta "$META")
 
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
     die "the replacement agent for $ID did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"

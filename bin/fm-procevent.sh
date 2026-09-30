@@ -23,6 +23,11 @@
 # register   Record a built-in source: its adapter, its canonical id, and the
 #            exact argv to execute. argv is stored one argument per line and
 #            executed directly, so there is no shell surface and no argument
+#            splitting. A known shell argv whose `$(...)` nesting reaches
+#            FM_PROCEVENT_ARGV_CMDSUB_NEST_MAX is refused at register and
+#            every start path, so stored argv cannot become recursive parser
+#            input.
+#            Built-in adapters register sources; nothing here parses user text.
 #            splitting. Built-in adapters register sources; nothing here parses
 #            user text.
 # register-task
@@ -530,6 +535,9 @@ cmd_register() {
   for arg in "$@"; do
     case "$arg" in *$'\n'*) die "argv elements cannot contain newlines" ;; esac
   done
+  if fm_procevent_argv_feeds_shell_parser "$@"; then
+    die "argv must not pass deeply nested command substitutions to a shell"
+  fi
   [ -f "$(adapter_script "$adapter")" ] || die "no installed adapter for: $adapter"
   state_root_bind create || die "cannot safely prepare the process-event state root"
   fm_procevent_source_lock_acquire "$id" || die "cannot lock the source"
@@ -899,6 +907,10 @@ EOF
 
 publish_pending() {  # [result-file-to-skip]
   local skip=${1-} result published=0
+  # Do not wrap this function in `$(...)`. Its while-loop body assigns through
+  # command substitution, and bash 5.3 parses `$(fn)` by recursively executing
+  # the function in a fork that copies the C stack. Callers that need the
+  # count read FM_PROCEVENT_PUBLISHED after a direct call.
   while IFS= read -r result; do
     [ -n "$result" ] || continue
     [ "$result" = "$skip" ] && continue
@@ -906,6 +918,7 @@ publish_pending() {  # [result-file-to-skip]
       published=$((published + 1))
     fi
   done < <(fm_procevent_pending "$STATE")
+  FM_PROCEVENT_PUBLISHED=$published
   printf '%s\n' "$published"
 }
 
@@ -1060,6 +1073,10 @@ cmd_start() {
       die "extension registration owner is unreadable: $id"
       ;;
   esac
+  if fm_procevent_argv_feeds_shell_parser "${ARGV[@]}"; then
+    fm_procevent_source_lock_release "$id"
+    die "registration argv must not pass deeply nested command substitutions to a shell: $id"
+  fi
   exec 7<"$(source_file "$id")" || {
     fm_procevent_source_lock_release "$id"
     die "cannot retain registration identity: $id"
@@ -1689,6 +1706,7 @@ stranded_leaderless_detail() {  # <source-id>
 
 cmd_reconcile() {
   local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
+  local owner_state
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
@@ -1697,7 +1715,8 @@ cmd_reconcile() {
   fm_procevent_launch_confirm_seconds >/dev/null \
     || die "FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_CONFIRM_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_CONFIRM_MAX_SECONDS"
   owner_lease_refresh
-  published=$(publish_pending)
+  publish_pending >/dev/null
+  published=${FM_PROCEVENT_PUBLISHED:-0}
 
   # Stop a runner this home owns whose source is no longer registered. Without
   # this, unregistering a source that never completes leaves its child blocked
@@ -1771,6 +1790,22 @@ cmd_reconcile() {
             "$(stranded_reused_pid_detail "$id")" || true
         elif [ "$claim_state" -eq 1 ]; then
           if ! cleanup_extension_registration_invocations_locked "$id"; then
+            uncertain=$((uncertain + 1))
+            fm_procevent_source_lock_release "$id"
+            continue
+          fi
+          fm_procevent_extension_registration_load_locked "$STATE" "$id"
+          owner_state=$?
+          if [ "$owner_state" -eq 1 ]; then
+            # Nested $(...) in interpreter -c argv overflows bash's parser;
+            # skip that launch. An unreadable argv still detaches so
+            # confirmation can report failed= (a source that cannot start).
+            if read_argv "$id" && fm_procevent_argv_feeds_shell_parser "${ARGV[@]}"; then
+              uncertain=$((uncertain + 1))
+              fm_procevent_source_lock_release "$id"
+              continue
+            fi
+          elif [ "$owner_state" -ne 0 ]; then
             uncertain=$((uncertain + 1))
             fm_procevent_source_lock_release "$id"
             continue

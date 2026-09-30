@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|agy|cline|copilot|rovo|omp|devin|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -81,14 +81,24 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # marker is present. Markers only report what the environment CLAIMS; detect_own
 # decides whether that claim survives contradicting ancestry.
 harness_marker() {
-  # Cursor is tested BEFORE claude, deliberately. cursor-agent does NOT clear an
-  # inherited CLAUDECODE, so a cursor session started by hand from a claude
-  # primary carries BOTH markers and whichever is tested first wins. This
-  # ordering only settles the case where ancestry finds nothing to arbitrate
-  # with; a nearer claude ancestor still outranks both in detect_own.
-  # Verified live on cursor-agent 2026.08.11-e8db854: CURSOR_INVOKED_AS=cursor-agent
-  # is set on the agent process itself, and CURSOR_AGENT=1 is set for the
-  # child/tool processes this script runs as.
+  # agy (Antigravity CLI) sets ANTIGRAVITY_AGENT=1 for its child/tool
+  # processes (verified 2026-08-01 on agy 1.1.9 via a clean env -i tool
+  # child write; docs/verification/agy-adapter.md). MUST be checked before
+  # CLAUDECODE: some interactive environments also surface CLAUDECODE=1 in
+  # the process tree, and that marker would otherwise misidentify an agy
+  # worker as claude. agy 1.2.0 TUI sessions may omit it, in which case
+  # ancestry still identifies the binary.
+  [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
+  # Cursor is checked BEFORE claude, deliberately. cursor-agent does NOT clear
+  # an inherited CLAUDECODE, so a cursor worker launched from a claude primary
+  # carries BOTH markers and whichever is tested first wins. Cursor's own
+  # markers are unambiguous when present, so ordering them first is what makes
+  # the verdict correct; bin/fm-spawn.sh additionally clears the foreign markers
+  # at the launch boundary. Both are kept: the launch sanitization only covers
+  # sessions fm-spawn started, while this ordering also covers a cursor session
+  # a human started by hand. Verified live on cursor-agent 2026.08.11-e8db854:
+  # CURSOR_INVOKED_AS=cursor-agent is set on the agent process itself, and
+  # CURSOR_AGENT=1 is set for the child/tool processes this script runs as.
   [ "${CURSOR_AGENT:-}" = "1" ] && { echo cursor; return; }
   [ "${CURSOR_INVOKED_AS:-}" = "cursor-agent" ] && { echo cursor; return; }
   # Gemini is checked BEFORE claude for exactly cursor's reason above: the
@@ -143,15 +153,20 @@ harness_marker() {
   # identified, and any rule that must be RELIABLE under grok has to test the hook
   # markers too (see .claude/settings.json Stop entries, docs/turnend-guard.md).
   [ "${GROK_AGENT:-}" = "1" ] && { echo grok; return; }
-  # codex, opencode, kimi, muse, agy, and devin publish no harness-identity marker at all, so
-  # they are never named here and are identified by ancestry alone. That is the
-  # whole reason a foreign marker must not outrank ancestry: with markers winning
-  # unconditionally, any retained CLAUDECODE would silently rename one of them.
-  # muse's only documented child variable is MUSE_CURRENT_SESSION_LOG, a
-  # per-session log PATH rather than an identity, and its export to tool
-  # subprocesses is unverified (verified: muse 0.1.0-R708.1). Do NOT promote it
-  # to a marker without verifying it reaches children AND that it cannot survive
-  # in a multiplexer's stored environment.
+  # copilot sets COPILOT_CLI=1 for its child/tool processes (verified, GitHub
+  # Copilot CLI 1.0.75; docs/verification/copilot-adapter.md). Obtained via a
+  # copilot-driven child shell write, never via the model pasting raw env
+  # output (it refuses that as a safety policy). Boolean, unambiguous.
+  [ "${COPILOT_CLI:-}" = "1" ] && { echo copilot; return; }
+  # muse (Muse Code) publishes no harness-identity marker of its own. The only
+  # MUSE_* variable it is documented to hand a child is MUSE_CURRENT_SESSION_LOG,
+  # a per-session log PATH rather than an identity, and its export to tool
+  # subprocesses is unverified (verified: muse 0.1.0-R708.1), so muse is
+  # identified by ancestry alone. Do NOT promote MUSE_CURRENT_SESSION_LOG to a
+  # marker without verifying it reaches children AND that it cannot survive in
+  # a multiplexer's stored environment.
+  # codex, opencode, kimi, cline, and devin likewise publish no harness-identity
+  # marker and are identified by ancestry alone.
   return 0
 }
 
@@ -180,11 +195,19 @@ ancestry_names_omp() {
 harness_process_verdict() {  # <pid>
   local pid=$1 comm args argv0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+  comm=${comm#"${comm%%[![:space:]]*}"}
+  comm=${comm%"${comm##*[![:space:]]}"}
   argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
   if fm_cursor_process_matches "$comm" '' "$argv0"; then
     echo "comm cursor"
     return
   fi
+  # Linux ps comm ignores exec -a (it reports bash); Muse's live identity is
+  # argv0 (`muse` or versioned `muse-bin-<version>`). Match that before
+  # *claude* so a claude-named ancestor cannot rename a muse worker.
+  case "$(basename -- "${argv0:-}")" in
+    muse|muse-bin-*) echo "comm muse"; return ;;
+  esac
   if fm_gemini_path_is_gemini "$comm"; then
     echo "comm gemini"
     return
@@ -207,6 +230,8 @@ harness_process_verdict() {  # <pid>
     *codex*) echo "comm codex"; return ;;
     *opencode*) echo "comm opencode"; return ;;
     *grok*) echo "comm grok"; return ;;
+    cline) echo "comm cline"; return ;;
+    copilot) echo "comm copilot"; return ;;
     kimi) echo "comm kimi"; return ;;
     rovo) echo "comm rovo"; return ;;
       # muse's installed launcher ~/.local/bin/muse execs ~/.local/bin/muse-bin-<version>
@@ -236,7 +261,8 @@ harness_process_verdict() {  # <pid>
     # publishes no harness-identity marker of its own (a live 1.2.0 TUI
     # carries no AGY_* or ANTIGRAVITY_* variable; AGENT=1 seen there is an
     # inherited launcher value, not an agy identity), so like muse it is
-    # detected by ancestry alone.
+    # detected by ancestry alone when the marker is absent. ANTIGRAVITY_AGENT=1
+    # remains a marker fast path for child/tool processes that still publish it.
     agy) echo "comm agy"; return ;;
     devin) echo "comm devin"; return ;;
     node*|python*)
@@ -251,7 +277,20 @@ harness_process_verdict() {  # <pid>
         *codex*) echo "args codex"; return ;;
         *opencode*) echo "args opencode"; return ;;
         *grok*) echo "args grok"; return ;;
+        *cline*) echo "args cline"; return ;;
+        *copilot*) echo "args copilot"; return ;;
         *" pi "*|*/pi) echo "args pi"; return ;;
+      esac ;;
+    MainThread)
+      # GitHub Copilot CLI 1.0.75 is a standalone compiled (Bun) executable,
+      # not an interpreter script; /proc/<pid>/comm reports the runtime's
+      # internal main-thread name "MainThread", never "copilot" or "node"/
+      # "python" (verified live; docs/verification/copilot-adapter.md
+      # "Detection"). Same argv-substring fallback shape as the node/python
+      # case above, keyed on this observed comm value instead.
+      args=$(ps -o args= -p "$pid" 2>/dev/null)
+      case "$args" in
+        *copilot*) echo "comm copilot"; return ;;
       esac ;;
   esac
 }
@@ -397,7 +436,7 @@ supervision_primary_pin() {
   local pin=${FM_SUPERVISION_PRIMARY_HARNESS:-}
   [ "${FM_SUPERVISION_ACTOR:-}" = branch ] && [ -n "$pin" ] || return 0
   case "$pin" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|cline|copilot|rovo|omp|agy|devin)
       printf '%s\n' "$pin"
       ;;
     *)

@@ -237,7 +237,7 @@ IFS= read -r -d '' PROMOTION_SHIP_SPEC <<EOF || true
 If these promotion steps were already completed before a relaunch, preserve the existing \`$BRANCH_Q\` branch and continue from its current state; do not repeat them destructively.
 1. **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from. If either does not resolve to the worktree you were launched in, stop and escalate to firstmate.
 2. Inventory this worktree's scratch state with \`git status\` and \`git log\` before changing anything.
-3. Return to a clean default-branch base, then create your branch: \`git checkout -b $BRANCH_Q --\`.
+3. Return to a clean default-branch base, prove it is current by running \`"$FM_ROOT/bin/fm-base-check.sh" .\` and following what it prints, and only when it reports current (exit 0) create your branch: \`git checkout -b $BRANCH_Q --\`.
 4. Carry over only the intended fix changes. Leave scratch commits, debug edits, and experiment files behind.
 5. If you reproduced a bug, turn that reproduction into a regression test.
 6. Treat the scout-time Firstmate spec and any unmarked legacy \`# Task\` text as investigation context, not captain intent or current ship-time instructions.
@@ -276,8 +276,14 @@ EOF
   cat <<EOF
 
 ## Firstmate spec
-$PROMOTION_SHIP_SPEC
-
+1. **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from. If either does not resolve to the worktree you were launched in, stop and escalate to firstmate.
+2. Inventory this worktree's scratch state with \`git status\` and \`git log\` before changing anything.
+3. Return to a clean default-branch base, prove it is current by running \`"$FM_ROOT/bin/fm-base-check.sh" .\` and following what it prints, and only when it reports current (exit 0) create your branch: \`git checkout -b $BRANCH_Q --\`.
+4. Carry over only the intended fix changes. Leave scratch commits, debug edits, and experiment files behind.
+5. If you reproduced a bug, turn that reproduction into a regression test.
+6. These ship instructions supersede the scout delivery rules and report-based Definition of done. Everything else in your original instructions carries over unchanged: the status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule.
+$PROMOTION_ASK_USER_BLOCK
+7. Treat the scout-time Firstmate spec and any unmarked legacy \`# Task\` text as investigation context, not captain intent or ship-time instructions.
 EOF
   promote_delivery_contract
 } > "$TMP" || { echo "error: could not render ship instructions for mode=$MODE" >&2; exit 1; }

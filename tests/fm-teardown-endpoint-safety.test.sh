@@ -195,6 +195,12 @@ test_non_pool_teardown_ignores_task_set_lock() {
 test_metadata_lock_serializes_destructive_cleanup() {
   local dir id=metadata-locked-task lock ready release holder teardown_pid i=0 rc
   dir=$(make_case metadata-lock)
+  # This is the one case whose teardown must SUCCEED through the worktree
+  # return. That path resolves the project's git object store to pick the
+  # per-project treehouse pool HOME before it ever invokes the (faked)
+  # treehouse binary, and every real teardown target satisfies it, so the
+  # fixture project must be a real repository.
+  git init -q "$dir/project"
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=isolated:fm-$id" "endpoint_task_id=$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
@@ -238,8 +244,13 @@ test_metadata_lock_serializes_destructive_cleanup() {
 
   : > "$release"
   wait "$holder" || fail "metadata lock holder failed"
-  wait "$teardown_pid"; rc=$?
-  expect_code 0 "$rc" "teardown should complete after the metadata writer releases"
+  # Collect the exit status with errexit off: a bare failing `wait` would kill
+  # the whole script here with no diagnostic instead of reaching expect_code.
+  set +e
+  wait "$teardown_pid"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "teardown should complete after the metadata writer releases: $(cat "$dir/stderr")"
   assert_absent "$dir/home/state/$id.meta" \
     "serialized teardown left a task record that a completed writer could resurrect"
   pass "fm-teardown: destructive cleanup serializes with metadata writers"
@@ -481,10 +492,10 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
   # The reuse collision: the pool slot recorded for a finished task has already
   # been handed to another task, whose worker is live in it right now.
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$dir/home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   # Staged in this shell, not a command substitution: a background child of a
   # $(...) subshell does not outlive it, and the point of this worker is to be
@@ -514,10 +525,10 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
   dir=$(make_case slot-reuse-home)
   mark_case_as_treehouse_pool "$dir"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$dir/home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "home=$dir/worktree" \
     "project=$dir/project" "kind=secondmate"
   set +e
@@ -564,10 +575,10 @@ test_cross_home_pool_slot_collision_refuses() {
   printf '%s\n' "- mate - fixture (home: $second_home; scope: test; projects: project; added 2026-01-01)" \
     > "$dir/home/data/secondmates.md"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$second_home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$second_project" "kind=scout"
 
   set +e
@@ -583,6 +594,70 @@ test_cross_home_pool_slot_collision_refuses() {
   assert_contains "$(cat "$dir/stderr")" "$other" \
     "cross-home refusal should name the task holding the slot"
   pass "fm-teardown: a pool slot held by another firstmate home is never returned"
+}
+
+# Override fakebin/tmux so the recovery-grade classifier reads any recorded
+# endpoint as unreadable (a session inventory failure it cannot attribute).
+add_unreadable_tmux_to_case() {  # <case>
+  cat > "$1/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) echo "error connecting to fixture: permission denied" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$1/fakebin/tmux"
+}
+
+# A pre-spawn_gen husk that records no window endpoint at all is retirable, so a
+# later task that reused its pool slot is no longer pinned by it.
+test_retirable_legacy_husk_does_not_pin_a_reused_slot() {
+  local dir id=current-task husk=stale-husk
+  dir=$(make_case slot-reuse-husk-retirable)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  # A pre-update husk: no spawn_gen and no window endpoint.
+  fm_write_meta "$dir/home/state/$husk.meta" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a retirable legacy husk still pinned the reused slot: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "the current task's record survived teardown"
+  assert_present "$dir/home/state/$husk.meta" "teardown removed the husk's own record"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "teardown did not return the slot the husk no longer holds: $(cat "$dir/runtime.log")"
+  pass "fm-teardown: a retirable pre-spawn_gen husk no longer pins its reused pool slot"
+}
+
+# A husk whose recorded endpoint cannot be read as gone is still a possible live
+# owner and must keep blocking the slot.
+test_legacy_husk_with_unknown_endpoint_still_pins_the_slot() {
+  local dir id=current-task husk=stale-husk rc
+  dir=$(make_case slot-reuse-husk-unknown)
+  mark_case_as_treehouse_pool "$dir"
+  add_unreadable_tmux_to_case "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$husk.meta" \
+    "window=firstmate:fm-$husk" "worktree=$dir/worktree" \
+    "project=$dir/project" "kind=ship"
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a legacy husk with an unreadable endpoint did not block the slot"
+  assert_present "$dir/home/state/$id.meta" "the blocked task's record was removed"
+  assert_present "$dir/home/state/$husk.meta" "the husk's record was removed"
+  assert_present "$dir/worktree/sentinel" "the contested slot was reset"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the contested slot was returned before the refusal: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$husk" \
+    "the refusal should name the husk holding the slot"
+  pass "fm-teardown: a pre-spawn_gen husk with an unknown endpoint still pins its slot"
 }
 
 test_sole_slot_record_still_tears_down() {
@@ -792,10 +867,10 @@ test_remote_seeded_home_still_refuses_a_slot_its_child_holds() {
   printf '%s\n' "- mate - fixture (home: $child_home; scope: test; projects: project; added 2026-01-01)" \
     > "$dir/home/data/secondmates.md"
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" "spawn_gen=s-test-$id" \
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   fm_write_meta "$child_home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" "spawn_gen=s-test-$other" \
     "worktree=$dir/worktree" "project=$child_project" "kind=scout"
 
   set +e
@@ -875,184 +950,58 @@ test_remote_layout_homes_serialize_on_one_project_lock() {
   pass "Treehouse project locking still serializes two homes across the remote-seeded boundary"
 }
 
-# The slot-reuse sequence with only ONE discoverable record: the finished task's
-# worker exited, its slot was granted to another task, and that task leaves no
-# record this home can enumerate. Nothing in the record scan contradicts the
-# stale worktree= line, so the slot's own owner claim is the only evidence that
-# it was reassigned. The slot is no longer this task's, so teardown finishes the
-# task's own cleanup and leaves the slot - its worker, its copy, its claim -
-# exactly as it found it.
-assert_reassigned_slot_left_alone() {  # <case> <id> <other> <description>
-  local dir=$1 id=$2 other=$3 description=$4
-  assert_absent "$dir/home/state/$id.meta" "$description: the stale task's own record was not removed"
-  assert_present "$dir/pool/1/.fm-slot-owner" "$description: another task's slot claim was removed"
-  assert_contains "$(cat "$dir/pool/1/.fm-slot-owner")" "task=$other" \
-    "$description: another task's slot claim was rewritten"
-  assert_present "$dir/pool/1/project/.git" "$description: the reassigned slot's checkout was removed"
-  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
-    || fail "$description: the reassigned slot was returned to the pool: $(cat "$dir/runtime.log")"
-  assert_contains "$(cat "$dir/stderr")" "$other" \
-    "$description: the warning should name the task the slot was reassigned to"
-  assert_contains "$(cat "$dir/stderr")" "reassigned" \
-    "$description: the warning should name the reassignment as the cause"
+test_project_lock_honors_a_redirected_state_directory() {
+  local dir root_home root_project root_lock mate_home mate_project mate_override mate_lock
+  local redir_home redir_project redir_state redir_lock
+  dir=$(make_case project-lock-state-override)
+  git -C "$dir/project" -c user.name=test -c user.email=test@example.invalid \
+    commit --allow-empty -qm lock-override-fixture
+
+  # A normal root home and a local secondmate beneath it unify on the literal
+  # root state directory; the secondmate's own redirected state must never
+  # retarget the shared lock away from that anchor.
+  root_home="$dir/home"
+  root_project="$root_home/projects/project"
+  mkdir -p "$root_home/projects"
+  git clone -q "$dir/project" "$root_project"
+  root_lock=$(resolve_project_lock "$root_home" "$root_project") \
+    || fail "the root home could not resolve its project lock"
+  mate_home="$dir/local-mate"
+  make_home "$mate_home"
+  write_local_parent_record "$mate_home" "$root_home"
+  mate_project="$mate_home/projects/project"
+  git clone -q "$dir/project" "$mate_project"
+  mate_override="$dir/local-mate-redirect"
+  mkdir -p "$mate_override"
+  mate_lock=$(FM_HOME="$mate_home" FM_STATE_OVERRIDE="$mate_override" bash -c \
+    '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$mate_project") \
+    || fail "the local secondmate could not resolve the shared root lock"
+  [ "$mate_lock" = "$root_lock" ] \
+    || fail "a local secondmate's own state redirect retargeted the shared root lock"
+
+  # A stand-alone home with no literal $home/state resolves through the
+  # FM_STATE_OVERRIDE it was given instead of refusing the spawn.
+  redir_home="$dir/redirected-home"
+  mkdir -p "$redir_home/data" "$redir_home/config" "$redir_home/projects"
+  redir_project="$redir_home/projects/project"
+  git clone -q "$dir/project" "$redir_project"
+  redir_state="$dir/redirected-state"
+  mkdir -p "$redir_state"
+  redir_lock=$(FM_HOME="$redir_home" FM_STATE_OVERRIDE="$redir_state" bash -c \
+    '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$redir_project") \
+    || fail "a home with a redirected state directory could not resolve its project lock"
+  case "$redir_lock" in
+    "$redir_state/"*) ;;
+    *) fail "a redirected state directory did not anchor the project lock: $redir_lock" ;;
+  esac
+  [ ! -e "$redir_home/state" ] \
+    || fail "resolving the lock created a literal state directory instead of using the redirect"
+
+  pass "Treehouse project locking honors a redirected state directory while keeping descendants on the shared root anchor"
 }
 
-test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
-  local dir id=stale-task other=reassigned-task worker rc
-
-  # Dirty slot, --force, and a live worker inside it: --force authorizes
-  # discarding this task's unlanded work, which is already gone with the slot,
-  # never the other task's live work.
-  dir=$(make_case slot-reassigned)
-  mark_case_as_treehouse_pool "$dir"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  claim_pool_slot "$dir" "$other" "$dir/other-home"
-  # Staged in this shell, not a command substitution: a background child of a
-  # $(...) subshell does not outlive it, and the point of this worker is to be
-  # alive in the slot while teardown runs.
-  ( cd "$dir/worktree" && exec sleep 30 ) &
-  worker=$!
-
-  set +e
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
-  rc=$?
-  set -e
-
-  [ "$rc" -eq 0 ] || fail "teardown of a task whose slot was reassigned failed: $(cat "$dir/stderr")"
-  kill -0 "$worker" 2>/dev/null || fail "teardown killed the worker holding the reassigned pool slot"
-  assert_present "$dir/worktree/sentinel" "teardown reset a pool slot another task had claimed"
-  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "dirty reassigned slot with --force"
-  assert_contains "$(cat "$dir/stderr")" "$dir/other-home" \
-    "the warning should name the claimant's home"
-  kill "$worker" 2>/dev/null || true
-  wait "$worker" 2>/dev/null || true
-
-  # The same reassignment on a CLEAN slot: a landed ship task torn down without
-  # --force, which is the shape of the real incident. A clean, fully landed copy
-  # passes every unlanded-work check, so only the ownership determination can
-  # keep this slot out of the pool; a guard keyed off dirtiness would return it
-  # and destroy the live task's copy.
-  dir=$(make_case slot-reassigned-clean)
-  mark_case_as_treehouse_pool "$dir"
-  rm -f "$dir/worktree/sentinel"
-  [ -z "$(git -C "$dir/worktree" status --porcelain)" ] \
-    || fail "clean-slot fixture is not clean: $(git -C "$dir/worktree" status --porcelain)"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
-  claim_pool_slot "$dir" "$other" "$dir/other-home"
-  ( cd "$dir/worktree" && exec sleep 30 ) &
-  worker=$!
-
-  set +e
-  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
-  FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
-    "$TEARDOWN" "$id" > "$dir/stdout" 2> "$dir/stderr"
-  rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "teardown of a clean ship task whose slot was reassigned failed: $(cat "$dir/stderr")"
-  kill -0 "$worker" 2>/dev/null || fail "teardown killed the worker holding the clean reassigned pool slot"
-  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "clean reassigned slot without --force"
-  kill "$worker" 2>/dev/null || true
-  wait "$worker" 2>/dev/null || true
-
-  # A claim that exists but cannot be read as a claim proves nothing either way,
-  # so it refuses rather than guessing the slot is still this task's.
-  dir=$(make_case slot-claim-unreadable)
-  mark_case_as_treehouse_pool "$dir"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  printf 'not-a-claim\n' > "$dir/pool/1/.fm-slot-owner"
-
-  set +e
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "teardown returned a pool slot whose claim could not be read"
-  assert_present "$dir/worktree/sentinel" "teardown reset a pool slot whose claim could not be read"
-  assert_present "$dir/pool/1/.fm-slot-owner" "teardown removed an unreadable slot claim"
-  assert_present "$dir/home/state/$id.meta" "teardown removed the task record on an unreadable claim"
-  [ ! -s "$dir/runtime.log" ] \
-    || fail "teardown reached the runtime on an unreadable slot claim: $(cat "$dir/runtime.log")"
-  assert_contains "$(cat "$dir/stderr")" "$dir/pool/1/.fm-slot-owner" \
-    "unreadable-claim refusal should name the claim file to inspect"
-
-  pass "fm-teardown: a pool slot claimed by another task is left alone while the task's own cleanup finishes"
-}
-
-# The reuse collision where BOTH records survive: the stale task's record still
-# names the slot the pool handed on, and the claimant's own record names it too.
-# The claim proves the stale record's teardown is records-only, so the record
-# scan must not refuse it; once it is gone, the claimant tears down normally.
-test_stale_record_on_claimed_slot_retires_then_claimant_tears_down() {
-  local dir id=stale-task other=live-task rc
-
-  dir=$(make_case slot-reassigned-both-records)
-  mark_case_as_treehouse_pool "$dir"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  fm_write_meta "$dir/home/state/$other.meta" \
-    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  claim_pool_slot "$dir" "$other"
-
-  set +e
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
-  rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "records-only teardown of a stale record on a claimed slot failed: $(cat "$dir/stderr")"
-  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "stale record beside the claimant's record"
-  assert_present "$dir/worktree/sentinel" "records-only teardown reset the claimant's slot"
-  assert_present "$dir/home/state/$other.meta" "records-only teardown removed the claimant's record"
-
-  : > "$dir/runtime.log"
-  run_case "$dir" "$other" > "$dir/stdout" 2> "$dir/stderr" \
-    || fail "claimant teardown failed after the stale record retired: $(cat "$dir/stderr")"
-  assert_absent "$dir/home/state/$other.meta" "claimant teardown left its record"
-  assert_absent "$dir/pool/1/.fm-slot-owner" "claimant teardown left its spent slot claim behind"
-  grep -Fq "treehouse <return>" "$dir/runtime.log" \
-    || fail "claimant teardown did not return its pool slot: $(cat "$dir/runtime.log")"
-
-  pass "fm-teardown: a stale record on a claimed slot retires, then the claimant tears down"
-}
-
-# The two states that must never become a false refusal: the task's own claim,
-# and no claim at all (a slot taken before claims existed, or already returned).
-test_own_and_absent_slot_claims_still_tear_down() {
-  local dir id=owned-task
-
-  dir=$(make_case slot-claim-own)
-  mark_case_as_treehouse_pool "$dir"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-  claim_pool_slot "$dir" "$id"
-
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
-    || fail "teardown of a task holding its own slot claim failed: $(cat "$dir/stderr")"
-  assert_absent "$dir/home/state/$id.meta" "own-claim teardown left the task record"
-  assert_absent "$dir/pool/1/.fm-slot-owner" "own-claim teardown left its spent slot claim behind"
-  grep -Fq "treehouse <return>" "$dir/runtime.log" \
-    || fail "own-claim teardown did not return its own pool slot: $(cat "$dir/runtime.log")"
-
-  dir=$(make_case slot-claim-absent)
-  mark_case_as_treehouse_pool "$dir"
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
-    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
-
-  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
-    || fail "teardown of an unclaimed slot failed: $(cat "$dir/stderr")"
-  assert_absent "$dir/home/state/$id.meta" "unclaimed-slot teardown left the task record"
-  grep -Fq "treehouse <return>" "$dir/runtime.log" \
-    || fail "unclaimed-slot teardown did not return its pool slot: $(cat "$dir/runtime.log")"
-
-  pass "fm-teardown: a task's own slot claim, and an unclaimed slot, both still tear down"
-}
 
 # The tmux shim used by the endpoint-close tests below: every subcommand
 # reaches the real isolated server, so presence is always read from real tmux.
@@ -1160,6 +1109,7 @@ test_failed_endpoint_close_refuses_before_removing_the_record() {
   pass "fm-teardown: a close that genuinely failed refuses and keeps the record naming the surviving endpoint, and the same teardown finishes once the close works"
 }
 
+
 test_forced_teardown_continues_past_a_close_it_could_not_make() {
   local dir socket session='forced close failure' id=forced-task rc
   [ -n "$REAL_TMUX" ] || { echo "skip - tmux not installed"; return 0; }
@@ -1207,6 +1157,7 @@ test_forced_teardown_continues_past_a_close_it_could_not_make() {
   ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" kill-server 2>/dev/null ) || true
   pass "fm-teardown: --force continues past a close it could not make while still reporting it, and the same case refuses without --force"
 }
+
 
 test_unreadable_close_read_refuses_while_a_definitive_absence_completes() {
   local dir socket='dedicated.sock' session='unreadable read' id=unreadable-task rc
@@ -1279,6 +1230,7 @@ test_unreadable_close_read_refuses_while_a_definitive_absence_completes() {
   pass "fm-teardown: a close re-read that could not run refuses, while a definitively absent session or server still completes silently"
 }
 
+
 test_forced_secondmate_child_close_failure_still_refuses() {
   local dir socket='dedicated.sock' session='child close failure' mate parent=mate-task child=child-task rc
   [ -n "$REAL_TMUX" ] || { echo "skip - tmux not installed"; return 0; }
@@ -1326,6 +1278,7 @@ test_forced_secondmate_child_close_failure_still_refuses() {
   ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" kill-server 2>/dev/null ) || true
   pass "fm-teardown: forced secondmate cleanup still refuses on a child endpoint close that failed"
 }
+
 
 test_orca_close_failure_refuses_even_under_force() {
   local dir orca_free id=orca-strand rc
@@ -1378,6 +1331,7 @@ test_orca_close_failure_refuses_even_under_force() {
   pass "fm-teardown: an Orca close its missing CLI never attempted refuses even under --force, keeping the record naming the terminal"
 }
 
+
 test_already_gone_endpoint_still_completes_without_a_refusal() {
   local dir socket session='already gone' id=gone-task
   [ -n "$REAL_TMUX" ] || { echo "skip - tmux not installed"; return 0; }
@@ -1420,15 +1374,142 @@ test_already_gone_endpoint_still_completes_without_a_refusal() {
   pass "fm-teardown: an already-exited endpoint, and a server that is already gone, still complete cleanup silently"
 }
 
-test_invalid_endpoint_records_refuse_before_mutation
-test_control_lock_contention_refuses_before_mutation
-test_non_pool_teardown_ignores_task_set_lock
-test_metadata_lock_serializes_destructive_cleanup
-test_supported_backend_endpoint_records_validate
-test_orca_composite_worktree_id_validates
-test_tmux_empty_target_refuses_without_invocation
-test_recorded_process_identity_cleanup_is_exact
-test_isolated_tmux_invalid_and_valid_cleanup
+assert_reassigned_slot_left_alone() {  # <case> <id> <other> <description>
+  local dir=$1 id=$2 other=$3 description=$4
+  assert_absent "$dir/home/state/$id.meta" "$description: the stale task's own record was not removed"
+  assert_present "$dir/pool/1/.fm-slot-owner" "$description: another task's slot claim was removed"
+  assert_contains "$(cat "$dir/pool/1/.fm-slot-owner")" "task=$other" \
+    "$description: another task's slot claim was rewritten"
+  assert_present "$dir/pool/1/project/.git" "$description: the reassigned slot's checkout was removed"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "$description: the reassigned slot was returned to the pool: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$other" \
+    "$description: the warning should name the task the slot was reassigned to"
+  assert_contains "$(cat "$dir/stderr")" "reassigned" \
+    "$description: the warning should name the reassignment as the cause"
+}
+
+test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
+  local dir id=stale-task other=reassigned-task worker rc
+
+  # Dirty slot, --force, and a live worker inside it: --force authorizes
+  # discarding this task's unlanded work, which is already gone with the slot,
+  # never the other task's live work.
+  dir=$(make_case slot-reassigned)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  claim_pool_slot "$dir" "$other" "$dir/other-home"
+  # Staged in this shell, not a command substitution: a background child of a
+  # $(...) subshell does not outlive it, and the point of this worker is to be
+  # alive in the slot while teardown runs.
+  ( cd "$dir/worktree" && exec sleep 30 ) &
+  worker=$!
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -eq 0 ] || fail "teardown of a task whose slot was reassigned failed: $(cat "$dir/stderr")"
+  kill -0 "$worker" 2>/dev/null || fail "teardown killed the worker holding the reassigned pool slot"
+  assert_present "$dir/worktree/sentinel" "teardown reset a pool slot another task had claimed"
+  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "dirty reassigned slot with --force"
+  assert_contains "$(cat "$dir/stderr")" "$dir/other-home" \
+    "the warning should name the claimant's home"
+  kill "$worker" 2>/dev/null || true
+  wait "$worker" 2>/dev/null || true
+
+  # The same reassignment on a CLEAN slot: a landed ship task torn down without
+  # --force, which is the shape of the real incident. A clean, fully landed copy
+  # passes every unlanded-work check, so only the ownership determination can
+  # keep this slot out of the pool; a guard keyed off dirtiness would return it
+  # and destroy the live task's copy.
+  dir=$(make_case slot-reassigned-clean)
+  mark_case_as_treehouse_pool "$dir"
+  rm -f "$dir/worktree/sentinel"
+  [ -z "$(git -C "$dir/worktree" status --porcelain)" ] \
+    || fail "clean-slot fixture is not clean: $(git -C "$dir/worktree" status --porcelain)"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+  claim_pool_slot "$dir" "$other" "$dir/other-home"
+  ( cd "$dir/worktree" && exec sleep 30 ) &
+  worker=$!
+
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "teardown of a clean ship task whose slot was reassigned failed: $(cat "$dir/stderr")"
+  kill -0 "$worker" 2>/dev/null || fail "teardown killed the worker holding the clean reassigned pool slot"
+  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "clean reassigned slot without --force"
+  kill "$worker" 2>/dev/null || true
+  wait "$worker" 2>/dev/null || true
+
+  # A claim that exists but cannot be read as a claim proves nothing either way,
+  # so it refuses rather than guessing the slot is still this task's.
+  dir=$(make_case slot-claim-unreadable)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  printf 'not-a-claim\n' > "$dir/pool/1/.fm-slot-owner"
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown returned a pool slot whose claim could not be read"
+  assert_present "$dir/worktree/sentinel" "teardown reset a pool slot whose claim could not be read"
+  assert_present "$dir/pool/1/.fm-slot-owner" "teardown removed an unreadable slot claim"
+  assert_present "$dir/home/state/$id.meta" "teardown removed the task record on an unreadable claim"
+  [ ! -s "$dir/runtime.log" ] \
+    || fail "teardown reached the runtime on an unreadable slot claim: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "$dir/pool/1/.fm-slot-owner" \
+    "unreadable-claim refusal should name the claim file to inspect"
+
+  pass "fm-teardown: a pool slot claimed by another task is left alone while the task's own cleanup finishes"
+}
+
+
+# The two states that must never become a false refusal: the task's own claim,
+# and no claim at all (a slot taken before claims existed, or already returned).
+test_own_and_absent_slot_claims_still_tear_down() {
+  local dir id=owned-task
+
+  dir=$(make_case slot-claim-own)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  claim_pool_slot "$dir" "$id"
+
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "teardown of a task holding its own slot claim failed: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "own-claim teardown left the task record"
+  assert_absent "$dir/pool/1/.fm-slot-owner" "own-claim teardown left its spent slot claim behind"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "own-claim teardown did not return its own pool slot: $(cat "$dir/runtime.log")"
+
+  dir=$(make_case slot-claim-absent)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "teardown of an unclaimed slot failed: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "unclaimed-slot teardown left the task record"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "unclaimed-slot teardown did not return its pool slot: $(cat "$dir/runtime.log")"
+
+  pass "fm-teardown: a task's own slot claim, and an unclaimed slot, both still tear down"
+}
+
 test_failed_endpoint_close_refuses_before_removing_the_record
 test_forced_teardown_continues_past_a_close_it_could_not_make
 test_unreadable_close_read_refuses_while_a_definitive_absence_completes
@@ -1438,12 +1519,15 @@ test_already_gone_endpoint_still_completes_without_a_refusal
 test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
+test_retirable_legacy_husk_does_not_pin_a_reused_slot
+test_legacy_husk_with_unknown_endpoint_still_pins_the_slot
 test_sole_slot_record_still_tears_down
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_stale_record_on_claimed_slot_retires_then_claimant_tears_down
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts
+test_project_lock_honors_a_redirected_state_directory
 test_remote_seeded_home_returns_its_uncontested_slot
 test_remote_seeded_home_still_refuses_a_slot_its_child_holds
 test_remote_layout_homes_serialize_on_one_project_lock

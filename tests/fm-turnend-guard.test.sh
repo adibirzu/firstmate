@@ -1060,6 +1060,45 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+test_opencode_plugin_obeys_watch_arm_outcomes() {
+  local plugin dir marker out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  dir="$TMP_ROOT/opencode-non-primary"
+  marker="$dir/guard-ran"
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/fm-turnend-guard.sh" <<EOF
+#!/usr/bin/env bash
+touch "$marker"
+exit 2
+EOF
+  chmod +x "$dir/bin/fm-turnend-guard.sh"
+  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" DIRECTORY="$dir" WORKTREE="$dir" MARKER="$marker" node 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const { existsSync, unlinkSync } = await import("node:fs");
+for (const outcome of ["retrying", "pending-silent-rearm", "not-needed", "healthy", "external", "existing", "armed", "not-primary", "failed", "read-only"]) {
+  if (existsSync(process.env.MARKER)) unlinkSync(process.env.MARKER);
+  globalThis.__firstmateOpenCodeWatchArm = { ensureArmed: async () => outcome };
+  const mod = await import(`${pathToFileURL(process.env.PLUGIN).href}?outcome=${outcome}`);
+  let prompts = 0;
+  const client = { session: { promptAsync: async () => { prompts += 1; } } };
+  const hooks = await mod.FmPrimaryTurnendGuard({
+    client, directory: process.env.DIRECTORY, worktree: process.env.WORKTREE,
+  });
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "guard-outcomes" } } });
+  const silent = ["retrying", "pending-silent-rearm", "not-needed", "healthy"].includes(outcome);
+  if (prompts !== (silent ? 0 : 1)) throw new Error(`${outcome}: unexpected prompts ${prompts}`);
+  if (existsSync(process.env.MARKER) === silent) throw new Error(`${outcome}: incorrect shell guard invocation`);
+}
+
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode idle must honor the authorized silent outcomes"
+  [ -z "$out" ] || fail "non-primary OpenCode idle produced output: $out"
+  pass ".opencode primary plugin: exact silent outcomes bypass the shell guard and prompts"
+}
+
 test_pi_extension_injects_once_per_logical_agent_run() {
   local repo home ext log out status
   repo="$TMP_ROOT/pi-logical-run-root"
@@ -1082,7 +1121,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --experimental-strip-types --no-warnings --input-type=module 2>&1 <<'EOF'
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1147,7 +1186,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" node --experimental-strip-types --no-warnings --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
 const handlers = new Map();
@@ -1231,8 +1270,15 @@ run_integrated_autoarm() {
   local dir=$1 home
   home=$(cd "$dir" && pwd)
   # shellcheck disable=SC2016 # the fake harness expands FM_HOME inside its child shell.
+  # The fleet lock binds a Claude Stop-hook run to its session identity, and the
+  # fake harness ("fake-claude") is detected as Claude ancestry. Supply the
+  # controlled identity inside the child so the lock-owning session is
+  # established from CLAUDECODE + a stable session id + this live pid (the same
+  # pid written to .lock) instead of any ambient identity leaked from the suite
+  # runner. Without it the auto-arm fails closed on identity and exits 0.
   printf '{"session_id":"sess-claude-mode","stop_hook_active":false}\n' \
     | FM_HOME="$home" "$dir/fake-claude" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="integrated-autoarm-session-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1
@@ -1955,6 +2001,124 @@ test_hook_claude_mode_secondmate_reblocks_like_primary() {
   pass "fm-turnend-guard --claude: secondmate home re-blocks unclaimed and allows auto-arm-claimed stops"
 }
 
+# --- LOCK-REFUSED (read-only) sessions ----------------------------------------
+# A session that never acquired the home lock is read-only: its Stop-owned
+# auto-arm stays inert, so the epoch ledger never advances and the re-block
+# budget keyed off epoch change re-blocks every turn end forever. The guard
+# must emit advisory wording only there - exit 0 with no block and no
+# shared-state mutation - while keeping its real backstop everywhere else.
+
+# Start a live fake-harness session that owns the fixture home's lock without
+# ever being an ancestor of the test shell, and record it in state/.lock. The
+# sleeper runs as a background job of the fake harness so the recorded pid
+# stays a harness-shaped process instead of exec-collapsing into sleep.
+start_nonancestor_lock_owner() {
+  local dir=$1
+  ln -sf /bin/bash "$dir/fake-claude"
+  "$dir/fake-claude" -c 'sleep 60 & wait' &
+  printf '%s\n' "$!" > "$dir/state/.lock"
+}
+
+stop_nonancestor_lock_owner() {
+  local dir=$1 pid
+  pid=$(cat "$dir/state/.lock" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+test_hook_claude_mode_lock_refused_advisory_not_block() {
+  local dir out status i owner
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-lock-refused")
+  : > "$dir/state/task1.meta"
+  start_nonancestor_lock_owner "$dir"
+  owner=$(cat "$dir/state/.lock")
+  for i in 1 2 3; do
+    out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+    expect_code 0 "$status" "lock-refused --claude turn $i must end without a block"
+    assert_contains "$out" "READ-ONLY SESSION WITHOUT LOCK OWNERSHIP" "lock-refused turn $i must carry advisory wording"
+    assert_not_contains "$out" "TURN WOULD END BLIND" "lock-refused advisory must not use the blocking banner"
+  done
+  assert_absent "$dir/state/.turnend-claude-blocks" "lock-refused advisory turns wrote the shared block budget"
+  assert_absent "$dir/state/.turnend-claude-blocks.lock" "lock-refused advisory turns took the shared budget lock"
+  assert_absent "$dir/state/.claude-autoarm-epoch" "lock-refused advisory turns wrote the shared epoch ledger"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" "lock-refused advisory turns wrote the failure notice"
+  assert_absent "$dir/state/.claude-autoarm-failure-alarmed" "lock-refused advisory turns wrote the attended alarm"
+  assert_absent "$dir/state/.lock.legacy.log" "lock-refused advisory turns logged a legacy lock acceptance"
+  [ "$(cat "$dir/state/.lock")" = "$owner" ] || fail "lock-refused advisory turns replaced the session lock"
+  stop_nonancestor_lock_owner "$dir"
+  pass "fm-turnend-guard --claude: lock-refused turns end with advisory wording only, forever, mutating nothing"
+}
+
+test_hook_claude_mode_lock_refused_stale_epoch_never_blocks() {
+  local dir out status i epoch_before
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-lock-refused-epoch")
+  : > "$dir/state/task1.meta"
+  printf 'epoch=7 owner_pid=%s outcome=rewake updated_at=1\ndead-identity\n' "$(nonexistent_pid)" > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  epoch_before=$(cat "$dir/state/.claude-autoarm-epoch")
+  start_nonancestor_lock_owner "$dir"
+  for i in 1 2 3; do
+    out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+    expect_code 0 "$status" "lock-refused --claude turn $i with a stale epoch must end without a block"
+    assert_contains "$out" "READ-ONLY SESSION WITHOUT LOCK OWNERSHIP" "lock-refused stale-epoch turn $i must carry advisory wording"
+  done
+  [ "$(cat "$dir/state/.claude-autoarm-epoch")" = "$epoch_before" ] || fail "lock-refused turns mutated the stale epoch ledger"
+  assert_absent "$dir/state/.turnend-claude-blocks" "lock-refused stale-epoch turns wrote the shared block budget"
+  stop_nonancestor_lock_owner "$dir"
+  pass "fm-turnend-guard --claude: a stale epoch in a lock-refused session never re-blocks"
+}
+
+test_hook_default_mode_lock_refused_advisory() {
+  local dir out status owner home
+  dir=$(make_primary_dir "$TMP_ROOT/hook-default-lock-refused")
+  : > "$dir/state/task1.meta"
+  start_nonancestor_lock_owner "$dir"
+  owner=$(cat "$dir/state/.lock")
+  home=$(cd "$dir" && pwd)
+  # Do not blind ps here: lock-refused needs the live owner still classified as
+  # a harness, and the default-mode path does not need CLAUDECODE to outrank a
+  # structural ancestor.
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  expect_code 0 "$status" "lock-refused default-mode turn must end without a block"
+  assert_contains "$out" "READ-ONLY SESSION WITHOUT LOCK OWNERSHIP" "lock-refused default-mode turn must carry advisory wording"
+  assert_not_contains "$out" "TURN WOULD END BLIND" "lock-refused default-mode advisory must not use the blocking banner"
+  assert_absent "$dir/state/.claude-autoarm-epoch" "lock-refused default-mode turn wrote the shared epoch ledger"
+  [ "$(cat "$dir/state/.lock")" = "$owner" ] || fail "lock-refused default-mode turn replaced the session lock"
+  stop_nonancestor_lock_owner "$dir"
+  pass "fm-turnend-guard: default mode ends a lock-refused turn with advisory wording only"
+}
+
+test_hook_claude_mode_owned_lock_still_blocks() {
+  local dir home out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-owned-lock")
+  home=$(cd "$dir" && pwd)
+  : > "$dir/state/task1.meta"
+  ln -s /bin/bash "$dir/fake-claude"
+  # shellcheck disable=SC2016 # the fake harness expands FM_HOME and $$ inside its child shell.
+  out=$(printf '{"stop_hook_active":false,"session_id":"sess-claude-mode"}' \
+    | FM_HOME="$home" FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=200 "$dir/fake-claude" -c '
+        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="owned-lock-session-$$" CLAUDE_PID=$$
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FM_HOME/bin/fm-turnend-guard.sh" --claude
+      ' 2>&1); status=$?
+  expect_code 2 "$status" "the lock-owning session must keep the guard backstop while unhealthy and unclaimed"
+  assert_contains "$out" "TURN WOULD END BLIND" "owned-lock re-block must carry the blind-turn banner"
+  assert_present "$dir/state/.turnend-claude-blocks" "owned-lock re-block must consume the shared block budget"
+  pass "fm-turnend-guard --claude: the lock-owning session still blocks an unhealthy unclaimed stop"
+}
+
+test_hook_claude_mode_dead_owner_lock_still_blocks() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-dead-owner")
+  : > "$dir/state/task1.meta"
+  printf '%s\n' "$(nonexistent_pid)" > "$dir/state/.lock"
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=200 run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "a dead lock owner is stale, not lock-refused, so the guard must keep blocking"
+  assert_contains "$out" "TURN WOULD END BLIND" "dead-owner re-block must carry the blind-turn banner"
+  pass "fm-turnend-guard --claude: a dead lock owner never reads as a lock-refused session"
+}
+
 # --- AWAY MODE: the daemon owns supervision ----------------------------------
 #
 # While state/.afk exists, bin/fm-supervise-daemon.sh owns supervision and runs
@@ -2244,6 +2408,7 @@ test_tracked_claude_entries_inert_under_grok
 test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_obeys_watch_arm_outcomes
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
@@ -2272,6 +2437,11 @@ test_hook_claude_mode_away_mode_never_uses_stop_autoarm_fail_open
 test_hook_claude_mode_allow_resets_budget
 test_hook_claude_mode_waits_for_late_claim
 test_hook_claude_mode_secondmate_reblocks_like_primary
+test_hook_claude_mode_lock_refused_advisory_not_block
+test_hook_claude_mode_lock_refused_stale_epoch_never_blocks
+test_hook_default_mode_lock_refused_advisory
+test_hook_claude_mode_owned_lock_still_blocks
+test_hook_claude_mode_dead_owner_lock_still_blocks
 test_hook_away_daemon_allows_between_watcher_cycles
 test_hook_away_daemon_allows_over_dead_watcher_lock
 test_hook_away_mode_blocks_without_any_supervisor

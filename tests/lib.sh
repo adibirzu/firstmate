@@ -47,6 +47,11 @@ umask 022
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
+# Pin the machine-capacity spawn guard to a fixed healthy machine so spawn tests
+# do not depend on how loaded the runner happens to be; tests/capacity-pin.sh
+# owns the values and the rationale.
+# shellcheck source=tests/capacity-pin.sh
+. "$(dirname "${BASH_SOURCE[0]}")/capacity-pin.sh"
 # Arms the test-only seams bin/ scripts expose (e.g. fm-afk-launch.sh's
 # FM_TEST_HARNESS harness pin). Normal primary launches do not arm it, so a
 # leaked harness pin alone stays inert outside a suite.
@@ -60,13 +65,30 @@ unset FM_TASK_ID
 
 # Clear the tasks-axi env overrides. An operator shell exports TASKS_AXI_FILE
 # (and may export TASKS_AXI_BACKEND) at its real home's backlog, and tasks-axi
-# resolves that env AHEAD of the .tasks.toml a fixture copies, so a suite that
-# seeds a temp home with bare `tasks-axi` would silently write the operator's
-# live backlog instead - tests/fm-public-followup.test.sh did exactly that. Every
-# fixture addresses its own data/backlog.md through its copied .tasks.toml, an
-# explicit --file, or bin/fm-tasks-axi.sh; a case that verifies the wrapper
-# against an ambient override sets TASKS_AXI_FILE itself.
+# resolves those ahead of a fixture's .tasks.toml. Suites that seed or read
+# through tasks-axi from a fixture home would otherwise write the operator's
+# live backlog. A case that verifies isolation against an ambient override sets
+# TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
+
+# Clear the home identity a live firstmate session exports, so a test file
+# launched directly (not through bin/fm-test-run.sh, which clears the same
+# names per worker) still starts from no home. A script given only
+# FM_STATE_OVERRIDE otherwise resolves FM_HOME from the ambient value, and in a
+# secondmate home its parent-channel publishers append fixture lines to the
+# real parent's status log. A case that needs a home sets these itself.
+# FM_TEST_HOME and FM_TEST_USER_HOME join them: the pr-merge helper resolves
+# its sandbox home from the former, so an ambient export would route the same
+# fabricated lines into a live home instead of the case directory.
+unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
+  FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME \
+  FM_TEST_HOME FM_TEST_USER_HOME
+
+# Clear agy's own load-bearing detection marker (bin/fm-harness.sh,
+# .agents/skills/harness-adapters/references/harness/agy.md) so a value leaked
+# from the invoking shell cannot pollute a harness-detection test. Same class
+# as FM_TASK_ID above; a case that verifies agy detection sets it itself.
+unset ANTIGRAVITY_AGENT
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
@@ -404,6 +426,12 @@ fm_live_gate() {
 fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
+  # Every fakebin gets the treehouse stub by default. fm-spawn.sh now EXECUTES
+  # treehouse to lease the worktree instead of sending `treehouse get` to a fake
+  # pane, so a fakebin without this stub falls through to the real binary and
+  # leases real pool slots against a test's throwaway repo. Suites that want to
+  # record the invocation call fm_fake_treehouse again with their own arguments.
+  fm_fake_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -411,12 +439,45 @@ fm_fake_exit0() {
   local fakebin=$1 tool
   shift
   for tool in "$@"; do
+    # Spawn leases the worktree by executing treehouse and reading the path
+    # off stdout. A trivial exit-0 stub reads as "no usable worktree path".
+    # Suites that pass treehouse here mean "treehouse is on PATH", not
+    # "return empty"; custom recorders still call fm_fake_treehouse after.
+    if [ "$tool" = treehouse ]; then
+      fm_fake_treehouse "$fakebin"
+      continue
+    fi
     cat > "$fakebin/$tool" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# fm_fake_treehouse <fakebin> [worktree]: stub treehouse for a spawn fixture.
+# fm-spawn.sh leases the worktree itself and reads the path off treehouse's
+# stdout, so an exit-0-with-no-output stub is not enough - it reads as treehouse
+# failing to produce a worktree at all. The path is <worktree> when given (for
+# fixtures that bake the path into their fake tmux), otherwise
+# FM_FAKE_TREEHOUSE_WT, otherwise FM_FAKE_PANE_PATH - which in these fixtures is
+# the same worktree the pane is made to report.
+fm_fake_treehouse() {
+  local fakebin=$1 baked=${2:-}
+  cat > "$fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+case "\${1:-}" in
+  get)
+    printf '%s\n' "\$*" >> "\${FM_FAKE_TREEHOUSE_ARGSFILE:-/dev/null}"
+    printf '%s\n' "\${HOME:-}" > "\${FM_FAKE_TREEHOUSE_HOMEFILE:-/dev/null}"
+    printf '%s\n' "\${FM_FAKE_TREEHOUSE_WT:-\${FM_FAKE_PANE_PATH:-$baked}}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
 }
 
 # fm_fake_crash_injector <fakebin>
@@ -579,7 +640,6 @@ fm_eval_launch() {
   shift 3
   (cd "$pane" && env "$@" PATH="$fakebin:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" bash -c "$launch")
 }
-
 # --- portable file timestamps -----------------------------------------------
 
 # fm_touch_epoch <epoch> <path> [path...]: set each path's modification time to
@@ -625,7 +685,7 @@ fm_git_init_commit() {
   git -C "$dir" init -q -b main
   printf '# %s\n' "$(basename "$dir")" > "$dir/README.md"
   git -C "$dir" add README.md
-  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >/dev/null
 }
 
 # fm_git_add_origin <repo> <bare>: clone <repo> bare into <bare> and register it

@@ -11,6 +11,9 @@ EXT="$ROOT/.pi/extensions/fm-primary-pi-watch.ts"
 # from a clean checkout with no tracked .opencode/package.json. The warning is
 # unrelated to plugin output, which the assertions intentionally require empty.
 export NODE_NO_WARNINGS=1
+# Node 22 needs explicit type stripping for the tracked .ts extension; Node 24
+# accepts the same flag. Keep it on NODE_OPTIONS so every invocation agrees.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--experimental-strip-types --input-type=module"
 
 # One owner for the readiness budget every unready-successor test below spends
 # on purpose. Both plugins start a successor arm through a login shell and
@@ -1705,9 +1708,12 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-hung-successor", {}, undefined, undefined, {});
-// Three unready successors each cost the full readiness budget, so wait well
-// past their sum. The wait ends as soon as the wake lands.
-for (let i = 0; i < 1500 && !prompt; i += 1) {
+// Wall-clock deadline, not an iteration count. This path deliberately burns one
+// whole arm-ready window per attempt (successor + two retries), so a fixed
+// 500x10ms budget can expire before the wake is even due once the window is
+// wide enough to survive process-start latency on a loaded runner.
+const promptDeadline = Date.now() + 60000;
+while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
@@ -1723,7 +1729,7 @@ if (stableRows.length !== 4) throw new Error(`single-flight recovery launched ${
 EOF
 )
   status=$?
-  expect_code 0 "$status" "Pi must deliver the actionable wake after bounded hung-successor recovery"
+  expect_code 0 "$status" "Pi must deliver the actionable wake after bounded hung-successor recovery: $out"
   [ -z "$out" ] || fail "Pi hung-successor test printed output: $out"
   pass "Pi hung successor falls back to one typed actionable wake"
 }
@@ -1750,7 +1756,7 @@ if [ "$count" -eq 0 ]; then
   printf 'signal: synthetic wake\n'
   exit 0
 fi
-trap '' TERM INT
+trap "" TERM INT
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.1; done
 SH
@@ -3350,6 +3356,8 @@ test_opencode_plugin_package_boundary_is_explicit_esm() {
   cp "$ROOT/.opencode/plugins/package.json" "$fixture/plugins/package.json"
   cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$plugin"
   cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$fixture/plugins/lib/fm-operational-input.js"
+  cp "$ROOT/.opencode/plugins/lib/fm-watch-arm-close.js" "$fixture/plugins/lib/fm-watch-arm-close.js"
+  cp "$ROOT/.opencode/plugins/lib/fm-watch-arm-eligibility.js" "$fixture/plugins/lib/fm-watch-arm-eligibility.js"
   out=$(PLUGIN="$plugin" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 await import(pathToFileURL(process.env.PLUGIN).href);
@@ -3490,14 +3498,15 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999\n");
 await hooks.event(event);
-// The hook starts its attempt without awaiting it, and the plugin answers a
-// second attempt from the one already in flight. Join that attempt through the
-// coordinator rather than waiting a fixed span: refusing an unowned lock walks
-// git and ps probes that can outlast any such span, and the owned-lock event
-// below would then be answered from the refusal instead of arming.
-const refusal = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
-if (refusal !== "read-only") {
-  console.error(`expected a read-only refusal without the session lock, got ${refusal}`);
+// The event hook starts the arm attempt without awaiting it, and a foreign-lock
+// refusal costs ~10 git/ps probes before it settles. Drain that attempt through
+// the coordinator instead of sleeping a fixed budget: on a loaded runner the
+// probes outlast any wall-clock guess, and flipping the lock underneath an
+// in-flight attempt makes the next caller coalesce onto its stale refusal and
+// never arm. Awaiting also asserts the exact reason the gate refused.
+const refused = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (refused !== "read-only") {
+  console.error(`expected read-only while another session holds the lock, got ${refused}`);
   process.exit(1);
 }
 if (existsSync(process.env.FM_ARM_LOG)) {
@@ -3883,9 +3892,12 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-// Three unready successors each cost the full readiness budget, so wait well
-// past their sum. The wait ends as soon as the wake lands.
-for (let i = 0; i < 1500 && !prompt; i += 1) {
+// Wall-clock deadline, not an iteration count. This path deliberately burns one
+// whole arm-ready window per attempt (successor + two retries), so a fixed
+// 500x10ms budget can expire before the wake is even due once the window is
+// wide enough to survive process-start latency on a loaded runner.
+const promptDeadline = Date.now() + 60000;
+while (!prompt && Date.now() < promptDeadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
@@ -3901,7 +3913,7 @@ if (stableRows.length !== 4) throw new Error(`single-flight recovery launched ${
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode must deliver the actionable wake after bounded hung-successor recovery"
+  expect_code 0 "$status" "OpenCode must deliver the actionable wake after bounded hung-successor recovery: $out"
   [ -z "$out" ] || fail "OpenCode hung-successor test printed output: $out"
   pass "OpenCode hung successor falls back to one typed actionable wake"
 }
@@ -3930,7 +3942,7 @@ if [ "$count" -eq 0 ]; then
   printf 'signal: synthetic wake\n'
   exit 0
 fi
-trap '' TERM INT
+trap "" TERM INT
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.1; done
 SH
@@ -4173,22 +4185,27 @@ const hooks = await mod.FmPrimaryWatchArm({
   directory: process.env.WORKTREE,
   worktree: process.env.WORKTREE,
 });
+const armRows = () =>
+  existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !prompt; i += 1) {
+for (let i = 0; i < 250 && armRows().length < 3; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
-const rows = existsSync(process.env.FM_ARM_LOG)
-  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
-  : [];
+// The retry delays are 5ms and 10ms here, so an unbounded loop would have
+// launched a fourth cycle well inside this settle window.
+await new Promise((resolve) => setTimeout(resolve, 150));
+const rows = armRows();
 if (rows.length !== 3) throw new Error(`retry limit launched ${rows.length} arm cycles: ${rows.join(" | ")}`);
-if (!prompt.includes("after 2 retries")) throw new Error(`retry exhaustion was not surfaced: ${prompt}`);
+if (prompt) throw new Error(`idle retry exhaustion spent a model turn: ${prompt}`);
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode established clean closes must honor the continuity retry limit"
+  expect_code 0 "$status" "OpenCode established clean closes must honor the continuity retry limit without a model turn"
   [ -z "$out" ] || fail "OpenCode established-empty-close retry test printed output: $out"
-  pass "OpenCode established clean closes stop at the configured retry limit"
+  pass "OpenCode established clean closes stop silently at the configured retry limit"
 }
 
 test_opencode_actionable_close_rechecks_session_lock() {
@@ -4276,8 +4293,7 @@ SH
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'guard should not run\n' >&2
-exit 2
+test -s "${FM_ARM_LOG:?}"
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-turnend-guard.sh"
   out=$(ARM_PLUGIN="$arm_plugin" GUARD_PLUGIN="$guard_plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_GUARD_LOG="$guard_log" node 2>&1 <<'EOF'
@@ -4313,8 +4329,8 @@ if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
   process.exit(1);
 }
-if (existsSync(process.env.FM_GUARD_LOG)) {
-  console.error("turn-end guard ran before the watch arm could establish supervision");
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("turn-end guard did not run after the watch arm established supervision");
   process.exit(1);
 }
 if (promptBody) {
@@ -4324,12 +4340,12 @@ if (promptBody) {
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode turn-end guard must let the auto-arm plugin establish supervision first"
+  expect_code 0 "$status" "OpenCode turn-end guard must let the auto-arm plugin establish supervision first: $out"
   [ -z "$out" ] || fail "OpenCode coordination test printed output: $out"
   pass "OpenCode watcher plugin coordinates with the turn-end guard"
 }
 
-test_opencode_healthy_arm_output_does_not_suppress_guard() {
+test_opencode_healthy_arm_output_keeps_guard_silent() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
@@ -4379,9 +4395,9 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
-}
+// The guard event resolves once the arm child has closed; give the shell guard
+// the same window it previously used to fire so a regression is observable.
+await new Promise((resolve) => setTimeout(resolve, 300));
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
   process.exit(1);
@@ -4390,20 +4406,20 @@ if (!readFileSync(process.env.FM_ARM_LOG, "utf8").includes("args=--restart")) {
   console.error("watch arm was not asked to restart into an owned child");
   process.exit(1);
 }
-if (!existsSync(process.env.FM_GUARD_LOG)) {
-  console.error("turn-end guard was suppressed by an external healthy watcher");
+if (existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("turn-end guard ran the shell guard after an external healthy watcher");
   process.exit(1);
 }
-if (!promptBody.includes("TURN WOULD END BLIND")) {
-  console.error(`missing blind-turn prompt: ${promptBody}`);
+if (promptBody) {
+  console.error(`external healthy watcher spent a model turn: ${promptBody}`);
   process.exit(1);
 }
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode watch plugin must not treat external healthy output as an owned arm"
+  expect_code 0 "$status" "OpenCode external healthy output must be idle with no guard run and no model turn"
   [ -z "$out" ] || fail "OpenCode external-healthy test printed output: $out"
-  pass "OpenCode healthy arm output does not suppress the turn-end guard"
+  pass "OpenCode healthy arm output keeps the turn-end guard silent"
 }
 
 test_pi_extension_reports_external_healthy_watcher
@@ -4457,4 +4473,4 @@ test_opencode_empty_close_retries_instead_of_disappearing
 test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_coordinates_with_turnend_guard
-test_opencode_healthy_arm_output_does_not_suppress_guard
+test_opencode_healthy_arm_output_keeps_guard_silent

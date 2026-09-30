@@ -215,8 +215,42 @@ test_over_long_decision_note_is_capped_with_a_marker() {
   pass "an over-long open decision is cut to its per-item budget with the shared truncation marker"
 }
 
+# The original section-wide 4 KiB budget hid most of a large fleet behind its
+# omission summary. Exercise more rendered bytes than that legacy ceiling while
+# staying well inside the current bound, and require the last decision to be
+# present so this cannot regress to a silently incomplete first page.
+test_more_than_legacy_section_cap_is_rendered_in_full() {
+  local dir state out i bytes
+  dir=$(make_case beyond-legacy-cap)
+  state="$dir/state"
+  out="$dir/drain.out"
+  i=1
+  while [ "$i" -le 60 ]; do
+    printf 'needs-decision [key=choice-%03d]: choose option for item %03d with enough detail to exceed the legacy section cap\n' \
+      "$i" "$i" >> "$state/task-many.status"
+    i=$((i + 1))
+  done
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with decisions beyond the legacy section cap"
+
+  bytes=$(LC_ALL=C wc -c < "$out")
+  bytes=${bytes//[[:space:]]/}
+  [ "$bytes" -gt 4000 ] \
+    || fail "fixture did not exceed the legacy section cap: $bytes bytes"
+  grep -F 'task-many [key=choice-001]' "$out" >/dev/null \
+    || fail "the first decision beyond the legacy-cap fixture was missing"
+  grep -F 'task-many [key=choice-060]' "$out" >/dev/null \
+    || fail "the last decision beyond the legacy-cap fixture was omitted"
+  if grep -F 'more omitted (byte cap)' "$out" >/dev/null; then
+    fail "decisions that fit the enlarged section were still omitted: $(tail -3 "$out")"
+  fi
+
+  pass "an OPEN DECISIONS view larger than the legacy 4 KiB cap renders in full"
+}
+
 test_buried_decision_still_surfaces
 test_over_long_decision_note_is_capped_with_a_marker
+test_more_than_legacy_section_cap_is_rendered_in_full
 test_explicit_resolution_closes_it
 test_later_unrelated_terminal_line_does_not_close_it
 test_reserved_key_namespace_is_owned_by_its_library

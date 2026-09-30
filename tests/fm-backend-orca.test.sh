@@ -558,8 +558,13 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   assert_grep "worktree=$wt" "$state/$id.meta" "meta missing Orca worktree path"
   assert_not_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''create' \
     "spawn should reuse the implicit terminal returned by Orca worktree creation"
-  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''export GOTMPDIR=/tmp/fm-orcaspawnz1/gotmp'$'\x1f''--enter'$'\x1f''--json' \
+  # The per-task temp root carries the operator's uid so two operators running the
+  # same task id on one host cannot collide (bin/fm-spawn.sh).
+  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f'"export GOTMPDIR=/tmp/fm-$(id -u)-orcaspawnz1/gotmp"$'\x1f''--enter'$'\x1f''--json' \
     "spawn did not export GOTMPDIR through the Orca terminal"
+  assert_contains "$(cat "$log")" $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-spawn\x1f--text\x1f. \'' \
+    "spawn did not send the staged harness launch command through Orca"
+  rm -rf "/tmp/fm-$(id -u)-$id"
   staged=$(tr '\037' '\n' < "$log" | sed -n "s/^\. '\([^']*\)'$/\1/p" | tail -1)
   [ -n "$staged" ] && [ -f "$staged" ] \
     || fail "spawn did not send Orca a readable staged launch command"
@@ -749,8 +754,8 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when metadata cannot be written"
-  assert_contains "$out" "task record for $id could not be published" \
-    "spawn should report metadata publication failure without relying on platform-specific mv output"
+  assert_contains "$out" "could not be published" "spawn should fail at metadata publication"
+  assert_contains "$out" "not a regular file" "spawn should name the directory that blocked publication"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close'$'\x1f''--terminal'$'\x1f''term-meta-fail'$'\x1f''--json' \
     "Orca spawn should close the recorded terminal when a later abort occurs"
   assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm'$'\x1f''--worktree'$'\x1f''id:wt-meta-fail::/orca/wt-meta-fail'$'\x1f''--force'$'\x1f''--json' \

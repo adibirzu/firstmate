@@ -564,17 +564,32 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
 }
 
 # fm_backend_cmux_send_text_submit: type <text> into <target> once (raw,
-# unsubmitted, via send_literal), then drive the shared verify-and-retry-Enter
-# loop (bin/fm-composer-lib.sh: fm_composer_submit_retry_core) against the
-# shared composer verdict. Echoes empty|pending|unknown|send-failed, a subset
-# of the proof-carrying submit vocabulary.
+# unsubmitted, via send_literal), then submit with a named Enter key, retried
+# (Enter only, never retyped) until the composer's own row reads empty.
+# Mirrors fm_backend_herdr_send_text_submit's ORIGINAL (composer-row)
+# verification strategy: a slash-command popup's first Enter can close the
+# popup and fill an argument-hint placeholder into the composer rather than
+# submitting, which a raw-diff check would misread as "submitted" -
+# classifying the composer row specifically avoids that false positive, so
+# the retry loop correctly sends a second Enter when needed. Herdr's adapter
+# has since moved its own confirmation to a native agent-state read instead
+# (docs/herdr-backend.md "Native agent-state submit confirmation"); cmux has
+# no analogous native primitive, so this composer-row approach remains
+# cmux's own confirmation strategy. Echoes empty|pending|unknown|send-failed, a
+# subset of the proof-carrying submit vocabulary.
 fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-}
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} i=0 state
   fm_backend_cmux_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_cmux_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  fm_composer_submit_retry_core fm_backend_cmux_send_key fm_backend_cmux_composer_state \
-    "$target" "$retries" "$sleep_s" "$expected_label"
+  while :; do
+    fm_backend_cmux_send_key "$target" Enter "$expected_label" || true
+    sleep "$sleep_s"
+    state=$(fm_backend_cmux_composer_state "$target" "$expected_label")
+    [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
+    i=$((i + 1))
+    [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
+  done
 }
 
 # fm_backend_cmux_window_of_workspace: echo "<window_id> <workspace_count>" for
