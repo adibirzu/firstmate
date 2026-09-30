@@ -5206,6 +5206,26 @@ EOF
     # conversation instead of its predecessor's. The classifier then accepts
     # only one remaining conversation and never guesses between incarnations.
     CURSOR_PROJECTS_ROOT="${CURSOR_PROJECTS_ROOT_OVERRIDE:-$HOME/.cursor/projects}"
+    # Workspace-trust pre-seed (verified bypass, docs/verification/
+    # cursor-agent-adapter.md): a pre-existing .workspace-trusted marker makes
+    # cursor-agent skip the blocking interactive trust dialog entirely. The
+    # --trust launch flag writes the same marker at startup, so this only
+    # covers the window before that write; cursor's length-capped slug
+    # variant for very long paths is not reproduced here, and the post-launch
+    # readiness gate still answers a residual dialog with `a`. The slug is
+    # the worktree abspath with the leading / dropped and every / replaced
+    # by -. A workspace that is already claimed stays untouched: a second
+    # marker under another slug would give the transcript binding two
+    # claimants for one workspace instead of one.
+    if ! fm_busy_cursor_project_dir "$CURSOR_PROJECTS_ROOT" "$WT" >/dev/null 2>&1; then
+      CURSOR_PROJECT_DIR="$CURSOR_PROJECTS_ROOT/$(printf '%s' "${WT#/}" | tr '/' '-')"
+      if [ ! -f "$CURSOR_PROJECT_DIR/.workspace-trusted" ]; then
+        mkdir -p "$CURSOR_PROJECT_DIR"
+        printf '{"trustedAt":"%s","workspacePath":"%s"}\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$(json_escape "$WT")" \
+          > "$CURSOR_PROJECT_DIR/.workspace-trusted"
+      fi
+    fi
     {
       printf 'projects_root=%s\n' "$CURSOR_PROJECTS_ROOT"
       printf 'workspace_root=%s\n' "$WT"

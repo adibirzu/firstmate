@@ -193,6 +193,28 @@ wait_for_pid_gone() {  # <pid> <polls>
   return 1
 }
 
+# Arm a watcher this suite owns, so later cases can delete its home or state
+# directory and assert the process exits instead of running on as an orphan.
+# WATCH_PID from the arm's started line. Both stdout and stderr land in <arm-out>
+# so the watcher's own exit reason, which it logs to stderr, is readable there.
+WATCH_PID=
+start_owned_watcher() {  # <home> <state> <fakebin> <arm-out>
+  local home=$1 state=$2 fakebin=$3 armout=$4 i
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=2 "$WATCH_ARM" > "$armout" 2>&1 &
+  ARM_PID=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    grep -q '^watcher: started pid=' "$armout" 2>/dev/null && break
+    is_live_non_zombie "$ARM_PID" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  WATCH_PID=$(sed -n 's/^watcher: started pid=\([0-9][0-9]*\).*/\1/p' "$armout" | head -1)
+  [ -n "$WATCH_PID" ] || fail "arm did not start a watcher: $(cat "$armout")"
+}
+
 test_attached_arm_reports_the_delivered_wake() {
   local dir state fakebin out armout status
   dir=$(make_case attached-delivered-wake)

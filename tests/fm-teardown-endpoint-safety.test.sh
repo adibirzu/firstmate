@@ -1012,6 +1012,51 @@ test_tmux_empty_target_refuses_without_invocation
 test_recorded_process_identity_cleanup_is_exact
 test_isolated_tmux_invalid_and_valid_cleanup
 
+# The tmux shim used by the endpoint-close tests below: every subcommand
+# reaches the real isolated server, so presence is always read from real tmux.
+# When FM_TEST_BLOCK_KILL is set, `kill-window` alone fails without forwarding,
+# which is a close that genuinely could not do its job - the recorded window is
+# demonstrably still there afterwards. Real tmux cannot be made to accept a
+# kill-window and leave the window alive, so blocking the call is the only way
+# to reach that state against a real endpoint.
+# When FM_TEST_UNREADABLE_LIST is set, `list-windows` fails with a response
+# that is NOT one of tmux's definitive missing-session/server answers, which is
+# the transient-server and tmux-absent-from-PATH shape: the read never happened,
+# so it proves nothing about whether the window survived.
+# The socket stays a RELATIVE name reached from <dir>, matching the isolated
+# case above: this fixture's absolute path is longer than a unix socket path
+# may be on macOS.
+write_close_failing_tmux_shim() {  # <dir> <socket-name> <real-tmux>
+  local dir=$1 socket=$2 real=$3
+  cat > "$dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+printf 'tmux' >> "\${FM_RUNTIME_LOG:?}"
+printf ' <%s>' "\$@" >> "\${FM_RUNTIME_LOG:?}"
+printf '\n' >> "\${FM_RUNTIME_LOG:?}"
+if [ -n "\${FM_TEST_BLOCK_KILL:-}" ] && [ "\${1:-}" = kill-window ]; then
+  echo "can't find window" >&2
+  exit 1
+fi
+if [ -n "\${FM_TEST_UNREADABLE_LIST:-}" ] && [ "\${1:-}" = list-windows ]; then
+  echo "lost server" >&2
+  exit 1
+fi
+cd '$dir'
+exec '$real' -S '$socket' "\$@"
+SH
+  chmod +x "$dir/fakebin/tmux"
+}
+
+# write_endpoint_close_meta: a task record whose worktree and project do not
+# exist, which keeps the cases below on the endpoint close itself - the pool
+# return and its own refusals are covered elsewhere in this file.
+write_endpoint_close_meta() {  # <case-dir> <id> <window>
+  fm_write_meta "$1/home/state/$2.meta" \
+    "window=$3" "endpoint_task_id=$2" \
+    "worktree=$1/nonexistent-worktree" "project=$1/nonexistent-project" \
+    "kind=ship" "mode=no-mistakes"
+}
 
 test_failed_endpoint_close_refuses_before_removing_the_record() {
   local dir socket session='close failure' id=strand-task rc

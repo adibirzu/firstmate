@@ -1042,16 +1042,27 @@ done
 subsection "AFK"
 # The away posture is the record (bin/fm-afk-contract.sh); the legacy flag
 # still marks a running daemon on the harnesses that launch one.
+# A quiet record (bin/fm-afk-contract.sh mode) is a present captain: it holds
+# nothing for a return. Fork AFK v1 remains the writer; this block only names
+# the record the way the merged quiet/away digest tests expect.
 if [ -f "$STATE/.afk-contract" ]; then
-  printf 'present - away posture recorded at %s (hold-for-return only; bin/fm-afk-contract.sh readback for the mandate)' \
-    "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  if [ "$("$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = quiet ]; then
+    printf 'present - quiet mode recorded at %s (the captain is present and nothing is held for a return: requested actions proceed under ordinary attended authority; only an explicit /quiet off exits it)' \
+      "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  else
+    printf 'present - away posture recorded at %s (hold-for-return only; bin/fm-afk-contract.sh readback for the mandate)' \
+      "$("$SCRIPT_DIR/fm-afk-contract.sh" field entered 2>/dev/null || printf unknown)"
+  fi
   if [ -e "$STATE/.afk" ]; then
-    printf '; the away daemon owns the watcher.\n'
+    if [ "$AFK_MODE" = quiet ]; then
+      printf '; the quiet daemon owns the watcher.\n'
+    else
+      printf '; the away daemon owns the watcher.\n'
+    fi
   else
     printf '; no daemon runs, the ordinary supervision session continues.\n'
   fi
 elif [ -e "$STATE/.afk" ]; then
-  printf 'present - away-mode supervision is active; the daemon owns the watcher (legacy flag with no posture record).\n'
   if [ "$AFK_MODE" = quiet ]; then
     printf 'present - quiet-mode supervision is active; the daemon owns the watcher, only an explicit /quiet off exits it (legacy flag with no posture record).\n'
   else

@@ -37,9 +37,11 @@
 #     tool) is main's. A captain row between the two markers is "unprocessed":
 #     delivered and shown, not yet acted on. Routine rows never wait on this
 #     marker. It only advances through an explicit sequence-bound
-#     acknowledgement naming the earliest currently unprocessed captain row at
-#     or below the read cursor; a routine, unread, already-processed, or later
-#     captain target is refused. It never moves past the read cursor or backwards, so an
+#     acknowledgement naming a currently unprocessed captain row at or below
+#     the read cursor; the target itself must be a captain, and advancing
+#     through it covers every earlier unprocessed captain in that range. A
+#     routine, unread, or already-processed target is refused. It never moves
+#     past the read cursor or backwards, so an
 #     unrelated or empty model answer cannot move it. An absent marker reads as
 #     0 (every delivered captain row is unprocessed, the safe direction), and
 #     nothing ever creates it from the read cursor: the Pi branch's visible
@@ -724,14 +726,6 @@ case "$CMD" in
     if [ "$VERDICT" != captain ]; then
       fm_lock_release "$LOCK"
       echo "error: refusing processed advancement because seq $THROUGH is not an unprocessed captain outcome" >&2
-      exit 1
-    fi
-    NEXT_CAPTAIN=$(jq -r --argjson processed "$PROCESSED_SEQ" --argjson cursor "$CURSOR_SEQ" '
-      select(.seq > $processed and .seq <= $cursor and .verdict == "captain") | .seq
-    ' "$STORE" | head -n 1)
-    if [ "$NEXT_CAPTAIN" != "$THROUGH" ]; then
-      fm_lock_release "$LOCK"
-      echo "error: refusing processed advancement over an earlier unprocessed captain outcome" >&2
       exit 1
     fi
     write_processed "$THROUGH"
