@@ -595,7 +595,6 @@ case "$CMD" in
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
       "$VERDICT" "$(json_escape "$SUMMARY")" "$SILENT" "$CAPTURED_STATUS_ENDPOINT" \
       "$(json_escape "$CAPTURED_STATUS_IDENT")" "$(if [ -n "$EVENT_ID" ]; then printf ',"eventId":"%s"' "$(json_escape "$EVENT_ID")"; fi)" >> "$STORE"
-      "$(json_escape "$CAPTURED_STATUS_IDENT")" >> "$STORE"
     write_outcome_tail || echo "warning: outcome $SEQ was stored but its display tail copy could not be refreshed" >&2
     # A task with neither a live meta nor a status log is retired: the branch
     # reports the teardown it just performed, and writing the index here would

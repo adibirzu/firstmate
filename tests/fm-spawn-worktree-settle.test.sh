@@ -186,10 +186,8 @@ test_already_settled_pane_is_accepted_on_first_read() {
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
   reads=$(cat "$COUNTFILE")
-  [ "$reads" -eq 1 ] || fail "already-settled pane took $reads reads - expected the first matching lease path"
-  pass "an already-settled pane is accepted on the first exact lease-path read"
-  [ "$reads" -eq 3 ] || fail "already-settled pane took $reads reads to confirm - expected the first read, one confirmation, and the launch-boundary cwd check"
-  pass "an already-settled pane confirms on the next read, not a whole extra cycle"
+  [ "$reads" -eq 2 ] || fail "already-settled pane took $reads reads - expected the first matching lease path plus the launch-boundary cwd check"
+  pass "an already-settled pane is accepted on the first exact lease-path read, then re-checked at the launch boundary"
 }
 
 # make_primary_case <name> <id> <stale_reads> builds the linked-home shape: the

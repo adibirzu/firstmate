@@ -95,11 +95,18 @@
 #   bin/fm-backend.sh's fm_backend_detect, with cmux fallback details in
 #   docs/cmux-backend.md),
 #   then tmux.
+#   For every backend except orca, firstmate leases the task worktree itself with
+#   `treehouse get --lease`, run under a HOME that puts the pool on the repo's own
+#   filesystem (bin/fm-treehouse-lib.sh owns why that HOME is the only lever), and
+#   then sends the pane a plain cd. The lease is durable, so fm-teardown.sh returning
+#   the worktree is what frees the pool slot; a spawn that fails before publishing
+#   state/<id>.meta returns its own lease.
 #   Spawn-capable backends are the reference tmux adapter, verified herdr
 #   adapter, and experimental zellij, orca, and cmux adapters. Orca owns both
-#   the task worktree and terminal, so ship/scout Orca spawns do not run
-#   treehouse get; cmux is a session provider only, exactly like herdr/zellij,
-#   so it does. Auto-detected herdr stays silent like tmux; auto-detected cmux
+#   the task worktree and terminal, so ship/scout Orca spawns acquire no
+#   treehouse lease and firstmate cannot place their worktree; cmux is a session
+#   provider only, exactly like herdr/zellij, so it leases like the rest.
+#   Auto-detected herdr stays silent like tmux; auto-detected cmux
 #   prints a loud stderr notice; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
@@ -618,6 +625,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-treehouse-lib.sh
+. "$SCRIPT_DIR/fm-treehouse-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
@@ -1217,6 +1226,8 @@ SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_SLOT_CLAIMED=0
+TREEHOUSE_LEASE_ABORT_CLEANUP=0
+POOL_HOME=
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1298,6 +1309,20 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  # The treehouse lease is durable, so a spawn that fails before publishing
+  # state/<id>.meta must return it here: teardown never runs for a task that
+  # never existed, so nothing else would ever free that pool slot.
+  if [ "$TREEHOUSE_LEASE_ABORT_CLEANUP" = 1 ]; then
+    TREEHOUSE_LEASE_ABORT_CLEANUP=0
+    if [ -n "${WT:-}" ] && [ -n "${PROJ_ABS:-}" ]; then
+      if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
+        echo "warning: leased worktree $WT was not returned because failed-dispatch rollback retained its task record; reconcile the record and endpoint before returning the lease" >&2
+      else
+        fm_treehouse_return "$PROJ_ABS" "$WT" >/dev/null 2>&1 \
+          || echo "warning: could not return the leased worktree $WT; run 'HOME=${POOL_HOME:-<pool-home>} treehouse return --force $WT' from $PROJ_ABS to free the pool slot" >&2
+      fi
+    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -3460,6 +3485,16 @@ freshen_spawn_worktree_base() { # <worktree>
   fi
 }
 
+assert_worktree_colocated() { # <worktree> <pool-home>
+  local wt=$1 pool_home=$2 status=0
+  fm_treehouse_worktree_colocated "$wt" || status=$?
+  if [ "$status" = 1 ]; then
+    echo "error: worktree $wt (filesystem $FM_TREEHOUSE_WT_DEVICE) is on a different filesystem than its object store $FM_TREEHOUSE_STORE (filesystem $FM_TREEHOUSE_STORE_DEVICE); the validation pipeline would hang in that worktree, so refusing to launch. Firstmate selected pool root $pool_home/.treehouse; a treehouse.toml in the repo root overrides that." >&2
+    exit 1
+  fi
+  return 0
+}
+
 herdr_projection_meta_field_exact() { # <meta> <key>
   local meta=$1 key=$2 count
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
@@ -4421,77 +4456,79 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # Firstmate acquires the worktree itself rather than sending `treehouse get` to
+  # the pane, because the pool has to land on the repo's own filesystem and the
+  # only way to select it is the HOME treehouse runs under (bin/fm-treehouse-lib.sh
+  # owns why). An interactive `treehouse get` opens the crew's shell as a child of
+  # treehouse, so that HOME would be inherited by the agent and by everything it
+  # runs - wrong ~/.claude, wrong git config, wrong gh credentials. Leasing here
+  # keeps the override inside this process: the pane only ever receives a plain cd.
+  # The lease's own `git fetch` still needs the real git and gh config, which that
+  # same substitution hides, so fm_treehouse_preserve_user_config pins them first.
+  #
+  # The lease is durable, so every exit path between here and metadata publication
+  # must return it; TREEHOUSE_LEASE_ABORT_CLEANUP arms spawn_abort_cleanup for that.
+  # fm-teardown.sh already returns the worktree by absolute path on the normal path.
+  POOL_HOME=$(fm_treehouse_pool_home "$PROJ_ABS") || exit 1
+  LEASE_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-lease-err.XXXXXXXX")
+  WT=$( cd "$PROJ_ABS" && fm_treehouse_preserve_user_config && HOME="$POOL_HOME" treehouse get --lease --lease-holder "fm-$ID" 2>"$LEASE_ERR_FILE" ) || {
+    echo "error: treehouse could not lease a worktree for $PROJ_ABS under pool root $POOL_HOME/.treehouse" >&2
+    [ ! -s "$LEASE_ERR_FILE" ] || sed 's/^/  treehouse: /' "$LEASE_ERR_FILE" >&2
+    rm -f "$LEASE_ERR_FILE"
+    exit 1
+  }
+  rm -f "$LEASE_ERR_FILE"
+  if [ -z "$WT" ] || [ ! -d "$WT" ]; then
+    echo "error: treehouse returned no usable worktree path for $PROJ_ABS (got '${WT:-}')" >&2
+    exit 1
+  fi
+  TREEHOUSE_LEASE_ABORT_CLEANUP=1
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  validate_spawn_worktree "treehouse get --lease" "$T"
+  assert_worktree_colocated "$WT" "$POOL_HOME"
+
+  # Move the pane into the leased worktree. `cd` is the one instruction every
+  # supported pane shell understands identically, which matters because the shell
+  # is the operator's, not ours.
+  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+
+  # Confirm the pane really landed there before anything is launched into it.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
   # worktree and tangle a hook into the primary checkout. The window id never lies.
-  # The project comparison is physical: spawn_worktree_isolated screens each
-  # read against PROJ_ABS_REAL, not PROJ_ABS, because a symlinked project prefix
-  # would otherwise make the pane's OS-level cwd read differ from PROJ_ABS on
-  # the very first poll, before the pane has actually moved.
-  #
-  # A single read that already looks isolated is not proof the pane settled
-  # there: on some tmux/WSL setups a brand-new window's pane_current_path
-  # transiently reports an unrelated stale path (seen live as another real git
-  # checkout entirely) before the shell catches up with treehouse get's cd. That
-  # stale path passes spawn_worktree_isolated too (it resolves to a real,
-  # distinct worktree top-level), so accepting it on one read alone silently
-  # records the wrong worktree= in state/<id>.meta. Require two consecutive
-  # reads to agree on the same isolated path before accepting it; a mismatch
-  # just becomes the new candidate rather than resetting the wait, so a pane
-  # that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
-  #
-  # Every candidate is screened with the isolation guard's own predicate, so a
-  # read of the project itself or of the repository primary checkout is treated
-  # as the transient it is and the wait continues, instead of being adopted and
-  # then refused by the guard.
-  # A candidate the screen rejects is never adopted, so a host where the pane
-  # never reaches an isolated worktree spends the whole window before refusing.
-  # That wait is deliberate - telling a transient apart from a terminal
-  # misconfiguration would need machinery this path does not want - so the
-  # refusal has to be self-explaining instead: carry the last path seen and the
-  # reason it was rejected, and report both at the deadline.
-  candidate=""
-  last_seen=""
+  # The expected path is known exactly now, so a transient stale pane_current_path
+  # can never be mistaken for arrival. Compare physically: a symlinked prefix
+  # would otherwise never match.
+  WT_REAL=$(real_path_or_raw "$WT")
+  landed=0
+  last_seen=
   last_reason="the pane reported no path"
-  for _ in $(seq 1 60); do
+  SETTLE_POLLS=${FM_SPAWN_SETTLE_POLLS:-60}
+  for _ in $(seq 1 "$SETTLE_POLLS"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
     [ -z "$p" ] || last_seen="$p"
-    if [ -n "$p" ] && spawn_worktree_isolated "$p"; then
-      p_real=$(real_path_or_raw "$p")
-      last_reason="it is an isolated worktree, but no second read agreed with it"
-      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-        WT="$p"
-        break
+    if [ -n "$p" ] && [ "$(real_path_or_raw "$p")" = "$WT_REAL" ]; then
+      landed=1
+      break
+    fi
+    if [ -n "$p" ]; then
+      if spawn_worktree_isolated "$p"; then
+        last_reason="it is an isolated worktree, but not the leased worktree"
+      else
+        last_reason=$SPAWN_WT_REASON
       fi
-      candidate="$p_real"
-    else
-      candidate=""
-      [ -z "$p" ] || last_reason=$SPAWN_WT_REASON
     fi
     sleep 1
   done
-  if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
+  if [ "$landed" -ne 1 ]; then
+    echo "error: pane did not enter the leased worktree $WT within $SETTLE_POLLS polls (last seen '${last_seen:-none}': $last_reason); inspect window $T" >&2
     exit 1
   fi
 
-  validate_spawn_worktree "treehouse get" "$T"
-
-  # Claim the pool slot for this task. The interactive `treehouse get` sent to
-  # the pane above records only a process lease (Treehouse's durable
-  # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
-  # homes, is not this path), so Treehouse cannot say which task a slot belongs
-  # to once that task's worker exits - and that is exactly when the slot is
-  # handed on and this task's worktree= line goes stale. The claim is what lets
-  # bin/fm-teardown.sh leave a slot that has since been reassigned untouched, so
-  # a slot that cannot be claimed is refused here, at the cheapest point, rather
-  # than launching a worker whose slot teardown could later release out from
-  # under its successor.
+  # Claim the pool slot for this task. The lease above is durable under
+  # `get --lease --lease-holder`; the claim is what lets teardown leave a slot
+  # that has since been reassigned untouched.
   # Written under the Treehouse project lock held from before slot allocation
   # through metadata publication, so no other spawn or return sees a half-claim.
   if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
@@ -4561,17 +4598,31 @@ agy)
   ;;
 esac
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
-# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
+# Per-task temp root: /tmp/fm-<uid>-<id>/ with Go's build temp nested at gotmp/.
+# Go won't create GOTMPDIR, so mkdir before it is used; fm-teardown removes the
+# whole root (reading the path this spawn recorded as tasktmp=, so changing the
+# shape here never orphans an already-running task's temp).
+# Nested (not a bare .../gotmp) so other per-task temp can live alongside later,
+# and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
+#
+# The uid is part of the path for the same reason the herdr presentation lock
+# namespace carries one (fm_backend_herdr_presentation_lock_namespace): task ids
+# are not unique across operators, so on a multi-operator box a uid-less
+# /tmp/fm-<id> is created by whoever spawns that id first and is then owned by
+# them outright. Every other operator's mkdir silently lands in a directory it
+# cannot write, and teardown's rm -rf fails with EACCES.
+#
 # The root is private (0700) because its path is predictable under a shared
 # /tmp: a root that already exists is reused only as a real directory owned by
 # this user and writable by nobody else, then tightened, so no other local user
 # can plant or swap a file in it. The staged launch command lives in a sibling
 # directory namespaced by home identity, not in this shared per-id root.
-TASK_TMP="/tmp/fm-$ID"
+TASK_TMP_UID=$(id -u 2>/dev/null || true)
+case "$TASK_TMP_UID" in
+  ''|*[!0-9]*) TASK_TMP_UID=nouid ;;
+esac
+TASK_TMP="/tmp/fm-$TASK_TMP_UID-$ID"
 if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   if [ -L "$TASK_TMP" ] || [ ! -d "$TASK_TMP" ] || [ ! -O "$TASK_TMP" ] ||
     [ -n "$(find "$TASK_TMP" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
@@ -5156,6 +5207,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   SPAWN_META_TMP=
 fi
+[ "$BACKLOG_TRANSITION" = 1 ] || TREEHOUSE_LEASE_ABORT_CLEANUP=0
 
 # Fuse the backlog In-flight transition into the publication that just created
 # the record (bin/fm-backlog-transition-lib.sh owns the invariant). It runs under
@@ -5806,6 +5858,9 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
   else
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2
   fi
+fi
+if [ "$BACKLOG_TRANSITION" = 1 ] && [ "$SPAWN_BACKLOG_COMMIT_STATUS" -eq 0 ]; then
+  TREEHOUSE_LEASE_ABORT_CLEANUP=0
 fi
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then

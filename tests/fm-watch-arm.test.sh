@@ -181,6 +181,18 @@ start_rearm_arm() {  # <home> <state> <fakebin> <arm-out> [predecessor-arm-pid]
   return 0
 }
 
+
+# The watcher is the arm's child, not this shell's, so wait on liveness only.
+wait_for_pid_gone() {  # <pid> <polls>
+  local pid=$1 limit=$2 i=0
+  while [ "$i" -lt "$limit" ]; do
+    is_live_non_zombie "$pid" || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 test_attached_arm_reports_the_delivered_wake() {
   local dir state fakebin out armout status
   dir=$(make_case attached-delivered-wake)
@@ -1246,6 +1258,161 @@ test_racy_concurrent_arms_settle_to_one_watcher() {
 
 test_attached_arm_reports_the_delivered_wake
 test_attached_arm_reports_the_delivered_wake_after_drain
+
+
+# The watcher validates FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS when it arms and
+# refuses to arm on an unusable value. Under a running watcher that value would
+# make every per-cycle reconcile refuse by name into a discarded stdout, so no
+# source would ever start and the home would sit disarmed while presenting as
+# supervised; refusing to arm is loud through the liveness guard instead. This
+# drives the real arm entry and asserts the arm STOPPED - non-zero exit, no
+# started line, no lock holder, no beacon - and that its refusal names the
+# variable, so a validator that merely returned false somewhere would not pass.
+test_arm_refuses_an_unusable_launch_confirm_window() {
+  local dir home state fakebin armout status lock_pid
+  dir=$(make_case confirm-window-refusal)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=5 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=5s \
+    "$WATCH_ARM" > "$armout" 2>&1 &
+  ARM_PID=$!
+  wait_for_exit "$ARM_PID" 200
+  status=$?
+  [ "$status" -ne 124 ] || fail "arm with an unusable confirm window never stopped: $(cat "$armout")"
+  [ "$status" -ne 0 ] || fail "arm reported success with an unusable confirm window: $(cat "$armout")"
+  grep -q '^watcher: FAILED' "$armout" \
+    || fail "arm did not report the typed failure line: $(cat "$armout")"
+  grep -qF 'FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS' "$armout" \
+    || fail "the refusal did not name the variable: $(cat "$armout")"
+  grep -qF "must be whole seconds from 1 to 600" "$armout" \
+    || fail "the refusal did not name the accepted range: $(cat "$armout")"
+  ! grep -q '^watcher: started' "$armout" \
+    || fail "arm reported a started watcher despite the refusal: $(cat "$armout")"
+  [ ! -e "$state/.last-watcher-beat" ] \
+    || fail "a refused watcher still published a liveness beacon"
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  [ -z "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null \
+    || fail "a refused watcher is still running as pid $lock_pid"
+  pass "watch-arm: an unusable launch confirm window refuses to arm by name"
+}
+
+
+# A watcher armed from a disposable no-mistakes validation checkout outlives the
+# validation step and keeps writing the real home's state from a path about to be
+# deleted (upstream #321). The arm must refuse before touching any state. The
+# fixture reaches this checkout's real arm through a symlink whose logical path
+# sits under .no-mistakes/worktrees/, with the test harness's own bypass cleared
+# for this one launch.
+test_arm_refuses_a_disposable_validation_checkout() {
+  local dir home state fakebin armout status link
+  dir=$(make_case disposable-checkout-refusal)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  link="$dir/.no-mistakes/worktrees/run-1/firstmate"
+  mkdir -p "$home/data" "$(dirname "$link")"
+  ln -s "$ROOT" "$link"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GATE_REFUSE_BYPASS='' \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT=5 "$link/bin/fm-watch-arm.sh" > "$armout" 2>&1 &
+  ARM_PID=$!
+  wait_for_exit "$ARM_PID" 200
+  status=$?
+  [ "$status" -ne 124 ] || fail "arm from a disposable checkout never stopped: $(cat "$armout")"
+  [ "$status" -ne 0 ] || fail "arm from a disposable checkout reported success: $(cat "$armout")"
+  grep -q '^watcher: FAILED' "$armout" \
+    || fail "arm did not report the typed failure line: $(cat "$armout")"
+  grep -qF 'disposable validation checkout' "$armout" \
+    || fail "the refusal did not name the disposable checkout: $(cat "$armout")"
+  ! grep -q '^watcher: started' "$armout" \
+    || fail "arm reported a started watcher despite the refusal: $(cat "$armout")"
+  [ ! -e "$state/.last-watcher-beat" ] \
+    || fail "a refused watcher still published a liveness beacon"
+  [ ! -e "$state/.watch.lock" ] \
+    || fail "a refused watcher still took the singleton lock"
+  pass "watch-arm: a disposable validation checkout refuses to arm"
+}
+
+
+# A running watcher whose state directory is deleted (a torn-down temporary
+# home) must exit after noticing the deletion with a logged reason, not run on
+# as an orphan (upstream #4760). Allow for a slow CI runner finishing the cycle
+# already in progress before its next FM_POLL=1 tick. A busy poll may spend
+# longer than ten seconds in subprocesses on a contended CI runner.
+test_watcher_exits_when_its_state_directory_is_removed() {
+  local dir home state fakebin armout
+  dir=$(make_case state-dir-removed)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  start_owned_watcher "$home" "$state" "$fakebin" "$armout"
+
+  rm -rf "$state"
+  wait_for_pid_gone "$WATCH_PID" 400 \
+    || { kill -TERM "$WATCH_PID" 2>/dev/null; fail "watcher pid $WATCH_PID outlived its deleted state directory"; }
+  wait_for_exit "$ARM_PID" 100 >/dev/null 2>&1 || true
+  grep -qF 'watcher: exiting - state directory' "$armout" \
+    || fail "watcher did not log the state-gone exit reason: $(cat "$armout")"
+  ! grep -q '^signal:\|^check:\|^stale:\|^heartbeat' "$armout" \
+    || fail "a state-gone exit was reported as an actionable wake: $(cat "$armout")"
+  pass "watch-arm: a watcher exits when its state directory is removed"
+}
+
+
+# The same for a deleted home whose state directory still exists elsewhere: the
+# lock is released through the ordinary cleanup so nothing stale is left behind.
+test_watcher_exits_when_its_home_is_removed() {
+  local dir home state fakebin armout
+  dir=$(make_case home-removed)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  start_owned_watcher "$home" "$state" "$fakebin" "$armout"
+
+  rm -rf "$home"
+  wait_for_pid_gone "$WATCH_PID" 400 \
+    || { kill -TERM "$WATCH_PID" 2>/dev/null; fail "watcher pid $WATCH_PID outlived its deleted home"; }
+  wait_for_exit "$ARM_PID" 100 >/dev/null 2>&1 || true
+  grep -qF 'watcher: exiting - home no longer exists' "$armout" \
+    || fail "watcher did not log the home-gone exit reason: $(cat "$armout")"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" != "$WATCH_PID" ] \
+    || fail "the exited watcher left its lock in place"
+  pass "watch-arm: a watcher exits when its home is removed"
+}
+
+
+# tests/lib.sh's exit-time reaper must stop a watcher a suite armed for a
+# temporary home, through the home-scoped stop, so no test leaves one behind.
+# The reaper is driven with a private registry so this suite's own registry
+# keeps covering the other cases.
+test_reaper_stops_a_tracked_watcher() {
+  local dir state fakebin out
+  dir=$(make_case reaper)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  start_seed_watcher "$state" "$fakebin" "$out"
+  printf '%s\n' "$state" > "$dir/registry"
+  ( FM_TEST_WATCHER_REGISTRY="$dir/registry"; fm_test_reap_watchers )
+  wait_for_exit "$SEED_PID" 100 >/dev/null 2>&1 || true
+  ! is_live_non_zombie "$SEED_PID" \
+    || { kill -TERM "$SEED_PID" 2>/dev/null; fail "reaper left the tracked watcher pid $SEED_PID running"; }
+  [ ! -e "$dir/registry" ] || fail "reaper did not consume its registry"
+  pass "watch-arm: the test reaper stops a watcher armed for a tracked temporary home"
+}
+
 test_arm_refuses_an_unusable_launch_confirm_window
 test_arm_refuses_a_disposable_validation_checkout
 test_watcher_exits_when_its_state_directory_is_removed

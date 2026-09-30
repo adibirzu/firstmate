@@ -376,7 +376,7 @@ kimi_typed_launch_file() {
 test_kimi_spawn_refuses_shared_task_temp_root() {
   local id rec out rc task_tmp launch_dir launch_file stale_file
   id="kimi-sharedtmp-z1-$$"
-  task_tmp="/tmp/fm-$id"
+  task_tmp="/tmp/fm-$(id -u)-$id"
   KIMI_RUNTIME_TASK_TMP=$task_tmp
   rm -rf "$task_tmp"
   mkdir "$task_tmp"

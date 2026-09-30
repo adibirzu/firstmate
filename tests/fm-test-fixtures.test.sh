@@ -285,16 +285,22 @@ test_spawn_home_layout() {
 # redirects only FM_STATE_OVERRIDE.
 make_bound_secondmate() {  # <dir>
   local dir=$1
-  mkdir -p "$dir/parent/state" "$dir/home" "$dir/state"
+  mkdir -p "$dir/parent/state" "$dir/home" "$dir/state" "$dir/fakebin"
   printf 'mate-x\n' > "$dir/home/.fm-secondmate-home"
   printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
     "$dir/parent" > "$dir/home/.fm-secondmate-parent"
-  fm_write_meta "$dir/state/task-x1.meta" "window=firstmate:fm-task-x1" "kind=ship" "mode=no-mistakes"
+  # Upstream named-head gate needs a pushed copy; keep this fixture offline.
+  fm_git_init_commit "$dir/wt"
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$(git -C "$dir/wt" rev-parse HEAD)"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/fakebin/gh"
+  chmod +x "$dir/fakebin/gh"
+  fm_write_meta "$dir/state/task-x1.meta" "window=firstmate:fm-task-x1" \
+    "kind=ship" "mode=no-mistakes" "project=x" "worktree=$dir/wt"
 }
 
 # The PR-ready publisher run with only its state redirected, as the suites do.
 pr_check_with_state_only() {  # <dir>
-  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$1/state" \
+  PATH="$1/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$1/state" \
     "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
 }
 
@@ -322,7 +328,7 @@ test_lib_clears_ambient_live_home() {
       for v in FM_HOME FM_PUBLIC_FOLLOWUP_PRIMARY_HOME FM_STATE_OVERRIDE FM_ROOT_OVERRIDE; do
         [ -z "${!v+set}" ] || echo "$v survived: ${!v}"
       done
-      FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$2/state" \
+      PATH="$2/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$2/state" \
         "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
     ' _ "$ROOT" "$dir" > "$dir/child.out" 2>&1 \
     || fail "fm-pr-check failed in a test that sourced lib.sh: $(cat "$dir/child.out")"

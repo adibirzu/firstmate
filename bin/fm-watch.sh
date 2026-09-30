@@ -294,6 +294,24 @@ POLL=${FM_POLL:-15}                   # seconds between cycles
 # This recomputes the library default above now that the real configured
 # POLL is known.
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-$(fm_poll_derived_grace "$POLL")}}
+[ "$WATCHER_STALE_GRACE" -gt 0 ] \
+  || WATCHER_STALE_GRACE=$(fm_poll_derived_grace "$POLL")
+# Sub-cadence for the in-cycle beats: a boundary beat re-touches the beacon only
+# once it has aged this far, so a busy cycle does not churn the mtime on every
+# window while the gap between touches stays a small fraction of the stale
+# grace. Clamped to a third of the resolved grace (floor 1s) so beats always
+# land with margin; a watcher wedged inside one stage cannot beat and still
+# crosses grace, so the stale verdict keeps its meaning.
+WATCHER_BEAT_SUBCADENCE=${FM_WATCHER_BEAT_SUBCADENCE:-60}
+case "$WATCHER_BEAT_SUBCADENCE" in
+  ''|*[!0-9]*) WATCHER_BEAT_SUBCADENCE=60 ;;
+esac
+[ "$WATCHER_BEAT_SUBCADENCE" -ge 1 ] \
+  || WATCHER_BEAT_SUBCADENCE=60
+_beat_subcadence_cap=$(( WATCHER_STALE_GRACE / 3 ))
+[ "$_beat_subcadence_cap" -ge 1 ] || _beat_subcadence_cap=1
+[ "$WATCHER_BEAT_SUBCADENCE" -le "$_beat_subcadence_cap" ] \
+  || WATCHER_BEAT_SUBCADENCE=$_beat_subcadence_cap
 # Hard bound on a live holder's beacon age. Under it a re-arm refuses and asks
 # for inspection (the grace above); at or past it the re-arm evicts the holder
 # instead, because a watcher whose beacon has stalled that long is not polling
@@ -869,6 +887,35 @@ secondmate_oldest_queue_row() {  # <queue-path>
   ' "$queue" 2>/dev/null || true
 }
 
+# 0 when a local secondmate is HEALTHY IDLE: its steering inbox has nothing
+# unhandled AND its own pane is affirmatively parked at an empty prompt. An aged
+# row in its foreign queue then cannot mean a wedged turn - the mate simply has
+# nothing to drain - so secondmate_wake_stall_tick must not escalate it. Both
+# halves must be POSITIVELY proven: the inbox must be absent or a readable real
+# directory, and the composer must read exactly empty; anything else (busy,
+# pending, unreadable) returns 1 so a genuine freeze still escalates.
+secondmate_healthy_idle() {  # <task> <meta>
+  local task=$1 meta=$2 window backend inbox tail40
+  inbox="$STATE/$task.inbox"
+  if [ -e "$inbox" ] || [ -L "$inbox" ]; then
+    [ -d "$inbox" ] && [ ! -L "$inbox" ] && [ -r "$inbox" ] || return 1
+  fi
+  fm_task_inbox_oldest_unhandled "$STATE" "$task" >/dev/null 2>&1 && return 1
+  window=$(fm_backend_target_of_meta "$meta")
+  [ -n "$window" ] || return 1
+  backend=$(fm_backend_of_meta "$meta")
+  # Composer first: unless the prompt is affirmatively empty there is nothing to
+  # prove idle, so return without paying for the busy capture. When it IS empty,
+  # the unbounded busy proof matters (not the time-bounded active-turn gate): a
+  # pane still generating past FM_BUSY_TURN_MAX_SECS is not idle, and the caller
+  # treats that crossed bound as a possible wedge. An unreadable pane cannot
+  # prove idle either, so decline.
+  [ "$(fm_backend_composer_state "$backend" "$window" 2>/dev/null)" = empty ] || return 1
+  tail40=$(fm_backend_capture "$backend" "$window" 40 2>/dev/null) || return 1
+  window_is_busy "$window" "$tail40" && return 1
+  return 0
+}
+
 # 0 iff <task> is demonstrably inside an active turn, through the watcher's own
 # busy-state knowledge: an exact busy verdict from the semantic contract, bounded
 # by the same BUSY_TURN_MAX_SECS that stops a busy pane from proving liveness
@@ -963,9 +1010,6 @@ secondmate_ring_to_drain() {  # <task> <window>
 # foreign queue.
 secondmate_wake_stall_tick() {
   local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
-  local meta task kind remote_host home queue row epoch seq row_key marker progress_marker progress observed_at observed_key
-  local receipt receipt_dir notify_key queued idle reason episode_alerted
-  local mate_window
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker ring_marker progress observed_at observed_key
   local receipt receipt_dir notify_key queued idle reason episode_alerted already_rung w
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
@@ -1031,14 +1075,12 @@ EOF
     # prompt is healthy idle, not a stalled wake loop: it has nothing to drain,
     # so an aged row cannot mean a wedged turn. A genuinely frozen or unreadable
     # pane falls through to the escalation below.
-    mate_window=$(fm_backend_target_of_meta "$meta")
+    w=$(fm_backend_target_of_meta "$meta")
     if secondmate_healthy_idle "$task" "$meta"; then
       # No active episode (the guard above already continued when one was
       # alerted), so there is nothing to clear: just decline this escalation.
       continue
     fi
-    ! secondmate_in_active_turn "$task" "$mate_window" || continue
-    w=$(fm_backend_target_of_meta "$meta")
     ! secondmate_in_active_turn "$w" "$idle" || continue
     already_rung=0
     if [ -e "$ring_marker" ] || [ -L "$ring_marker" ]; then
@@ -2551,6 +2593,24 @@ context_hygiene_tick() {
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
+
+# beat_watcher_clock: advance the liveness beacon at a stage boundary WITHIN a
+# poll cycle, gated by WATCHER_BEAT_SUBCADENCE so a busy cycle does not churn
+# the mtime on every window. Only the watcher's own loop calls this, and only
+# where a stage actually returned, so the beacon keeps meaning "this loop is
+# getting through its work" rather than "some helper is alive": a watcher wedged
+# inside one probe reaches no further boundary and still crosses the stale grace.
+# docs/turnend-guard.md "Guard grace and the poll cadence" owns the beacon
+# contract. The stages that carry explicit time bounds own them at their call
+# sites (bin/fm-timeout-lib.sh supplies them: the remote per-home observe and
+# each .check.sh); the remaining stages are beaten between but not timed, so a
+# beat there only proves the stage returned, which is what keeps the stale
+# verdict meaningful for a watcher wedged inside one call.
+beat_watcher_clock() {
+  [ "$(age_of "$STATE/.last-watcher-beat")" -ge "$WATCHER_BEAT_SUBCADENCE" ] \
+    && touch "$STATE/.last-watcher-beat"
+  return 0
+}
 
 # FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS is validated here, at arm time, and an
 # unusable value refuses to arm. This is deliberately NOT symmetry with the

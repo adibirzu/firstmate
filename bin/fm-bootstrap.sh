@@ -1387,6 +1387,9 @@ detect_local_tools() {
       || missing_tool_diagnostic "$t"
   done
   for t in $COMMON_TOOLS; do
+    # lavish-axi is optional presentation: a missing or stale copy reports
+    # PRESENTATION_UNAVAILABLE below so nonvisual work can still proceed.
+    [ "$t" = lavish-axi ] && continue
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
   # The treehouse lease-support upgrade check is only relevant when the resolved
