@@ -2248,7 +2248,7 @@ ${context.command}
       return outcomesRenderShell();
     },
     renderCall: (args, theme, context) => {
-      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+      if (calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
       }
       if (calmHides("assistant-tool-call")) return new Container();
@@ -2257,7 +2257,7 @@ ${context.command}
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
-      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+      if (calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
       }
       if (calmHides("tool-result")) return new Container();
@@ -2316,7 +2316,7 @@ ${context.command}
       return outcomesRenderShell();
     },
     renderCall: (args, theme, context) => {
-      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+      if (calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
       }
       if (calmHides("assistant-tool-call")) return new Container();
@@ -2325,7 +2325,7 @@ ${context.command}
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
-      if (!calmPresentation.active || calmPresentation.stockExportRendering) {
+      if (calmPresentation.stockExportRendering) {
         throw new Error("Use Pi stock export rendering");
       }
       if (calmHides("tool-result")) return new Container();

@@ -1216,12 +1216,6 @@ test_portable_shard_union_and_coverage_guard() {
   # No duplicates across the four partitions.
   [ "$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort | uniq -d | wc -l | tr -d ' ')" = "0" ] \
     || fail "lanes must not duplicate scripts"
-  # LPT order: first script of shard 1 is the longest proven script by the
-  # CI-measured maxima the shards are balanced from
-  # (docs/fm-test-portable-shards.md), not by the local isolation proof.
-  first=$(printf '%s\n' "$s1" | head -n 1)
-  [ "$first" = "tests/fm-captain-hold-lifecycle.test.sh" ] \
-    || fail "shard 1 must start with the longest proven script, got $first"
   # LPT execution order, asserted against the runner's own measured schedule
   # rather than against a script name: naming the current longest script here is
   # what let the recorded lane duration go stale unnoticed in the first place.
@@ -1341,7 +1335,9 @@ test_portable_serial_packing_budget_boundary() {
   mkdir -p "$repo/bin" "$repo/tests"
   # Preserve the real inventory and packing policy without executing suites.
   # Only the fixture's measured timing input changes at the boundary.
+  # Nested fork tests (tests/federation/) need their parent dirs created.
   while IFS= read -r script; do
+    mkdir -p "$repo/$(dirname "$script")"
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
   done < <("$RUNNER" --list --all)
 

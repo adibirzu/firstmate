@@ -1352,7 +1352,7 @@ unit_quiet_check_and_enter_shims() {
   local st out rc
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-quiet-shim.XXXXXX")
   mkdir -p "$st/state" "$st/config"
-  printf 'off\n' > "$st/config/supervision-host"
+  : > "$st/config/supervision-host-off"
   out=$(FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_CONFIG_OVERRIDE="$st/config" \
     "$LAUNCH" quiet-check 2>&1)
   rc=$?
