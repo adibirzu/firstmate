@@ -2114,6 +2114,25 @@ ok - live cursor startup guard verified 2 live surface(s)
 The portable regressions are the login, unrecognized-screen, dead-login, and indeterminate-probe spawn runs in `tests/fm-cursor-submit-confirm.test.sh` and the probe, gate, and multi-claimant binding checks in `tests/fm-cursor-harness.test.sh`.
 Rerun the guard after the login is restored: the expected output is then a `ready` final screen with a non-refusing probe, and the "gates seen" note records whether this build still shows the trust dialog or the sandbox intro under `--trust --yolo`.
 
+#### adi1, cursor-agent 2026.10.01-e373342, live login
+
+The same fleet failure was reported from adi1 (Ubuntu 6.17 aarch64, Herdr 0.9.1) on 2026-10-02 with a working login, so the login alone did not explain it.
+A bare launch there reached the composer in two seconds, and the guard's first run against that build failed in a different way: the plain row `→ Plan, search, build anything` was on screen, but the cursorless styled classifier did not read the 2026.10.01 composer as `empty` (the row now sits between half-block rules drawn in `38;2;21;21;21`, with a 256-colour `48;5;233` background in tmux). `cursor_pane_is_ready` in `bin/fm-spawn.sh` reads the plain placeholder row and admitted the pane, so the guard now reads that same plain row through the shared idle-placeholder owner and reports the cursorless classifier's verdict as a note; teaching the classifier the 2026.10.01 shape is separate composer work.
+Two real `bin/fm-spawn.sh <id> <scratch-project> --scout --harness cursor --backend herdr` runs from a throwaway home inside an `fm-lab-` session, one with presentation spaces off and one on, both passed the readiness gate and typed the brief, and both then reported `cursor seeded brief did not start a confirmed first turn (submit verdict: confirmation-failed)` while the pane showed `ctrl+c to stop` and the model was answering.
+A timed launch explains it: after Enter on a 25-second turn the footer read busy from the first second, the transcript's opening `role:user` record did not exist until `t=8s`, and the `turn_ended` close landed at `t=37s`.
+
+```text
+t=1s busy=1 transcripts:
+t=7s busy=1 transcripts:
+t=8s busy=1 transcripts: acad7e5e-....jsonl:1l
+t=34s busy=1 transcripts: acad7e5e-....jsonl:2l
+t=37s busy=0 transcripts: acad7e5e-....jsonl:4l
+```
+
+The 2026-08-11 record that the transcript opens the turn at once no longer holds, so `cursor_first_turn_started` now accepts either the transcript fold or the rendered busy footer inside a bounded grace window and still refuses when neither appears (`tests/fm-cursor-submit-confirm.test.sh` pins both orders with `FM_FAKE_CURSOR_TRANSCRIPT=never`).
+With that change two consecutive lab spawns on adi1 reported `spawned cursorlab9 harness=cursor kind=scout window=fm-lab-fm-cursor-spawn-141132-5994:w1:p2 ...` and the same for `cursorlab10`, each in about 40 seconds with presentation spaces on; the pane ran the brief (`git log`, `ls`, a reply) and the transcript fold read `idle cursor-transcript` once the turn closed.
+The readiness timeout the admiral reported from adi1 (`trust answered: 0, sandbox-intro answered: 0`) did not reproduce in either lab run; the gate's timeout detail now names the last screen it saw, so the next occurrence is attributable from its status line alone.
+
 ### End-to-end
 
 A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux` on a real cursor worker and driven to completion.

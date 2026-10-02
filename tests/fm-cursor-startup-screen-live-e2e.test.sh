@@ -143,6 +143,24 @@ classify_cursorless() {  # <styled-screen>
   printf '%s' "$verdict"
 }
 
+# The plain placeholder row, read through the shared idle-placeholder owner
+# exactly as bin/fm-spawn.sh's readiness gate reads it. cursor-agent
+# 2026.10.01-e373342 draws the composer between half-block rules on a
+# 256-colour background that the cursorless styled classifier does not yet
+# read as empty, so the plain row is the ready signal here and the classifier's
+# verdict is reported as a note for the composer owners.
+plain_idle_row() {  # <plain-screen>
+  local row
+  while IFS= read -r row; do
+    row=${row#"${row%%[![:space:]]*}"}
+    case "$row" in "→ "*) row=${row#"→ "} ;; *) continue ;; esac
+    printf '%s\n' "$row" | grep -qE "$FM_COMPOSER_IDLE_RE_DEFAULT" && return 0
+  done <<EOF
+$1
+EOF
+  return 1
+}
+
 budget=${FM_CURSOR_STARTUP_LIVE_POLLS:-45}
 i=0
 final=''
@@ -150,6 +168,7 @@ plain=''
 seen_gates=''
 trust_answered=0
 sandbox_answered=0
+cursorless_verdict=''
 while [ "$i" -lt "$budget" ]; do
   plain=$(tm capture-pane -p -t "$SESSION:$WIN" 2>/dev/null)
   styled=$(tm capture-pane -e -p -t "$SESSION:$WIN" 2>/dev/null | tail -n "$FM_COMPOSER_CAPTURE_LINES")
@@ -178,7 +197,8 @@ while [ "$i" -lt "$budget" ]; do
         final=ready
         break
       fi
-      if [ "$(classify_cursorless "$styled")" = empty ]; then
+      cursorless_verdict=$(classify_cursorless "$styled")
+      if [ "$cursorless_verdict" = empty ] || plain_idle_row "$plain"; then
         final=ready
         break
       fi
@@ -189,6 +209,7 @@ while [ "$i" -lt "$budget" ]; do
 done
 
 note "cursor-agent ($VERSION): gates seen before the final screen:${seen_gates:- none}"
+[ "$final" != ready ] || note "cursor-agent ($VERSION): ready read from the plain placeholder row; cursorless styled classifier verdict=${cursorless_verdict:-unread}"
 
 if [ -z "$final" ]; then
   printf '# cursor-agent pane tail at failure:\n' >&2
