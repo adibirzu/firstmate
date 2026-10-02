@@ -3095,17 +3095,52 @@ fm_backend_herdr_send_key() {  # <target> <key>
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" "$key" >/dev/null 2>&1
 }
 
+# fm_backend_herdr_control_byte: the raw terminal control BYTE behind one of the
+# reset keys, or nonzero for a key with no control byte here.
+#
+# Verified herdr 0.9.1 (docs/verification/runtime-backends.md "Bare-shell reset
+# keys"): `pane send-keys` encodes a named key in whichever keyboard protocol
+# the pane's terminal has active, and those flags outlive the agent that set
+# them. A pane whose agent pushed the kitty keyboard protocol and then exited -
+# leaving the bare shell this reset exists for - still has them set, so
+# `ctrl+c` arrived as ESC [ 99 ; 5 : 1 u and `ctrl+u` as ESC [ 117 ; 5 : 1 u
+# (captured byte-exact off a real pane with `cat` as the foreground process). A
+# bare /bin/sh decodes neither, so the keys landed as literal text, the cwd proof
+# below never moved, and the guarded reset refused every relaunch retry.
+fm_backend_herdr_control_byte() {  # <key>
+  case "$1" in
+    C-c|c-c|ctrl+c|Ctrl+C) printf '\003' ;;
+    C-u|c-u|ctrl+u|Ctrl+U) printf '\025' ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_backend_herdr_send_control_byte: deliver one reset key to a pane as its raw
+# control byte instead of as a named key. `pane send-text` writes the caller's
+# bytes verbatim and is not protocol-sensitive, which is what makes this correct
+# for a pane whose foreground program cannot decode a keyboard-protocol
+# sequence. Named keys stay right everywhere else: every other send-keys caller
+# targets an agent composer, which does decode them, and Enter is unaffected
+# either way (verified as a plain newline under the same active flags).
+fm_backend_herdr_send_control_byte() {  # <target> <key>
+  local target=$1 byte
+  byte=$(fm_backend_herdr_control_byte "$2") || return 1
+  fm_backend_herdr_send_literal "$target" "$byte"
+}
+
 # fm_backend_herdr_reset_shell: the Herdr analogue of
 # fm_backend_tmux_reset_shell (see bin/backends/tmux.sh): ctrl+c aborts a
 # continuation prompt or half-typed line, ctrl+u drops a remaining line, and the
 # shell must execute a `cd <reset-dir>` proven by the pane's foreground cwd.
 # Herdr exposes no pane respawn, so the same key-based reset is the
 # deterministic option; the cwd proof is what distinguishes a real reset from a
-# command the continuation swallowed.
+# command the continuation swallowed. The two keys go out as raw control bytes
+# (fm_backend_herdr_send_control_byte) because the bare shell on the far side
+# cannot decode the keyboard-protocol encoding a named key would get.
 fm_backend_herdr_reset_shell() {  # <target> <reset-dir>
   local target=$1 dir=$2 expected raw observed i=0
-  fm_backend_herdr_send_key "$target" C-c || return 1
-  fm_backend_herdr_send_key "$target" C-u || return 1
+  fm_backend_herdr_send_control_byte "$target" C-c || return 1
+  fm_backend_herdr_send_control_byte "$target" C-u || return 1
   fm_backend_herdr_send_text_line "$target" "cd $(fm_backend_shell_quote "$dir")" || return 1
   expected=$(cd "$dir" 2>/dev/null && pwd -P) || expected=$dir
   while [ "$i" -lt 20 ]; do

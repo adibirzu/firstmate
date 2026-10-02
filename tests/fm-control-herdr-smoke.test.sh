@@ -212,6 +212,149 @@ RESET_OBSERVED=$(fm_backend_herdr_current_path "$SESSION:$PANE_ID" 2>/dev/null |
   || fail "the herdr shell reset did not move the pane cwd to '$RESET_EXPECTED' (got '$RESET_OBSERVED')"
 pass "real herdr: the shell reset clears an inherited continuation and proves the cwd"
 
+# --- the keyboard-protocol half of that reset, against the real binary --------
+#
+# The incident this pins: `pane send-keys` encodes a named key in whichever
+# keyboard protocol the pane's terminal has active, and those flags outlive the
+# agent that set them. A pane whose agent pushed the kitty keyboard protocol and
+# then exited - exactly the bare shell this reset exists for - keeps them, so
+# ctrl+c arrived as ESC [ 99 ; 5 : 1 u and ctrl+u as ESC [ 117 ; 5 : 1 u
+# (captured byte-exact off a real pane with `cat` in the foreground, herdr
+# 0.9.1). A bare shell decodes neither, so both keys landed as literal text, the
+# reset's `cd` proof never moved, and every relaunch retry was refused.
+#
+# Which encoding herdr picks is herdr's own decision, so it is pinned here
+# end-to-end against the real binary rather than against a stub, and the same
+# pane is driven all four ways so the check cannot pass against the defect: the
+# reset is proven to work before the protocol is pushed, proven to fail once it
+# is, and proven to work again through the raw-byte path that replaced the named
+# keys. A pane read alone would only say a shell is idle.
+#
+# Only the recording step below reads how the shell renders an unknown key
+# sequence. Every verdict here is a line-editor-independent fact about whether
+# the reset's bytes reached the shell, so the block holds on any line editor
+# that keeps a heredoc continuation.
+pane_cwd() {
+  local raw
+  raw=$(fm_backend_herdr_current_path "$SESSION:$PANE_ID" 2>/dev/null || true)
+  if [ -n "$raw" ]; then
+    cd "$raw" 2>/dev/null && pwd -P || printf '%s' "$raw"
+  fi
+}
+
+# Positive proofs poll the way the production reset does, so a loaded host
+# cannot fail a check whose reset actually worked. Negative proofs keep a single
+# read: polling there could only make them stricter, never looser.
+wait_pane_cwd() {
+  local want i=0
+  want=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  while [ "$i" -lt 20 ]; do
+    [ "$(pane_cwd)" = "$want" ] && return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  return 1
+}
+
+CONTINUE_PANE() {
+  fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cat <<'FMEOF'" \
+    || fail "could not type the heredoc opener into the herdr pane"
+  sleep 1
+  [ "$(fm_backend_agent_state herdr "$SESSION:$PANE_ID")" = dead ] \
+    || fail "a bare herdr shell in a continuation should classify dead, got '$(fm_backend_agent_state herdr "$SESSION:$PANE_ID")'"
+}
+
+# Baseline: with no keyboard protocol active, a named-key reset clears the
+# continuation. This is what makes the later failure attributable to the
+# encoding rather than to the fixture or to the reset itself.
+PRE_RESET_DIR="$SCRATCH/shell-reset-protocol-off"
+mkdir -p "$PRE_RESET_DIR"
+CONTINUE_PANE
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-c || fail "could not deliver the baseline C-c"
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-u || fail "could not deliver the baseline C-u"
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cd $(fm_backend_shell_quote "$PRE_RESET_DIR")" \
+  || fail "could not type the baseline reset cd"
+wait_pane_cwd "$PRE_RESET_DIR" \
+  || fail "the baseline named-key reset should move the pane cwd before the keyboard protocol is active; it read '$(pane_cwd)', so a later failure could not be attributed to the protocol"
+pass "real herdr: with no keyboard protocol active, a named-key reset clears the continuation and proves the cwd"
+
+# The pane's own output pushes the kitty keyboard protocol, which is the state a
+# departed agent leaves behind. Nothing else here simulates it.
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "printf '\\033[>3u'" \
+  || fail "could not make the herdr pane's terminal push the keyboard protocol"
+sleep 1
+
+# The defect, observed: the same named C-c now arrives as visible CSI-u text at
+# the prompt instead of interrupting the line. Recorded as evidence only - a line
+# editor is free to swallow an unknown key sequence instead of showing it, so a
+# missing trace must not stop the test. The named-key reset failing below is the
+# precondition, and it fails on any line editor.
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-c || fail "could not deliver the post-protocol C-c"
+sleep 1
+PROTOCOL_TAIL=$(fm_backend_herdr_capture "$SESSION:$PANE_ID" 6 | tail -2)
+case "$PROTOCOL_TAIL" in
+  *":1u"*)
+    pass "real herdr: with the keyboard protocol pushed, a named ctrl+c lands as visible CSI-u text, not as a raw interrupt (evidence: '$PROTOCOL_TAIL')"
+    ;;
+  *)
+    printf '# note: this shell renders no visible CSI-u text for the post-protocol ctrl+c (last lines: %s); the verdict below rests on the named-key reset failing, not on this\n' "$PROTOCOL_TAIL"
+    ;;
+esac
+
+NAMED_RESET_DIR="$SCRATCH/shell-reset-named-keys"
+mkdir -p "$NAMED_RESET_DIR"
+CONTINUE_PANE
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-c || fail "could not deliver the named-key reset C-c"
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-u || fail "could not deliver the named-key reset C-u"
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cd $(fm_backend_shell_quote "$NAMED_RESET_DIR")" \
+  || fail "could not type the named-key reset cd"
+sleep 1
+NAMED_RESET_OBSERVED=$(pane_cwd)
+NAMED_RESET_EXPECTED=$(cd "$NAMED_RESET_DIR" && pwd -P)
+[ "$NAMED_RESET_OBSERVED" != "$NAMED_RESET_EXPECTED" ] \
+  || fail "the named-key reset unexpectedly cleared the continuation under the active keyboard protocol; the regression this pins is not reproducing, so the fix below is unproven"
+pass "real herdr: under the active keyboard protocol the named-key reset leaves the continuation standing and the cwd never moves - the exact refusal the relaunch hit"
+
+# The fix, on the same pane, still in that continuation: raw control bytes
+# clear it and the cwd proof lands.
+FIXED_RESET_DIR="$SCRATCH/shell-reset-raw-bytes"
+mkdir -p "$FIXED_RESET_DIR"
+fm_backend_reset_shell herdr "$SESSION:$PANE_ID" "$FIXED_RESET_DIR" \
+  || fail "the raw-control-byte reset did not recover a pane the named-key reset left inside a continuation"
+FIXED_RESET_EXPECTED=$(cd "$FIXED_RESET_DIR" && pwd -P)
+wait_pane_cwd "$FIXED_RESET_DIR" \
+  || fail "the raw-control-byte reset did not move the pane cwd to '$FIXED_RESET_EXPECTED' (got '$(pane_cwd)')"
+pass "real herdr: the raw-control-byte reset clears the same continuation and proves the cwd where the named-key reset could not"
+
+# And once more from a fresh continuation, so the fixed path is not credited
+# only with cleaning up after the failed one.
+CONTINUE_PANE
+fm_backend_reset_shell herdr "$SESSION:$PANE_ID" "$FIXED_RESET_DIR" \
+  || fail "the raw-control-byte reset did not clear a fresh continuation under the active keyboard protocol"
+wait_pane_cwd "$FIXED_RESET_DIR" \
+  || fail "the raw-control-byte reset left the pane cwd at '$(pane_cwd)' instead of '$FIXED_RESET_EXPECTED'"
+pass "real herdr: the raw-control-byte reset clears a fresh continuation under the active keyboard protocol"
+
+# Restore the pane to the state it was in before this block pushed the protocol,
+# so the rest of this smoke test runs against a normal terminal instead of
+# inheriting flags no later step is meant to be reading through.
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "printf '\\033[<u'" \
+  || fail "could not pop the keyboard protocol off the herdr pane's terminal"
+sleep 1
+# Prove the pop landed by repeating the baseline: a raw-byte reset would clear
+# this continuation either way, so only a named-key reset can show the flags are
+# gone.
+POPPED_DIR="$SCRATCH/shell-reset-protocol-popped"
+mkdir -p "$POPPED_DIR"
+CONTINUE_PANE
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-c || fail "could not deliver the post-pop C-c"
+fm_backend_herdr_send_key "$SESSION:$PANE_ID" C-u || fail "could not deliver the post-pop C-u"
+fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "cd $(fm_backend_shell_quote "$POPPED_DIR")" \
+  || fail "could not type the post-pop reset cd"
+wait_pane_cwd "$POPPED_DIR" \
+  || fail "a named-key reset still fails after popping the keyboard protocol, so the pane is still carrying this block's flags and the later checks below would read through them"
+pass "real herdr: the keyboard protocol is popped and a named-key reset works again, so the rest of this smoke test sees a normal terminal"
+
 if OUT=$(run_control hsmoke interrupt 2>&1); then
   fail "interrupt should refuse when herdr reports no agent on the pane: $OUT"
 fi

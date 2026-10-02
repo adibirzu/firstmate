@@ -1185,6 +1185,39 @@ ok - real herdr: an agent that does not stop fails closed instead of being repor
 The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, so registering and not registering an agent on a plain shell pane exercises exactly the gate every lifecycle verb depends on, with no real agent launched.
 That command is the guard that refreshes this record; run it after every Herdr upgrade rather than trusting the version above.
 
+### Bare-shell reset keys
+
+Measured 2026-10-02 on Linux aarch64 against Herdr 0.9.1 (protocol 22) in an isolated `fm-lab-` session.
+
+`pane send-keys` encodes a named key in whichever keyboard protocol the pane's terminal has active, and those flags outlive the agent that set them, because a departed agent never pops them.
+A pane whose agent pushed the kitty keyboard protocol and then exited - the bare shell `fm_backend_reset_shell` exists to clear - therefore still has them set, and a named key reaches that shell as a keyboard-protocol sequence a bare `/bin/sh` cannot decode.
+The bytes below are what the pane actually received, recorded with `cat` as its foreground process under `stty raw -echo`:
+
+```sh
+herdr pane run <pane> "printf '\033[>3u'" --session <name>
+herdr pane run <pane> "stty raw -echo; cat > /tmp/cap" --session <name>
+herdr pane send-keys <pane> ctrl+c --session <name>
+herdr pane send-keys <pane> ctrl+u --session <name>
+herdr pane send-text <pane> "$(printf '\003')" --session <name>
+herdr pane send-text <pane> "$(printf '\025')" --session <name>
+od -An -c /tmp/cap
+```
+
+```text
+ 033   [   9   9   ;   5   :   1   u 033   [   1   1   7   ;   5
+   :   1   u 003 025
+```
+
+`pane send-keys` produced `ESC [ 99 ; 5 : 1 u` and `ESC [ 117 ; 5 : 1 u` (the kitty functional-key encodings for ctrl+c and ctrl+u, with the event-type field the pushed flags also asked for), while `pane send-text` passed `003` and `025` through as plain bytes.
+`pane send-keys <pane> enter` was measured raw (a plain `\n`) under the same active flags, so submission is not affected; `escape` was measured as `ESC [ 2 7 u` and is protocol-sensitive like the two control keys.
+Every other `send-keys` caller targets an agent composer, which does decode that encoding, so only the bare-shell reset changed to the raw-byte path (`fm_backend_herdr_send_control_byte`).
+
+Observable consequence of the encoding, also on a real pane: under the active flags a named-key reset leaves a heredoc continuation standing, the following `cd` is appended to it, and the pane's cwd never moves, which is the reset's refusal condition; the raw-byte reset clears the same continuation and the cwd proof lands.
+That end-to-end case ran against a pane running `bash`, and every verdict in it is a line-editor-independent fact about whether the reset's bytes reached the shell, so it holds for a pane running any shell that keeps a heredoc continuation; only the recording of the visible CSI-u text above depends on how a given shell renders an unknown key sequence.
+`tests/fm-control-herdr-smoke.test.sh` is the guard that refreshes this record and drives one pane all four ways, so it cannot pass against the defect: the named-key reset is proven to work before the protocol is pushed, proven to fail once it is, and the raw-byte reset proven to work again from a fresh continuation.
+The smoke test pops the keyboard protocol again afterwards and proves it landed by repeating the baseline named-key reset, so its remaining checks read through a normal terminal instead of inheriting this block's flags.
+`tests/fm-backend-herdr.test.sh` pins the same rule portably against a fake Herdr CLI, asserting the reset asks for the raw `0x03`/`0x15` bytes and never for a named `ctrl` key.
+
 ### Endpoint recovery classification
 
 Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) in an isolated `fm-lab-` session.

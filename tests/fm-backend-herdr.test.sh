@@ -3790,6 +3790,63 @@ test_normalize_key() {
   pass "fm_backend_herdr_normalize_key: Enter/Escape/C-c map to herdr's verified enter/escape/ctrl+c"
 }
 
+# The defect these two cases pin: `pane send-keys` encodes a named key in the
+# keyboard protocol the pane's terminal has active, and a pane whose agent
+# enabled the kitty keyboard protocol and then exited keeps those flags while a
+# bare shell sits behind it. The reset keys then reached /bin/sh as literal
+# ESC [ 99 ; 5 : 1 u text, so the guarded reset refused every relaunch retry.
+# The reset must ask for the raw control bytes through the protocol-independent
+# text path instead. The byte-exact proof against the real binary lives in
+# tests/fm-control-herdr-smoke.test.sh; these two run everywhere.
+test_control_byte_maps_reset_keys_to_raw_control_bytes() {
+  local hex
+  hex=$( . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_control_byte C-c | od -An -tx1
+    fm_backend_herdr_control_byte c-c | od -An -tx1
+    fm_backend_herdr_control_byte ctrl+c | od -An -tx1
+    fm_backend_herdr_control_byte C-u | od -An -tx1
+    fm_backend_herdr_control_byte ctrl+u | od -An -tx1
+  )
+  assert_equals " 03
+ 03
+ 03
+ 15
+ 15" "$hex" "every spelling of C-c and C-u must resolve to exactly the raw 0x03/0x15 bytes, so no spelling can quietly resolve to something else"
+  ( . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_control_byte Enter
+  ) && fail "Enter has no raw control byte here and must not resolve to one"
+  pass "fm_backend_herdr_control_byte: C-c and C-u resolve to the raw 0x03/0x15 bytes, and a key with no control byte refuses"
+}
+
+test_reset_shell_sends_raw_control_bytes_and_no_named_keys() {
+  local dir log resp fb
+  dir="$TMP_ROOT/reset-shell-raw"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" RESET_DIR="$dir" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      # Stand in for the real cwd read so the proof loop settles on its first
+      # poll instead of spending the full retry budget on a fake pane.
+      fm_backend_herdr_current_path() { printf "%s\n" "$RESET_DIR"; }
+      fm_backend_herdr_reset_shell default:w1:p2 "$RESET_DIR"
+    ' "$ROOT"
+  expect_code 0 $? "reset_shell should succeed once the cwd proof settles"
+  local logtext
+  logtext=$(cat "$log")
+  assert_contains "$logtext" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f'$'\003' \
+    "the reset must deliver C-c as the raw 0x03 byte through the protocol-independent text path"
+  assert_contains "$logtext" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f'$'\025' \
+    "the reset must deliver C-u as the raw 0x15 byte through the protocol-independent text path"
+  # The named-key path is what produced the CSI-u text the bare shell could not
+  # decode, so its absence from a bare-shell reset is the regression itself.
+  if printf '%s' "$logtext" | grep -q $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''ctrl'; then
+    fail "the bare-shell reset asked for a named ctrl key, which herdr encodes in the pane's keyboard protocol: $logtext"
+  fi
+  assert_contains "$logtext" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2'$'\x1f''cd ' \
+    "the reset must still prove the shell executes again by cd-ing into the reset directory"
+  pass "fm_backend_herdr_reset_shell: reset keys go out as raw 0x03/0x15, never as named keys, and the cwd proof still runs"
+}
+
 # --- capture / send_key / kill / current_path --------------------------------
 
 test_capture_calls_pane_read() {
@@ -5727,6 +5784,8 @@ test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
 test_parse_target
 test_normalize_key
+test_control_byte_maps_reset_keys_to_raw_control_bytes
+test_reset_shell_sends_raw_control_bytes_and_no_named_keys
 test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
 test_capture_preserves_pane_read_failure
