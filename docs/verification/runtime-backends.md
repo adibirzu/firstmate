@@ -2059,6 +2059,61 @@ This row is a delivery guard for submit acknowledgement only; recorded worker st
 | Skill invocation | `/<skill>`; cursor discovers firstmate's user-level skills, and `/no-mistakes` autocompleted with firstmate's own description and invoked the skill |
 | Slash popup | real: the first Enter closes the popup and a SECOND Enter submits, the same hazard as grok, covered by the submit core's retried Enter |
 
+### Startup gates and login, 2026-10-02
+
+Verified on 2026-10-02 on macOS arm64 (Darwin 25.3.0) against `cursor-agent` 2026.09.26-dd393fe (`~/.local/bin/cursor-agent`, canonical `~/.local/share/cursor-agent/versions/2026.09.26-dd393fe/cursor-agent`), launched bare with `--trust --yolo --workspace <fresh git directory>` inside an isolated `fm-lab-` Herdr session provisioned by `bin/fm-herdr-lab.sh` (Herdr 0.9.1) and again inside a private tmux server.
+The fleet had reported every cursor spawn since 2026-09-26 as `cursor did not reach a ready composer before brief delivery (trust answered: 0, sandbox-intro answered: 0)` or `cursor seeded brief did not start a confirmed first turn (submit verdict: unknown)`, and the cursor auto-update of that day was the suspected cause.
+
+The real first screen, read through `herdr pane read --source visible` eight seconds after launch and unchanged for the rest of the budget apart from the animated logo rows:
+
+```text
+                              v2026.09.26-dd393fe
+                              Press any key to log in...
+```
+
+No trust dialog, sandbox intro, or composer ever rendered, so the readiness gate's two dialog answers were never spent and the gate ran out its whole budget with no name for the screen it was looking at.
+The account was the cause, not the update:
+
+```sh
+$ cursor-agent status --format json
+{"status":"authenticated","isAuthenticated":true,"hasAccessToken":true,"hasRefreshToken":true,"message":"Logged in (unable to fetch user details)"}
+$ cursor-agent --list-models
+Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.
+$ cursor-agent -p --trust --output-format text "Reply with exactly the word OK."
+Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.
+$ security find-generic-password -s cursor-access-token | grep -E 'cdat|mdat'
+    "cdat"<timedate>=...  "20260729130818Z\000"
+    "mdat"<timedate>=...  "20260729130818Z\000"
+```
+
+The keychain tokens were stored on 2026-07-29 and never rewritten, the last successful transcript on this machine is from 2026-09-26 08:49 on the new build, and the refusal began about sixty days after the tokens were stored, so `status` is not a usable signal and the catalog command is.
+Three consequences are now enforced:
+
+1. `fm_cursor_auth_probe` in `bin/fm-cursor-lib.sh` runs the catalog command before any window or worktree exists; the vendor refusal above stops the spawn with the remedy, a catalog admits it, and any other failure is indeterminate and leaves the verdict to the gate.
+2. `fm_cursor_gate_screen` names the login, trust, and sandbox screens for `cursor_wait_for_ready` in `bin/fm-spawn.sh`; the login screen ends the wait on first sight with the remedy, and a timeout now reports the last gate seen or quotes the last row of an unrecognized screen.
+3. The spawn no longer writes a `.workspace-trusted` marker under `~/.cursor/projects`.
+   Cursor's own slug for a dotted path drops the dots (and hashes long paths), so the pre-seeded marker never suppressed anything and sat beside cursor's real entry as a second claimant of the same `workspacePath`; seven such pairs existed on this machine, every one a pooled worktree under `.fm-pools/.../.treehouse/`, with the empty twin sorting first in C collation.
+   `fm_busy_cursor_project_dirs` and `fm_busy_cursor_conversations` in `bin/fm-busy-lib.sh` now read every claimant of a workspace as one set, so an empty or stale twin never masks the pane's own turn and the one-remaining-conversation rule still settles it.
+
+The live guard that refreshes this entry launches the installed cursor-agent idle in a private tmux server, requires the first screen to resolve to a named gate or a ready composer, and pins the account probe to that screen (a login screen with a non-refusing probe, or a composer with a refusing one, is drift in one of the two signals); it submits no prompt, so it is default-on wherever cursor-agent and tmux are installed:
+
+```sh
+FM_CURSOR_STARTUP_LIVE=1 bin/fm-test-run.sh tests/fm-cursor-startup-screen-live-e2e.test.sh
+```
+
+Output on 2026-10-02, with the login still dead:
+
+```text
+# cursor-agent (2026.09.26-dd393fe): account probe refused with 'Authentication required' (stored login dead)
+# cursor-agent (2026.09.26-dd393fe): gates seen before the final screen: none
+ok - cursor-agent (2026.09.26-dd393fe): real startup screen resolves to a named state: login
+ok - cursor-agent (2026.09.26-dd393fe): login screen and the account probe's refusal agree (stored login is dead; run 'cursor-agent login' to restore the lane)
+ok - live cursor startup guard verified 2 live surface(s)
+```
+
+The portable regressions are the login, unrecognized-screen, dead-login, and indeterminate-probe spawn runs in `tests/fm-cursor-submit-confirm.test.sh` and the probe, gate, and multi-claimant binding checks in `tests/fm-cursor-harness.test.sh`.
+Rerun the guard after the login is restored: the expected output is then a `ready` final screen with a non-refusing probe, and the "gates seen" note records whether this build still shows the trust dialog or the sandbox intro under `--trust --yolo`.
+
 ### End-to-end
 
 A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux` on a real cursor worker and driven to completion.
@@ -2114,6 +2169,7 @@ Refresh this harness-dependent proof before accepting a cursor upgrade:
 
 ```sh
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
+FM_CURSOR_STARTUP_LIVE=1 bin/fm-test-run.sh tests/fm-cursor-startup-screen-live-e2e.test.sh
 ```
 
 ## Pi supervision branch

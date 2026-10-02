@@ -157,6 +157,69 @@ test_resolve_binary_prefers_stable_path() {
   pass "fm_cursor_resolve_binary: prints the stable launcher, not the versioned target"
 }
 
+# --- 1b. Account probe and startup gates -------------------------------------
+# Both verdicts come from vendor-emitted surfaces (a stderr refusal, a
+# rendered screen); the fakes below replay the exact text captured live on
+# 2026-10-02 from 2026.09.26-dd393fe, and
+# tests/fm-cursor-startup-screen-live-e2e.test.sh re-reads the real CLI.
+
+make_probe_binary() {  # <path> <body...> - a fake cursor-agent answering --list-models
+  local path=$1
+  shift
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --list-models ]; then
+SH
+  printf '%s\n' "$@" >> "$path"
+  printf 'fi\nexit 0\n' >> "$path"
+  chmod +x "$path"
+}
+
+test_auth_probe_classifies_the_vendor_refusal() {
+  local dir="$TMP_ROOT/probe" out rc
+  mkdir -p "$dir"
+  make_probe_binary "$dir/ok" \
+    "printf 'Available models\\ncursor-grok-4.5-high - Grok 4.5 High\\n'" "exit 0"
+  make_probe_binary "$dir/dead" \
+    "printf '%s\\n' \"Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.\" >&2" "exit 1"
+  make_probe_binary "$dir/blip" "printf 'Error: fetch failed\\n' >&2" "exit 1"
+  make_probe_binary "$dir/hang" "sleep 30" "exit 0"
+
+  out=$(fm_cursor_auth_probe "$dir/ok"); rc=$?
+  [ "$rc" -eq 0 ] || fail "a catalog answer must be verdict 0, got $rc"
+  case "$out" in *cursor-grok-4.5-high*) ;; *) fail "verdict 0 must print the catalog, got '$out'" ;; esac
+
+  out=$(fm_cursor_auth_probe "$dir/dead"); rc=$?
+  [ "$rc" -eq 1 ] || fail "the vendor authentication refusal must be verdict 1, got $rc"
+  [ -z "$out" ] || fail "a refusal must print no catalog, got '$out'"
+
+  out=$(fm_cursor_auth_probe "$dir/blip"); rc=$?
+  [ "$rc" -eq 2 ] || fail "an unrelated failure must be indeterminate (2), never a login verdict, got $rc"
+
+  out=$(FM_CURSOR_PROBE_TIMEOUT=1 fm_cursor_auth_probe "$dir/hang"); rc=$?
+  [ "$rc" -eq 2 ] || fail "a hung probe must be indeterminate (2) within its budget, got $rc"
+
+  # The two signals are independent: the refusal text alone never reads as a
+  # gate screen, and the gate text alone never reads as a refusal.
+  ! fm_cursor_gate_screen "Error: Authentication required." >/dev/null \
+    || fail "the stderr refusal must not classify as a rendered gate"
+  pass "fm_cursor_auth_probe: catalog is 0, the vendor refusal is 1, anything else is indeterminate"
+}
+
+test_gate_screen_names_each_startup_gate() {
+  local login trust sandbox
+  login=$(printf '                              v2026.09.26-dd393fe\n                              Press any key to log in...\n')
+  trust=$(printf '  │  ⚠ Workspace Trust Required                     │\n  │  ▶ [a] Trust this workspace                      │\n')
+  sandbox=$(printf '  │  Command Execution                                         │\n  │  Choose how commands should be executed:                   │\n')
+  [ "$(fm_cursor_gate_screen "$login")" = login ] || fail "the login screen must classify as login"
+  [ "$(fm_cursor_gate_screen "$trust")" = trust ] || fail "the trust dialog must classify as trust"
+  [ "$(fm_cursor_gate_screen "$sandbox")" = sandbox ] || fail "the sandbox intro must classify as sandbox"
+  ! fm_cursor_gate_screen "$(printf '  → Plan, search, build anything\n  Auto    Run Everything\n')" >/dev/null \
+    || fail "an idle composer must not classify as a gate"
+  ! fm_cursor_gate_screen '' >/dev/null || fail "an empty screen must not classify as a gate"
+  pass "fm_cursor_gate_screen: login, trust, and sandbox are named; composer and blank screens are not gates"
+}
+
 # --- 2. tmux pane liveness ---------------------------------------------------
 
 test_tmux_classifies_cursor_pane_without_inferring_dead() {
@@ -400,6 +463,50 @@ test_transcript_binding_matches_workspace_exactly() {
   pass "cursor transcript binding: exact recorded workspacePath only, never a prefix or rebuilt slug"
 }
 
+test_transcript_binding_reads_every_claimant_as_one_set() {
+  # Two directories claim one workspace: an empty one under the slug firstmate
+  # used to pre-seed (dots kept, sorts first in C collation) and cursor's own
+  # (dots dropped), which holds the conversation. The binding must read both
+  # as one set so glob order never decides which history is seen.
+  local state root ws proj twin out
+  state=$(make_cursor_binding dup conv-real '{"role":"user"}
+')
+  root="$TMP_ROOT/dup/projects"
+  ws="$TMP_ROOT/dup/worktree"
+  proj="$root/some-opaque-slug-dup"
+  twin="$root/a-.dotted-slug-that-sorts-first"
+  mkdir -p "$twin"
+  printf '{"trustedAt":"2026-09-30T11:28:57.000Z","workspacePath":"%s"}\n' "$ws" > "$twin/.workspace-trusted"
+  [ "$(fm_busy_cursor_project_dirs "$root" "$ws" | wc -l | tr -d ' ')" = 2 ] \
+    || fail "both claimants of the workspace must be listed"
+  [ "$(fm_busy_cursor_conversations "$root" "$ws" | cut -f1)" = conv-real ] \
+    || fail "an empty twin must contribute no conversation"
+  out=$(fm_busy_classify tmux none cursor task "$state")
+  [ "$out" = "busy cursor-transcript" ] \
+    || fail "an open turn must fold even when an empty twin sorts first, got '$out'"
+  # A conversation an earlier pane left under the twin (an older cursor slug)
+  # is recorded as prior at spawn, so the union still leaves one remaining.
+  mkdir -p "$twin/agent-transcripts/conv-old"
+  printf '{"role":"user"}\n{"type":"turn_ended","status":"success"}\n' \
+    > "$twin/agent-transcripts/conv-old/conv-old.jsonl"
+  [ "$(fm_busy_cursor_conversations "$root" "$ws" | wc -l | tr -d ' ')" = 2 ] \
+    || fail "conversations must be collected across every claimant"
+  out=$(fm_busy_classify tmux none cursor task "$state")
+  [ "$out" = "unknown cursor-transcript" ] \
+    || fail "two unrecorded conversations across twins cannot be told apart, got '$out'"
+  printf 'prior_conversation=conv-old\n' >> "$state/task.cursor-session"
+  out=$(fm_busy_classify tmux none cursor task "$state")
+  [ "$out" = "busy cursor-transcript" ] \
+    || fail "with the twin's history recorded as prior the pane's own turn must fold, got '$out'"
+  # A mirrored copy of the same conversation id never counts twice.
+  mkdir -p "$twin/agent-transcripts/conv-real"
+  cp "$proj/agent-transcripts/conv-real/conv-real.jsonl" "$twin/agent-transcripts/conv-real/conv-real.jsonl"
+  out=$(fm_busy_classify tmux none cursor task "$state")
+  [ "$out" = "busy cursor-transcript" ] \
+    || fail "the same conversation id under two claimants is one conversation, got '$out'"
+  pass "cursor transcript binding: every claimant of a workspace is read as one set, so an empty or stale twin never masks the pane's own turn"
+}
+
 test_transcript_fold_excludes_prior_conversations() {
   # A relaunch in a reused worktree must fold ITS turn, not its predecessor's.
   local state proj out
@@ -425,6 +532,8 @@ test_identity_accepts_cursor_shapes_rejects_lookalikes
 test_identity_signals_diverge
 test_verify_executable_refuses_unrelated_agent
 test_resolve_binary_prefers_stable_path
+test_auth_probe_classifies_the_vendor_refusal
+test_gate_screen_names_each_startup_gate
 test_tmux_classifies_cursor_pane_without_inferring_dead
 test_cursor_marker_outranks_inherited_claudecode
 test_harness_ancestry_rejects_cursor_named_node_script
@@ -433,4 +542,5 @@ test_transcript_fold_ignores_lifecycle_tokens_in_message_text
 test_transcript_fold_handles_partially_appended_records
 test_transcript_fold_is_unknown_never_idle_when_unresolvable
 test_transcript_binding_matches_workspace_exactly
+test_transcript_binding_reads_every_claimant_as_one_set
 test_transcript_fold_excludes_prior_conversations

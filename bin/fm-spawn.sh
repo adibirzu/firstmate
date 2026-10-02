@@ -2541,12 +2541,26 @@ cursor)
   # missing install a loud spawn refusal instead of a pane that dies with a
   # command-not-found the supervisor would read as a wedged worker.
   CURSOR_BIN=$(fm_cursor_resolve_binary) || exit 1
-  if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
-    if CURSOR_MODELS=$(fm_cursor_list_models "$CURSOR_BIN"); then
-      if ! printf '%s\n' "$CURSOR_MODELS" | fm_cursor_catalog_has_model "$MODEL"; then
-        echo "error: Cursor model '$MODEL' is not available from '$CURSOR_BIN --list-models'; choose an id listed by that command or omit --model" >&2
-        exit 1
-      fi
+  # A dead stored login is refused HERE, before any worktree or window exists:
+  # the catalog probe is the same account call the TUI makes at startup, and a
+  # refusal from it means the pane could only ever show cursor's login screen
+  # (bin/fm-cursor-lib.sh "Account and startup gates"). An indeterminate probe
+  # (timeout, unrelated failure) keeps today's tolerance and leaves the
+  # verdict to the readiness gate below, which names that screen if it shows.
+  CURSOR_AUTH_PROBE_RC=0
+  CURSOR_MODELS=$(fm_cursor_auth_probe "$CURSOR_BIN") || CURSOR_AUTH_PROBE_RC=$?
+  case "$CURSOR_AUTH_PROBE_RC" in
+    0) CURSOR_AUTH_PROBE=ok ;;
+    1)
+      echo "error: cursor-agent on this machine has no usable login: '$CURSOR_BIN --list-models' answered '$FM_CURSOR_AUTH_REQUIRED_RE_DEFAULT', so a worker would open on the login screen and never reach a composer; $(fm_cursor_auth_remedy)" >&2
+      exit 1
+      ;;
+    *) CURSOR_AUTH_PROBE=indeterminate ;;
+  esac
+  if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ "$CURSOR_AUTH_PROBE" = ok ]; then
+    if ! printf '%s\n' "$CURSOR_MODELS" | fm_cursor_catalog_has_model "$MODEL"; then
+      echo "error: Cursor model '$MODEL' is not available from '$CURSOR_BIN --list-models'; choose an id listed by that command or omit --model" >&2
+      exit 1
     fi
   fi
   ;;
@@ -4503,41 +4517,59 @@ cursor_capture() {
   fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
 }
 
-cursor_trust_dialog_present() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Fq 'Workspace Trust Required'
-}
-
-cursor_sandbox_intro_present() {  # <plain-pane-capture>
-  printf '%s\n' "$1" | grep -Fq 'Choose how commands should be executed'
-}
-
 cursor_pane_is_ready() {  # <plain-pane-capture>
   printf '%s\n' "$1" | grep -Eq '→ (Plan, search, build anything|Add a follow-up)|ctrl\+c to stop'
 }
 
+# The last non-blank row of a capture, bounded, so a timeout names what was
+# actually on screen instead of only which dialogs were not.
+cursor_last_screen_row() {  # <plain-pane-capture>
+  printf '%s\n' "$1" | grep '[^[:space:]]' | tail -1 | sed 's/^[[:space:]]*//' | cut -c1-120
+}
+
+# Polls the pane until the composer is proven ready, answering each gate
+# screen once (bin/fm-cursor-lib.sh fm_cursor_gate_screen owns which screens
+# exist). The login screen is terminal: no key reaches a composer from it, so
+# the gate stops on the first sight of it and names the remedy instead of
+# spending the whole budget to report that no dialog was answered.
 cursor_wait_for_ready() {
-  local pane i=0 max=${FM_CURSOR_READY_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} trust_answered=0 sandbox_answered=0
+  local pane gate i=0 max=${FM_CURSOR_READY_POLLS:-60} interval=${FM_CURSOR_POLL_INTERVAL:-0.5} trust_answered=0 sandbox_answered=0 last_gate=none
   while [ "$i" -lt "$max" ]; do
     pane=$(cursor_capture)
     if cursor_pane_is_ready "$pane"; then
       return 0
-    elif cursor_trust_dialog_present "$pane"; then
-      if [ "$trust_answered" -eq 0 ]; then
-        spawn_send_literal "$T" a
-        trust_answered=1
-      fi
-    elif cursor_sandbox_intro_present "$pane"; then
-      if [ "$sandbox_answered" -eq 0 ]; then
-        spawn_send_literal "$T" u
-        sandbox_answered=1
-      fi
-    elif [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]; then
-      return 0
     fi
+    gate=$(fm_cursor_gate_screen "$pane") || gate=''
+    case "$gate" in
+      login)
+        CURSOR_READY_DETAIL="cursor-agent opened on its login screen ('$FM_CURSOR_LOGIN_SCREEN_RE_DEFAULT'), so the stored Cursor login is missing or expired and no composer can appear; $(fm_cursor_auth_remedy); trust answered: $trust_answered, sandbox-intro answered: $sandbox_answered"
+        return 1
+        ;;
+      trust)
+        last_gate=trust
+        if [ "$trust_answered" -eq 0 ]; then
+          spawn_send_literal "$T" a
+          trust_answered=1
+        fi
+        ;;
+      sandbox)
+        last_gate=sandbox
+        if [ "$sandbox_answered" -eq 0 ]; then
+          spawn_send_literal "$T" u
+          sandbox_answered=1
+        fi
+        ;;
+      *)
+        if [ "$(fm_backend_composer_state "$BACKEND" "$T" "$W" 2>/dev/null)" = empty ]; then
+          return 0
+        fi
+        last_gate=unrecognized
+        ;;
+    esac
     i=$((i + 1))
     [ "$i" -ge "$max" ] || sleep "$interval"
   done
-  CURSOR_READY_DETAIL="trust answered: $trust_answered, sandbox-intro answered: $sandbox_answered"
+  CURSOR_READY_DETAIL="last screen: $last_gate (last row: '$(cursor_last_screen_row "$pane")'); trust answered: $trust_answered, sandbox-intro answered: $sandbox_answered"
   return 1
 }
 
@@ -5217,35 +5249,27 @@ EOF
     # conversation instead of its predecessor's. The classifier then accepts
     # only one remaining conversation and never guesses between incarnations.
     CURSOR_PROJECTS_ROOT="${CURSOR_PROJECTS_ROOT_OVERRIDE:-$HOME/.cursor/projects}"
-    # Workspace-trust pre-seed (verified bypass, docs/verification/
-    # cursor-agent-adapter.md): a pre-existing .workspace-trusted marker makes
-    # cursor-agent skip the blocking interactive trust dialog entirely. The
-    # --trust launch flag writes the same marker at startup, so this only
-    # covers the window before that write; cursor's length-capped slug
-    # variant for very long paths is not reproduced here, and the post-launch
-    # readiness gate still answers a residual dialog with `a`. The slug is
-    # the worktree abspath with the leading / dropped and every / replaced
-    # by -. A workspace that is already claimed stays untouched: a second
-    # marker under another slug would give the transcript binding two
-    # claimants for one workspace instead of one.
-    if ! fm_busy_cursor_project_dir "$CURSOR_PROJECTS_ROOT" "$WT" >/dev/null 2>&1; then
-      CURSOR_PROJECT_DIR="$CURSOR_PROJECTS_ROOT/$(printf '%s' "${WT#/}" | tr '/' '-')"
-      if [ ! -f "$CURSOR_PROJECT_DIR/.workspace-trusted" ]; then
-        mkdir -p "$CURSOR_PROJECT_DIR"
-        printf '{"trustedAt":"%s","workspacePath":"%s"}\n' \
-          "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$(json_escape "$WT")" \
-          > "$CURSOR_PROJECT_DIR/.workspace-trusted"
-      fi
-    fi
+    # No workspace-trust pre-seed. Firstmate used to write a .workspace-trusted
+    # marker under a slug rebuilt from the worktree path, but cursor's own
+    # slug drops the dots that every pooled worktree path carries (and hashes
+    # long paths), so for those worktrees the marker landed under a directory
+    # cursor never reads and sat beside cursor's real entry as a second,
+    # empty claimant for the transcript binding (bin/fm-busy-lib.sh
+    # fm_busy_cursor_project_dirs). The launch flag --trust writes cursor's
+    # own marker at startup and the readiness gate answers a residual trust
+    # dialog once with `a`, so cursor stays the only writer under its
+    # projects root.
     {
       printf 'projects_root=%s\n' "$CURSOR_PROJECTS_ROOT"
       printf 'workspace_root=%s\n' "$WT"
-      if CURSOR_PRIOR_PROJECT=$(fm_busy_cursor_project_dir "$CURSOR_PROJECTS_ROOT" "$WT" 2>/dev/null); then
-        for CURSOR_PRIOR_DIR in "$CURSOR_PRIOR_PROJECT"/agent-transcripts/*/; do
-          [ -d "$CURSOR_PRIOR_DIR" ] || continue
-          printf 'prior_conversation=%s\n' "$(basename -- "${CURSOR_PRIOR_DIR%/}")"
-        done
-      fi
+      # Every conversation already recorded for this worktree, across every
+      # directory claiming it, so a relaunch folds its own turn and not one
+      # left by an earlier pane under a different cursor-era slug.
+      while IFS=$'\t' read -r CURSOR_PRIOR_CONV _; do
+        [ -n "$CURSOR_PRIOR_CONV" ] && printf 'prior_conversation=%s\n' "$CURSOR_PRIOR_CONV"
+      done <<EOF
+$(fm_busy_cursor_conversations "$CURSOR_PROJECTS_ROOT" "$WT" 2>/dev/null || true)
+EOF
     } >"$STATE/$ID.cursor-session"
     ;;
   kimi*)

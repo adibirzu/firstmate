@@ -10,8 +10,13 @@
 # submit-confirmation read unknown forever (spawn: "did not start a confirmed
 # first turn"; steer: "delivery unconfirmed; verdict=unknown"), and a quit
 # modal exited the agent outright (later sends: send-failed). The spawn now
-# pre-seeds .workspace-trusted and waits for a ready composer, answering each
-# dialog once with the launch-consistent choice, before submitting.
+# waits for a ready composer, answering each dialog once with the
+# launch-consistent choice, before submitting, and stops on first sight of
+# the login screen (2026-10-02, 2026.09.26-dd393fe: a dead stored login held
+# every spawn for its whole budget with no name for the screen it saw). It
+# writes nothing under ~/.cursor/projects: the pre-seeded trust marker it
+# used to leave there sat under a slug cursor never reads for dotted paths
+# and doubled as an empty second claimant for the transcript binding.
 #
 # Every assertion drives behavior through an executable or public interface:
 # real fm-spawn.sh against the spawn-world fake tmux, the real backend submit
@@ -72,16 +77,29 @@ cat > "$SCREENS/busy.txt" <<'EOF'
   Auto · 10.4%                                     Run Everything
 EOF
 
-# The unauthenticated startup screen (captured live from 2026.09.02-c22c1a3):
-# no composer shape at all.
+# The unauthenticated startup screen: no composer shape at all. Captured live
+# on 2026-10-02 from 2026.09.26-dd393fe in a Herdr lab pane (the animated
+# logo rows vary; the version and prompt rows are the vendor text); the same
+# prompt row was captured from 2026.09.02-c22c1a3 on 2026-09-15.
 cat > "$SCREENS/login.txt" <<'EOF'
-adi@adi2:/tmp/cursor-probe-wt$ cursor-agent --trust --yolo --workspace /tmp/cursor-probe-wt
-Tip: You can start the Cursor CLI with `agent` (same as `cursor-agent`).
-
-                                               Cursor Agent
-                                               v2026.09.02-c22c1a3
-                                               Press any key to log in...
+                                   .db.
+                                .ggggggg.
+                               b.         d    o8888 88   88 88888o .d8888  d8A8b  88888.
+                               888b._    d8   dP     88   88 88__8P Y8.._  dP   Yb 88__8P
+                               888888   d88   Y8     88   8P 88""8o  `""Y8 Yb   dP 88""8o
+                               Y88888  d88P    Y8888 `Y8odP' 88  YA 88888"  Y8odP  88  YA
+                                 `Y88 dP"
+                                    `"
+                              v2026.09.26-dd393fe
+                              Press any key to log in...
 EOF
+
+# The vendor refusal every account-backed subcommand prints to stderr once the
+# stored login is dead (captured live on 2026-10-02 from 2026.09.26-dd393fe:
+# `cursor-agent --list-models`, `cursor-agent models`, and `cursor-agent -p`
+# all printed it and exited non-zero while `cursor-agent status` still said
+# authenticated).
+CURSOR_AUTH_REFUSAL="Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN."
 
 # --- shared-owner agreement fence -------------------------------------------
 # The spawn gate duplicates two vendor literals whose owners live in
@@ -105,6 +123,21 @@ test_lib_owners_agree_with_gate_fixtures() {
     || fail "the trust dialog must not match the cursor busy signal"
   ! fm_busy_lines_match cursor < "$SCREENS/login.txt" \
     || fail "the login screen must not match the cursor busy signal"
+  # The gate classifier (bin/fm-cursor-lib.sh) must agree with the same
+  # fixtures the spawn runs below feed it, and must stay silent on the
+  # composer shapes so a ready or busy pane is never mistaken for a gate.
+  # shellcheck source=bin/fm-cursor-lib.sh
+  . "$ROOT/bin/fm-cursor-lib.sh"
+  [ "$(fm_cursor_gate_screen "$(cat "$SCREENS/login.txt")")" = login ] \
+    || fail "the gate classifier must read the login fixture as login"
+  [ "$(fm_cursor_gate_screen "$(cat "$SCREENS/trust.txt")")" = trust ] \
+    || fail "the gate classifier must read the trust fixture as trust"
+  [ "$(fm_cursor_gate_screen "$(cat "$SCREENS/sandbox.txt")")" = sandbox ] \
+    || fail "the gate classifier must read the sandbox fixture as sandbox"
+  ! fm_cursor_gate_screen "$(cat "$SCREENS/ready.txt")" >/dev/null \
+    || fail "an idle composer must not classify as a gate"
+  ! fm_cursor_gate_screen "$(cat "$SCREENS/busy.txt")" >/dev/null \
+    || fail "a mid-turn composer must not classify as a gate"
   # The idle composer shape the gate waits for is genuinely empty under the
   # shared classifier: the real 2026.08.11 idle row (dim glyph and
   # placeholder, reverse-video cell under the terminal cursor) exercises the
@@ -356,14 +389,14 @@ EOF
     || fail "no sandbox-intro answer may be sent when only trust was shown"
   assert_contains "$(cat "$launchlog")" "FIRSTMATE_OP: v1 launch-brief" \
     "the seeded brief must be submitted after the gate clears"
-  # The pre-seed marker covers the task worktree before launch.
+  # Firstmate writes nothing under cursor's projects root: cursor is the only
+  # claimant of the task worktree there, so the transcript binding has one
+  # directory to follow.
   user_home=$(spawn_user_home "$home")
   slug=$(printf '%s' "${wt#/}" | tr '/' '-')
-  marker="$user_home/.cursor/projects/$slug/.workspace-trusted"
-  [ -f "$marker" ] || fail "the trust marker must be pre-seeded at $marker"
-  assert_grep "\"workspacePath\":\"$wt\"" "$marker" \
-    "the pre-seeded marker must claim the task worktree"
-  pass "spawn answers a residual trust dialog once, pre-seeds trust, then submits the brief"
+  [ ! -e "$user_home/.cursor/projects/$slug" ] \
+    || fail "spawn must not seed a projects entry under the rebuilt slug $slug"
+  pass "spawn answers a residual trust dialog once, seeds nothing under cursor's projects root, then submits the brief"
 }
 
 test_gate_answers_sandbox_intro_once_then_submits() {
@@ -391,45 +424,136 @@ EOF
 }
 
 test_gate_fails_loud_on_login_screen_without_typing() {
-  local rec id out status home wt launchlog user_home slug marker
+  local rec id out status home launchlog captures
   id=gate-login-z3
   rec=$(make_cursor_gate_case "$id")
-  IFS='|' read -r _ home _ wt _ launchlog <<EOF
+  IFS='|' read -r _ home _ _ _ launchlog <<EOF
 $rec
 EOF
   write_screens "$TMP_ROOT/$id-screens" login
+  # A generous budget: the login screen must end the wait on first sight, not
+  # after the budget is spent, because no key reaches a composer from it.
   out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" \
-    FM_CURSOR_READY_POLLS=4 FM_CURSOR_POLL_INTERVAL=0.01 \
+    FM_CURSOR_READY_POLLS=40 FM_CURSOR_POLL_INTERVAL=0.01 \
     run_cursor_gate_spawn "$rec" "$id")
   status=$?
   expect_code 1 "$status" "spawn held on a login screen must fail instead of typing into it"
   assert_contains "$out" "did not reach a ready composer" \
     "the failure must name the unreadiness instead of the submit verdict"
+  assert_contains "$out" "opened on its login screen" \
+    "the failure must name the login screen it saw"
+  assert_contains "$out" "cursor-agent login" \
+    "the failure must name the remedy"
   assert_contains "$out" "trust answered: 0, sandbox-intro answered: 0" \
     "the failure must report the spent answers"
+  captures=$(cat "$TMP_ROOT/$id-screens/.count" 2>/dev/null || echo 0)
+  [ "$captures" -le 2 ] \
+    || fail "the login screen must stop the wait on first sight, but $captures captures were read"
   assert_not_contains "$(cat "$launchlog")" "FIRSTMATE_OP: v1 launch-brief" \
     "the seeded brief must never be typed into a login screen"
   [ "$(grep -c -x 'a' "$launchlog" || true)" -eq 0 ] \
     || fail "no dialog answer may be sent when no dialog was shown"
   assert_grep "failed: cursor did not reach a ready composer" "$home/state/$id.status" \
     "the failure must append a supervisor-actionable task status"
-  # Even on the fail path the pre-seed ran before launch.
-  user_home=$(spawn_user_home "$home")
-  slug=$(printf '%s' "${wt#/}" | tr '/' '-')
-  marker="$user_home/.cursor/projects/$slug/.workspace-trusted"
-  [ -f "$marker" ] || fail "the trust pre-seed must run even when the gate later fails"
-  pass "spawn fails loudly on a login screen and never types the brief into it"
+  assert_grep "login screen" "$home/state/$id.status" \
+    "the task status must carry the named screen for the supervisor"
+  pass "spawn stops on first sight of a login screen, names it and the remedy, and never types the brief into it"
 }
 
-test_preseed_keeps_an_already_claimed_workspace() {
-  local rec id out status home wt user_home slug marker before
+test_gate_timeout_names_the_unrecognized_screen() {
+  local rec id out status
+  id=gate-unknown-z5
+  rec=$(make_cursor_gate_case "$id")
+  # A screen no owner recognizes: not a gate, not a composer, not a dead
+  # shell. The budget is spent, and the failure must say what was on screen.
+  mkdir -p "$TMP_ROOT/$id-screens"
+  printf '  Something new from a vendor update\n  Continue? [y/n]\n' > "$TMP_ROOT/$id-screens/1"
+  out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" \
+    FM_CURSOR_READY_POLLS=3 FM_CURSOR_POLL_INTERVAL=0.01 \
+    run_cursor_gate_spawn "$rec" "$id")
+  status=$?
+  expect_code 1 "$status" "spawn held on an unrecognized screen must fail"
+  assert_contains "$out" "last screen: unrecognized" \
+    "the timeout must say the screen matched no known gate"
+  assert_contains "$out" "Continue? [y/n]" \
+    "the timeout must quote the last row it saw"
+  assert_contains "$out" "trust answered: 0, sandbox-intro answered: 0" \
+    "the timeout must still report the spent answers"
+  pass "spawn names an unrecognized startup screen on timeout instead of only the unanswered dialogs"
+}
+
+test_spawn_refuses_before_launch_on_dead_login() {
+  local rec id out status home launchlog fakebin
+  id=gate-nologin-z6
+  rec=$(make_cursor_gate_case "$id")
+  IFS='|' read -r _ home _ _ fakebin launchlog <<EOF
+$rec
+EOF
+  # The install answers the account probe exactly as the real CLI does with a
+  # dead stored login: the vendor refusal on stderr and a non-zero exit.
+  cat > "$fakebin/cursor-agent" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = --list-models ]; then
+  printf '%s\n' "$CURSOR_AUTH_REFUSAL" >&2
+  exit 1
+fi
+exit 0
+SH
+  chmod +x "$fakebin/cursor-agent"
+  write_screens "$TMP_ROOT/$id-screens" ready
+  out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" \
+    FM_CURSOR_READY_POLLS=10 FM_CURSOR_POLL_INTERVAL=0.01 \
+    run_cursor_gate_spawn "$rec" "$id")
+  status=$?
+  expect_code 1 "$status" "spawn must refuse when the account probe says the login is dead, got: $out"
+  assert_contains "$out" "no usable login" "the refusal must name the dead login"
+  assert_contains "$out" "cursor-agent login" "the refusal must name the remedy"
+  assert_not_contains "$out" "spawned $id" "a refused spawn must not report a worker"
+  [ ! -s "$launchlog" ] \
+    || fail "nothing may be typed into any pane when the spawn is refused before launch, log: $(cat "$launchlog")"
+  [ ! -e "$home/state/$id.meta" ] \
+    || fail "a spawn refused before launch must leave no task metadata behind"
+  pass "spawn refuses before launch when the account probe reports a dead login, naming the remedy"
+}
+
+test_spawn_tolerates_an_indeterminate_account_probe() {
+  local rec id out status fakebin
+  id=gate-probe-z7
+  rec=$(make_cursor_gate_case "$id")
+  IFS='|' read -r _ _ _ _ fakebin _ <<EOF
+$rec
+EOF
+  # An unrelated catalog failure (a network blip) is not a login verdict: the
+  # spawn proceeds and the readiness gate decides on the rendered screen.
+  cat > "$fakebin/cursor-agent" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --list-models ]; then
+  printf 'Error: fetch failed\n' >&2
+  exit 1
+fi
+exit 0
+SH
+  chmod +x "$fakebin/cursor-agent"
+  write_screens "$TMP_ROOT/$id-screens" ready
+  out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" \
+    FM_CURSOR_READY_POLLS=10 FM_CURSOR_POLL_INTERVAL=0.01 \
+    run_cursor_gate_spawn "$rec" "$id")
+  status=$?
+  expect_code 0 "$status" "an indeterminate account probe must not refuse the spawn, got: $out"
+  assert_contains "$out" "spawned $id harness=cursor" "spawn did not report cursor"
+  pass "spawn proceeds to the readiness gate when the account probe is indeterminate"
+}
+
+test_spawn_leaves_cursor_projects_root_untouched() {
+  local rec id out status home wt user_home before slug
   id=gate-claimed-z4
   rec=$(make_cursor_gate_case "$id")
   IFS='|' read -r _ home _ wt _ _ <<EOF
 $rec
 EOF
-  # An operator marker under another slug already claims this worktree: the
-  # pre-seed must not add a second claimant for the transcript binding.
+  # cursor's own entry already claims this worktree under its own slug. The
+  # spawn must neither touch it nor add a second claimant beside it, because
+  # the transcript binding follows cursor's directory, not a rebuilt slug.
   # Pretty-printed like cursor's own marker, one key per line.
   user_home=$(spawn_user_home "$home")
   mkdir -p "$user_home/.cursor/projects/operator-slug"
@@ -448,12 +572,11 @@ EOF
   status=$?
   expect_code 0 "$status" "spawn with a claimed workspace should succeed, got: $out"
   [ "$(cat "$user_home/.cursor/projects/operator-slug/.workspace-trusted")" = "$before" ] \
-    || fail "an existing workspace claim must stay byte-identical"
+    || fail "cursor's existing workspace claim must stay byte-identical"
   slug=$(printf '%s' "${wt#/}" | tr '/' '-')
-  marker="$user_home/.cursor/projects/$slug/.workspace-trusted"
-  [ ! -e "$marker" ] \
-    || fail "no second marker may be seeded while the workspace is claimed"
-  pass "pre-seed never adds a second claimant for an already-claimed workspace"
+  [ ! -e "$user_home/.cursor/projects/$slug" ] \
+    || fail "no second projects entry may be seeded under the rebuilt slug beside cursor's own"
+  pass "spawn leaves cursor's projects root to cursor: one claimant per worktree"
 }
 
 # --- real-backend no-orphan confirmation --------------------------------------
@@ -571,6 +694,9 @@ test_herdr_submit_against_gate_screen_never_confirms
 test_gate_answers_trust_once_then_submits
 test_gate_answers_sandbox_intro_once_then_submits
 test_gate_fails_loud_on_login_screen_without_typing
-test_preseed_keeps_an_already_claimed_workspace
+test_gate_timeout_names_the_unrecognized_screen
+test_spawn_refuses_before_launch_on_dead_login
+test_spawn_tolerates_an_indeterminate_account_probe
+test_spawn_leaves_cursor_projects_root_untouched
 test_real_tmux_submit_unknown_and_cleanup
 test_real_herdr_lab_submit_unknown_and_cleanup

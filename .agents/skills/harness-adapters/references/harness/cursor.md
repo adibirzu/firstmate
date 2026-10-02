@@ -1,6 +1,7 @@
 # Cursor Agent
 
 Verified for crew and scout work on tmux on 2026-08-11 and Herdr on 2026-08-12, and for secondmate and primary work on 2026-08-13, with Cursor Agent CLI 2026.08.11-e8db854.
+The startup gates and the account probe were re-verified on 2026-10-02 with 2026.09.26-dd393fe in a Herdr lab and an isolated tmux server; that build opened on its login screen, so its composer and trust screens could not be re-read until a login is restored.
 Cross-harness provider and credential identity is owned by `references/common/model-and-effort.md`.
 
 ## Operating facts
@@ -11,13 +12,14 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 | Launch | Bare TUI launch with `--trust`, `--yolo`, optional `--model <model>`, and `--workspace <absolute-task-worktree>`, after clearing foreign primary markers. The encoded launch brief is submitted after startup through the backend submit-confirmation path so a zero-turn worker fails spawn instead of reporting spawned. |
 | Attribution | Cursor can append a Co-authored-by trailer after the typed message. Unless the home sets `config/keep-ai-trailers` (`../../../../../docs/configuration.md` "Commit attribution"), every fleet launch installs the pane-scoped commit-msg strip in `../../../bin/fm-git-strip-ai-trailers.sh`, which removes known AI trailers and leaves human co-authors and the author identity untouched. |
 | Models | Use current-account `cursor-agent --list-models` or legacy `agent --list-models`; the drifting observed list had only `cursor-grok-4.5-high` and `cursor-grok-4.5-high-fast` for Grok plus several `xhigh` ids, so choose a returned reasoning id and never assume low or medium Grok. |
-| Busy state | `../../../bin/fm-busy-lib.sh` folds the per-conversation transcript as `cursor-transcript`: `role:user` opens and typed `turn_ended` closes success or abort, covering manual interrupt; nothing is armed or seeded, and this backend-agnostic source was identical on tmux and Herdr. |
+| Busy state | `../../../bin/fm-busy-lib.sh` folds the per-conversation transcript as `cursor-transcript`: `role:user` opens and typed `turn_ended` closes success or abort, covering manual interrupt; nothing is armed or seeded, and this backend-agnostic source was identical on tmux and Herdr. The binding reads every `~/.cursor/projects` entry whose recorded `workspacePath` is the task worktree as one set, because cursor's slug rule has changed across releases and a worktree can be claimed twice. |
 | Exit command | `/exit`. |
 | Interrupt | Single Escape returns the placeholder with no clear key; control makes no cancellation claim because an aborted transcript close appeared within seconds in some runs and not within twenty in others. |
 | Skill invocation | `/<skill>`, for example `/no-mistakes`; Cursor discovers Firstmate's user skills. |
 | Resume | No verified native pane resume; use deterministic relaunch. |
 | Autonomy | `--yolo`, documented alias for `--force`; footer `Run Everything`. |
-| Trust | `--trust` suppresses the dialog; `--yolo` does not, and every task has a fresh path. Spawn additionally pre-seeds `.workspace-trusted` (unless the workspace is already claimed) and gates the seeded-brief submit on a proven-ready composer, answering a residual trust dialog once with `a` and the 2026.09 sandbox intro once with `u`, failing loudly on any other gate screen. |
+| Login | Cursor keeps its OAuth session in the login keychain and refreshes it on use; once that refresh dies (observed 2026-10-02: tokens stored 2026-07-29, dead about 60 days later) the TUI opens on `Press any key to log in...` with no composer, while `cursor-agent status` still says authenticated and is not a signal. Spawn probes the account first (`--list-models`; the vendor's `Authentication required` refusal stops the spawn before any window exists) and the readiness gate stops on first sight of that screen; both name the remedy: `cursor-agent login` as the worker account, or `CURSOR_API_KEY`. `../../../bin/fm-cursor-lib.sh` "Account and startup gates" owns both signals. |
+| Trust | `--trust` suppresses the dialog; `--yolo` does not, and every task has a fresh path. Spawn writes nothing under `~/.cursor/projects` (its former pre-seeded marker landed under a slug cursor never reads for a dotted path and doubled as an empty second claimant for the transcript binding) and gates the seeded-brief submit on a proven-ready composer, answering a residual trust dialog once with `a` and the 2026.09 sandbox intro once with `u`; any other screen fails the spawn naming the gate it saw, or quoting the last row when none matches. |
 | Marker | `CURSOR_INVOKED_AS=cursor-agent` on agent and children, plus `CURSOR_AGENT=1` on child or tool processes; other `CURSOR_*` variables are not identity markers. |
 | Effort | No verified flag; `references/common/model-and-effort.md` owns unsupported-value handling. |
 | Composer | Bare borderless row with `→` (U+2192); de-emphasized placeholders `Plan, search, build anything` when fresh and `Add a follow-up` later. |
@@ -58,7 +60,7 @@ Teaching those backends is separate cross-harness work requiring live checks.
 
 Reverse-video placeholder remnants and Herdr half-block edges belong to `../../../bin/fm-composer-lib.sh`; without the edges a bare composer swallows the footer and idle reads pending.
 `../../../docs/verification/runtime-backends.md` owns captures.
-Refresh with `FM_HARNESS_LIVENESS_DRIFT=1 ../../../bin/fm-test-run.sh ../../../tests/fm-harness-liveness-drift-live-e2e.test.sh`.
+Refresh with `FM_HARNESS_LIVENESS_DRIFT=1 ../../../bin/fm-test-run.sh ../../../tests/fm-harness-liveness-drift-live-e2e.test.sh`, and refresh the startup-gate and account-probe evidence with `FM_CURSOR_STARTUP_LIVE=1 ../../../bin/fm-test-run.sh ../../../tests/fm-cursor-startup-screen-live-e2e.test.sh` after every cursor-agent auto-update.
 
 ## Worktree boundary
 

@@ -151,20 +151,10 @@ case "${1:-}" in
         printf '{"workspacePath":"%s"}\n' "$workspace" > "$project/.workspace-trusted"
         printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
           > "$project/agent-transcripts/fake-conversation/fake-conversation.jsonl"
-        # Mirror the fabricated turn into every OTHER project dir claiming
-        # this workspace (e.g. a pre-seeded slug dir): the transcript binding
-        # resolves one claimant, and whichever it picks must hold exactly one
-        # conversation for the confirmation callback to observe the turn.
-        for _claim_marker in "$root"/*/.workspace-trusted; do
-          [ -f "$_claim_marker" ] || continue
-          _claim=$(LC_ALL=C sed -n 's/.*"workspacePath"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$_claim_marker" | head -1)
-          [ "$_claim" = "$workspace" ] || continue
-          _claim_dir=${_claim_marker%/.workspace-trusted}
-          [ "$_claim_dir" = "$project" ] && continue
-          mkdir -p "$_claim_dir/agent-transcripts/fake-conversation"
-          printf '%s\n' '{"role":"user"}' '{"type":"turn_ended","status":"success"}' \
-            > "$_claim_dir/agent-transcripts/fake-conversation/fake-conversation.jsonl"
-        done
+        # Only cursor's own directory holds the turn, exactly as the real CLI
+        # writes it: the transcript binding reads every claimant of the
+        # workspace as one set, so another claimant (an operator's entry under
+        # a different slug) needs no mirrored copy to be seen.
       fi
     fi
     # The pre-launch pane exports ride the text-line form

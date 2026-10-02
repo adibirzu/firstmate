@@ -81,7 +81,8 @@ Live tmux probing showed `cursor-agent --trust --yolo --model cursor-grok-4.6-lo
 However, two supervised Cursor dispatches reached the startup render with the seeded brief visible and no transcript/status append, while OpenCode workers using the same brief scaffold progressed normally.
 2026-09-15 update (cursor-agent 2026.09.02-c22c1a3): the bare launch typed the seeded brief with no readiness wait, so any pre-composer gate held the submit at unknown (trust dialog: pending-unproven on the retry path) forever and a quit modal exited the agent (later sends: send-failed).
 The 2026.09 bundle adds a "Command Execution" sandbox-intro modal (keys a/m/u/q, quit exits 0) beside the trust dialog.
-Spawn now pre-seeds `.workspace-trusted` (skipped when the workspace is already claimed) and waits for a proven-ready composer - idle placeholder, busy footer, or a classifier-empty read - answering trust once with `a` and the intro once with `u` (Run Everything, matching `--yolo`), failing loudly otherwise before anything is typed.
+Spawn waits for a proven-ready composer - idle placeholder, busy footer, or a classifier-empty read - answering trust once with `a` and the intro once with `u` (Run Everything, matching `--yolo`), failing loudly otherwise before anything is typed.
+2026-10-02 update (cursor-agent 2026.09.26-dd393fe): the spawn probes the account before launch and stops on first sight of the login screen, and it no longer pre-seeds `.workspace-trusted` because cursor's own slug differs from the rebuilt one for every dotted path; `runtime-backends.md` "Startup gates and login, 2026-10-02" owns that evidence.
 Verified by `tests/fm-cursor-submit-confirm.test.sh` (fake-tmux and canned-Herdr submit pins plus full spawn runs; live-Herdr cleanup case opt-in).
 
 Historical note: `cursor-agent --force "<prompt>"` was previously verified to seed and auto-run the prompt once trust was cleared.
@@ -97,7 +98,7 @@ cursor-agent --trust --yolo __MODELFLAG__--workspace __WORKTREE__
 
 | Owner | Change |
 |---|---|
-| `bin/fm-spawn.sh` | `launch_template` cursor-agent case; `--model` allowlist; known-adapter allowlists; workspace-trust readiness (pre-seed `.workspace-trusted` + `a`-answering poll gate that fails loudly) |
+| `bin/fm-spawn.sh` | `launch_template` cursor-agent case; `--model` allowlist; known-adapter allowlists; pre-launch account probe; readiness gate (`a`-answering trust poll that stops on the login screen and fails loudly naming any other gate) |
 | `bin/fm-harness.sh` | `detect_own` ancestry match `*cursor*` → `cursor-agent` (comm + args) |
 | `bin/fm-tmux-lib.sh` | `FM_TMUX_CURSOR_AGENT_BUSY_REGEX_DEFAULT='ctrl\+c to stop'` + case arm |
 | `bin/fm-composer-lib.sh` + `bin/backends/{herdr,cmux,orca}.sh` | `→` added to the shared agent-glyph classifier and bare-row promotion; shared `FM_COMPOSER_IDLE_RE_DEFAULT` covers the cursor placeholders (tmux + all backends) |
@@ -107,11 +108,9 @@ cursor-agent --trust --yolo __MODELFLAG__--workspace __WORKTREE__
 ## Remaining acceptance (live end-to-end)
 
 Registry facts above are verified in isolation and unit-covered. The
-trust-clearing readiness step is implemented in `fm-spawn`: it pre-seeds
-`.workspace-trusted` before launch and its post-launch gate answers a residual
-dialog with `a` (once — covering cursor's undocumented length-capped slug
-variant for long paths), failing the spawn loudly when the pane never reaches a
-ready/working signal. The closing acceptance is a full live crewmate dispatch
+trust-clearing readiness step is implemented in `fm-spawn`: its post-launch
+gate answers a residual dialog with `a` (once), failing the spawn loudly when
+the pane never reaches a ready/working signal. The closing acceptance is a full live crewmate dispatch
 through the herdr backend observing trust-clear → brief auto-run → busy →
 turn-end and interrupt(`Ctrl-C`)/exit(`/quit`) under supervision; it needs a
 full firstmate home + a real project and is not run in this environment.

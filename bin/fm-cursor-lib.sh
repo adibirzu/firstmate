@@ -125,6 +125,90 @@ fm_cursor_list_models() {  # <path>
   fm_cursor_bounded_output "$1" --list-models
 }
 
+# --- Account and startup gates ---------------------------------------------
+#
+# Cursor keeps its OAuth session in the login keychain and refreshes it on use.
+# When that refresh stops working (observed live 2026-10-02 on cursor-agent
+# 2026.09.26-dd393fe: tokens stored 2026-07-29, never rewritten, dead ~60 days
+# later) every account-backed subcommand - `--list-models`, `models`, `-p` -
+# prints the vendor refusal below to stderr and exits non-zero, while
+# `cursor-agent status` still answers "authenticated" with "unable to fetch
+# user details", so status is NOT a usable signal. The interactive TUI then
+# opens on a login screen with no composer at all, which no amount of
+# composer polling will ever turn into a ready pane.
+#
+# Two independent signals therefore carry the "not logged in" verdict, and
+# either alone is positive: the pre-launch probe reads the vendor refusal from
+# the catalog command, and the readiness gate reads the rendered login screen.
+# Both literals are vendor-controlled; docs/verification/runtime-backends.md
+# ("Cursor Agent CLI" > "Startup gates and login") owns the dated captures and
+# tests/fm-cursor-startup-screen-live-e2e.test.sh is the live drift guard.
+FM_CURSOR_AUTH_REQUIRED_RE_DEFAULT='Authentication required'
+FM_CURSOR_LOGIN_SCREEN_RE_DEFAULT='Press any key to log in'
+FM_CURSOR_TRUST_DIALOG_RE_DEFAULT='Workspace Trust Required'
+FM_CURSOR_SANDBOX_INTRO_RE_DEFAULT='Choose how commands should be executed'
+
+# Bounded run with stderr folded into stdout, for probes whose verdict lives on
+# stderr. Same runner and budget as fm_cursor_bounded_output; exit status is
+# the command's own (124 from the runner on timeout).
+fm_cursor_bounded_output_merged() {  # <path> <args...>
+  local path=$1 runner=
+  shift
+  [ -n "$path" ] && [ -x "$path" ] || return 1
+  if command -v timeout >/dev/null 2>&1; then runner=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then runner=gtimeout
+  fi
+  [ -n "$runner" ] || return 1
+  "$runner" "$FM_CURSOR_PROBE_TIMEOUT" "$path" "$@" 2>&1
+}
+
+# fm_cursor_auth_probe <path>: can this install reach the account at all?
+# Prints the model catalog (the `--list-models` output) on success so a caller
+# needs no second catalog call.
+#   0  the catalog came back: the stored login works
+#   1  the vendor refused for lack of authentication: the TUI would open on
+#      its login screen, so a spawn must stop here and name the remedy
+#   2  indeterminate (timeout, no runner, an unrelated failure): the caller
+#      proceeds and the readiness gate decides on the rendered screen
+fm_cursor_auth_probe() {  # <path>
+  local out rc
+  out=$(fm_cursor_bounded_output_merged "$1" --list-models)
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  [ "$rc" -ne 124 ] || return 2
+  case "$out" in
+    *"$FM_CURSOR_AUTH_REQUIRED_RE_DEFAULT"*) return 1 ;;
+  esac
+  return 2
+}
+
+# fm_cursor_auth_remedy: the one sentence every refusal for a dead login
+# prints, so a supervisor reading any of them sees the same fix.
+fm_cursor_auth_remedy() {
+  printf '%s' "run 'cursor-agent login' as the account that launches workers on this machine (or export CURSOR_API_KEY for the fleet); 'cursor-agent status' still reports authenticated in this state and is not a signal"
+}
+
+# fm_cursor_gate_screen <plain-capture>: which pre-composer gate, if any, holds
+# the pane. Prints one of
+#   login     the unauthenticated startup screen; no key reaches a composer
+#   trust     the workspace-trust dialog, answered once with `a`
+#   sandbox   the 2026.09 command-execution intro, answered once with `u`
+# and exits 1 with no output when none of them is on screen. The composer's
+# own ready and busy shapes stay with their owners (bin/fm-composer-lib.sh
+# and bin/fm-busy-lib.sh); this classifies only the gates in front of it.
+fm_cursor_gate_screen() {  # <plain-capture>
+  local screen=$1
+  case "$screen" in
+    *"$FM_CURSOR_LOGIN_SCREEN_RE_DEFAULT"*) printf 'login\n'; return 0 ;;
+    *"$FM_CURSOR_TRUST_DIALOG_RE_DEFAULT"*) printf 'trust\n'; return 0 ;;
+    *"$FM_CURSOR_SANDBOX_INTRO_RE_DEFAULT"*) printf 'sandbox\n'; return 0 ;;
+  esac
+  return 1
+}
+
 fm_cursor_catalog_has_model() {  # <model>
   local wanted=$1
   awk -v wanted="$wanted" '

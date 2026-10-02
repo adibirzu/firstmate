@@ -689,22 +689,54 @@ fm_busy_cursor_binding_field() {  # <state-dir> <id> <key>
   printf '%s' "$value"
 }
 
-# fm_busy_cursor_project_dir: the project directory whose recorded
-# .workspace-trusted workspacePath is exactly <workspace-root>. Exact-match
-# only: a prefix or slug comparison would bind a nested worktree to its parent.
-fm_busy_cursor_project_dir() {  # <projects-root> <workspace-root>
-  local root=$1 want=$2 marker dir path
+# fm_busy_cursor_project_dirs: every project directory whose recorded
+# .workspace-trusted workspacePath is exactly <workspace-root>, one per line.
+# Exact-match only: a prefix or slug comparison would bind a nested worktree
+# to its parent.
+#
+# Several directories can claim one workspace, and the binding reads them as
+# ONE set: cursor's own slug rule has changed across releases (dots dropped,
+# long paths truncated and hashed), so a worktree reused across an upgrade
+# can hold old conversations under one slug and the new one under another,
+# and until 2026-10 fm-spawn pre-seeded a marker under a slug cursor itself
+# never used for a dotted path, leaving an empty claimant beside the real one
+# for every pooled worktree (observed live on 2026-10-02: seven such pairs in
+# one ~/.cursor/projects). Reading only the first claimant in glob order then
+# left every first turn unconfirmable. The union makes an empty twin
+# contribute nothing, lets the spawn-time prior-conversation record cover an
+# old twin's history, and keeps the one-remaining-conversation rule in
+# fm_busy_cursor_transcript as the only thing that settles a pane.
+fm_busy_cursor_project_dirs() {  # <projects-root> <workspace-root>
+  local root=$1 want=$2 marker path found=0
   [ -d "$root" ] || return 1
   for marker in "$root"/*/.workspace-trusted; do
     [ -f "$marker" ] || continue
     path=$(LC_ALL=C sed -n 's/.*"workspacePath"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$marker" | head -1)
     [ -n "$path" ] || continue
     [ "$path" = "$want" ] || continue
-    dir=${marker%/.workspace-trusted}
-    printf '%s' "$dir"
-    return 0
+    printf '%s\n' "${marker%/.workspace-trusted}"
+    found=1
   done
-  return 1
+  [ "$found" -eq 1 ]
+}
+
+# fm_busy_cursor_conversations: every conversation transcript recorded for
+# <workspace-root> across all of its claimant directories, as
+# <conversation-id>\t<transcript-path> lines, one line per conversation id
+# (the first directory holding an id wins, so a mirrored copy never counts
+# twice).
+fm_busy_cursor_conversations() {  # <projects-root> <workspace-root>
+  local project dir conv seen=''
+  fm_busy_cursor_project_dirs "$1" "$2" | while IFS= read -r project; do
+    for dir in "$project"/agent-transcripts/*/; do
+      [ -d "$dir" ] || continue
+      conv=$(basename -- "${dir%/}")
+      [ -f "$dir$conv.jsonl" ] || continue
+      case "$seen" in *"|$conv|"*) continue ;; esac
+      seen="$seen|$conv|"
+      printf '%s\t%s\n' "$conv" "$dir$conv.jsonl"
+    done
+  done
 }
 
 # fm_busy_cursor_transcript: the ONE transcript this pane owns, or failure.
@@ -714,20 +746,19 @@ fm_busy_cursor_project_dir() {  # <projects-root> <workspace-root>
 # no turn has been submitted yet and several means the pane cannot be told
 # apart, and neither proves anything about the current turn.
 fm_busy_cursor_transcript() {  # <state-dir> <id>
-  local root workspace project dir conv found='' count=0 prior
+  local root workspace conv transcript found='' count=0 prior
   root=$(fm_busy_cursor_binding_field "$1" "$2" projects_root) || return 1
   workspace=$(fm_busy_cursor_binding_field "$1" "$2" workspace_root) || return 1
-  project=$(fm_busy_cursor_project_dir "$root" "$workspace") || return 1
   prior=$(LC_ALL=C awk -F= '$1 == "prior_conversation" { sub(/^[^=]*=/, ""); print }' \
     "$(fm_busy_cursor_binding_path "$1" "$2")" 2>/dev/null)
-  for dir in "$project"/agent-transcripts/*/; do
-    [ -d "$dir" ] || continue
-    conv=$(basename -- "${dir%/}")
+  while IFS=$'\t' read -r conv transcript; do
+    [ -n "$conv" ] || continue
     printf '%s\n' "$prior" | grep -Fqx "$conv" && continue
-    [ -f "$dir$conv.jsonl" ] || continue
-    found="$dir$conv.jsonl"
+    found=$transcript
     count=$((count + 1))
-  done
+  done <<EOF
+$(fm_busy_cursor_conversations "$root" "$workspace")
+EOF
   [ "$count" = 1 ] && [ -n "$found" ] || return 1
   printf '%s' "$found"
 }
