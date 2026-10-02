@@ -140,7 +140,12 @@ case "${1:-}" in
       fi
       prev=$a
     done
+    # FM_FAKE_CURSOR_TRANSCRIPT=never models cursor-agent 2026.10.01, which
+    # writes the transcript's opening record seconds after the turn starts:
+    # the fake then never writes one, so a suite can prove the submit path
+    # confirms from the rendered busy footer alone, or refuses without it.
     if [ "${FM_FAKE_TMUX_COMPOSER:-}" != pending ] &&
+       [ "${FM_FAKE_CURSOR_TRANSCRIPT:-}" != never ] &&
        printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
       session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)
       if [ -n "$session" ]; then

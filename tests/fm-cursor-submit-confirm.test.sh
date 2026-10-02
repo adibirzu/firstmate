@@ -544,6 +544,50 @@ SH
   pass "spawn proceeds to the readiness gate when the account probe is indeterminate"
 }
 
+test_first_turn_confirms_from_busy_footer_before_transcript() {
+  local rec id out status launchlog
+  id=gate-latetx-z8
+  rec=$(make_cursor_gate_case "$id")
+  IFS='|' read -r _ _ _ _ _ launchlog <<EOF
+$rec
+EOF
+  # The composer is ready, the brief is typed, and the pane then shows the
+  # mid-turn footer while cursor has not yet written its transcript (the
+  # 2026.10.01 order, where the opening record lands seconds later). The
+  # footer alone must confirm the first turn.
+  write_screens "$TMP_ROOT/$id-screens" ready ready busy
+  out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" FM_FAKE_CURSOR_TRANSCRIPT=never \
+    FM_CURSOR_READY_POLLS=10 FM_CURSOR_POLL_INTERVAL=0.01 \
+    FM_CURSOR_FIRST_TURN_POLLS=4 FM_CURSOR_FIRST_TURN_INTERVAL=0.01 \
+    run_cursor_gate_spawn "$rec" "$id")
+  status=$?
+  expect_code 0 "$status" "a rendered busy footer must confirm the first turn without a transcript, got: $out"
+  assert_contains "$out" "spawned $id harness=cursor" "spawn did not report cursor"
+  assert_contains "$(cat "$launchlog")" "FIRSTMATE_OP: v1 launch-brief" \
+    "the seeded brief must have been submitted"
+  pass "first-turn confirmation accepts the rendered busy footer while cursor's transcript is still unwritten"
+}
+
+test_first_turn_refuses_without_transcript_or_footer() {
+  local rec id out status
+  id=gate-noturn-z9
+  rec=$(make_cursor_gate_case "$id")
+  # Neither signal ever appears: the composer stays idle after the submit and
+  # no transcript is written, so the spawn must refuse rather than report a
+  # worker that never started a turn. This keeps the footer path above from
+  # being a vacuous pass.
+  write_screens "$TMP_ROOT/$id-screens" ready
+  out=$(FM_FAKE_TMUX_SCREEN_DIR="$TMP_ROOT/$id-screens" FM_FAKE_CURSOR_TRANSCRIPT=never \
+    FM_CURSOR_READY_POLLS=10 FM_CURSOR_POLL_INTERVAL=0.01 \
+    FM_CURSOR_FIRST_TURN_POLLS=3 FM_CURSOR_FIRST_TURN_INTERVAL=0.01 \
+    run_cursor_gate_spawn "$rec" "$id")
+  status=$?
+  expect_code 1 "$status" "no transcript and no busy footer must refuse the spawn, got: $out"
+  assert_contains "$out" "did not start a confirmed first turn" \
+    "the refusal must name the unconfirmed first turn"
+  pass "first-turn confirmation still refuses when neither the transcript nor the busy footer ever appears"
+}
+
 test_spawn_leaves_cursor_projects_root_untouched() {
   local rec id out status home wt user_home before slug
   id=gate-claimed-z4
@@ -697,6 +741,8 @@ test_gate_fails_loud_on_login_screen_without_typing
 test_gate_timeout_names_the_unrecognized_screen
 test_spawn_refuses_before_launch_on_dead_login
 test_spawn_tolerates_an_indeterminate_account_probe
+test_first_turn_confirms_from_busy_footer_before_transcript
+test_first_turn_refuses_without_transcript_or_footer
 test_spawn_leaves_cursor_projects_root_untouched
 test_real_tmux_submit_unknown_and_cleanup
 test_real_herdr_lab_submit_unknown_and_cleanup

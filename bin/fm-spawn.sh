@@ -4578,14 +4578,32 @@ cursor_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+# cursor_first_turn_started: proof that the seeded brief started a turn, read
+# from two independent signals where either one is positive: the transcript
+# fold (a role:user record opened a turn, or the turn already closed) and the
+# rendered busy footer. cursor-agent 2026.10.01-e373342 writes the opening
+# transcript record about eight seconds after Enter (verified live 2026-10-02
+# on adi1; 2026.08.11-e8db854 wrote it at once), so a transcript-only read
+# inside the submit window could never confirm while the footer sat on screen
+# the whole time. The bounded grace loop covers the other order too: a turn
+# so short that the footer is already gone when the backend asks, whose
+# transcript then lands within the same window.
 cursor_first_turn_started() {
-  local transcript turn_state
-  transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) || return 1
-  turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null) || return 1
-  case "$turn_state" in
-    busy|settled) return 0 ;;
-  esac
-  return 1
+  local i=0 max=${FM_CURSOR_FIRST_TURN_POLLS:-24} interval=${FM_CURSOR_FIRST_TURN_INTERVAL:-0.5} transcript turn_state
+  while :; do
+    if transcript=$(fm_busy_cursor_transcript "$STATE" "$ID" 2>/dev/null) \
+      && turn_state=$(fm_busy_cursor_turn_state "$transcript" 2>/dev/null); then
+      case "$turn_state" in
+        busy|settled) return 0 ;;
+      esac
+    fi
+    if cursor_capture | fm_busy_lines_match cursor; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -lt "$max" ] || return 1
+    sleep "$interval"
+  done
 }
 
 agy_wait_for_working() {
