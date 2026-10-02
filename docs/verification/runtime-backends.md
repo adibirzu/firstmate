@@ -2131,6 +2131,17 @@ t=37s busy=0 transcripts: acad7e5e-....jsonl:4l
 
 The 2026-08-11 record that the transcript opens the turn at once no longer holds, so `cursor_first_turn_started` now accepts either the transcript fold or the rendered busy footer inside a bounded grace window and still refuses when neither appears (`tests/fm-cursor-submit-confirm.test.sh` pins both orders with `FM_FAKE_CURSOR_TRANSCRIPT=never`).
 With that change two consecutive lab spawns on adi1 reported `spawned cursorlab9 harness=cursor kind=scout window=fm-lab-fm-cursor-spawn-141132-5994:w1:p2 ...` and the same for `cursorlab10`, each in about 40 seconds with presentation spaces on; the pane ran the brief (`git log`, `ls`, a reply) and the transcript fold read `idle cursor-transcript` once the turn closed.
+The guard's output on adi1 after that change:
+
+```text
+# cursor-agent (2026.10.01-e373342): account probe returned a catalog (246 model rows)
+# cursor-agent (2026.10.01-e373342): gates seen before the final screen: none
+# cursor-agent (2026.10.01-e373342): ready read from the plain placeholder row; cursorless styled classifier verdict=unknown
+ok - cursor-agent (2026.10.01-e373342): real startup screen resolves to a named state: ready
+ok - cursor-agent (2026.10.01-e373342): ready composer and a non-refusing account probe agree
+ok - live cursor startup guard verified 2 live surface(s)
+```
+
 The readiness timeout the admiral reported from adi1 (`trust answered: 0, sandbox-intro answered: 0`) did not reproduce in either lab run; the gate's timeout detail now names the last screen it saw, so the next occurrence is attributable from its status line alone.
 
 ### End-to-end
