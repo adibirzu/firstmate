@@ -94,7 +94,9 @@ fm_test_fake_gh_axi() {
 # fm_test_fake_tmux_spawn <fakebin>
 # Spawn-world tmux: pane_current_path from FM_FAKE_PANE_PATH, session named
 # firstmate, window ops succeed, send-keys succeed. When FM_FAKE_LAUNCH_LOG is
-# set, each send-keys -l payload is appended one per line. Optional
+# set, each send-keys -l payload is appended one per line. When FM_FAKE_PANE_LOG
+# is set, each send-keys TEXT-LINE payload (the pre-launch pane exports, which
+# carry no -l) is appended there instead, one per line in send order. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
 # FM_FAKE_TMUX_COMPOSER=pending makes submit-confirmation reads show an unsent
 # composer; otherwise they show an empty composer.
@@ -126,10 +128,42 @@ case "${1:-}" in
     for a in "$@"; do
       if [ "$prev" = "-l" ]; then
         payload=$a
-        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+        if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
+          # Production sends a short source command for the private staged
+          # launch file. Record its contents so launch-contract assertions see
+          # the command the pane executes, while retaining direct-literal
+          # logging for tests that exercise other send paths.
+          case "$a" in
+            ". '"*"'")
+              staged=${a#". '"}
+              staged=${staged%"'"}
+              if [ -f "$staged" ]; then
+                a=$(cat "$staged")
+              fi
+              ;;
+            *) ;;
+          esac
+          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+        fi
       fi
       prev=$a
     done
+    # Pre-launch pane exports use the text-line form with no -l flag. Record
+    # only that payload when a suite opts in, not flags, target, or Enter.
+    if [ -n "${FM_FAKE_PANE_LOG:-}" ]; then
+      shift
+      skip_next=
+      literal=
+      for a in "$@"; do
+        if [ -n "$skip_next" ]; then skip_next=; continue; fi
+        case "$a" in
+          -t) skip_next=1; continue ;;
+          -l) literal=1; continue ;;
+          Enter|C-m) continue ;;
+          *) [ -n "$literal" ] || printf '%s\n' "$a" >> "$FM_FAKE_PANE_LOG" ;;
+        esac
+      done
+    fi
     if [ "${FM_FAKE_TMUX_COMPOSER:-}" != pending ] &&
        printf '%s' "$payload" | grep -Fq 'FIRSTMATE_OP: v1 launch-brief'; then
       session=$(find "${FM_HOME:-}"/state -name '*.cursor-session' -type f -print -quit 2>/dev/null)

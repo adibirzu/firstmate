@@ -19,6 +19,8 @@
 # a different host. Primary
 # config/trace-context is copied at the launch convergence point as part of the
 # default-off W3C trace-context setup, while live convergence leaves it unchanged.
+# Primary config/lavish-axi-host carries the one per-machine Lavish server address
+# to every worker so a worker never starts a second server on another interface.
 # The primary passes its frozen home-session decision into a newly launched
 # Secondmate; see docs/trace-context.md.
 # Primary config/spawn-capacity gives that home the same machine-capacity spawn

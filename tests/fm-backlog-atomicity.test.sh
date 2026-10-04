@@ -129,7 +129,7 @@ configure_env_backend_tasks_axi() {  # <case-dir>
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
 case "\${1:-}" in
-  --version) printf '0.2.5\n' ;;
+  --version) printf '0.2.6\n' ;;
   update) printf '%s\n' '--archive-body' ;;
   mv) printf '%s\n' '[<id>...]' ;;
   show)
@@ -183,7 +183,7 @@ make_beads_tasks_axi_stub() {  # <case-dir> <id>
 printf '%s\n' "\$*" >> "$case_dir/tasks-axi-calls"
 case "\${1:-}" in
   --version)
-    printf '%s\n' '0.2.5'
+    printf '%s\n' '0.2.6'
     ;;
   update)
     [ "\${2:-}" = --help ] || exit 1
@@ -848,7 +848,7 @@ test_completion_omits_the_file_for_a_beads_done() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$case_dir/tasks-axi-calls"
 case "\${1:-}" in
-  --version) printf '%s\n' '0.2.5' ;;
+  --version) printf '%s\n' '0.2.6' ;;
   update)
     [ "\${2:-}" = --help ] || exit 1
     printf '%s\n' '--archive-body'
@@ -1356,22 +1356,12 @@ test_dispatch_reports_an_incomplete_record_rollback() {
   meta="$(home_of "$case_dir")/state/$id.meta"
   break_verb "$case_dir" start
   break_meta_removal "$case_dir" "$meta"
-  cat > "$case_dir/fakebin/treehouse" <<SH
-#!/usr/bin/env bash
-case "\${1:-}" in
-  get) printf '%s\n' "$case_dir/wt" ;;
-  return) : > "$case_dir/treehouse-returned" ;;
-esac
-SH
-  chmod +x "$case_dir/fakebin/treehouse"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though transition and rollback failed"
   assert_contains "$out" "failed-dispatch cleanup is incomplete" \
     "spawn did not report that its provisional record remained"
   assert_present "$meta" "failed record removal was reported as successful"
-  assert_absent "$case_dir/treehouse-returned" \
-    "incomplete rollback returned the leased worktree under its retained task record"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "record-removal failure prevented busy-state rollback"
   [ "$(row_state "$case_dir" "$id")" = queued ] \

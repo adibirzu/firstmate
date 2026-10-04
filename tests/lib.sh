@@ -33,6 +33,11 @@ FM_TEST_LIB_SOURCED=1
 # suite's fixtures were written against.
 umask 022
 
+# Fixture Git isolation for every suite that reaches this library; the helper's
+# header owns the invariant and the layers it deliberately leaves in force.
+# shellcheck source=tests/git-config-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/git-config-helpers.sh"
+
 # Exempt firstmate's own test suite from the gate-lifecycle refusal
 # (bin/fm-gate-refuse-lib.sh). The no-mistakes gate runs this suite FROM a gate
 # worktree - the exact environment that guard refuses - so without this every
@@ -47,6 +52,10 @@ export FM_GATE_REFUSE_BYPASS=1
 # owns the values and the rationale.
 # shellcheck source=tests/capacity-pin.sh
 . "$(dirname "${BASH_SOURCE[0]}")/capacity-pin.sh"
+
+# Arms the test-only seams bin/ scripts expose. Normal primary launches do not
+# arm them, so a leaked fixture override stays inert outside the suite.
+export FM_TEST_SEAM=1
 
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
@@ -66,6 +75,11 @@ unset FM_TASK_ID
 unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
   FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_PUBLIC_FOLLOWUP_PRIMARY_HOME \
   FM_TEST_HOME FM_TEST_USER_HOME
+
+# tasks-axi resolves these ahead of each fixture's .tasks.toml or explicit
+# wrapper. Never let an operator shell redirect fixture writes into a live
+# backlog; cases that exercise ambient overrides set them after this point.
+unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
 # Clear agy's own load-bearing detection marker (bin/fm-harness.sh,
 # .agents/skills/harness-adapters/references/harness/agy.md) so a value leaked
@@ -435,6 +449,34 @@ echo "fm-crash-inject: pid $target still running 30s after SIGKILL" >&2
 exit 1
 SH
   chmod +x "$fakebin/fm-crash-inject"
+}
+
+# fm_fake_blind_ancestry <fakebin>
+# Blind the parent-chain walks: a query of the FIELD-FIRST per-pid form those walks
+# use - `ps -o comm=|args=|ppid= -p <pid>`, the shape in bin/fm-harness.sh,
+# bin/fm-session-lock-lib.sh, bin/fm-sessionstart-nudge.sh and bin/fm-backend.sh's
+# cmux ancestor detection - reports a bash ancestor terminating at pid 1, so ancestry
+# proves nothing and the marker a case sets is the only evidence left. A case that pins
+# its harness with a marker (CLAUDECODE=1 and friends) needs this, because a structural
+# ancestor of a DIFFERENT harness outranks a marker - without it, the harness the SUITE
+# was launched from decides the verdict.
+# Every other ps query reaches the real ps untouched, and the pid-first form is
+# deliberately among them: bin/fm-tmux-lib.sh and bin/backends/tmux.sh read pane and
+# cursor identity with `ps -p <pid> -o args=`, so intercepting that shape too would make
+# a pane assertion under a PATH-wide blind read `bash` and reject every cursor pane.
+fm_fake_blind_ancestry() {
+  local fakebin=$1 real_ps
+  real_ps=$(command -v ps) || return 1
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  '-o comm= -p '*) printf '%s\n' bash ;;
+  '-o args= -p '*) printf '%s\n' bash ;;
+  '-o ppid= -p '*) printf '%s\n' 1 ;;
+  *) exec "$real_ps" "\$@" ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
 }
 
 # fm_fake_version_tool <fakebin> <tool> <override-env-var> <default-version>

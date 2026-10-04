@@ -82,6 +82,12 @@ case "$1 ${2:-}" in
     [ "${FM_FAKE_HERDR_DELETE_FAIL:-}" != 1 ] || exit 93
     printf '%s\n' deleted > "$state/$session"
     ;;
+  "terminal title")
+    [ "${FM_FAKE_HERDR_TITLE_FAIL:-}" != 1 ] || exit 94
+    reason=no_foreground_client
+    [ ! -f "$state/$session.foreground" ] || reason=$(cat "$state/$session.foreground")
+    jq -nc --arg reason "$reason" '{result:{reason:$reason,type:"client_window_title"}}'
+    ;;
   *)
     printf '%s\n' '{"ok":true}'
     ;;
@@ -100,6 +106,7 @@ run_with_fake() {
     FM_FAKE_HERDR_SERVER_DELAY="${FM_FAKE_HERDR_SERVER_DELAY:-0}" \
     FM_FAKE_HERDR_FAST_POLL="${FM_FAKE_HERDR_FAST_POLL:-}" \
     FM_FAKE_HERDR_DELETE_FAIL="${FM_FAKE_HERDR_DELETE_FAIL:-}" \
+    FM_FAKE_HERDR_TITLE_FAIL="${FM_FAKE_HERDR_TITLE_FAIL:-}" \
     FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" \
     "$@"
 }
@@ -231,6 +238,9 @@ test_timed_out_provision_cancels_late_launch() {
   cat > "$FAKEBIN/sleep" <<'SH'
 #!/usr/bin/env bash
 if [ "${FM_FAKE_HERDR_FAST_POLL:-}" = 1 ]; then
+  while [ -n "${FM_FAKE_HERDR_WAIT_MARKER:-}" ] && [ ! -f "$FM_FAKE_HERDR_WAIT_MARKER" ]; do
+    "$FM_FAKE_HERDR_REAL_SLEEP" 0.01
+  done
   exit 0
 fi
 exec "$FM_FAKE_HERDR_REAL_SLEEP" "$@"
@@ -289,3 +299,13 @@ test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
+test_viewer_refuses_unowned_sessions
+test_viewer_start_cancels_an_unrecorded_launcher
+test_viewer_timeout_allows_launcher_escalation
+test_viewer_start_requires_its_owned_process
+test_viewer_stop_only_signals_owned_processes
+test_viewer_stop_requires_the_recorded_parent
+test_interrupted_viewer_start_cancels_launcher
+test_teardown_refuses_while_viewer_attached
+test_viewer_stop_retains_record_when_detach_is_unreadable
+test_viewer_launcher_refuses_unsafe_arguments
