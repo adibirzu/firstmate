@@ -20,7 +20,13 @@
 #   (d) terminal run-step (passed/failed) is authoritative        -> run-step
 #   (d2) terminal failed run whose only failure is an orphaned ci monitor
 #       after checks read green                                   -> done
+#   (d3) cancelled green deliveries retain done, skipped rebase is allowed;
+#       other cancellations read unknown without a false fleet contradiction
 #   (e) cross-branch attribution: this branch's own run found via list lookup
+#   (e2) several runs bound to one worktree: the live one outranks the corpse
+#        (an unclassifiable status word keeps the ledger's newest-first order)
+#   (e3) the live sibling's head was never fetched into the task copy: it still
+#        outranks a terminal row sitting at the worktree's exact commit
 #   (e2) multiple runs: creation order preserves newer failures, replacement
 #        gates retain their run identity, and competing live runs read unknown
 #   (e3) an older live sibling with an unfetched head cannot hide a newer failure
@@ -178,6 +184,22 @@ case "${1:-} ${2:-}" in
 esac
 exit 1
 SH
+  cat > "$fb/gerrit-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  show)
+    [ -z "${FM_FAKE_GERRIT_READ_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_GERRIT_READ_LOG"
+    [ "${FM_FAKE_GERRIT_READ_FAIL:-0}" = 1 ] && exit 1
+    # url defaults to null, the shape a server whose gerrit.canonicalWebUrl is
+    # unset returns, so every case here reads a record that carries no URL.
+    printf '{"ok":true,"op":"show","changes":[{"change":%s,"subject":"fixture change","status":"%s","url":%s}]}\n' \
+      "${FM_FAKE_GERRIT_CHANGE:-${2:-0}}" "${FM_FAKE_GERRIT_STATUS:-MERGED}" \
+      "${FM_FAKE_GERRIT_URL_JSON:-null}"
+    exit 0 ;;
+esac
+exit 1
+SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -258,7 +280,7 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/gh-axi" "$fb/glab" "$fb/tmux" "$fb/herdr"
+  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/gh-axi" "$fb/glab" "$fb/gerrit-axi" "$fb/tmux" "$fb/herdr"
   printf '%s\n' "$fb"
 }
 
@@ -328,6 +350,11 @@ reset_fakes() {
   FM_FAKE_GLAB_STATE=merged
   FM_FAKE_GLAB_READ_FAIL=0
   FM_FAKE_GLAB_READ_LOG=
+  FM_FAKE_GERRIT_STATUS=MERGED
+  FM_FAKE_GERRIT_CHANGE=
+  FM_FAKE_GERRIT_URL_JSON=
+  FM_FAKE_GERRIT_READ_FAIL=0
+  FM_FAKE_GERRIT_READ_LOG=
   unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_UNREADABLE
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_CI_LOGS
@@ -335,6 +362,8 @@ reset_fakes() {
   export FM_FAKE_AXI_HOME_ERROR FM_FAKE_AXI_STATUS_RUN_ERROR FM_FAKE_AXI_STATUS_ERROR
   export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_READ_LOG FM_FAKE_PR_STATE_AXI
   export FM_FAKE_GLAB_STATE FM_FAKE_GLAB_READ_FAIL FM_FAKE_GLAB_READ_LOG
+  export FM_FAKE_GERRIT_STATUS FM_FAKE_GERRIT_CHANGE FM_FAKE_GERRIT_URL_JSON
+  export FM_FAKE_GERRIT_READ_FAIL FM_FAKE_GERRIT_READ_LOG
   export FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
 }
 
@@ -1385,6 +1414,9 @@ test_terminal_passed() {
   local out; out=$(run_crew_state "$d" feat-d)
   assert_contains "$out" "state: done" "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
+  # Combined with upstream: a passed outcome may name forge state only from a
+  # bounded PR record or retirement receipt. The 2421 false-claim stays covered
+  # by test_terminal_passed_with_open_pr_does_not_claim_merged.
   assert_contains "$out" "run passed: PR merged" "passed run reports merged only after the PR record says merged"
   assert_not_contains "$out" "merged/closed" "passed merged PR must not keep the old ambiguous label"
   pass "terminal passed run is authoritative"
@@ -1575,6 +1607,82 @@ test_terminal_passed_with_failed_gitlab_read_reports_unknown() {
   pass "terminal passed run handles failed GitLab read"
 }
 
+test_terminal_passed_with_open_gerrit_change_does_not_claim_merged() {
+  reset_fakes
+  local d url read_log out
+  d=$(new_case passed-open-gerrit-change)
+  url=https://review.internal/c/group/apps/console/+/4201
+  make_repo_on_branch "$d/wt" fm/feat-dgerritopen
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgerritopen.meta" "window=fm:fm-feat-dgerritopen" \
+    "worktree=$d/wt" "kind=ship" "pr=$url"
+  read_log="$d/gerrit-read.log"
+  : > "$read_log"
+  FM_FAKE_GERRIT_READ_LOG=$read_log
+  FM_FAKE_GERRIT_STATUS=NEW
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgerritopen "$url")"
+  out=$(run_crew_state "$d" feat-dgerritopen)
+  assert_contains "$out" "run passed: PR open" "open Gerrit change state is named"
+  assert_not_contains "$out" "PR merged" "open Gerrit change must not be reported merged"
+  assert_grep 'show 4201 --host review.internal --json' "$read_log" \
+    "Gerrit read addresses the change by number and explicit host"
+  pass "terminal passed run reads open Gerrit change state"
+}
+
+test_terminal_passed_with_merged_gerrit_change_reports_merged() {
+  reset_fakes
+  local d url out
+  d=$(new_case passed-merged-gerrit-change)
+  url=https://review.internal/c/group/apps/console/+/4200
+  make_repo_on_branch "$d/wt" fm/feat-dgerritmerged
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgerritmerged.meta" "window=fm:fm-feat-dgerritmerged" \
+    "worktree=$d/wt" "kind=ship" "pr=$url"
+  FM_FAKE_GERRIT_STATUS=MERGED
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgerritmerged "$url")"
+  out=$(run_crew_state "$d" feat-dgerritmerged)
+  # The fixture record carries a null url, the shape a server with no
+  # gerrit.canonicalWebUrl returns, so the merge is reported off the change
+  # number the read was addressed by rather than off a URL the server may
+  # never compose.
+  assert_contains "$out" "run passed: PR merged" "merged Gerrit change is reported merged"
+
+  # An abandoned change is this report's closed, and is never merged.
+  FM_FAKE_GERRIT_STATUS=ABANDONED
+  out=$(run_crew_state "$d" feat-dgerritmerged)
+  assert_contains "$out" "run passed: PR closed" "abandoned Gerrit change is reported closed"
+  assert_not_contains "$out" "PR merged" "abandoned Gerrit change must not be reported merged"
+  pass "terminal passed run reads merged and abandoned Gerrit change state"
+}
+
+test_terminal_passed_with_unreadable_gerrit_change_reports_unknown() {
+  reset_fakes
+  local d url out
+  d=$(new_case passed-unreadable-gerrit-change)
+  url=https://review.internal/c/group/apps/console/+/4202
+  make_repo_on_branch "$d/wt" fm/feat-dgerritunknown
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dgerritunknown.meta" "window=fm:fm-feat-dgerritunknown" \
+    "worktree=$d/wt" "kind=ship" "pr=$url"
+  FM_FAKE_GERRIT_READ_FAIL=1
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgerritunknown "$url")"
+  out=$(run_crew_state "$d" feat-dgerritunknown)
+  assert_contains "$out" "run passed: PR state unknown (unreadable)" "failed Gerrit read is honest unknown"
+  assert_not_contains "$out" "PR merged" "failed Gerrit read must not be reported merged"
+
+  # A record naming another change can never answer for this one, however the
+  # server came to return it. The change number is the whole identity of the
+  # match, so a wrong one is an unreadable record rather than a merge.
+  reset_fakes
+  FM_FAKE_GERRIT_STATUS=MERGED
+  FM_FAKE_GERRIT_CHANGE=4203
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/feat-dgerritunknown "$url")"
+  out=$(run_crew_state "$d" feat-dgerritunknown)
+  assert_contains "$out" "run passed: PR state unknown (unreadable)" "mismatched Gerrit record is honest unknown"
+  assert_not_contains "$out" "PR merged" "another change's merged record must not report merged"
+  pass "terminal passed run handles an unreadable or mismatched Gerrit read"
+}
+
 test_terminal_failed() {
   reset_fakes
   local d; d=$(new_case failed)
@@ -1582,10 +1690,265 @@ test_terminal_failed() {
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/feat-e.meta" "window=fm:fm-feat-e" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_failed fm/feat-e)"
+  FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/status: completed/status: failed}
   local out; out=$(run_crew_state "$d" feat-e)
   assert_contains "$out" "state: failed" "failed run -> failed"
   assert_contains "$out" "source: run-step" "failed -> run-step source"
   pass "terminal failed run is authoritative"
+}
+
+# Recovered delivery cases, varying only the terminal route and the optional
+# rebase step. The already-fixed passed-run case remains a control.
+test_cancelled_delivery_and_skipped_rebase() {
+  local scenario failures=0
+  for scenario in cancelled-outcome cancelled-status skipped-rebase cancelled-skipped-rebase passed; do
+    (
+      reset_fakes
+      local d out
+      d=$(new_case "delivery-$scenario")
+      make_repo_on_branch "$d/wt" fm/delivery
+      make_fakebin "$d" >/dev/null
+      fm_write_meta "$d/state/delivery.meta" "window=fm:fm-delivery" "worktree=$d/wt" "kind=ship"
+      FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/delivery)"
+      case "$scenario" in
+        cancelled*) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled} ;;
+      esac
+      case "$scenario" in
+        *skipped-rebase) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/rebase,completed/rebase,skipped} ;;
+        cancelled-status) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^outcome:/d') ;;
+        passed) FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/delivery https://github.com/o/r/pull/203)" ;;
+      esac
+      FM_FAKE_PR_STATE=OPEN
+      FM_FAKE_PR_MERGED=false
+      FM_FAKE_PR_STATE_AXI=open
+      FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+      out=$(FM_HOME="$d" run_crew_state "$d" delivery)
+      assert_contains "$out" "state: done" "$scenario: delivered work remains done: $out"
+      assert_not_contains "$out" "PR merged" "$scenario: terminal record cannot prove a merge"
+      if [ "$scenario" != passed ]; then
+        assert_contains "$out" "https://github.com/o/r/pull/203" "$scenario: delivery identity retained"
+        assert_contains "$out" "checks green" "$scenario: retain positive CI evidence"
+        assert_contains "$out" "held for merge" "$scenario: delivery awaits merge"
+      fi
+      pass "$scenario: terminal delivery reports only observed evidence"
+    ) || failures=$((failures + 1))
+  done
+  [ "$failures" -eq 0 ] || fail "$failures cancelled delivery regressions"
+}
+
+test_terminal_green_delivery_disposition() {
+  local route provider disposition failures=0
+  for route in failed-outcome failed-status cancelled-outcome cancelled-status; do
+    for provider in github gitlab gerrit; do
+      for disposition in open merged closed unreadable skipped no-identity; do
+        (
+          reset_fakes
+          local d out url expected
+          d=$(new_case "disposition-$route-$provider-$disposition")
+          make_repo_on_branch "$d/wt" fm/disposition
+          make_fakebin "$d" >/dev/null
+          fm_write_meta "$d/state/delivery.meta" "window=fm:fm-delivery" "worktree=$d/wt" "kind=ship"
+          FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/disposition)"
+          case "$route" in
+            cancelled-*) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled} ;;
+          esac
+          case "$route" in
+            *-status) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^outcome:/d') ;;
+          esac
+          case "$provider" in
+            github) url=https://github.com/o/r/pull/203 ;;
+            gitlab) url=https://gitlab.com/o/r/-/merge_requests/203 ;;
+            gerrit) url=https://review.example.com/c/r/+/203 ;;
+          esac
+          FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//https:\/\/github.com\/o\/r\/pull\/203/$url}
+          FM_FAKE_PR_STATE=OPEN
+          FM_FAKE_PR_MERGED=false
+          FM_FAKE_PR_STATE_AXI=open
+          FM_FAKE_GLAB_STATE=opened
+          FM_FAKE_GERRIT_STATUS=NEW
+          case "$disposition" in
+            no-identity) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^[[:space:]]*pr:/d') ;;
+            merged)
+              FM_FAKE_PR_STATE=MERGED
+              FM_FAKE_PR_MERGED=true
+              FM_FAKE_PR_STATE_AXI=merged
+              FM_FAKE_GLAB_STATE=merged
+              FM_FAKE_GERRIT_STATUS=MERGED ;;
+            closed)
+              FM_FAKE_PR_STATE=CLOSED
+              FM_FAKE_PR_STATE_AXI=closed
+              FM_FAKE_GLAB_STATE=closed
+              FM_FAKE_GERRIT_STATUS=ABANDONED ;;
+            unreadable)
+              FM_FAKE_PR_READ_FAIL=1
+              FM_FAKE_GLAB_READ_FAIL=1
+              FM_FAKE_GERRIT_READ_FAIL=1 ;;
+          esac
+          FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+          if [ "$disposition" = skipped ]; then
+            out=$(FM_CREW_STATE_NO_FORGE=1 FM_HOME="$d" run_crew_state "$d" delivery)
+          else
+            out=$(FM_HOME="$d" run_crew_state "$d" delivery)
+          fi
+          case "$disposition" in
+            open|merged)
+              assert_contains "$out" "state: done" "$route/$provider/$disposition: delivered work: $out"
+              if [ "$disposition" = open ]; then
+                assert_contains "$out" "held for merge" "open delivery awaits merge"
+              else
+                assert_contains "$out" "PR merged" "merged delivery has current evidence"
+                assert_not_contains "$out" "held for merge" "merged delivery is no longer held"
+              fi ;;
+            *)
+              expected=failed
+              case "$route" in
+                cancelled-*) expected=unknown
+                  assert_contains "$out" "run cancelled: no verdict" "cancellation retains no verdict" ;;
+              esac
+              assert_contains "$out" "state: $expected" "$route/$provider/$disposition: no unsupported delivery: $out"
+              assert_not_contains "$out" "held for merge" "unproven open delivery cannot await merge"
+              assert_not_contains "$out" "PR merged" "unproven merge cannot be claimed" ;;
+          esac
+          pass "$route/$provider/$disposition: terminal delivery uses current disposition"
+        ) || failures=$((failures + 1))
+      done
+    done
+  done
+  [ "$failures" -eq 0 ] || fail "$failures terminal delivery disposition regressions"
+}
+
+# Cancellation carries no verdict without the positive delivery safeguard.
+# Exercise both detailed routes, selected-run attribution, and the coarse ledger.
+test_cancelled_without_delivery_has_no_verdict() {
+  local scenario failures=0
+  for scenario in outcome status selected coarse no-ci-log red-ci cancelled-test skipped-test; do
+    (
+      reset_fakes
+      local d out
+      d=$(new_case "no-verdict-$scenario")
+      make_repo_on_branch "$d/wt" fm/cancelled
+      make_fakebin "$d" >/dev/null
+      fm_write_meta "$d/state/cancelled.meta" "window=fm:fm-cancelled" "worktree=$d/wt" "kind=ship"
+      FM_FAKE_AXI_STATUS="$(run_failed fm/cancelled)"
+      FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled}
+      FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/status: completed/status: cancelled}
+      case "$scenario" in
+        status) FM_FAKE_AXI_STATUS=$(printf '%s\n' "$FM_FAKE_AXI_STATUS" | sed '/^outcome:/d') ;;
+        selected)
+          FM_FAKE_AXI_STATUS_RUN=$FM_FAKE_AXI_STATUS
+          FM_FAKE_AXI_HOME="count: 1 of 1 total
+runs[1]{id,branch,status,head,pr}:
+  01RUN,fm/cancelled,cancelled,$FM_FAKE_RUN_HEAD,\"\""
+          ;;
+        coarse)
+          FM_FAKE_AXI_STATUS="$(run_running fm/another)"
+          FM_FAKE_RUNS_LIST="  cancelled  fm/cancelled $FM_FAKE_RUN_HEAD  2026-09-26 17:00"
+          ;;
+        no-ci-log|red-ci|cancelled-test|skipped-test)
+          FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/cancelled)"
+          FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled}
+          FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+          case "$scenario" in
+            no-ci-log) FM_FAKE_CI_LOGS= ;;
+            red-ci) FM_FAKE_CI_LOGS="$FM_FAKE_CI_LOGS
+checks failed: 1 of 2 checks red" ;;
+            cancelled-test) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/test,completed/test,cancelled} ;;
+            skipped-test) FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/test,completed/test,skipped} ;;
+          esac
+          ;;
+      esac
+      out=$(FM_HOME="$d" run_crew_state "$d" cancelled)
+      assert_contains "$out" "state: unknown" "$scenario: cancellation alone has no verdict: $out"
+      assert_contains "$out" "run cancelled: no verdict" "$scenario: explicit reason"
+      assert_contains "$out" "source: run-step" "$scenario: keep attribution"
+      assert_not_contains "$out" "held for merge" "$scenario: no unsupported delivery claim"
+      pass "$scenario: cancellation without delivery carries no verdict"
+    ) || failures=$((failures + 1))
+  done
+  [ "$failures" -eq 0 ] || fail "$failures cancellation verdict regressions"
+}
+
+# The real inventory consumer must not confuse a cancellation with a failed
+# child contradicting an In flight row. Unknown remains explicitly partial.
+test_cancelled_fleet_inventory_is_unverified_not_contradictory() {
+  reset_fakes
+  local d out summary backlog_before status_before scenario=${1:-synthetic}
+  d=$(new_case "cancelled-inventory-$scenario")
+  make_repo_on_branch "$d/wt" fm/cancelled
+  make_fakebin "$d" >/dev/null
+  mkdir -p "$d/data" "$d/config" "$d/projects"
+  fm_write_meta "$d/state/cancelled.meta" "window=fm:fm-cancelled" "worktree=$d/wt" \
+    "project=sample" "harness=claude" "kind=ship" "mode=no-mistakes"
+  cat > "$d/data/backlog.md" <<'EOF'
+## In flight
+- [ ] cancelled - Validation in progress (repo: sample) (kind: ship) (since 2026-09-26)
+
+## Queued
+
+## Done
+EOF
+  printf 'failed: historical cancellation projection\n' > "$d/state/cancelled.status"
+  backlog_before=$(cat "$d/data/backlog.md")
+  status_before=$(cat "$d/state/cancelled.status")
+  FM_FAKE_AXI_STATUS="$(run_running fm/cancelled)"
+  out=$(FM_HOME="$d" run_crew_state "$d" cancelled)
+  assert_contains "$out" 'state: working' 'fixture begins with active validation'
+  # Deliberately transition the external instrument fixture to cancelled.
+  # This executes Firstmate end to end; it does not cancel a real daemon run.
+  FM_FAKE_AXI_STATUS="$(run_failed fm/cancelled)"
+  FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS//failed/cancelled}
+  FM_FAKE_AXI_STATUS=${FM_FAKE_AXI_STATUS/status: completed/status: cancelled}
+  if [ "$scenario" = captured ]; then
+    # Real record supplied read-only from axi status --run
+    # 01M2SXM5NDEWK2KY5TG8DDYJMV; only branch/head are rebound for attribution.
+    # Skipped rebase and cancelled CI monitoring remain synthetic cases above.
+    FM_FAKE_AXI_STATUS="$(cat <<EOF
+current_branch: fm/fm-abort-autorise-nest-pas-un-echec
+other_branch_run:
+id: "01M2SXM5NDEWK2KY5TG8DDYJMV"
+branch: fm/cancelled
+status: cancelled
+head: ${FM_FAKE_RUN_HEAD:0:8}
+head_sha: $FM_FAKE_RUN_HEAD
+pr: "https://github.com/kunchenguid/firstmate/pull/4818"
+findings: 2 awaiting
+steps[9]{step,status,findings,duration_ms}:
+intent,completed,0,32
+rebase,completed,0,1137
+review,failed,2,652115
+test,pending,0,0
+document,pending,0,0
+lint,pending,0,0
+push,pending,0,0
+pr,pending,0,0
+ci,pending,0,0
+outcome: cancelled
+error: "cancelled: aborted by user"
+EOF
+)"
+  fi
+  out=$(FM_HOME="$d" run_crew_state "$d" cancelled)
+  assert_contains "$out" 'state: unknown' "$scenario cancellation has no verdict: $out"
+  assert_contains "$out" 'source: run-step' "$scenario retains run attribution"
+  assert_contains "$out" 'run cancelled: no verdict' "$scenario cancellation outweighs interrupted steps"
+  assert_not_contains "$out" 'state: failed' "$scenario cancellation is not a failure"
+  assert_not_contains "$out" 'held for merge' "$scenario has no positive delivery evidence"
+  summary=$(PATH="$d/fakebin:$PATH" FM_HOME="$d" FM_ROOT_OVERRIDE="$d/fixture-root" \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary)
+  printf '%s' "$summary" | jq -e '
+    .state == "unknown" and .valid == false
+    and .invalidity == {kind:"child_current_unavailable",ids:["cancelled"]}
+    and .reason == "child current state unavailable: cancelled"
+  ' >/dev/null || fail "cancellation must not report a terminal/backlog contradiction: $summary"
+  assert_equals "$backlog_before" "$(cat "$d/data/backlog.md")" 'correct backlog is unchanged'
+  assert_equals "$status_before" "$(cat "$d/state/cancelled.status")" 'historical event is unchanged'
+  pass "$scenario cancelled run leaves fleet inventory unverified without a failure contradiction"
+}
+
+# Replay the recorded producer output through both public consumers, without
+# starting or aborting a daemon run or claiming live cancellation evidence.
+test_captured_cancelled_review_has_no_verdict() {
+  test_cancelled_fleet_inventory_is_unverified_not_contradictory captured
 }
 
 test_terminal_failed_ci_orphan_after_green_reads_done() {
@@ -1765,10 +2128,13 @@ EOF
   pass "cross-branch attribution picks the branch's most recent row"
 }
 
-# The plain ledger is ordered by creation time, not the time a status changed.
-# A newer failure must not be hidden by an older live run, even when both heads
-# bind to the worktree. These legacy CLI cases lack the AXI identity table.
-test_terminal_run_keeps_newer_failure_over_live_sibling() {
+# Live-over-terminal selection (bin/fm-nm-run-lib.sh). Reproduces the proven
+# 2026-08 case: a crashed validation daemon left a FAILED run at the worktree's
+# exact commit, while the live run that replaced it validates a descendant
+# commit on the same branch. Both bind - the corpse by the equal-commit rule,
+# the live run by the ancestor rule - and bare `axi status` answers with the
+# corpse, so every recomputation read a healthy task as failed.
+test_terminal_corpse_loses_to_live_run_on_same_branch() {
   reset_fakes
   local d base_head live_head short_base short_live out
   d=$(new_case live-beats-corpse)
@@ -1783,25 +2149,28 @@ test_terminal_run_keeps_newer_failure_over_live_sibling() {
   [ "$short_base" != "$short_live" ] || fail "live run head did not advance past the worktree"
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/corpse.meta" "window=fm:fm-corpse" "worktree=$d/wt" "kind=ship"
-  # The newest run failed at this worktree's own commit.
+  # The corpse is the most-recently-touched run, so it is what `axi status`
+  # reports, at this worktree's own commit.
   FM_FAKE_RUN_HEAD="$base_head"
   FM_FAKE_AXI_STATUS="$(run_failed fm/feat-corpse)"
-  # The older live run may have advanced its tip, but it did not replace this run.
+  # It is also the newest row in the listing (the crash marked it after the
+  # live run started), so row order alone still selects the corpse.
   FM_FAKE_RUNS_LIST="$(cat <<EOF
   failed     fm/feat-corpse ${short_base}  2026-08-05 11:20
   running    fm/feat-corpse ${short_live}  2026-08-05 10:05
 EOF
 )"
   out=$(run_crew_state "$d" corpse)
-  assert_contains "$out" "state: failed" "the newer failure remains authoritative beside an older live run"
-  assert_contains "$out" "source: run-step" "the newer failure keeps its run-step verdict"
-  pass "a newer failure is not hidden by a live sibling"
+  assert_contains "$out" "state: working" "the live run outranks the terminal corpse bound to the same worktree"
+  assert_contains "$out" "source: run-step" "the live run is still an attributed run-step verdict"
+  assert_not_contains "$out" "state: failed" "a dead run at the worktree commit must not report a healthy task as failed"
+  pass "a live run outranks a terminal run bound to the same worktree"
 }
 
-# The same creation-order rule on the runs-list path itself: `axi status` answers for
+# The same preference on the runs-list path itself: `axi status` answers for
 # another crew's branch, and this branch's newest row is terminal while an older
 # row is still live.
-test_runs_list_newer_failure_outranks_older_live_row() {
+test_runs_list_live_row_outranks_newer_terminal_row() {
   reset_fakes
   local d base_head live_head short_base short_live out
   d=$(new_case live-row-beats-terminal-row)
@@ -1822,13 +2191,17 @@ test_runs_list_newer_failure_outranks_older_live_row() {
 EOF
 )"
   out=$(run_crew_state "$d" liverow)
-  assert_contains "$out" "state: failed" "the newest terminal row must not lose to an older live row"
-  pass "runs-list selection keeps the newer failure over an older live row"
+  assert_contains "$out" "state: working" "an older live row outranks the branch's newest terminal row"
+  assert_not_contains "$out" "state: failed" "the terminal row must not win while a live row binds"
+  pass "runs-list selection prefers a live row over a newer terminal one"
 }
 
-# An unfetched head on the older live row does not change creation order.
-# Exact-head compatibility of the newer terminal row is not supersession proof.
-test_unfetched_older_live_sibling_does_not_hide_failure() {
+# The routine production shape of the same case: the live run's fix-round
+# commits live only in the gate repo, so its head is not a git object in the
+# task copy and can never bind by the head rule. The terminal row sitting at
+# the worktree's EXACT commit is the anchor that proves the unfetched live row
+# is this worktree's own continuation, so the live run still wins.
+test_unfetched_live_sibling_outranks_terminal_row_at_exact_head() {
   reset_fakes
   local d base_head short_base unfetched out
   d=$(new_case unfetched-live-sibling)
@@ -1848,7 +2221,111 @@ test_unfetched_older_live_sibling_does_not_hide_failure() {
 EOF
 )"
   out=$(run_crew_state "$d" unfetched)
+  assert_contains "$out" "state: working" "an unfetched live row anchored by the exact-head terminal row outranks it"
+  assert_not_contains "$out" "state: failed" "the corpse at the worktree commit must not report a healthy task as failed"
+  pass "an unfetched live sibling outranks a terminal row at the worktree's exact commit"
+}
+
+# Identity overview: newest-row-decides. The coarse runs-list path above keeps
+# the fork's live-over-terminal exception (a corpse at this copy must not hide
+# a live replacement). With run ids, the newer failure is selected by id.
+test_terminal_run_keeps_newer_failure_over_live_sibling() {
+  reset_fakes
+  local d base_head live_head short_base short_live out
+  d=$(new_case newer-failure-over-live)
+  make_repo_on_branch "$d/wt" fm/feat-newerfail
+  base_head=$(git -C "$d/wt" rev-parse HEAD)
+  git -C "$d/wt" commit -q --allow-empty -m 'older live run advanced the tip'
+  live_head=$(git -C "$d/wt" rev-parse HEAD)
+  git -C "$d/wt" reset -q --hard "$base_head"
+  short_base=$(git -C "$d/wt" rev-parse --short=7 "$base_head")
+  short_live=$(git -C "$d/wt" rev-parse --short=7 "$live_head")
+  [ "$short_base" != "$short_live" ] || fail "live run head did not advance past the worktree"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/newerfail.meta" "window=fm:fm-newerfail" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_RUN_HEAD="$base_head"
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-newerfail | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_STATUS_RUN="$FM_FAKE_AXI_STATUS"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-newerfail,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-newerfail,running,$short_live,\"\""
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-newerfail ${short_base}  2026-08-05 11:20
+  running    fm/feat-newerfail ${short_live}  2026-08-05 10:05
+EOF
+)"
+  out=$(run_crew_state "$d" newerfail)
+  assert_contains "$out" "state: failed" "the newer failure remains authoritative beside an older live run"
+  assert_contains "$out" "source: run-step" "the newer failure keeps its run-step verdict"
+  assert_contains "$out" "01NEW" "the selected identity is the newer failure"
+  pass "a newer failure is not hidden by a live sibling"
+}
+
+# The same creation-order rule on the runs-list path itself: `axi status` answers for
+# another crew's branch, and this branch's newest row is terminal while an older
+# row is still live.
+test_runs_list_newer_failure_outranks_older_live_row() {
+  reset_fakes
+  local d base_head live_head short_base short_live out
+  d=$(new_case overview-newer-failure)
+  make_repo_on_branch "$d/wt" fm/feat-liverow
+  base_head=$(git -C "$d/wt" rev-parse HEAD)
+  git -C "$d/wt" commit -q --allow-empty -m 'live run advanced the tip'
+  live_head=$(git -C "$d/wt" rev-parse HEAD)
+  git -C "$d/wt" reset -q --hard "$base_head"
+  short_base=$(git -C "$d/wt" rev-parse --short=7 "$base_head")
+  short_live=$(git -C "$d/wt" rev-parse --short=7 "$live_head")
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/liverow.meta" "window=fm:fm-liverow" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_RUN_HEAD="$base_head"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_AXI_STATUS_RUN="$(run_failed fm/feat-liverow | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-liverow,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-liverow,running,$short_live,\"\""
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-05 11:30
+  failed     fm/feat-liverow ${short_base}  2026-08-05 11:20
+  running    fm/feat-liverow ${short_live}  2026-08-05 10:05
+EOF
+)"
+  out=$(run_crew_state "$d" liverow)
+  assert_contains "$out" "state: failed" "the newest terminal row must not lose to an older live row"
+  assert_contains "$out" "01NEW" "identity selection keeps the newer failure"
+  pass "runs-list selection keeps the newer failure over an older live row"
+}
+
+# An unfetched head on the older live row does not change creation order.
+# Exact-head compatibility of the newer terminal row is not supersession proof.
+test_unfetched_older_live_sibling_does_not_hide_failure() {
+  reset_fakes
+  local d base_head short_base unfetched out
+  d=$(new_case overview-unfetched-older-live)
+  make_repo_on_branch "$d/wt" fm/feat-unfetched-id
+  base_head=$(git -C "$d/wt" rev-parse HEAD)
+  short_base=$(git -C "$d/wt" rev-parse --short=7 "$base_head")
+  unfetched=0123abc
+  git -C "$d/wt" rev-parse --verify --quiet "${unfetched}^{commit}" >/dev/null 2>&1 \
+    && fail "the unfetched head must not resolve in the task copy"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/unfetchedid.meta" "window=fm:fm-unfetchedid" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_RUN_HEAD="$base_head"
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-unfetched-id | sed 's/01RUN/01NEW/')"
+  FM_FAKE_AXI_STATUS_RUN="$FM_FAKE_AXI_STATUS"
+  FM_FAKE_AXI_HOME="count: 2 of 2 total
+runs[2]{id,branch,status,head,pr}:
+  \"01NEW\",fm/feat-unfetched-id,failed,$short_base,\"\"
+  \"01OLD\",fm/feat-unfetched-id,running,$unfetched,\"\""
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-unfetched-id ${short_base}  2026-08-05 11:20
+  running    fm/feat-unfetched-id ${unfetched}  2026-08-05 10:05
+EOF
+)"
+  out=$(run_crew_state "$d" unfetchedid)
   assert_contains "$out" "state: failed" "an older unfetched live head must not hide the newer failure"
+  assert_contains "$out" "01NEW" "identity selection keeps the newer failure"
   pass "an older unfetched live sibling does not hide a newer failure"
 }
 
@@ -1876,7 +2353,7 @@ test_only_terminal_rows_keep_newest_first_precedence() {
 EOF
 )"
   out=$(run_crew_state "$d" allterminal)
-  assert_contains "$out" "state: failed" "the newest terminal row still wins when no live row binds"
+  assert_contains "$out" "state: unknown" "the newest cancelled row wins without inventing a verdict"
   assert_contains "$out" "run cancelled" "the newer cancelled row, not the older completed one"
   pass "two terminal rows keep the existing newest-first precedence"
 }
@@ -2144,6 +2621,47 @@ Enter to confirm . Esc to cancel'
   assert_contains "$out" "state: unknown" "a parked launch reads unknown, not busy or idle"
   assert_contains "$out" "launch-prompt" "the unknown verdict names the launch-prompt backstop as its source"
   pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
+}
+
+# Gap fix: a cline crew used to read `unknown - harness state unavailable`, which
+# left supervision unable to tell a working worker from a wedged one by anything
+# but watching its token counter by hand. It now folds cline's own session record.
+test_cline_reports_a_real_state_from_its_session_record() {
+  reset_fakes
+  local d out root
+  d=$(new_case cline-session)
+  make_repo_on_branch "$d/wt" fm/feat-cl
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-cl.meta" "window=fm:fm-feat-cl" "worktree=$d/wt" "kind=ship" "harness=cline"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  root="$d/clinesessions"
+  mkdir -p "$root/s1"
+  cat > "$root/s1/s1.json" <<EOF
+{"session_id":"s1","status":"running","workspace_root":"$d/wt","messages_path":"$root/s1/s1.messages.json"}
+EOF
+  printf 'sessions_root=%s\nworkspace_root=%s\n' "$root" "$d/wt" > "$d/state/feat-cl.cline-session"
+  out=$(run_crew_state "$d" feat-cl)
+  assert_contains "$out" "state: working" "a running cline session must read working"
+  assert_contains "$out" "cline-session" "the cline verdict must name its semantic source"
+  assert_not_contains "$out" "harness state unavailable" "cline must no longer report an unavailable harness state"
+
+  # The wedge: a message the agent accepted and never processed. No turn is
+  # running, so this must not read working off the busy path. The classifier
+  # separates it from a finished turn as `idle cline-session-stalled`
+  # (tests/fm-cline-harness.test.sh pins that); this layer folds every idle
+  # verdict into the same fall-through, so the distinction stops at the
+  # classifier until fm-crew-state's rendered state vocabulary is extended.
+  cat > "$root/s1/s1.json" <<EOF
+{"session_id":"s1","status":"idle","workspace_root":"$d/wt","messages_path":"$root/s1/s1.messages.json"}
+EOF
+  cat > "$root/s1/s1.messages.json" <<'EOF'
+{"messages":[{"role":"user","content":[{"type":"text","text":"go"}]}]}
+EOF
+  out=$(run_crew_state "$d" feat-cl)
+  assert_not_contains "$out" "state: working" "a queued-but-unprocessed cline turn must not read working"
+  assert_not_contains "$out" "harness state unavailable" "an unprocessed cline turn is a read state, not an unreadable one"
+  pass "a cline crew reports a real state and never reads an unprocessed turn as working"
 }
 
 # A converted adapter must NOT read working from rendered footer text: the
@@ -2655,6 +3173,43 @@ test_no_run_idle_secondmate_resolved_event_not_state() {
   pass "a trailing resolved: event does not corrupt state render (idle stays idle)"
 }
 
+# A still-standing paused: declaration must keep governing across a later
+# resolved: line that closes some OTHER open decision on the same task -
+# status_paused_governing_line's fold, shared with fm-watch.sh and the daemon,
+# recovers this declared state instead of the trailing-verb fallback defaulting
+# to unknown/none. The unrelated blocked:/needs-decision: + resolved: -> idle
+# cases above must stay unchanged: those trailing resolved: lines close a
+# decision, not a declared wait, so no earlier paused:/captain-held: line
+# stands behind them.
+test_no_run_idle_paused_survives_unrelated_resolved_event() {
+  reset_fakes
+  local d; d=$(new_case paused-resolved)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/mate.meta" "window=fm:fm-mate" "worktree=$d/wt" "kind=secondmate" "home=$d/wt"
+  printf 'paused: holding for the upstream release\n' > "$d/state/mate.status"
+  printf 'resolved [key=other]: an unrelated decision was answered\n' >> "$d/state/mate.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "state: paused" "an intervening unrelated resolved: line cancelled a still-standing declared pause"
+  assert_contains "$out" "source: status-log" "the recovered pause still reports its status-log source"
+  assert_contains "$out" "holding for the upstream release" "the recovered pause keeps its original reason"
+  # Control (unchanged): a keyed resolved: closing the SAME needs-decision chain
+  # still falls through to idle - the earlier line was never a declared wait.
+  printf 'needs-decision [key=race]: pick subscribe order\nresolved [key=race]: went with subscribe-before-write\n' \
+    > "$d/state/mate.status"
+  out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "state: unknown" "a resolved needs-decision chain must not be recovered as paused"
+  assert_contains "$out" "source: none" "a resolved needs-decision chain still has no status-log state source"
+  # Control (unchanged): a bare resolved: closing a blocked: declaration still
+  # falls through to idle - blocked: is a real state verb, not a declared wait.
+  printf 'blocked: waiting on infra\nresolved: infra access granted\n' > "$d/state/mate.status"
+  out=$(run_crew_state "$d" mate)
+  assert_contains "$out" "source: none" "a resolved blocked: chain must not be recovered as paused"
+  pass "a still-standing paused: declaration survives an intervening unrelated resolved: line"
+}
+
 test_dead_window_ignores_stale_status_log() {
   reset_fakes
   local d; d=$(new_case dead-window)
@@ -2875,6 +3430,19 @@ test_remote_alive_idle_is_healthy_not_gone() {
   assert_not_contains "$out" "worktree gone" "a healthy remote mate must never read as torn down"
   assert_not_contains "$out" "backend target gone" "a healthy remote mate must never read as a dead target"
   pass "fm-crew-state remote: an idle alive endpoint reads alive, never gone or dead"
+}
+
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line() {
+  reset_fakes
+  local d out rc
+  d=$(setup_remote_case remote-alive-paused-then-resolved)
+  make_fakebin "$d" >/dev/null
+  printf 'paused: holding for review\nresolved [key=other]: closed an unrelated decision\n' > "$d/state/rsm.status"
+  out=$(FM_FAKE_REMOTE_STATE_OUT=alive FM_FAKE_SSH_RC=0 run_remote_crew_state "$d" rsm); rc=$?
+  expect_code 0 "$rc" "remote alive exits 0"
+  assert_contains "$out" "state: paused" "a still-standing declared pause must survive an unrelated later resolved line"
+  assert_contains "$out" "remote endpoint alive on remote-mac" "the remote liveness read should be visible"
+  pass "fm-crew-state remote: a genuinely standing pause is not silently cancelled by an unrelated resolved line"
 }
 
 test_remote_unreachable_is_unknown_remote_not_dead() {
@@ -5014,10 +5582,14 @@ test_legacy_conflicting_run_records_report_unknown() {
   FM_FAKE_AXI_STATUS="$(run_running fm/competing | sed 's/01RUN/01OLD/')"
   FM_FAKE_AXI_HOME=$FM_FAKE_AXI_STATUS
   out=$(run_crew_state "$d" competing)
-  assert_contains "$out" 'state: unknown' 'conflicting records without identities cannot prove authority'
-  assert_contains "$out" '01OLD' 'legacy ambiguity preserves the available run id'
-  assert_contains "$out" 'unavailable' 'legacy ambiguity states that the competing id is unavailable'
-  pass 'legacy conflicting run records report unknown'
+  # Without an identity overview, the fork's live-over-terminal rule still
+  # attributes the live run. Upstream wanted unknown/unavailable here; that
+  # would re-break the 2026-08 corpse-at-HEAD incident the ledger exception
+  # exists to prevent. Identity-aware selection covers the newer-failure case.
+  assert_contains "$out" 'state: working' 'without run ids the live-over-terminal rule still attributes the live run'
+  assert_contains "$out" '01OLD' 'the bound axi-status identity is still named'
+  assert_not_contains "$out" 'state: unknown' 'live-over-terminal is not an identity-unavailable unknown'
+  pass 'legacy conflicting run records keep live-over-terminal without an identity overview'
 }
 
 # Captured AXI stdout is a serialized input contract, not implementation source.
@@ -5146,6 +5718,16 @@ test_captured_axi_status_shapes
 test_captured_inventory_replay
 test_captured_authority_transition
 test_captured_completed_history
+cancellation_failures=0
+for cancellation_test in test_captured_cancelled_review_has_no_verdict \
+  test_terminal_green_delivery_disposition \
+  test_cancelled_without_delivery_has_no_verdict \
+  test_cancelled_fleet_inventory_is_unverified_not_contradictory \
+  test_cancelled_delivery_and_skipped_rebase; do
+  ("$cancellation_test") || cancellation_failures=$((cancellation_failures + 1))
+done
+[ "$cancellation_failures" -eq 0 ] || fail "$cancellation_failures cancellation test groups failed"
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -5188,6 +5770,9 @@ test_terminal_passed_without_readable_pr_identity_reports_unknown
 test_terminal_passed_with_open_gitlab_mr_does_not_claim_merged
 test_terminal_passed_with_merged_gitlab_mr_reports_merged
 test_terminal_passed_with_failed_gitlab_read_reports_unknown
+test_terminal_passed_with_open_gerrit_change_does_not_claim_merged
+test_terminal_passed_with_merged_gerrit_change_reports_merged
+test_terminal_passed_with_unreadable_gerrit_change_reports_unknown
 test_terminal_failed
 test_terminal_failed_ci_orphan_after_green_reads_done
 test_terminal_failed_ci_orphan_status_only_reads_done
@@ -5197,6 +5782,9 @@ test_cross_branch_attribution_via_runs_list
 test_coarse_socket_refusal_reports_blocked
 test_coarse_failed_ledger_with_daemon_down_reports_unknown
 test_cross_branch_attribution_picks_most_recent_row
+test_terminal_corpse_loses_to_live_run_on_same_branch
+test_runs_list_live_row_outranks_newer_terminal_row
+test_unfetched_live_sibling_outranks_terminal_row_at_exact_head
 test_terminal_run_keeps_newer_failure_over_live_sibling
 test_runs_list_newer_failure_outranks_older_live_row
 test_unfetched_older_live_sibling_does_not_hide_failure
@@ -5212,6 +5800,7 @@ test_moved_remote_branch_without_named_head_is_blocked
 test_no_run_busy_pane
 test_no_run_launch_prompt_parked_is_not_working
 test_no_run_footer_text_alone_is_not_working
+test_cline_reports_a_real_state_from_its_session_record
 test_no_run_grok_uses_isolated_fallback
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_cli_failure_reads_unreachable_not_gone
@@ -5224,6 +5813,7 @@ test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
+test_no_run_idle_paused_survives_unrelated_resolved_event
 test_dead_window_ignores_stale_status_log
 test_no_run_tmux_unreadable_reads_unreachable_not_gone
 test_dead_window_still_reports_terminal_run_step
@@ -5233,6 +5823,7 @@ test_scout_skips_run_lookup
 test_torn_down_worktree
 test_remote_alive_with_log_uses_status_log
 test_remote_alive_idle_is_healthy_not_gone
+test_remote_alive_still_reports_paused_after_unrelated_resolved_line
 test_remote_unreachable_is_unknown_remote_not_dead
 test_remote_dead_reports_remote_verdict
 test_missing_meta

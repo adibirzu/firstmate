@@ -34,7 +34,7 @@
     },
     {
       "when": "The task handles sensitive data that must stay on local infrastructure, is a long-duration run, or paid-quota headroom is low and the work fits a fast local lane.",
-      "use": { "harness": "opencode", "model": "vllm/qwen3.8-flash" },
+      "use": { "harness": "opencode", "provider": "opencode", "model": "vllm/qwen3.8-flash" },
       "why": "The adi1 LiteLLM qwen3.8-Flash lane keeps sensitive or long-running work off paid vendor quota. Confirm the model id against the LiteLLM catalog before copying this."
     },
     {
@@ -45,7 +45,8 @@
   ],
   "default": [
     { "harness": "claude", "provider": "claude", "model": "sonnet", "effort": "medium" },
-    { "harness": "codex", "provider": "codex", "model": "gpt-5.5", "effort": "medium" }
+    { "harness": "codex", "provider": "codex", "model": "gpt-5.5", "effort": "medium" },
+    { "harness": "pi", "model": "anthropic/claude-sonnet-5", "effort": "medium", "provider": "claude" }
   ],
   "modelFallback": {
     "grok": [ "grok-4.6", "grok-4.5" ]

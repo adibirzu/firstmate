@@ -8,11 +8,14 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 . "$ROOT/tests/composer-fence.sh"
 classify() { fm_composer_classify_content "$@"; }
 test_copilot_env_marker_detects_harness() {
-  local out fakebin base_path
+  local out blind_root blind_bin base_path
   base_path=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
-  fakebin=$(fm_fakebin "$(fm_test_tmproot fm-copilot-marker)")
-  fm_fake_blind_ancestry "$fakebin"
-  out=$(PATH="$fakebin:$base_path" COPILOT_CLI=1 "$HARNESS")
+  blind_root=$(mktemp -d "${TMPDIR:-/tmp}/fm-copilot-marker.XXXXXX")
+  blind_bin=$(fm_fakebin "$blind_root")
+  fm_fake_blind_ancestry "$blind_bin"
+  out=$(env -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    PATH="$blind_bin:$base_path" COPILOT_CLI=1 "$HARNESS")
+  rm -rf "$blind_root"
   [ "$out" = copilot ] || fail "expected copilot from COPILOT_CLI=1, got '$out'"
   pass "fm-harness: Copilot marker selects copilot"
 }
@@ -37,8 +40,23 @@ case "${1:-}" in
   has-session|new-session|new-window|kill-window|set-window-option|list-windows) ;;
   send-keys) [ "$#" -ne 4 ] || [ "${!#}" != Enter ] || [ "$(cat "$FM_COPILOT_CAPTURE_COUNT")" != 1 ] || printf '%s\n' Enter >> "$FM_COPILOT_KEYS" ;;
   capture-pane)
-    n=$(cat "$FM_COPILOT_CAPTURE_COUNT"); n=$((n + 1)); printf '%s\n' "$n" > "$FM_COPILOT_CAPTURE_COUNT"
-    if [ "$FM_COPILOT_MODE" = clear ] && [ "$n" -gt 1 ]; then printf '%s\n' ' ◎ Working esc interrupt GPT-5.6 Terra'; else printf '%s\n' 'Confirm folder trust' '/opt/pool/crew/wt-01' '❯ 1. Yes'; fi ;;
+    # The trust gate reads 120 lines. A 40-line composer/busy capture during
+    # launch must not start that counter, or pre-launch Enters are counted as
+    # trust answers and the first trust poll already looks past the dialog.
+    case "$*" in
+      *' -S -120'*)
+        n=$(cat "$FM_COPILOT_CAPTURE_COUNT"); n=$((n + 1)); printf '%s\n' "$n" > "$FM_COPILOT_CAPTURE_COUNT"
+        if [ "$FM_COPILOT_MODE" = clear ] && [ "$n" -gt 1 ]; then
+          printf '%s\n' ' ◎ Working esc interrupt GPT-5.6 Terra'
+        else
+          printf '%s\n' 'Confirm folder trust' '/opt/pool/crew/wt-01' '❯ 1. Yes'
+        fi
+        ;;
+      *)
+        printf '%s\n' 'Confirm folder trust' '/opt/pool/crew/wt-01' '❯ 1. Yes'
+        ;;
+    esac
+    ;;
 esac
 SH
   chmod +x "$fakebin/tmux"

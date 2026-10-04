@@ -102,6 +102,7 @@ async function handle(q){
  await new Promise(r=>setTimeout(r,150));
  if(text.includes('ARM_PRIMARY'))await control('fm_watch_arm_pi');
  const seq=text.match(/\\[seq (\\d+)\\]/);
+ const seq=text.match(/\\[seq (\\d+)[,\\]]/);
  if(seq){await control('fm_branch_outcomes',{recent:1});await control('fm_branch_processed',{through:Number(seq[1])});await control('fm_branch_processed',{through:Number(seq[1])});}
  const answer=seq?'NATIVE_OUTCOME_HANDLED':'NATIVE_PRIMARY_READY';
  emit({method:'item/agentMessage/delta',params:{threadId:thread.id,turnId:id,itemId:id+'-answer',delta:answer}});

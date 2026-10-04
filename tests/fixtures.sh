@@ -128,23 +128,15 @@ case "${1:-}" in
     for a in "$@"; do
       if [ "$prev" = "-l" ]; then
         payload=$a
-        if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-          # Production sends a short source command for the private staged
-          # launch file. Record its contents so launch-contract assertions see
-          # the command the pane executes, while retaining direct-literal
-          # logging for tests that exercise other send paths.
-          case "$a" in
-            ". '"*"'")
-              staged=${a#". '"}
-              staged=${staged%"'"}
-              if [ -f "$staged" ]; then
-                a=$(cat "$staged")
-              fi
-              ;;
-            *) ;;
-          esac
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
+        logged=$a
+        case "$logged" in
+          ". '"*"'")
+            staged=${logged#". '"}
+            staged=${staged%"'"}
+            [ ! -f "$staged" ] || logged=$(cat "$staged")
+            ;;
+        esac
+        [ -n "${FM_FAKE_LAUNCH_LOG:-}" ] && printf '%s\n' "$logged" >> "$FM_FAKE_LAUNCH_LOG"
       fi
       prev=$a
     done
@@ -190,6 +182,25 @@ case "${1:-}" in
             > "$_claim_dir/agent-transcripts/fake-conversation/fake-conversation.jsonl"
         done
       fi
+    fi
+    # The pre-launch pane exports ride the text-line form
+    # (`send-keys -t <target> <text> Enter`), which carries no -l flag, so a
+    # suite that asserts on what the pane shell received opts in with its own
+    # log. Skip the flags, the target, and the trailing key so only the payload
+    # is recorded, one per line, in send order.
+    if [ -n "${FM_FAKE_PANE_LOG:-}" ]; then
+      shift
+      skip_next=
+      literal=
+      for a in "$@"; do
+        if [ -n "$skip_next" ]; then skip_next=; continue; fi
+        case "$a" in
+          -t) skip_next=1; continue ;;
+          -l) literal=1; continue ;;
+          Enter|C-m) continue ;;
+          *) [ -n "$literal" ] || printf '%s\n' "$a" >> "$FM_FAKE_PANE_LOG" ;;
+        esac
+      done
     fi
     exit 0
     ;;

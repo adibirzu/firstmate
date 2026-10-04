@@ -55,7 +55,7 @@
 #
 # Sourced by the publishers above and by tests. No side effects on source.
 
-_FM_PARENT_CHANNEL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_FM_PARENT_CHANNEL_LIB_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$_FM_PARENT_CHANNEL_LIB_DIR/fm-secondmate-parent-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -129,9 +129,10 @@ fm_parent_channel_clean_note() {  # <text>
   printf '%s' "$1" | LC_ALL=C tr '\t\r\n' '   ' | cut -c1-1200
 }
 
-# Append <line> once under a per-channel lock.  Retry identity ignores the
-# optional event timestamp through fm-classify-lib.sh, so a repeated report
-# remains idempotent even though each fresh emission is stamped.
+# Append <line> to <path> unless that exact line is already there, serializing
+# the check and append per channel so concurrent publishers cannot duplicate it.
+# Append <line> once, using fm-classify-lib.sh's retry contract. Time-insensitive:
+# the caller declaring a new event is the one that stamps it.
 fm_parent_channel_append_once() {  # <path> <line>
   local path=$1 line=$2 lock pid owner_pid
   if [ -e "$path" ] || [ -L "$path" ]; then

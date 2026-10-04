@@ -70,7 +70,7 @@ const attempt = () => {
   if (mode === "worktree") {
     if (declinedExternalImports(projects, project)) {
       throw new Error(
-        `project entry for ${project} in ${store} already declined external CLAUDE.md imports; refusing to override that consent`,
+        `project entry for ${project} in ${store} already declined external CLAUDE.md imports; refusing to override that consent. To recover, remove hasClaudeMdExternalIncludesApproved and hasClaudeMdExternalIncludesWarningShown from that project entry and approve the imports dialog interactively once`,
       );
     }
     const carryImportConsent = approvedExternalImports(projects, project);
@@ -90,7 +90,10 @@ const attempt = () => {
   const unique = `${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
   const tmp = path.join(path.dirname(store), `.claude.json.fm-trust.${unique}`);
   // Two-space pretty-printed, because that is the format Claude Code itself
-  // writes. Compact would reformat the operator's whole config on every spawn.
+  // writes: the store on the box this was measured on begins "{\n  " and runs
+  // 9646 lines. Compact would reformat the operator's whole config on every
+  // spawn and the vendor's next write would expand it again, so this must not
+  // be "simplified" to JSON.stringify(root) without re-measuring the vendor.
   fs.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   let renamed = false;
   try {

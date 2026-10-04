@@ -178,6 +178,10 @@ test_agy_busy_tail_needs_the_pinned_status_row() {
     && fail "an idle footer must not read busy" || true
   printf 'Generating report...\ndone\n? for shortcuts\n>\n' | fm_busy_lines_match agy \
     && fail "the delivery guard must not acknowledge on echoed Generating output" || true
+  printf 'Running...\n' | fm_busy_lines_match agy \
+    || fail "the delivery guard must acknowledge agy 1.2.x's standalone Running row"
+  printf 'the worker said Running... in prose\n' | fm_busy_lines_match agy \
+    && fail "the delivery guard must not acknowledge prose mentioning Running" || true
   FM_BUSY_AGY_REGEX='idle' bash -c '. "$0/bin/fm-busy-lib.sh"; printf "idle\n" | fm_busy_agy_tail_busy' "$ROOT" \
     && fail "an environment override must not change the agy busy signature" || true
   pass "fm-busy-lib: only the pinned esc-to-cancel row carries the agy busy verdict"

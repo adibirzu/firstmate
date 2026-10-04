@@ -62,6 +62,7 @@ enter_mailbox() {
   local home=$1 generator=$2
   mkdir -p "$home/bin" "$FAKEBIN"
   [ -e "$home/bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$home/bin/fm-wake-lib.sh"
+  [ -e "$home/bin/fm-path-lib.sh" ] || ln -s "$ROOT/bin/fm-path-lib.sh" "$home/bin/fm-path-lib.sh"
   printf '%s\n' "$generator" > "$FAKEBIN/python3"
   chmod +x "$FAKEBIN/python3"
 }
@@ -305,7 +306,6 @@ SH
   done
   pass "fm-mail-check: large repeated polls drain every reader without output noise"
 }
-
 test_repeated_timeout_still_wakes() {
   # A timeout can kill the poll after wake_for queued mail and before the
   # woke-for line is printed. Difference-record silence would then leave that

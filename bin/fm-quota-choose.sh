@@ -320,12 +320,12 @@ fi
 printf '%s\n' "$QUOTA_JSON" | fm_quota_json_valid || die "invalid quota-axi provider data"
 
 # provider_for_harness <harness> [<model>]
-# Map a firstmate harness name to its primary quota-axi provider family.
-# Multi-provider harnesses (Pi, OpenCode) map to their primary family only; see
-# the header limitation note. omp is keyed on the candidate model prefix instead
-# and has no family for any other prefix (see the header). Authoritative
-# multi-provider routing is owned by AGENTS.md section 4 and the
-# router-dispatch skill, not this helper.
+# The harness -> primary provider family table is owned by
+# fm_quota_provider_for_harness in bin/fm-quota-axi-lib.sh; see the header
+# limitation note for why one family per harness is all this helper checks.
+# omp is keyed on the candidate model prefix instead and has no family for any
+# other prefix. Authoritative multi-provider routing is owned by AGENTS.md
+# section 4 and the router-dispatch skill, not this helper.
 provider_for_harness() {
   fm_quota_provider_for_harness "$@"
 }

@@ -392,20 +392,17 @@ receiver_wake_mark() { # <secondmate-id> <prepared|pending> [batch-id]
     [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
     value=$(cat "$marker" 2>/dev/null || true)
     case "$value" in
-    prepared:*)
-      corr=${value#*:}
-      corr=${corr%%:*}
-      rec=$(fm_pending_reply_path "$STATE" "$corr")
-      [ -f "$rec" ] && [ ! -L "$rec" ] &&
-        [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ]
-      return $?
-      ;;
-    pending:*)
-      receiver_wake_pending_valid "$id"
-      return $?
-      ;;
-    pending) ;;
-    *) return 1 ;;
+      prepared:*)
+        corr=${value#*:}
+        corr=${corr%%:*}
+        rec=$(fm_pending_reply_path "$STATE" "$corr")
+        [ -f "$rec" ] && [ ! -L "$rec" ] \
+          && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ]
+        return $?
+        ;;
+      pending:*) receiver_wake_pending_valid "$id"; return $? ;;
+      pending) ;;
+      *) return 1 ;;
     esac
   fi
   corr=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$id" "$RECEIVER_WAKE_MESSAGE") || return 1
@@ -480,6 +477,8 @@ receiver_wake_pending_valid() { # <secondmate-id>
   case "$value" in pending:*) corr=${value#pending:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
+  [ -f "$rec" ] && [ ! -L "$rec" ] \
+    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] || return 1
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] || return 1
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
@@ -494,6 +493,9 @@ receiver_wake_pending_delivered_valid() { # <secondmate-id>
   case "$value" in pending:*) corr=${value#pending:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
+  [ -f "$rec" ] && [ ! -L "$rec" ] \
+    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] \
+    && [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] &&
     [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
@@ -507,6 +509,9 @@ receiver_wake_confirmed_valid() { # <secondmate-id>
   case "$value" in confirmed:*) corr=${value#confirmed:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
+  [ -f "$rec" ] && [ ! -L "$rec" ] \
+    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] \
+    && [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] &&
     [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
@@ -906,6 +911,7 @@ resume_pending_wakes() {
     name=$(basename "$marker")
     id=${name#.backlog-handoff-}
     id=${id%.wake-pending}
+    case "$id" in ''|*[!A-Za-z0-9._-]*) echo "error: unsafe pending wake id: $id" >&2; failed=1; continue ;; esac
     case "$id" in '' | *[!A-Za-z0-9._-]*)
       echo "error: unsafe pending wake id: $id" >&2
       failed=1

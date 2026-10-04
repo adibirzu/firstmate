@@ -110,7 +110,7 @@ test_new_lock_excludes_a_pool_sibling_and_readmits_its_owner() {
 
   out=$(run_lock "$home" "$fakebin" pool sibling-session "$sibling") \
     && fail "a sibling session acquired the owner's new-format lock: $out"
-  case "$out" in *"another live firstmate session holds the lock (pid $session)"*) ;; *) fail "sibling refusal was not explicit: $out" ;; esac
+  case "$out" in *"another live firstmate session holds the lock (pid $session"*) ;; *) fail "sibling refusal was not explicit: $out" ;; esac
   pass "fm-lock: a new session binding readmits its owner and rejects a sibling in the same pool"
 }
 
@@ -228,7 +228,7 @@ test_different_live_session_is_refused_after_owner_clear() {
 
   out=$(run_lock "$home" "$fakebin" sibling other-session "$sibling") \
     && fail "a different live session claimed the owner's lock: $out"
-  case "$out" in *"another live firstmate session holds the lock (pid $session)"*) ;; *) fail "the different-session refusal was not explicit: $out" ;; esac
+  case "$out" in *"another live firstmate session holds the lock (pid $session"*) ;; *) fail "the different-session refusal was not explicit: $out" ;; esac
   [ "$(cat "$home/state/.lock")" = "$session" ] || fail "the refused session moved the lock off its owner"
   pass "fm-lock: a different live session is still refused after a /clear session-id change"
 }

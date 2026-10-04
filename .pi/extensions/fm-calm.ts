@@ -6,10 +6,10 @@
 // with a disposable component factory, and setHiddenThinkingLabel().
 // ./lib/fm-calm-working-ship.ts owns the animated working presentation this file
 // installs. The focused tests pin those assumptions but never reject a
-// newer Pi solely for its version. The collapsed-thinking and operational-user
-// presentation adapters probe the exact API they patch and degrade independently with a
-// diagnostic (see installCalmPresentationAdapter below) if a future Pi removes it; Pi
-// still exposes no global renderer for arbitrary built-in or custom rows.
+// newer Pi solely for its version. The collapsed-thinking, operational-user, and
+// queued-operational presentation adapters probe the exact API they patch and degrade
+// independently with a diagnostic (see installCalmPresentationAdapter below) if a future
+// Pi removes it; Pi still exposes no global renderer for arbitrary built-in or custom rows.
 // docs/configuration.md owns the home-local Calm preference contract.
 //
 // Pi has one first-registration-wins ToolDefinition per tool name, with no merge or
@@ -37,6 +37,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
+  AgentSession,
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
@@ -49,6 +50,10 @@ import { Box, Container, getKeybindings, type Component } from "@earendil-works/
 import type { TSchema } from "typebox";
 import { installCalmAssistantLayout } from "./lib/fm-calm-assistant-layout.ts";
 import { installCalmOperationalUserLayout } from "./lib/fm-calm-operational-user-layout.ts";
+import {
+  installCalmPendingOperationalLayout,
+  refreshCalmPendingOperationalRows,
+} from "./lib/fm-calm-pending-operational-layout.ts";
 import {
   CALM_WORKING_SHIP_WIDGET_KEY,
   createCalmWorkingShipAnimation,
@@ -119,9 +124,70 @@ function installCalmPresentationAdapter(name: string, install: () => void): void
   }
 }
 
+const CALM_EXPORT_CONVERSATION_BOUNDARY = Symbol.for(
+  "firstmate:calm-export-conversation-boundary",
+);
+const HIDDEN_HOOK_STRIP_SCRIPT = `<script data-firstmate-calm-export-boundary="1">
+(function () {
+  var strip = function () {
+    var messages = document.getElementById("messages");
+    if (!messages) return;
+    messages.querySelectorAll(".hook-message-hidden").forEach(function (node) { node.remove(); });
+  };
+  var messages = document.getElementById("messages");
+  if (messages) new MutationObserver(strip).observe(messages, { childList: true, subtree: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", strip);
+  else strip();
+})();
+</script>`;
+
+type HtmlExportSession = {
+  exportToHtml(outputPath?: string, options?: object): Promise<string>;
+};
+
+function installCalmExportConversationBoundary(): void {
+  const registry = globalThis as typeof globalThis & {
+    [CALM_EXPORT_CONVERSATION_BOUNDARY]?: true;
+  };
+  if (registry[CALM_EXPORT_CONVERSATION_BOUNDARY]) return;
+  if (typeof AgentSession !== "function") {
+    throw new Error("Firstmate Calm requires Pi AgentSession");
+  }
+  const proto = AgentSession.prototype as HtmlExportSession;
+  const original = proto.exportToHtml;
+  if (typeof original !== "function") {
+    throw new Error("Firstmate Calm requires AgentSession.exportToHtml");
+  }
+  proto.exportToHtml = async function exportToHtmlWithConversationBoundary(outputPath, options) {
+    const filePath = await original.call(this, outputPath, options);
+    let html = readFileSync(filePath, "utf8");
+    // Pi serializes display:false custom_message rows as hidden hook messages
+    // inside #messages. Remove those serialized rows so dump-dom cannot leak
+    // synthetic provenance even if page JS never runs, then keep the observer
+    // for rows Pi injects after load.
+    html = html.replace(
+      /<div class="hook-message hook-message-hidden"[^>]*>[\s\S]*?<\/div>/g,
+      "",
+    );
+    if (!html.includes('data-firstmate-calm-export-boundary="1"')) {
+      const marker = "</body>";
+      const index = html.lastIndexOf(marker);
+      if (index === -1) {
+        throw new Error("exported HTML is missing a body close tag");
+      }
+      html = `${html.slice(0, index)}${HIDDEN_HOOK_STRIP_SCRIPT}\n${html.slice(index)}`;
+    }
+    writeFileSync(filePath, html, "utf8");
+    return filePath;
+  };
+  registry[CALM_EXPORT_CONVERSATION_BOUNDARY] = true;
+}
+
 export default function (pi: ExtensionAPI) {
   installCalmPresentationAdapter("collapsed-thinking", installCalmAssistantLayout);
   installCalmPresentationAdapter("operational-user-row", installCalmOperationalUserLayout);
+  installCalmPresentationAdapter("queued-operational-row", installCalmPendingOperationalLayout);
+  installCalmPresentationAdapter("export-conversation-boundary", installCalmExportConversationBoundary);
 
   let exportRendering = false;
   let removeTerminalInputHandler: (() => void) | undefined;
@@ -487,6 +553,7 @@ export default function (pi: ExtensionAPI) {
       // unchanged, which is what makes a toggle apply to rows already on screen.
       ctx.ui.setHiddenThinkingLabel(active ? "" : undefined);
       ctx.ui.setStatus("firstmate-calm", undefined);
+      refreshCalmPendingOperationalRows();
 
       const expanded = ctx.ui.getToolsExpanded();
       ctx.ui.setToolsExpanded(!expanded);

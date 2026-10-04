@@ -18,8 +18,11 @@
 # cursor-agent and the far-too-generic legacy alias `agent`, and it runs as a
 # bundled node script. bin/fm-cursor-lib.sh is the fleet's single owner of that
 # decision, so this file delegates to it rather than widening the name match.
+_FM_SESSION_LOCK_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$_FM_SESSION_LOCK_LIB_DIR" != "${BASH_SOURCE[0]}" ] || _FM_SESSION_LOCK_LIB_DIR=.
 # shellcheck source=bin/fm-cursor-lib.sh
-. "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
+. "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-cursor-lib.sh"
+unset _FM_SESSION_LOCK_LIB_DIR
 
 # Known harness command names; extend when a new adapter is verified. omp is
 # anchored exactly like pi: its process name is the bare word `omp` (verified,
@@ -172,20 +175,12 @@ fm_harness_ancestry_pids() {
 # trusted Claude session's model-loop pid instead. Every non-Claude harness
 # reports a single pid, so this remains its innermost match unchanged.
 fm_harness_ancestry_pid() {
-  local pid outermost=''
-  fm_harness_ancestry_cache || return 1
-  while IFS= read -r pid; do
-    [ -n "$pid" ] && outermost=$pid
-  done <<EOF
-$FM_HARNESS_ANCESTRY_PIDS
-EOF
-  [ -n "$outermost" ] || return 1
-  printf '%s\n' "$outermost"
+  local pids
+  pids=$(fm_harness_ancestry_pids) || return 1
+  _fm_harness_outermost_pid "$pids"
 }
 
-# Print the last (outermost) pid of an already-resolved ancestry list. The
-# anchor path uses the captured list so its trusted-session check and fallback
-# cannot observe two different process-tree snapshots.
+# Print the last (outermost) pid of ancestry list $1, or return 1 when empty.
 _fm_harness_outermost_pid() {  # <ancestry-pids>
   local pid outermost=''
   while IFS= read -r pid; do
@@ -315,16 +310,16 @@ fm_session_lock_anchor_pid() {
 # held by a harness outside this ancestry under another (or no) session id, or
 # an ancestry that cannot be resolved all fail closed.
 fm_session_lock_owned_by_self() {
-  local state=$1 lock_pid pid
+  local state=$1 lock_pid pids pid
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  fm_harness_ancestry_cache || return 1
+  pids=$(fm_harness_ancestry_pids) || return 1
   while IFS= read -r pid; do
     [ "$pid" = "$lock_pid" ] && return 0
   done <<EOF
-$FM_HARNESS_ANCESTRY_PIDS
+$pids
 EOF
   fm_session_lock_same_session "$state" "$FM_HARNESS_ANCESTRY_PIDS" || return 1
   fm_harness_pid_alive "$lock_pid"
@@ -341,6 +336,9 @@ fm_session_lock_foreign_owner_live() {
   local state=$1 lock_pid pids pid
   FM_SESSION_LOCK_FOREIGN_OWNER_PID=
   [ -f "$state/.lock" ] && [ ! -L "$state/.lock" ] || return 1
+  # New-format / session-id ownership is not a foreign owner, even when the
+  # recorded pid sits outside this process's reparented worker-pool ancestry.
+  fm_session_lock_owned_by_current_session "$state" && return 1
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
@@ -442,14 +440,16 @@ fm_harness_ancestry_is_claude() {
 #
 # Claude Code supplies a stable session id, and normally the served session pid
 # in CLAUDE_PID. Require the session id, and require a live verified-harness pid,
-# before a new Claude lock may be written. When CLAUDE_PID is unset - the
-# homebrew Claude Code build exports CLAUDECODE and CLAUDE_CODE_SESSION_ID into
-# hook and tool shells but not CLAUDE_PID - fall back to the live claude ancestry
-# pid, the contiguous-run pid state/.lock records for this session anyway. The
-# session id, not the pid, is what distinguishes one Claude session from a
-# reparented worker-pool sibling, so this fallback keeps a sibling from claiming
-# the lock. Other supported harnesses expose their session through their one
-# verified ancestry pid, which remains their stable lock identity.
+# before a new Claude lock may be written. CLAUDE_PID is the served session pid
+# even when that pid is not in this process's contiguous ancestry: Claude's
+# worker pool is reparented away from the session it serves, and the session
+# id, not ancestry, is what distinguishes that session from a sibling in the
+# same pool. When CLAUDE_PID is unset - the homebrew Claude Code build exports
+# CLAUDECODE and CLAUDE_CODE_SESSION_ID into hook and tool shells but not
+# CLAUDE_PID - fall back to the live claude ancestry pid, the contiguous-run
+# pid state/.lock records for this session anyway. Other supported harnesses
+# expose their session through their one verified ancestry pid, which remains
+# their stable lock identity.
 FM_SESSION_LOCK_OWNER_KIND=
 FM_SESSION_LOCK_OWNER_PID=
 FM_SESSION_LOCK_OWNER_SESSION=
@@ -555,51 +555,53 @@ fm_session_lock_print_binding() {  # <kind> <pid> <session>
 # Write the complete new lock format under fm-lock.sh's acquisition claim.
 # The record publishes first, so readers fail closed while the raw pid moves;
 # it is removed again if the raw lock cannot be replaced. A new acquisition
-# therefore never leaves only a pid-only lock behind.
+# therefore never leaves only a pid-only lock behind. Line 1 is written in
+# place so a chmod a-w lock fails instead of being replaced by mv, matching
+# the sidecar restore contract in fm-lock.sh.
 fm_session_lock_write_new_format() {  # <state-dir>
-  local state=$1 path lock tmp_record tmp_lock previous=
+  local state=$1 path lock tmp_record previous=
   [ -n "$FM_SESSION_LOCK_OWNER_KIND" ] || return 1
   [ -n "$FM_SESSION_LOCK_OWNER_PID" ] || return 1
   [ -n "$FM_SESSION_LOCK_OWNER_SESSION" ] || return 1
   path=$(fm_session_lock_record_path "$state")
   lock="$state/.lock"
   tmp_record=$(mktemp "$state/.lock.session.XXXXXX" 2>/dev/null) || return 1
-  tmp_lock=$(mktemp "$state/.lock.new.XXXXXX" 2>/dev/null) || {
-    command rm -f -- "$tmp_record" 2>/dev/null
-    return 1
-  }
   if ! {
     printf 'format=1\nkind=%s\npid=%s\nsession=%s\n' \
       "$FM_SESSION_LOCK_OWNER_KIND" "$FM_SESSION_LOCK_OWNER_PID" "$FM_SESSION_LOCK_OWNER_SESSION" > "$tmp_record"
-    printf '%s\n' "$FM_SESSION_LOCK_OWNER_PID" > "$tmp_lock"
   }; then
-    command rm -f -- "$tmp_record" "$tmp_lock" 2>/dev/null
+    command rm -f -- "$tmp_record" 2>/dev/null
     return 1
   fi
   if [ -f "$path" ] && [ ! -L "$path" ]; then
     previous=$(mktemp "$state/.lock.session.previous.XXXXXX" 2>/dev/null) || {
-      command rm -f -- "$tmp_record" "$tmp_lock" 2>/dev/null
+      command rm -f -- "$tmp_record" 2>/dev/null
       return 1
     }
     if ! cp "$path" "$previous" 2>/dev/null; then
-      command rm -f -- "$tmp_record" "$tmp_lock" "$previous" 2>/dev/null
+      command rm -f -- "$tmp_record" "$previous" 2>/dev/null
       return 1
     fi
   fi
   if ! mv -f "$tmp_record" "$path" 2>/dev/null; then
-    command rm -f -- "$tmp_record" "$tmp_lock" "$previous" 2>/dev/null
+    command rm -f -- "$tmp_record" "$previous" 2>/dev/null
     return 1
   fi
-  if ! mv -f "$tmp_lock" "$lock" 2>/dev/null; then
+  if ! { printf '%s\n' "$FM_SESSION_LOCK_OWNER_PID" > "$lock"; }; then
     if [ -n "$previous" ]; then
       mv -f "$previous" "$path" 2>/dev/null || true
     else
       command rm -f -- "$path" 2>/dev/null
     fi
-    command rm -f -- "$tmp_lock" "$previous" 2>/dev/null
+    command rm -f -- "$previous" 2>/dev/null
     return 1
   fi
   command rm -f -- "$previous" 2>/dev/null || true
+  # Keep the legacy one-line sidecar in lockstep: readers that still name
+  # state/.lock-session must see the same session id the new-format record holds.
+  if [ "$FM_SESSION_LOCK_OWNER_KIND" = claude ]; then
+    printf '%s\n' "$FM_SESSION_LOCK_OWNER_SESSION" > "$state/.lock-session" || return 1
+  fi
 }
 
 # Record every temporary legacy acceptance durably. Logging failure rejects the
@@ -654,9 +656,18 @@ fm_session_lock_owned_by_current_session() {  # <state-dir>
     [ "$lock_pid" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
     fm_harness_pid_alive "$lock_pid" || return 1
     [ "$FM_SESSION_LOCK_OWNER_KIND" = "$FM_SESSION_LOCK_RECORD_KIND" ] || return 1
-    [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ] || return 1
-    [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ] && return 0
-    [ "$FM_SESSION_LOCK_RECORD_KIND" = claude ]
+    if [ "$FM_SESSION_LOCK_OWNER_PID" = "$FM_SESSION_LOCK_RECORD_PID" ]; then
+      [ "$FM_SESSION_LOCK_OWNER_SESSION" = "$FM_SESSION_LOCK_RECORD_SESSION" ] && return 0
+      # Claude Code regenerates CLAUDE_CODE_SESSION_ID on /clear in the same
+      # harness process; only that same-pid claude-kind case is exempted.
+      [ "$FM_SESSION_LOCK_RECORD_KIND" = claude ]
+      return
+    fi
+    # A Claude background helper is a different pid than the recorded front-end.
+    # Only a trusted same-session id owns that lock; an env id whose CLAUDE_PID
+    # is outside this ancestry is not trusted.
+    [ "$FM_SESSION_LOCK_RECORD_KIND" = claude ] || return 1
+    fm_session_lock_same_session "$state"
     return
   fi
   fm_session_lock_owned_by_legacy_compatibility "$state"

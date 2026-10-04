@@ -29,6 +29,14 @@ make_case() {  # <name>
   fakebin="$dir/fakebin"
   root="$dir/root"
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/wt" "$fakebin" "$root/bin"
+  # Direct-PR registration still asks bin/fm-dod-lib.sh to accept the named
+  # head (a forge-reported head is the named head only in no-mistakes mode).
+  # This fixture is a git copy whose HEAD is already on a remote-tracking ref,
+  # so the fork --repo pin can be asserted without tripping that gate.
+  git -C "$dir/wt" init -q -b main
+  git -C "$dir/wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m init
+  git -C "$dir/wt" update-ref refs/remotes/origin/main "$(git -C "$dir/wt" rev-parse HEAD)"
   cat > "$root/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0

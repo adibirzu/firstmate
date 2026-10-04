@@ -25,6 +25,14 @@
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-agent-process-lib.sh"
 
+# Compatibility alias: bin/fm-agent-process-lib.sh owns the classifier. Callers
+# and tests that still use the tmux-prefixed name stay on that same owner so a
+# cline install path cannot classify as an agent on one backend and other on
+# another.
+fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
+  fm_agent_process_classify_name "$@"
+}
+
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the
@@ -180,23 +188,6 @@ fm_backend_tmux_send_literal() {  # <target> <text>
   tmux send-keys -t "$1" -l "$2"
 }
 
-# Read one session's window inventory without collapsing "definitively absent"
-# into "could not be read".  Recovery and teardown may only treat the former
-# as proof that an endpoint is gone.
-fm_backend_tmux_window_inventory() {  # <session-target>
-  local windows
-  if windows=$(LC_ALL=C tmux list-windows -t "$1" -F '#{window_name}' 2>&1); then
-    printf '%s\n' "$windows"
-    return 0
-  fi
-  case "$windows" in
-    *"can't find session:"*|*"no server running on "*|*"error connecting to "*" (No such file or directory)"|*"error connecting to "*" (Connection refused)")
-      return 2
-      ;;
-  esac
-  return 1
-}
-
 # fm_backend_tmux_reset_shell: clear a bare tmux pane's shell input state and
 # PROVE it. C-c (the shell's interrupt) aborts any continuation prompt or
 # half-typed line, and C-u drops a remaining line. The shell must then execute a
@@ -221,6 +212,34 @@ fm_backend_tmux_reset_shell() {  # <target> <reset-dir>
     sleep 0.25
     i=$((i + 1))
   done
+  return 1
+}
+
+# fm_backend_tmux_window_inventory: <session-target>'s window names, one per
+# line on stdout, together with a verdict on the READ ITSELF, which is what
+# every caller that must not guess depends on:
+#   0 - the inventory was read; its lines are that session's windows.
+#   2 - tmux answered definitively that the session, or its whole server, is
+#       absent, so no window of that session exists.
+#   1 - the read could not be made at all, and proves nothing either way. A
+#       transient tmux problem, or a tmux that is not even on PATH, must never
+#       be read as an absent endpoint: that mistake launches a duplicate agent
+#       for fm_backend_tmux_agent_state and reports a live window as closed for
+#       fm_backend_tmux_kill.
+# The target is passed through exactly as the caller means it, so a caller that
+# requires the exact recorded session asks for `=session` and still gets the
+# same classification.
+fm_backend_tmux_window_inventory() {  # <session-target>
+  local windows
+  if windows=$(LC_ALL=C tmux list-windows -t "$1" -F '#{window_name}' 2>&1); then
+    printf '%s\n' "$windows"
+    return 0
+  fi
+  case "$windows" in
+    *"can't find session:"*|*"no server running on "*|*"error connecting to "*" (No such file or directory)"|*"error connecting to "*" (Connection refused)")
+      return 2
+      ;;
+  esac
   return 1
 }
 

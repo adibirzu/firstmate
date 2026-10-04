@@ -26,78 +26,55 @@
 #
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
 #
+# Before producing that line for a local endpoint, the reader passively compares
+# its live cwd and, where a backend can read it atomically, argv with the spawn
+# record. A confirmed divergence is appended as a launch-drift annotation; it
+# never overrides the state, because the worker can still be working. The drift
+# policy and backend coverage are owned by bin/fm-launch-drift-lib.sh.
+#
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
 #      live on that host, so the local worktree and pane reads are skipped and
 #      the remote host is asked for the endpoint's recovery-grade state
 #      (fm-on.sh + fm-remote-secondmate-control.sh state). alive falls through
-#      to the routed status log; dead/missing report the remote verdict; an
+#      to the routed status log, then also checks the pause-governing fold
+#      (status_paused_governing_line in fm-classify-lib.sh) so a standing
+#      paused:/captain-held: declaration still reports paused even when a later
+#      unrelated append, such as a resolved: line closing a different decision,
+#      is the log's last line; dead/missing report the remote verdict; an
 #      unreachable or unreadable remote reports unknown-remote, never a false
 #      gone/dead.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
 #      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
 #      fallback)? Branch name alone is not enough: a historical run on a reused
 #      branch whose head was rewritten or diverged must not be attributed.
-#      A run EXECUTING on this crew's branch (pending, running, fixing or ci -
-#      the detail-object vocabulary, which carries all four; the selected route
-#      re-reads it by id and the legacy route passes the same detail SHAPE, and
-#      neither is the overview table's narrower status column)
-#      is authoritative REGARDLESS of head (fm_nm_run_is_executing in
-#      bin/fm-nm-run-lib.sh) as long as an explicit probe has not ANSWERED that
-#      the daemon is down (nm_daemon_answered_down): the pipeline rebases the
-#      branch and
-#      commits its fix rounds in its own checkout, so a live run's head
-#      routinely differs from the local head, and reading an older run that
-#      still matches the local head would report a working crew as failed - but
-#      a record still saying `running` because the daemon died under it is
-#      evidence from a dead instrument, exactly as for a terminal record, and
-#      must not answer once the worktree has moved off the run head. Every
-#      other run -
-#      terminal, or parked at a gate - matches only when its head equals the
-#      worktree HEAD, or the worktree HEAD is an ancestor of the run head
-#      (pipeline fix commits advanced the run on the same line of history);
-#      local work that advanced past the run head, or diverged from it,
-#      invalidates attribution. While the pipeline owns the branch
-#      (branch_sync.state=pipeline_owned), its own custody attribution also
-#      binds ANY ACTIVE run - executing or parked - without head equality
-#      (fm_nm_run_is_pipeline_owned_active in bin/fm-nm-run-lib.sh), and that
-#      route is deliberately OUTSIDE the daemon rule below: while the pipeline
-#      holds custody its own attribution is the attribution, and second-guessing
-#      it here is a change to a route this fix does not otherwise touch.
-#      A parked run head whose commit object the task copy never fetched cannot
-#      be verified locally; that row is recognized only as a provable
-#      pipeline-owned continuation - the branch's ACTIVE newest ledger row,
-#      anchored by the row immediately before it having ended at exactly this
-#      worktree's head (rule owned by fm_nm_runs_status_for_worktree in
-#      bin/fm-nm-run-lib.sh). The coarse runs-ledger fallback has NO
-#      branch-name-only acceptance: an executing `axi status` record is the one
-#      live bind, so a ledger row that cannot be tied to this worktree's head
-#      never answers on branch name alone. A record whose daemon has ANSWERED
-#      down reads unknown and names the dead instrument on exactly ONE route:
-#      the id-addressed selected run whose head this copy cannot resolve and
-#      whose continuation the ledger anchor proves. The coarse ledger fallback
-#      carries NO such verdict - it reports the same status word for a
-#      head-matching row and an anchored one, so any rule there would also catch
-#      head-tied rows, and a record whose head still equals or precedes the
-#      worktree HEAD keeps its original working reading, as it always has.
-#      A record whose
-#      identity is proven by NEITHER head nor ledger anchor is not this
-#      worktree's run to report on: it leaves HAVE_RUN=0 so the pane and status
-#      log answer, because a stale record naming this branch must never override
-#      a crew that is visibly working.
-#      A run PARKED at a gate is exempt from the dead-instrument verdict: an
-#      open decision stays open when the instrument dies, so it keeps its gate
-#      and findings.
-#      fm_nm_select_run in bin/fm-nm-run-lib.sh owns complete run selection
-#      and ambiguity reporting. The selected run's id-addressed status must
-#      agree on id, branch, and live/terminal class before attribution;
-#      disagreement reports unknown with available candidate ids.
-#      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working
-#      (the id-addressed detail read carries step words the overview does not),
+#      A run matches when its head equals the worktree HEAD, or the worktree HEAD
+#      is an ancestor of the run head (pipeline fix commits advanced the run on
+#      the same line of history). Local work that advanced past the run head, or
+#      diverged from it, invalidates attribution. While the pipeline owns the
+#      branch (branch_sync.state=pipeline_owned), its own custody attribution
+#      binds an ACTIVE run without head equality (fm_nm_run_is_pipeline_owned_active
+#      in bin/fm-nm-run-lib.sh).
+#      A run head whose commit object the task copy never fetched (the pipeline
+#      committed its fix round in its own checkout) cannot be verified locally;
+#      that row is recognized only as a provable pipeline-owned continuation -
+#      the branch's ACTIVE newest ledger row, anchored by the row immediately
+#      before it having ended at exactly this worktree's head - so an active fix
+#      round never reads as an older failed run (rule owned by
+#      fm_nm_runs_status_for_worktree in bin/fm-nm-run-lib.sh).
+#      More than one recorded run can bind to this worktree at once, and
+#      bin/fm-nm-run-lib.sh also owns which of them wins: a LIVE run always
+#      outranks a terminal one, so a terminal answer here is provisional until
+#      the ledger has been asked whether a live sibling run exists.
+#      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
 #      passed/checks-passed/passed-with-override/passed-with-skips -> done,
-#      failed/cancelled -> failed. passed-with-override is a passing outcome
+#      failed -> failed, cancelled -> unknown (no verdict unless the green
+#      delivery safeguard below applies). A cancelled outcome takes precedence
+#      over an interrupted step's failed status or outstanding gate findings;
+#      it does not rewrite historical events or backlog records.
+#      passed-with-override is a passing outcome
 #      carrying an explicitly approved Test or CI exception (no-mistakes' own
 #      vocabulary), read identically to a clean passed. passed-with-skips is
 #      also a passing outcome (publication or CI verification was
@@ -108,12 +85,15 @@
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a check of the full ci-step log overrides working -> done once checks read
 #      green, so a green PR is never silently read as still-validating. And a
-#      terminal FAILED run whose only failure is the ci monitor step, after
-#      every substantive step completed and the ci log's last marker reads
-#      checks green, also reads done (held-for-merge), never failed: a monitor
-#      whose only remaining job is to observe a human merge decision must not
+#      terminal failed or cancelled run whose only unfinished step is the ci
+#      monitor, after every substantive step completed (an explicitly skipped
+#      rebase is allowed) and the ci log's last marker reads checks green,
+#      also reads done only when the bounded forge read confirms the PR is
+#      open (held-for-merge) or merged. Closed, missing, unreadable, or skipped
+#      forge evidence leaves the original failed or unknown classification.
+#      A monitor whose only remaining job is to observe a merge decision must not
 #      convert the absence of that decision into a failure verdict
-#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). In the
+#      (nm_reclassify_failed_run_as_held_green). In the
 #      coarse runs-ledger fallback (no steps table, no ci log), a terminal
 #      FAILED record whose daemon an explicit probe proves down reads unknown,
 #      never failed: an instrument failure must not read as work failure
@@ -140,7 +120,10 @@
 #      proven historical head, or kind=scout): fall back to the recorded
 #      backend's pane busy state, then the resolved status declaration
 #      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      `resolved` never become current state or detail. When the last line does
+#      not map to a state, the pause-governing fold (status_paused_governing_line)
+#      still reports paused for a standing paused:/captain-held: declaration that
+#      an unrelated later append has not genuinely superseded.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log. On tmux and herdr, which own a
@@ -170,14 +153,14 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-launch-drift-lib.sh
+. "$SCRIPT_DIR/fm-launch-drift-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
-# shellcheck source=bin/fm-launch-drift-lib.sh
-. "$SCRIPT_DIR/fm-launch-drift-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -189,14 +172,20 @@ LOG=${FM_CREW_STATE_STATUS_OVERRIDE:-"$STATE/$ID.status"}
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows each ledger read
-# (fm_nm_runs_status_for_worktree in bin/fm-nm-run-lib.sh) scans for the legacy
-# fallback or an unfetched-head continuation (docs/configuration.md owns the
-# setting). Generous enough to
+# (fm_nm_runs_status_for_worktree in bin/fm-nm-run-lib.sh) scans, whether it is
+# the cross-branch fallback or the live-sibling probe behind a terminal `axi
+# status` answer (docs/configuration.md owns the setting). Generous enough to
 # still find a branch's own run on a busy multi-crew fleet without listing the
 # entire history every call.
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
+
+# Set by launch_drift_note() once the endpoint has been read, and appended by
+# emit() to whichever line this run produces. It is deliberately an ANNOTATION
+# rather than a state: a worker with lost flags, or one standing in the primary
+# checkout, is usually still `working` by every other measure, so overriding the
+# state would hide what it is actually doing. The supervisor needs both facts.
 LAUNCH_DRIFT_NOTE=''
 
 # Emit the one canonical line and exit 0. Detail is optional.
@@ -290,6 +279,10 @@ if [ -n "$REMOTE_HOST" ]; then
           emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
+      REMOTE_PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+      if status_is_paused_or_captain_held "$REMOTE_PAUSE_GOVERNING_LINE"; then
+        emit paused status-log "$(status_line_note "$REMOTE_PAUSE_GOVERNING_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
+      fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
       ;;
     dead|missing)
@@ -314,9 +307,22 @@ TASK_BACKEND=$(fm_backend_of_meta "$META")
 BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 
-# Annotate confirmed live endpoint drift without replacing the independently
-# derived crew state. Remote endpoints are read on their own host and are not
-# compared against local paths.
+# --- launch drift ----------------------------------------------------------
+
+# Compare the endpoint's LIVE working directory and command line against what
+# the spawn RECORDED, and set LAUNCH_DRIFT_NOTE when they diverge. The policy,
+# including which divergences are severe and which reads are allowed to be
+# unknown, is owned by bin/fm-launch-drift-lib.sh; this function only gathers
+# the two live values and formats the note.
+#
+# It runs on every state read because a restore can strip a worker's flags or
+# move it into the primary checkout at any point in its life, not only at spawn.
+# Both reads are best-effort and their failure is not an error: an unreadable
+# endpoint yields `unknown`, which produces no note at all.
+#
+# A remote secondmate is skipped: its worktree and endpoint live on another
+# host, so both local reads would compare this machine's paths against that
+# host's record and manufacture a divergence that does not exist.
 launch_drift_note() {
   local live_cwd='' live_argv='' verdict severity code detail
   [ -z "$REMOTE_HOST" ] || return 0
@@ -413,6 +419,24 @@ mr_read_record_bounded() {  # <host> <path> <number>
   FM_PR_RECORD_MERGED=$merged
 }
 
+change_read_record_bounded() {  # <host> <number>
+  local record state merged
+  # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
+  if ! record=$(fm_run_timed 5 bash -c '
+    . "$1"
+    fm_pr_gerrit_read_record "$2" "$3" || exit 1
+    printf "state=%s\nmerged=%s\n" "$FM_PR_RECORD_STATE" "$FM_PR_RECORD_MERGED"
+  ' _ "$SCRIPT_DIR/fm-pr-lib.sh" "$1" "$2" 2>/dev/null); then
+    return 1
+  fi
+  state=$(printf '%s\n' "$record" | sed -n 's/^state=//p' | head -1)
+  merged=$(printf '%s\n' "$record" | sed -n 's/^merged=//p' | head -1)
+  [ -n "$state" ] || return 1
+  [ "$merged" = true ] || [ "$merged" = false ] || return 1
+  FM_PR_RECORD_STATE=$state
+  FM_PR_RECORD_MERGED=$merged
+}
+
 passed_pr_detail() {
   local provider url host path number owner repo raw_pr state_lc
   raw_pr=$(strip_quotes "$(nm_field pr)")
@@ -479,6 +503,23 @@ passed_pr_detail() {
         open|opened) printf 'run passed: PR open' ;;
         closed)      printf 'run passed: PR closed' ;;
         *)           printf 'run passed: PR state %s' "$state_lc" ;;
+      esac
+      ;;
+    gerrit)
+      if ! change_read_record_bounded "$host" "$number"; then
+        printf 'run passed: PR state unknown (unreadable)'
+        return
+      fi
+      if [ "$FM_PR_RECORD_MERGED" = true ]; then
+        printf 'run passed: PR merged'
+        return
+      fi
+      # Gerrit spells an open change NEW and a closed one ABANDONED.
+      state_lc=$(printf '%s' "$FM_PR_RECORD_STATE" | tr '[:upper:]' '[:lower:]')
+      case "$state_lc" in
+        new)       printf 'run passed: PR open' ;;
+        abandoned) printf 'run passed: PR closed' ;;
+        *)         printf 'run passed: PR state %s' "$state_lc" ;;
       esac
       ;;
     *)
@@ -699,12 +740,12 @@ nm_run_activity_is_recent() {
   ! printf '%s\n' "$rows" | grep -q 'quiet'
 }
 
-# 0 when a terminal FAILED run's only failure is the ci monitor step and the
+# 0 when a terminal failed or cancelled run ended at the ci monitor and the
 # ci log's last recognized marker reads checks green. Requires the exact
 # shape, all on positive evidence: a steps[] table where every step completed
-# except exactly `ci` failed (any other non-completed status, or a second
-# failed step, disqualifies), plus nm_ci_checks_state=green (a genuinely red
-# check, or an unreadable ci log, keeps the failure a failure). This is the
+# except `ci` failed/cancelled and an optional skipped rebase (any other
+# non-completed step disqualifies), plus nm_ci_checks_state=green (a genuinely red
+# check, or an unreadable ci log, cannot prove delivery). This is the
 # orphaned-CI-monitor gap (2026-09-05 jr-voice): a run held for a captain
 # merge decision polls until the shared daemon restarts under it and marks
 # the run failed, although GitHub's own check state - the actual shippability
@@ -721,7 +762,11 @@ nm_failed_run_is_green_held_ci() {
     status=$(strip_quotes "$(trim "${rest%%,*}")")
     case "$status" in
       completed) continue ;;
-      failed)
+      skipped)
+        [ "$step" = rebase ] || return 1
+        continue
+        ;;
+      failed|cancelled)
         [ "$step" = ci ] || return 1
         saw_ci_failed=1
         continue
@@ -735,14 +780,18 @@ EOF
   [ "$(nm_ci_checks_state)" = green ]
 }
 
-# Reclassify a terminal failed run as done (held-for-merge) when
-# nm_failed_run_is_green_held_ci matches, surfacing the run's PR URL so the
-# supervisor reads the concrete review-ready outcome instead of a failure.
+# Apply the header's terminal-delivery safeguard. The earlier green log cannot
+# prove current PR disposition: a subsequent close can itself end the monitor.
 nm_reclassify_failed_run_as_held_green() {
   nm_failed_run_is_green_held_ci || return 1
+  local disposition pr_url
+  disposition=$(passed_pr_detail)
+  case "$disposition" in
+    "run passed: PR open") RUN_DETAIL="checks green: PR held for merge (ci monitor ended)" ;;
+    "run passed: PR merged") RUN_DETAIL="checks green: PR merged (ci monitor ended)" ;;
+    *) return 1 ;;
+  esac
   RUN_STATE="done"
-  RUN_DETAIL="checks green: PR held for merge (ci monitor ended)"
-  local pr_url
   pr_url=$(strip_quotes "$(nm_field pr)")
   [ -n "$pr_url" ] && RUN_DETAIL="$RUN_DETAIL: $pr_url"
   return 0
@@ -865,13 +914,13 @@ nm_ci_checks_state() {
 # has no runs-listing subcommand; tests/fm-crew-state.test.sh owns the
 # 2026-07-02 dead-code incident history this fallback replaced).
 # fm_nm_runs_status_for_worktree in bin/fm-nm-run-lib.sh is the ONE owner of
-# the ledger format, the newest-row-decides rule, and the anchored
-# pipeline-continuation recognition
+# the ledger format, the newest-row-decides rule, its live-over-terminal
+# exception, and the anchored pipeline-continuation recognition
 # (model-routing-benchmark-hardening: an active fix round whose head object the
 # task copy never fetched used to be rejected here, letting the older failed row
 # answer as current), so both attribution routes share one rule.
-# The same reader checks for conflicting run records when the AXI overview
-# cannot identify this branch's run.
+# The same reader is also consulted when `axi status` DID bind this branch's run
+# but that run is terminal, to find a live sibling run for this worktree.
 nm_runs_list() {
   nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT"
 }
@@ -977,22 +1026,27 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         && { nm_run_head_matches_worktree || fm_nm_run_is_pipeline_owned_active "$RUN_OUT" \
           || { fm_nm_run_is_executing "$RUN_OUT" && ! nm_daemon_answered_down; }; }; then
         HAVE_RUN=1
-        # Without run ids, contradictory liveness cannot prove precedence.
-        # A live replacement also needs an id-addressed status read: a bare
-        # "running" row cannot tell working from waiting at a gate.
-        ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
-        if fm_nm_run_is_active "$RUN_OUT"; then
-          if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
-            emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
+        SELECTED_RUN_ID=$(strip_quotes "$(nm_field id)")
+        # Live-over-terminal (fork): a terminal axi-status bind at this
+        # worktree's head is provisional when the ledger shows a live sibling.
+        # Prefer that coarse live word over upstream's "replacement identity
+        # unavailable" unknown, so a working replacement still answers when
+        # the overview table cannot name it.
+        if ! fm_nm_run_is_active "$RUN_OUT"; then
+          live_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+          if [ "$(fm_nm_run_status_class "$live_status")" = live ]; then
+            COARSE_STATUS=$live_status
+            RUN_SOURCE=coarse
+          elif [ -n "$live_status" ] \
+            && [ "$live_status" != "$(strip_quotes "$(nm_field status)")" ] \
+            && [ "$live_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then
+            COARSE_STATUS=$live_status
+            RUN_SOURCE=coarse
           fi
         else
-          if [ "$(fm_nm_run_status_class "$ledger_status")" = live ]; then
-            emit unknown run-step "replacement run identity unavailable; run ids: $(strip_quotes "$(nm_field id)"), replacement unavailable"
-          elif [ -n "$ledger_status" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field status)")" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then
-            COARSE_STATUS=$ledger_status
-            RUN_SOURCE=coarse
+          ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+          if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
+            emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
           fi
         fi
       else
@@ -1050,7 +1104,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         else
           RUN_STATE=failed; RUN_DETAIL="run failed"
         fi ;;
-      cancelled) RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
+      cancelled) RUN_STATE=unknown; RUN_DETAIL="run cancelled: no verdict" ;;
       *)         RUN_STATE=unknown; RUN_DETAIL="runs list status: $COARSE_STATUS" ;;
     esac
   else
@@ -1062,6 +1116,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     has_gate=0
     nm_has_gate && has_gate=1
 
+    # A detail string may state only what its own source establishes. An outcome
+    # is a pipeline fact: `passed` says the run's steps completed, nothing about
+    # the forge, and the task's recorded `pr=` is never consulted here. Claiming
+    # a merge firstmate cannot see is what would wrongly confirm landing and
+    # authorize teardown of an open PR's branch (tests/fm-crew-state.test.sh,
+    # test_terminal_passed).
     if [ -n "$outcome" ]; then
       case "$outcome" in
         passed|passed-with-override) RUN_STATE="done"; RUN_DETAIL=$(passed_pr_detail) ;;
@@ -1071,7 +1131,10 @@ if [ "$HAVE_RUN" = 1 ]; then
           if nm_reclassify_failed_run_as_held_green; then :; else
             RUN_STATE=failed; RUN_DETAIL="run failed"
           fi ;;
-        cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;
+        cancelled)
+          if nm_reclassify_failed_run_as_held_green; then :; else
+            RUN_STATE=unknown; RUN_DETAIL="run cancelled: no verdict"
+          fi ;;
         *)             RUN_STATE=unknown; RUN_DETAIL="outcome: $outcome" ;;
       esac
     elif [ -n "$awaiting" ] || [ "$status" = awaiting_approval ] || [ "$status" = fix_review ] || [ -n "$gate_status" ] || [ "$has_gate" = 1 ]; then
@@ -1101,7 +1164,10 @@ if [ "$HAVE_RUN" = 1 ]; then
           if nm_reclassify_failed_run_as_held_green; then :; else
             RUN_STATE=failed; RUN_DETAIL="run failed"
           fi ;;
-        cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
+        cancelled)
+          if nm_reclassify_failed_run_as_held_green; then :; else
+            RUN_STATE=unknown; RUN_DETAIL="run cancelled: no verdict"
+          fi ;;
         "")             RUN_STATE=working; RUN_DETAIL="run active" ;;
         *)              RUN_STATE=working; RUN_DETAIL="run active ($status)" ;;
       esac
@@ -1286,6 +1352,11 @@ if [ -n "$LOG_VERB" ]; then
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
+fi
+
+PAUSE_GOVERNING_LINE=$(status_paused_governing_line "$LOG")
+if status_is_paused_or_captain_held "$PAUSE_GOVERNING_LINE"; then
+  emit paused status-log "$(status_line_note "$PAUSE_GOVERNING_LINE")"
 fi
 
 emit unknown none "no current-state source available"

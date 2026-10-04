@@ -166,6 +166,9 @@ case "\$cmd" in
       case "\$text" in
         "cd "*)
           rest=\${text#cd }
+          # Production spawn sends: cd -- 'path' (POSIX-safe). A leading --
+          # is the end-of-options marker, not part of the path.
+          rest=\${rest#-- }
           rest=\${rest#\'}
           rest=\${rest%\'}
           printf '%s' "\$rest" > "\$ST/panes/\$paneid.cwd"

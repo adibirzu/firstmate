@@ -28,7 +28,11 @@ make_confinement_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/home/data" "$case_dir/home/config" "$case_dir/wt" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/home/data" "$case_dir/home/config" "$fakebin"
+  # Named-head merge verification requires a git copy whose HEAD is on a
+  # remote-tracking ref, matching tests/fm-pr-merge.test.sh make_case.
+  fm_git_init_commit "$case_dir/wt"
+  git -C "$case_dir/wt" update-ref refs/remotes/origin/main "$(git -C "$case_dir/wt" rev-parse HEAD)"
   cp "$ROOT/.tasks.toml" "$case_dir/home/.tasks.toml"
   printf '%s\n' '## In flight' '' '## Queued' '' '## Done' \
     > "$case_dir/home/data/backlog.md"
@@ -49,14 +53,24 @@ make_confinement_case() {
 }
 
 # gh-axi mock recording every invocation to a log file, and gh mock answering
-# headRefOid for fm-pr-check.sh's pr_head lookup. Args: case_dir head_sha
+# the live pre-merge JSON view plus an unprotected base branch. Args: case_dir head_sha
 add_confinement_gh_mocks() {
   local case_dir=$1 head=$2
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+  printf '{"name":"main","protected":false,"protection":{"enabled":false,"required_status_checks":{"enforcement_level":"off","contexts":[],"checks":[]}}}\n' \
+    > "$case_dir/github-branch.json"
+  printf '[]\n' > "$case_dir/github-required-rules.json"
+  printf '{"check_runs":[]}\n' > "$case_dir/github-runs.json"
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
 case "${1:-} ${2:-}" in
-  "pr merge") printf 'merged:\n  number: %s\n  status: ok\n' "${3:-}" ;;
+  "pr merge")
+    exec gh "$@"
+    ;;
   "pr view")
     [ "$#" -eq 5 ] && [ "${4:-}" = --repo ] || exit 2
     printf 'pull_request:\n  number: %s\n  state: %s\n' "$3" "${FM_TEST_GH_MERGE_STATE:-merged}"
@@ -64,21 +78,42 @@ case "${1:-} ${2:-}" in
 esac
 exit 0
 SH
-  cat > "$case_dir/fakebin/gh" <<SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "\$FM_TEST_GH_LOG"
-case "\${1:-} \${2:-}" in
+printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
+case "${1:-} ${2:-}" in
   "pr view")
-    case " \$* " in
-      *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
+    case " $* " in
+      *statusCheckRollup*|*isDraft*|*headRefOid*)
+        cat "$FM_TEST_GH_VIEW_JSON"
+        exit 0
+        ;;
     esac
     ;;
+  "pr merge")
+    printf 'merged:\n  number: %s\n  status: ok\n' "${3:-}"
+    exit 0
+    ;;
   "api graphql")
-    cat "\$FM_TEST_GH_OUTCOME"
+    cat "$FM_TEST_GH_OUTCOME"
     exit 0
     ;;
   api\ *)
-    cat "\$FM_TEST_GH_RULES"
+    case " $* " in
+      *" repos/"*"/commits/"*"/check-runs"*)
+        cat "$FM_TEST_GH_RUNS"
+        exit 0
+        ;;
+      *" repos/"*"/rules/branches/"*)
+        cat "$FM_TEST_GH_REQUIRED_RULES"
+        exit 0
+        ;;
+      *" repos/"*"/branches/"*)
+        cat "$FM_TEST_GH_BRANCH"
+        exit 0
+        ;;
+    esac
+    cat "$FM_TEST_GH_RULES"
     exit 0
     ;;
 esac
@@ -143,6 +178,11 @@ test_merge_confined_despite_ambient_test_home() {
       FM_TEST_GH_LOG="$3/gh.log" \
       FM_TEST_GH_OUTCOME="$3/github-outcome" \
       FM_TEST_GH_RULES="$3/github-rules" \
+      FM_TEST_GH_VIEW_JSON="$3/github-view.json" \
+      FM_TEST_GH_HEAD="$3/github-head" \
+      FM_TEST_GH_BRANCH="$3/github-branch.json" \
+      FM_TEST_GH_REQUIRED_RULES="$3/github-required-rules.json" \
+      FM_TEST_GH_RUNS="$3/github-runs.json" \
       HOME="$3/user-home" \
       PATH="$3/fakebin:$PATH" \
         "$4" task-x1 https://github.com/example/repo/pull/9 \

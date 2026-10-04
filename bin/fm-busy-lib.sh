@@ -49,6 +49,9 @@
 #   muse-session-log, cursor-transcript, cline-session, cline-session-stalled,
 #   missing, malformed, gen-mismatch, source-mismatch, kimi-unverified,
 #   codex-unverified, capture-failed, no-target
+#   endpoint-gone, herdr-native, grok-regex, rovo-regex, agy-regex, muse-session-log,
+#   cursor-transcript, missing, malformed, gen-mismatch, source-mismatch,
+#   kimi-unverified, codex-unverified, capture-failed, no-target, launch-prompt
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
 # with the producing source as the second token. Precedence:
@@ -72,6 +75,9 @@
 #      muse session-log, cursor transcript, and cline session-record pull
 #      sources, then the Grok/Rovo temporary regex fallbacks classify their
 #      own harnesses from rendered tails, then unknown missing
+#      muse session-log and cursor transcript pull sources, then the
+#      Grok/Rovo/AGY temporary regex fallbacks classify a grok, rovo, or agy
+#      task from its rendered tail, then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback
 #
 # fm_busy_launch_prompt_parked (the launch-prompt classifier-only source): a

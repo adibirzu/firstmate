@@ -44,7 +44,7 @@ case "$*" in
 esac
 case "${1:-}" in
   kill-window) exit 0 ;;
-  *capture-pane*) printf '%s\n' '? for shortcuts' ; exit 0 ;;
+  *capture-pane*) printf '%s\n' 'esc to cancel' ; exit 0 ;;
   display-message) printf '%s\n' "${FM_FAKE_SESSION:-firstmate}" ; exit 0 ;;
   has-session|new-session|set-window-option|send-keys) exit 0 ;;
   new-window) printf '@9\n' ; exit 0 ;;

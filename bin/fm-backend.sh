@@ -456,8 +456,12 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
-# Orca returns a composite `<id>::<absolute worktree path>` identifier.
-# Firstmate passes it back opaquely, so validate only the stable two-part shape.
+# An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
+# that Orca itself returns, so the `:` and `/` characters every real value
+# carries make the simple-atom check reject it. Firstmate hands the id back to
+# Orca opaquely and resolves it through Orca before removing anything, so this
+# proves only the shape that can name one worktree: both halves of the first
+# `::` split present, and the path half absolute.
 fm_backend_orca_worktree_id_valid() {  # <value>
   case "$1" in
     *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
@@ -572,8 +576,16 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id> [--allow-missing-
       workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
       tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
       pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || pane=
-      if [ -z "$recorded_session" ] || [ -z "$workspace" ] || [ -z "$tab" ] || [ -z "$pane" ] \
-        || [ "$window" != "$recorded_session:$pane" ] \
+      missing=
+      [ -n "$recorded_session" ] || missing="${missing:+$missing }herdr_session"
+      [ -n "$workspace" ] || missing="${missing:+$missing }herdr_workspace_id"
+      [ -n "$tab" ] || missing="${missing:+$missing }herdr_tab_id"
+      [ -n "$pane" ] || missing="${missing:+$missing }herdr_pane_id"
+      if [ -n "$missing" ]; then
+        echo "REFUSED: task $id's record is missing the herdr endpoint identity ($missing); preserving task state." >&2
+        return 1
+      fi
+      if [ "$window" != "$recorded_session:$pane" ] \
         || ! fm_backend_endpoint_atom_valid "$recorded_session" \
         || ! fm_backend_endpoint_atom_valid "$workspace" \
         || ! fm_backend_endpoint_atom_valid "${tab//:/_}" \
@@ -704,15 +716,44 @@ fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>
 # Each adapter is an independently linted canonical root. The /dev/null source
 # boundaries keep runtime dispatch from importing all five adapter ASTs into
 # every dispatcher consumer while preserving the runtime source operations.
+# Bash 3.2 can enter an EXIT trap with status 0 after `set -e` aborts on a
+# missing or unreadable dot-sourced file, and a newer Bash can print that
+# diagnostic and keep going. Both report a successful teardown. Prove the
+# adapter and the siblings it sources are readable regular files before `.`.
+fm_backend_source_readable() {  # <path>
+  [ -f "$1" ] && [ -r "$1" ]
+}
+
 fm_backend_source() {  # <name>
-  local name=$1 adapter
+  local name=$1 adapter rel path siblings
   fm_backend_validate "$name" || return 1
   adapter="$FM_BACKEND_LIB_DIR/backends/$name.sh"
-  # Bash 3.2 can enter an EXIT trap with status 0 after `set -e` aborts on a
-  # missing or unreadable dot-sourced file. Refuse the adapter explicitly so
-  # callers retain the real failure status and never continue a destructive
-  # lifecycle operation after an unavailable backend prerequisite.
-  [ -f "$adapter" ] && [ -r "$adapter" ] || return 1
+  case "$name" in
+    tmux)
+      siblings="fm-tmux-lib.sh fm-composer-lib.sh fm-cursor-lib.sh fm-session-lock-lib.sh fm-agent-process-lib.sh fm-gemini-lib.sh"
+      ;;
+    herdr)
+      siblings="fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh"
+      ;;
+    zellij)
+      siblings="fm-backend-hometag-lib.sh fm-composer-lib.sh"
+      ;;
+    orca)
+      siblings="fm-composer-lib.sh"
+      ;;
+    cmux)
+      siblings="fm-backend-hometag-lib.sh fm-composer-lib.sh"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  fm_backend_source_readable "$adapter" || return 1
+  # shellcheck disable=SC2086 # sibling names are a fixed space-separated list
+  for rel in $siblings; do
+    path="$FM_BACKEND_LIB_DIR/$rel"
+    fm_backend_source_readable "$path" || return 1
+  done
   case "$name" in
     tmux)
       if [ -z "${_FM_BACKEND_TMUX_SOURCED:-}" ]; then
@@ -1147,6 +1188,17 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # view. Zellij remains unverified because its secondmate ghost-tab and
 # agent-process recovery path has not been empirically validated. Orca and cmux
 # do not support secondmate spawns.
+# Only `dead` and `missing` license recovery. Every `alive` is proven at
+# process level through the shared classifier in bin/fm-agent-process-lib.sh,
+# never from a registration or a rendered title alone. The tmux adapter
+# requires a successful session inventory and returns `missing` only when it
+# omits the exact window; the Herdr adapter reuses its strict husk classifier -
+# which verifies a registered agent against `pane process-info` and the real
+# process table, so a registration Herdr kept over a shell-only pane reads
+# `dead` here (issue #4115) - then maps a positively stopped session server to
+# `missing` only in this recovery-grade view. Zellij remains unverified because
+# its secondmate ghost-tab and agent-process recovery path has not been
+# empirically validated. Orca and cmux do not support secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }

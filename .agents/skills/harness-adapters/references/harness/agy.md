@@ -53,3 +53,5 @@ Teardown removes nothing agy-specific because the spawn leaves nothing behind.
 Unsupported and unverified.
 `../../../../../docs/supervision-protocols/` carries no agy protocol, no turn-end guard adapter exists for it, and this adapter verified only the crewmate-side launch, busy state, interrupt, and exit.
 `references/common/primary-hooks.md`'s unsupported-boundary rule applies: never invent a wake protocol from a similar TUI.
+
+On 1.2.x the footer tokens used by 1.1.9 are gone: mid-turn reads `Running...` / `Running command...` with tool lines like `● Bash(...) (ctrl+o to expand)`, and idle is a bordered box with a bare `>` and no placeholder text.

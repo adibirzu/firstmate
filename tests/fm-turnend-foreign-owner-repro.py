@@ -148,6 +148,7 @@ try:
     root, env = make("nonowner")
     owner = start(
         env,
+        'export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=synthetic-owner CLAUDE_PID=$$; '
         '"$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
         "owner-idle.txt",
     )
@@ -196,6 +197,7 @@ try:
     stop(owner)
     replacement = start(
         env,
+        'export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=synthetic-replacement CLAUDE_PID=$$; '
         'printf \'%s\\n\' \'{"session_id":"replacement","stop_hook_active":true}\' | "$FM_ROOT_OVERRIDE/bin/fm-claude-stop-autoarm.sh"; printf "replacement_rc=%s\\n" "$?"; sleep 1',
         "replacement.txt",
     )
@@ -216,10 +218,11 @@ try:
     # A different id against that same owner keeps the refusal and names the
     # recorded id.
     same, same_env = make("same-session")
+    same_env["CLAUDECODE"] = "1"
     same_env["CLAUDE_CODE_SESSION_ID"] = "synthetic-same"
     same_owner = start(
         same_env,
-        'export CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
+        'export CLAUDECODE=1 CLAUDE_PID=$$; "$FM_ROOT_OVERRIDE/bin/fm-lock.sh" && touch "$FM_HOME/state/owner-ready" && while :; do sleep 1; done',
         "same-owner.txt",
     )
     same_lock = same / "state/.lock"
