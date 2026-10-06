@@ -650,6 +650,26 @@ setup_case() {
   pass "successful handoff preserves work, updates meta, reuses brief"
 }
 
+# --- success: the worker handoff file travels with the handoff ---------------
+
+{
+  setup_case worker-handoff task-wh1
+  export FM_FAKE_WINDOW_PRESENT=1
+  export FM_FAKE_PANE_CMD=bash
+  printf '## Next\nRe-run the landing browser test after the fix.\n' > "$CASE_HOME/data/task-wh1/handoff.md"
+  set +e
+  out=$(FM_SPAWN_SETTLE_POLLS=2 "$HANDOFF" task-wh1 --harness claude --skip-exit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "handoff with only a worker handoff file should succeed: $out"
+  prompt=$(cat "$CASE_HOME/state/task-wh1.handoff-prompt")
+  assert_contains "$prompt" "Previous worker handoff file" "worker handoff section in prompt"
+  assert_contains "$prompt" "Re-run the landing browser test after the fix." "worker handoff content in prompt"
+  assert_contains "$prompt" "No captain note was supplied; the previous worker's handoff file follows." "note points at the worker file"
+  assert_not_contains "$prompt" "No progress note was supplied." "generic fallback is not used when a worker file exists"
+  pass "a worker handoff file reaches the replacement agent even without a captain note"
+}
+
 # --- success: verified exit path (alive -> exit command -> dead) ------------
 
 {

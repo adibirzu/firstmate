@@ -529,6 +529,11 @@ RULE_NO_PROMPT="8. A decision above your authority is reported only through rule
 RULE_NO_POLL="9. Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off, such as a validation run or CI.
    Firstmate already supervises every task centrally, and a worker-side loop burns turns for no signal firstmate lacks - follow that step's own response flow, or report and stop."
 
+RULE_HANDOFF="10. Keep a handoff file at \`$DATA/$ID/handoff.md\` so that another agent, possibly on another harness, model or host, can continue if you run out of tokens, time or capacity.
+   Update it after every phase change you report, before any long-running command, and at least every 15 minutes of work; never commit it.
+   Write it for a reader who never saw your session, under these headings: \`## Goal\` (one paragraph), \`## State\` (branch, base, last commit, uncommitted changes yes or no), \`## Done\` (what is finished, with the exact command and result that verified it), \`## Next\` (the very next concrete step, then the rest), \`## Decisions\` (choices made and why), \`## Blockers\` (exact error text), \`## Agent\` (harness, model, host, time of the update).
+   Firstmate snapshots it with your uncommitted work through \`fm-wip-checkpoint.sh\` and hands it to your replacement; keeping it current is what makes that replacement cheap."
+
 IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 # Task
 ## Captain's intent
@@ -594,7 +599,7 @@ $GRAPH_FIRST_SECTION
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+2. Stay inside this worktree; the only files you may write outside it are the report, the status file below, and the handoff file in rule 10.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    Never let a gh or gh-axi PR command fall back to its default repository: pass
    \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
@@ -619,6 +624,8 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $SHARED_INFRA_RULE
 $RULE_NO_PROMPT
 $RULE_NO_POLL
+
+$RULE_HANDOFF
 
 $INBOX_SECTION
 
@@ -676,7 +683,7 @@ $GRAPH_FIRST_SECTION
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+2. Stay inside this worktree; modify nothing outside it except the handoff file in rule 10.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    Never let a gh or gh-axi PR command fall back to its default repository: pass
    \`--repo <owner>/<name>\` derived from \`git remote get-url origin\` on every PR read or create,
@@ -705,6 +712,8 @@ $ASK_USER_BLOCK
 $SHARED_INFRA_RULE
 $RULE_NO_PROMPT
 $RULE_NO_POLL
+
+$RULE_HANDOFF
 
 $INBOX_SECTION
 

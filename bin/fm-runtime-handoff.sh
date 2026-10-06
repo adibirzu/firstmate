@@ -200,6 +200,14 @@ if [ -n "$PROGRESS_NOTE_FILE" ]; then
   [ -f "$PROGRESS_NOTE_FILE" ] || { echo "error: --progress-note-file not found: $PROGRESS_NOTE_FILE" >&2; exit 1; }
   PROGRESS_NOTE=$(cat "$PROGRESS_NOTE_FILE")
 fi
+# The worker's own handoff file (brief rule 10) travels with every handoff, next
+# to any captain note, so a replacement never depends on the old agent's memory.
+WORKER_HANDOFF_FILE="$DATA/$ID/handoff.md"
+WORKER_HANDOFF=
+[ ! -s "$WORKER_HANDOFF_FILE" ] || WORKER_HANDOFF=$(cat "$WORKER_HANDOFF_FILE")
+if [ -z "$PROGRESS_NOTE" ] && [ -n "$WORKER_HANDOFF" ]; then
+  PROGRESS_NOTE="No captain note was supplied; the previous worker's handoff file follows."
+fi
 if [ -z "$PROGRESS_NOTE" ]; then
   PROGRESS_NOTE="No progress note was supplied. Inspect git status, git log, and the task status log, then continue from the original brief. Preserve all existing commits and uncommitted changes."
 fi
@@ -315,6 +323,7 @@ Do not create a new worktree. Do not start over from a clean tree.
 ## Progress so far
 
 $PROGRESS_NOTE
+$(if [ -n "$WORKER_HANDOFF" ]; then printf '\n## Previous worker handoff file\n\nFrom %s - keep updating that same file as you work.\n\n%s\n' "$WORKER_HANDOFF_FILE" "$WORKER_HANDOFF"; fi)
 
 ## Active pipeline
 
