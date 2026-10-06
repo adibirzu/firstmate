@@ -647,6 +647,10 @@ setup_case() {
   if [ -s "$FM_FAKE_TREEHOUSE_LOG" ]; then
     fail "handoff must not call treehouse; log=$(cat "$FM_FAKE_TREEHOUSE_LOG")"
   fi
+  assert_contains "$out" "checkpoint task-h1 " "handoff prints the checkpoint summary"
+  tag_commit=$(git -C "$CASE_WT" rev-parse --verify -q refs/tags/wip/task-h1) || fail "handoff must leave refs/tags/wip/task-h1"
+  [ "$(git -C "$CASE_WT" rev-parse "$tag_commit^")" = "$head_before" ] || fail "checkpoint parent must be the worktree HEAD"
+  [ "$(git -C "$CASE_WT" show "$tag_commit:dirty.txt")" = uncommitted ] || fail "checkpoint must carry uncommitted files"
   pass "successful handoff preserves work, updates meta, reuses brief"
 }
 

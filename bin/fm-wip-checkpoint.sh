@@ -22,7 +22,7 @@
 #
 # Prints: checkpoint <id> <commit> parent=<head> handoff=<yes|no> pushed=<remote|no>
 #
-# Restoring on any host (documented in docs/handoff-checkpoints.md):
+# Restoring on any host:
 #   git fetch --force <remote> "refs/tags/wip/<id>:refs/tags/wip/<id>"
 #   git switch -c <branch> "wip/<id>^"
 #   git restore --source="wip/<id>" --worktree -- .

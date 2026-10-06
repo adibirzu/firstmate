@@ -11,12 +11,15 @@
 # What this does (mechanism only; firstmate decides WHEN to call it):
 #   1. Reconcile the recorded worktree and endpoint ownership; refuse rather
 #      than guess when either cannot be proven safe.
-#   2. Cleanly exit the current agent using the recorded harness's verified
+#   2. Take a best-effort wip checkpoint (fm-wip-checkpoint.sh, no push) so the
+#      worktree's work survives even if the relaunch goes wrong; a failure only
+#      warns.
+#   3. Cleanly exit the current agent using the recorded harness's verified
 #      exit command (harness-adapters owns those facts).
-#   3. Keep the recorded, agent-free endpoint (pane/window) intact.
-#   4. Relaunch the chosen verified harness in the EXISTING worktree and endpoint with the
+#   4. Keep the recorded, agent-free endpoint (pane/window) intact.
+#   5. Relaunch the chosen verified harness in the EXISTING worktree and endpoint with the
 #      existing brief plus a concise progress note (brief file is not rewritten).
-#   5. Rewrite harness=/model=/effort= (and the new endpoint fields)
+#   6. Rewrite harness=/model=/effort= (and the new endpoint fields)
 #      in state/<id>.meta while preserving every other meta line (pr=, x_*, ...).
 #
 # Hard refusals:
@@ -253,6 +256,14 @@ wait_for_non_alive() {
   done
   agent_state_of
 }
+
+# Best-effort safety snapshot of the worker's committed and uncommitted work,
+# taken before the old agent exits; it never blocks or alters the handoff.
+if ! CHECKPOINT_OUT=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-wip-checkpoint.sh" "$ID" 2>&1); then
+  echo "warning: wip checkpoint for $ID failed; continuing handoff: $CHECKPOINT_OUT" >&2
+else
+  printf '%s\n' "$CHECKPOINT_OUT"
+fi
 
 STATE_NOW=$(agent_state_of)
 case "$STATE_NOW" in
