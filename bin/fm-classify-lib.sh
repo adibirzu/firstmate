@@ -1737,9 +1737,29 @@ _fm_status_open_decision_origins() {  # <status-file>
   printf '%s' "$origins"
 }
 
+# _fm_span_fold_room: whether one more status line fits the per-pass fold budget.
+# The fold joins captain-relevant lines into one `;`-separated events string;
+# keeping both a fragment count and a character ceiling bounds every string built
+# out of a status span, so no consumer of the record can ever receive the
+# ~19,400-command `;`-list that recursed an 8 MiB-stack bash into SIGSEGV
+# (fm-watch-bash-segv, 2026-10-07 Mac mini watcher). Defaults are 200 events /
+# 8192 characters; a malformed or empty override falls back to the defaults so a
+# typo cannot widen the fold back to unbounded.
+_fm_span_fold_room() {  # <text> <events> <fold-count> -> 0 when another event fits
+  local count_max chars_max used
+  count_max=${FM_STATUS_SPAN_MAX_FOLD_EVENTS:-200}
+  case "$count_max" in ''|*[!0-9]*) count_max=200 ;; esac
+  chars_max=${FM_STATUS_SPAN_MAX_FOLD_CHARS:-8192}
+  case "$chars_max" in ''|*[!0-9]*) chars_max=8192 ;; esac
+  [ "$3" -lt "$count_max" ] || return 1
+  used=$(( ${#2} + ${#1} + 3 ))
+  [ "$used" -le "$chars_max" ] || return 1
+  return 0
+}
+
 status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file full_file prefix_file result
-  local line verb key origins='' folded=0 rc=1 failed=0 prefix_lines=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
+  local line verb key origins='' folded=0 rc=1 failed=0 prefix_lines=0 line_number=0 live_line='' events='' fold_events=0 fold_exhausted=0 _line _key _fm_span_needs_decision=0
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
   ident=$(_fm_open_decisions_file_ident "$f") || return 2
@@ -1781,15 +1801,25 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
     case "$verb" in
       needs-decision|blocked)
         key=$(_fm_decision_key "$line") || {
-          [ -n "$events" ] && events="${events} ; "
-          events="${events}${line}"
+          if _fm_span_fold_room "$line" "$events" "$fold_events"; then
+            [ -n "$events" ] && events="${events} ; "
+            events="${events}${line}"
+            fold_events=$((fold_events + 1))
+          else
+            fold_exhausted=1
+          fi
           [ "$verb" = needs-decision ] && _fm_span_needs_decision=1
           rc=0
           continue
         }
         _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" || {
-          [ -n "$events" ] && events="${events} ; "
-          events="${events}reconciliation-required: ${line}"
+          if _fm_span_fold_room "reconciliation-required: ${line}" "$events" "$fold_events"; then
+            [ -n "$events" ] && events="${events} ; "
+            events="${events}reconciliation-required: ${line}"
+            fold_events=$((fold_events + 1))
+          else
+            fold_exhausted=1
+          fi
           [ "$verb" = needs-decision ] && _fm_span_needs_decision=1
           rc=0
           continue
@@ -1812,8 +1842,13 @@ $origins
 EOF
 )
         [ -n "$live_line" ] && [ "$((prefix_lines + line_number))" -eq "$live_line" ] || continue
-        [ -n "$events" ] && events="${events} ; "
-        events="${events}${line}"
+        if _fm_span_fold_room "$line" "$events" "$fold_events"; then
+          [ -n "$events" ] && events="${events} ; "
+          events="${events}${line}"
+          fold_events=$((fold_events + 1))
+        else
+          fold_exhausted=1
+        fi
         if [ "$verb" = needs-decision ] || { [ "$verb" = blocked ] &&
           _fm_is_pending_reply_escalation "$key" "$(status_line_note "$line")"; }; then
           _fm_span_needs_decision=1
@@ -1821,14 +1856,23 @@ EOF
         rc=0
         ;;
       *)
-        [ -n "$events" ] && events="${events} ; "
-        events="${events}${line}"
+        if _fm_span_fold_room "$line" "$events" "$fold_events"; then
+          [ -n "$events" ] && events="${events} ; "
+          events="${events}${line}"
+          fold_events=$((fold_events + 1))
+        else
+          fold_exhausted=1
+        fi
         rc=0
         ;;
     esac
   done < "$chunk_file"
   rm -f "$chunk_file" "$full_file" "$prefix_file"
   [ "$failed" -eq 0 ] || return 2
+  if [ "$fold_exhausted" -eq 1 ]; then
+    [ -n "$events" ] && events="${events} ; "
+    events="${events}... (status-span fold budget exhausted; remaining events scanned but not folded)"
+  fi
   if [ "$rc" -eq 0 ]; then result="${size}"$'\t'"${ident}"$'\t'"${events}"; else result="${size}"$'\t'"${ident}"; fi
   if [ -n "$output_var" ]; then
     printf -v "$output_var" '%s' "$result"
