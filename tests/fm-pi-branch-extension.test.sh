@@ -68,6 +68,8 @@ JSON
   cat > "$repo/node_modules/@earendil-works/pi-coding-agent/index.js" <<'JS'
 import { writeFileSync } from "node:fs";
 
+export const VERSION = process.env.FM_STUB_PI_VERSION || "0.99.0";
+
 export function getAgentDir() {
   return "/stub-agent-dir";
 }
@@ -805,20 +807,31 @@ const renderTheme = {
 };
 const renderContext = { state: {}, isError: false, isPartial: false };
 const stockResult = { content: [{ type: "text", text: "OUTCOME_DUMP" }] };
-const assertStockFallback = (label, fn) => {
-  try {
-    fn();
-  } catch {
-    return;
-  }
-  throw new Error(label);
+const calmOffCall = outcomesTool.renderCall({}, renderTheme, renderContext);
+const calmOffResult = outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
+if (calmOffCall.constructor.name !== "Box" || calmOffCall.paddingX !== 1 || calmOffCall.paddingY !== 1) {
+  throw new Error("fm_branch_outcomes changed its ordinary shell rendering");
+}
+if (calmOffResult.constructor.name !== "Container" || calmOffCall.children[0]?.text !== "fm_branch_outcomes" || calmOffCall.children[1]?.text !== "OUTCOME_DUMP") {
+  throw new Error("fm_branch_outcomes changed its ordinary call or result rendering");
+}
+const legacyStockResult = {
+  content: [{
+    type: "text",
+    text: Array.from({ length: 12 }, (_, index) => `LEGACY_OUTCOME_${String(index + 1).padStart(2, "0")}`).join("\n"),
+  }],
 };
-assertStockFallback("fm_branch_outcomes replaced Pi stock rendering while Calm was off", () => {
-  outcomesTool.renderCall({}, renderTheme, renderContext);
-});
-assertStockFallback("fm_branch_outcomes replaced Pi stock result rendering while Calm was off", () => {
-  outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
-});
+const legacyRenderContext = { state: {}, isError: false, isPartial: false };
+const legacyCall = outcomesTool.renderCall({}, renderTheme, legacyRenderContext);
+outcomesTool.renderResult(legacyStockResult, { expanded: false, isPartial: false }, renderTheme, legacyRenderContext);
+const collapsedLegacyText = legacyCall.children[1]?.text;
+if (!collapsedLegacyText?.includes("LEGACY_OUTCOME_12") || collapsedLegacyText.includes("more lines")) {
+  throw new Error("legacy all-line stock capability did not preserve collapsed Calm-off output");
+}
+outcomesTool.renderResult(legacyStockResult, { expanded: true, isPartial: false }, renderTheme, legacyRenderContext);
+if (legacyCall.children[1]?.text !== collapsedLegacyText) {
+  throw new Error("legacy all-line stock capability changed expanded Calm-off output");
+}
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: false });
 const calmOnCall = outcomesTool.renderCall({}, renderTheme, renderContext);
 const calmOnResult = outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
@@ -826,12 +839,9 @@ if (calmOnCall.constructor.name !== "Container" || calmOnCall.render(100).length
   throw new Error("fm_branch_outcomes remained visible while Calm was on");
 }
 pi.events.emit("firstmate:calm-presentation", { active: false, stockExportRendering: false });
-assertStockFallback("fm_branch_outcomes did not restore stock rendering when Calm was turned off", () => {
-  outcomesTool.renderCall({}, renderTheme, renderContext);
-});
-assertStockFallback("fm_branch_outcomes did not restore stock result rendering when Calm was turned off", () => {
-  outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext);
-});
+if (outcomesTool.renderCall({}, renderTheme, renderContext).constructor.name !== "Box" || outcomesTool.renderResult(stockResult, { expanded: false, isPartial: false }, renderTheme, renderContext).constructor.name !== "Container") {
+  throw new Error("fm_branch_outcomes did not restore ordinary rendering when Calm was turned off");
+}
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
 let exportCallFellBack = false;
 let exportResultFellBack = false;
@@ -4992,6 +5002,64 @@ JS
   pass "the installed Pi still bounds the picker's list and ranks its search"
 }
 
+# Pi's stock call header gained arguments in 0.99: before it, the header is
+# the bold title alone; from 0.99 a collapsed call appends `key=json` and an
+# expanded call lists `key: value` under the title. Both supervision tools
+# must match the header of whichever Pi version loaded them.
+test_outcomes_tool_call_headers_follow_the_loaded_pi_version() {
+  local repo version status out
+  repo="$TMP_ROOT/call-header-versions"
+  install_pi_branch_extension_fixture "$repo"
+  for version in 0.87.0 0.99.0; do
+    FM_STUB_PI_VERSION="$version" EXT="$repo/.pi/extensions/fm-branch-supervision.ts" \
+      node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+
+const version = process.env.FM_STUB_PI_VERSION;
+const tools = [];
+const pi = {
+  events: { on() {}, emit() {} },
+  on() {},
+  registerCommand() {},
+  registerMessageRenderer() {},
+  registerTool(tool) { tools.push(tool); },
+  sendMessage() {},
+  sendUserMessage() {},
+};
+const extension = await import(pathToFileURL(process.env.EXT).href);
+extension.default(pi);
+const theme = {
+  fg(color, text) { return `<${color}>${text}</${color}>`; },
+  bg(_color, text) { return text; },
+  bold(text) { return `**${text}**`; },
+};
+const showsArgs = version === "0.99.0";
+for (const [name, key, value] of [["fm_branch_outcomes", "recent", 2], ["fm_branch_processed", "through", 1]]) {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) throw new Error(`${name} was not registered`);
+  const title = `<toolTitle>**${name}**</toolTitle>`;
+  for (const expanded of [false, true]) {
+    const stock = !showsArgs
+      ? title
+      : expanded
+        ? `${title}\n<muted>  ${key}: ${value}</muted>`
+        : `${title} <muted>${key}=${value}</muted>`;
+    const shell = tool.renderCall({ [key]: value }, theme, { state: {}, expanded, isError: false, isPartial: false });
+    const header = shell.children[0]?.text;
+    if (header !== stock) {
+      throw new Error(`Pi ${version} ${expanded ? "expanded" : "collapsed"} ${name} header ${JSON.stringify(header)} is not stock ${JSON.stringify(stock)}`);
+    }
+  }
+}
+JS
+    status=$?
+    out=$(cat "$TMP_ROOT/node-output")
+    expect_code 0 "$status" "Pi $version supervision tool call headers must match that version's stock header: $out"
+    [ -z "$out" ] || fail "Pi $version call header test printed output: $out"
+  done
+  pass "fm_branch_outcomes and fm_branch_processed call headers match stock on Pi before and from 0.99"
+}
+
 test_outcomes_tool_uses_stock_execution_and_export_consumers() {
   if ! command -v node >/dev/null 2>&1; then
     echo "skip: node not found for Pi outcomes rendering test"
@@ -5122,6 +5190,28 @@ if (JSON.stringify(expandedActual) !== JSON.stringify(expandedStock)) {
 }
 if (!expandedStock.join("\n").includes("OUTCOME_TWELVE") || JSON.stringify(expandedStock) === JSON.stringify(collapsedStock)) {
   throw new Error("stock rendering fixture did not exercise expanded output");
+}
+const processedDefinition = tools.find((tool) => tool.name === "fm_branch_processed");
+if (!processedDefinition) throw new Error("fm_branch_processed was not registered");
+const stockProcessedDefinition = { ...processedDefinition };
+delete stockProcessedDefinition.renderShell;
+delete stockProcessedDefinition.renderCall;
+delete stockProcessedDefinition.renderResult;
+const processedArgs = { through: 1 };
+const processedResult = { content: [{ type: "text", text: "acknowledged through 1" }], details: undefined, isError: false };
+const stockProcessed = new ToolExecutionComponent("fm_branch_processed", "stock-processed", processedArgs, { showImages: false }, stockProcessedDefinition, ui, process.cwd());
+const actualProcessed = new ToolExecutionComponent("fm_branch_processed", "actual-processed", processedArgs, { showImages: false }, processedDefinition, ui, process.cwd());
+for (const row of [stockProcessed, actualProcessed]) {
+  row.markExecutionStarted();
+  row.setArgsComplete();
+  row.updateResult(processedResult);
+}
+for (const expanded of [false, true]) {
+  stockProcessed.setExpanded(expanded);
+  actualProcessed.setExpanded(expanded);
+  if (JSON.stringify(actualProcessed.render(100)) !== JSON.stringify(stockProcessed.render(100))) {
+    throw new Error(`${expanded ? "expanded" : "collapsed"} Calm-off fm_branch_processed rendering differs from Pi stock`);
+  }
 }
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: false });
 actualRow.invalidate();
@@ -5719,6 +5809,7 @@ EOF
   pass "an extension-registered provider resolves in the isolated branch runtime"
 }
 
+test_outcomes_tool_call_headers_follow_the_loaded_pi_version
 test_outcomes_tool_uses_stock_execution_and_export_consumers
 test_real_pi_picker_primitives_stay_bounded_and_searchable
 test_branch_dispatch_two_stage_filter_and_prefix_contract

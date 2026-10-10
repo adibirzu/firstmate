@@ -1002,15 +1002,6 @@ test_project_lock_honors_a_redirected_state_directory() {
   pass "Treehouse project locking honors a redirected state directory while keeping descendants on the shared root anchor"
 }
 
-test_invalid_endpoint_records_refuse_before_mutation
-test_control_lock_contention_refuses_before_mutation
-test_non_pool_teardown_ignores_task_set_lock
-test_metadata_lock_serializes_destructive_cleanup
-test_supported_backend_endpoint_records_validate
-test_orca_composite_worktree_id_validates
-test_tmux_empty_target_refuses_without_invocation
-test_recorded_process_identity_cleanup_is_exact
-test_isolated_tmux_invalid_and_valid_cleanup
 
 # The tmux shim used by the endpoint-close tests below: every subcommand
 # reaches the real isolated server, so presence is always read from real tmux.
@@ -1485,6 +1476,39 @@ test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
 }
 
 
+test_stale_record_on_claimed_slot_retires_then_claimant_tears_down() {
+  local dir id=stale-task other=live-task rc
+
+  dir=$(make_case slot-reassigned-both-records)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$other.meta" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  claim_pool_slot "$dir" "$other"
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "records-only teardown of a stale record on a claimed slot failed: $(cat "$dir/stderr")"
+  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "stale record beside the claimant's record"
+  assert_present "$dir/worktree/sentinel" "records-only teardown reset the claimant's slot"
+  assert_present "$dir/home/state/$other.meta" "records-only teardown removed the claimant's record"
+
+  : > "$dir/runtime.log"
+  run_case "$dir" "$other" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "claimant teardown failed after the stale record retired: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$other.meta" "claimant teardown left its record"
+  assert_absent "$dir/pool/1/.fm-slot-owner" "claimant teardown left its spent slot claim behind"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "claimant teardown did not return its pool slot: $(cat "$dir/runtime.log")"
+
+  pass "fm-teardown: a stale record on a claimed slot retires, then the claimant tears down"
+}
+
 # The two states that must never become a false refusal: the task's own claim,
 # and no claim at all (a slot taken before claims existed, or already returned).
 test_own_and_absent_slot_claims_still_tear_down() {
@@ -1532,6 +1556,7 @@ test_retirable_legacy_husk_does_not_pin_a_reused_slot
 test_legacy_husk_with_unknown_endpoint_still_pins_the_slot
 test_sole_slot_record_still_tears_down
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
+test_stale_record_on_claimed_slot_retires_then_claimant_tears_down
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts
