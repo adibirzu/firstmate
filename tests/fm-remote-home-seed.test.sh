@@ -231,37 +231,74 @@ def receive(case, action="put", rel="config/spawn-capacity", payload=PAYLOAD,
                (action, rel, len(payload), digest, generation), settings, payload)
 
 
+def receipt(case, generation, payload, digest, action):
+    record = case["path"] / "remote-home/config/.fm-inherit-spawn-capacity.generation"
+    expected = f"{generation}\n{len(payload)}\n{digest}\n{action}\n".encode()
+    check(record.read_bytes() == expected, "committed generation/length/digest/action receipt changed")
+
+
+def snapshot(root):
+    return {str(path.relative_to(root)):
+            ("symlink", os.readlink(path)) if path.is_symlink() else
+            ("directory",) if path.is_dir() else ("file", path.read_bytes())
+            for path in root.rglob("*")}
+
+
+def rejected_receive(case, diagnostic, **kwargs):
+    before = snapshot(case["path"] / "remote-home")
+    expect(receive(case, **kwargs), 1, diagnostic)
+    check(snapshot(case["path"] / "remote-home") == before,
+          "rejected inheritance changed committed payload, receipt or destination")
+
+
 case = fixture("receiver")
 dest = case["path"] / "remote-home/config/spawn-capacity"
 expect(receive(case), 0, b"pushed:")
 check(dest.read_bytes() == PAYLOAD, "capacity bytes changed")
+receipt(case, "1", PAYLOAD, HASH, "put")
 expect(receive(case), 0, b"unchanged:")
+check(dest.read_bytes() == PAYLOAD, "identical retry changed capacity bytes")
+receipt(case, "1", PAYLOAD, HASH, "put")
 expect(receive(case, "absent", payload=b"", digest=EMPTY_HASH, generation="2"), 0, b"removed:")
 check(not dest.exists(), "absent did not remove capacity")
+receipt(case, "2", b"", EMPTY_HASH, "absent")
 no_endpoint(case)
 passed("declared spawn-capacity put, identical retry and absent preserve receiver contract")
 
 case = fixture("receiver-negative")
-expect(receive(case, rel="config/secondmate-harness"), 1, b"path is not inherited material")
-expect(receive(case, digest="0" * 64), 1, b"digest does not match")
-expect(receive(case, generation="0"), 1, b"generation is outside")
-dest = case["path"] / "remote-home/config/spawn-capacity"
-check(not dest.exists(), "invalid payload published")
 expect(receive(case, generation="3"), 0)
-expect(receive(case, "absent", payload=b"", digest=EMPTY_HASH, generation="2"), 1, b"superseded")
-expect(receive(case, "absent", payload=b"", digest=EMPTY_HASH, generation="3"), 1, b"conflicts")
-check(dest.read_bytes() == PAYLOAD, "generation refusal changed committed capacity")
+check((case["path"] / "remote-home/config/spawn-capacity").read_bytes() == PAYLOAD,
+      "initial commitment changed capacity bytes")
+receipt(case, "3", PAYLOAD, HASH, "put")
+rejected_receive(case, b"path is not inherited material", rel="config/secondmate-harness")
+rejected_receive(case, b"digest does not match", digest="0" * 64, generation="4")
+rejected_receive(case, b"generation is outside", generation="0")
+rejected_receive(case, b"superseded", generation="2")
+rejected_receive(case, b"superseded", action="absent", payload=b"", digest=EMPTY_HASH, generation="2")
+conflict = b"min_free_memory_mb=300\n"
+rejected_receive(case, b"conflicts", payload=conflict,
+                 digest=__import__("hashlib").sha256(conflict).hexdigest(), generation="3")
+rejected_receive(case, b"conflicts", action="absent", payload=b"", digest=EMPTY_HASH, generation="3")
+check(not (case["path"] / "remote-home/config/secondmate-harness").exists(),
+      "undeclared configuration was published")
 passed("undeclared config, wrong digest, invalid/stale/conflicting generations refuse safely")
 
 case = fixture("receiver-unsafe")
+expect(receive(case), 0)
+receipt(case, "1", PAYLOAD, HASH, "put")
 outside = case["path"] / "outside"
 outside.write_bytes(b"preserve synthetic outside content")
 dest = case["path"] / "remote-home/config/spawn-capacity"
+committed = dest.with_name("committed-capacity")
+dest.rename(committed)
 dest.symlink_to(outside)
-expect(receive(case), 1, b"destination is a symlink")
-expect(receive(case, "absent", payload=b"", digest=EMPTY_HASH), 1, b"destination is a symlink")
-check(dest.is_symlink() and outside.read_bytes() == b"preserve synthetic outside content",
-      "unsafe destination touched outside content")
+for action in ("put", "absent"):
+    outside_before = outside.read_bytes()
+    rejected_receive(case, b"destination is a symlink", action=action,
+                     payload=PAYLOAD if action == "put" else b"",
+                     digest=HASH if action == "put" else EMPTY_HASH, generation="2")
+    check(outside.read_bytes() == outside_before and committed.read_bytes() == PAYLOAD,
+          "unsafe destination damaged outside or committed bytes")
 passed("unsafe receiver destination refuses put and absent without touching its target")
 
 for action in ("put", "absent"):
@@ -283,14 +320,31 @@ for action in ("put", "absent"):
 for name, evidence in (("capacity-refusal", '{"ok":false,"reasons":["synthetic no headroom"]}'),
                        ("capacity-malformed", 'not-json')):
     case = fixture(name)
+    expect(seed(case), 0)
+    transport_before = calls(case)
+    parent_before = snapshot(case["parent"])
+    remote_before = snapshot(case["path"] / "remote-home")
     router = case["path"] / "router"
-    router.write_text("#!" + SHELL + "\nprintf '%s\\n' '" + evidence + "'\n")
+    router.write_text("#!" + sys.executable + "\n" +
+                      "import json, os, sys\nfrom pathlib import Path\n" +
+                      "with (Path(os.environ['TEST_BOOTSTRAP_CASE']) / 'router.jsonl').open('a') as stream:\n" +
+                      "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n" +
+                      "print(" + repr(evidence) + ")\n")
     router.chmod(0o755)
-    expect(run(case, "fm-spawn.sh", ("bootstrap", "--secondmate", "--harness", "codex"),
-               {"FM_LLM_ROUTER_AXI": str(router)}), 1)
-    check(not calls(case), "capacity refusal reached transport")
+    proc = run(case, "fm-spawn.sh", ("bootstrap", "--secondmate", "--harness", "codex"),
+               {"FM_LLM_ROUTER_AXI": str(router)})
+    expect(proc, 1, b"machine capacity declines secondmate task bootstrap:")
+    if name == "capacity-refusal":
+        expect(proc, 1, b"synthetic no headroom")
+    invocations = [json.loads(line) for line in
+                   (case["path"] / "router.jsonl").read_text().splitlines()]
+    check(invocations == [["capacity", "--json"]], "spawn did not request the capacity verdict")
+    check(calls(case) == transport_before, "capacity refusal reached downstream transport")
     no_endpoint(case)
-    check(not list((case["parent"] / "state").iterdir()), "capacity refusal mutated task state")
+    check(snapshot(case["parent"]) == parent_before, "capacity refusal mutated parent task/route state")
+    check(snapshot(case["path"] / "remote-home") == remote_before,
+          "capacity refusal mutated remote state")
+    check(not (case["path"] / "claims").exists(), "capacity refusal created process-event claims")
     passed(name + " remains before task state or remote transport mutation")
 
 print("ALL TESTS PASSED")
