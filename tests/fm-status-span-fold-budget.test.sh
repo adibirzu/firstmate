@@ -47,6 +47,10 @@ test_fold_stays_bounded_on_a_dense_captain_log() {
   [ "$nd" -eq 1 ] \
     || fail "the needs-decision flag was lost when the fold hit its budget"
   events=${record#*$'\t'}; events=${events#*$'\t'}
+  case "$events" in
+    *"pick the deeper option"*) ;;
+    *) fail "a decision buried past the budget lost its TEXT: '$events'" ;;
+  esac
   chars_max=${FM_STATUS_SPAN_MAX_FOLD_CHARS:-8192}
   len=${#events}
   # The budget ceiling plus the truncation marker's overhead; still an order of
@@ -60,6 +64,57 @@ test_fold_stays_bounded_on_a_dense_captain_log() {
   [ "$ev_count" -le 205 ] \
     || fail "the events fold held ${ev_count} fragments (budget 200 + marker): the pre-fix unbounded fold"
   pass "a dense captain-relevant status log folds within budget and still surfaces a decision buried in its tail"
+}
+
+# Classify one status file under an env override through a subshell export;
+# prints 'rc<TAB>nd<TAB>record' so the caller can assert without eval.
+classify_under_env() {  # <name> <value> <status-file>
+  local name=$1 val=$2 f=$3 rec n
+  (
+    export "$name=$val"
+    rec=; n=0
+    status_span_first_actionable_record "$f" 0 rec n
+    printf '%s\t%s\t%s\n' "$?" "$n" "$rec"
+  )
+}
+
+# The budgets are reachable through env only as a positive decimal; a zero,
+# absurdly large, or malformed override must fall back to the defaults rather
+# than folding nothing (EVENTS=0/CHARS=0 honored) or reopening an unbounded fold
+# (a 20-digit value honored). The dense fixture's buried decision also demands
+# enough survivors to guarantee its text keeps a seat.
+test_invalid_budget_overrides_fall_back_to_defaults() {
+  local dir f i record rc nd events ev_count _frag envv
+  dir="$TMP_ROOT/overrides"; mkdir -p "$dir"
+  f="$dir/dense.status"
+  for i in $(seq 1 300); do
+    printf 'done: heavy batch %d shipped\n' "$i" >> "$f"
+  done
+  printf 'needs-decision [key=deep]: pick the deeper option\n' >> "$f"
+
+  for envv in \
+      FM_STATUS_SPAN_MAX_FOLD_EVENTS=0 \
+      FM_STATUS_SPAN_MAX_FOLD_EVENTS=99999999999999999999 \
+      FM_STATUS_SPAN_MAX_FOLD_CHARS=0 \
+      FM_STATUS_SPAN_MAX_FOLD_CHARS=99999999999999999999; do
+    IFS='=' read -r name val <<< "$envv"
+    IFS=$'\t' read -r rc nd events <<< "$(classify_under_env "$name" "$val" "$f")"
+    [ "$rc" -eq 0 ] || fail "override '$envv' hid the buried decision from actionability"
+    [ "$nd" -eq 1 ] || fail "override '$envv' lost the needs-decision flag"
+    case "$events" in
+      *"pick the deeper option"*) ;;
+      *) fail "override '$envv' was honored, falling back not; decision text lost: '$events'" ;;
+    esac
+    ev_count=0
+    while IFS= read -r -d ';' _frag || [ -n "$_frag" ]; do
+      [ -n "$_frag" ] && ev_count=$((ev_count + 1))
+    done <<< "$events"
+    [ "$ev_count" -gt 100 ] \
+      || fail "override '$envv' was honored as a ~zero budget instead of falling back to defaults (${ev_count} fragments)"
+    [ "$ev_count" -le 205 ] \
+      || fail "override '$envv' reopened the unbounded fold (${ev_count} fragments)"
+  done
+  pass "zero, absurd, and malformed budget overrides fall back to the defaults"
 }
 
 # The fold budget is env-tunable and ordinary small logs fold byte-for-byte as
@@ -98,3 +153,4 @@ test_budget_is_tunable_and_small_logs_are_untouched() {
 
 test_fold_stays_bounded_on_a_dense_captain_log
 test_budget_is_tunable_and_small_logs_are_untouched
+test_invalid_budget_overrides_fall_back_to_defaults
