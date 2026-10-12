@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+case "${1:-}" in
+  capacity)
+    printf '{"ok":true,"measured":{},"reasons":[],"signals":[]}\n'
+    exit 0
+    ;;
+  classify-evidence)
+    printf 'classification=none\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
