@@ -1648,11 +1648,13 @@ for (const { name, actual } of rows) {
     throw new Error(`${name} was not hidden before export rendering`);
   }
 }
+const getStockToolRenderer = (name) => tools.find((tool) => tool.name === name);
 async function assertStockHtmlRendering(command, submitData) {
   editorText = command;
   terminalInputHandler(submitData);
   const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+    getToolDefinition: getStockToolRenderer,
+    getToolRenderers: getStockToolRenderer,
     theme,
     cwd: process.cwd(),
   });
@@ -1683,7 +1685,8 @@ getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
 const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+  getToolDefinition: getStockToolRenderer,
+  getToolRenderers: getStockToolRenderer,
   theme,
   cwd: process.cwd(),
 });
@@ -4201,7 +4204,9 @@ TS
 {"type":"message","id":"a0000016","parentId":"a0000015","timestamp":"$now","message":{"role":"assistant","content":[{"type":"text","text":"The deterministic tool example is complete."}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":2,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":16}}
 JSON
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  # Fit the restored transcript: Pi 1.1.0 clips initial rows outside the viewport,
+  # so capture-pane scrollback cannot recover them for the assertions below.
+  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 160 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$default_snapshot" "The deterministic tool example is complete." \
     || fail "Pi calm E2E did not reach the restored session transcript"
@@ -4878,7 +4883,7 @@ JS
     || fail "Pi did not exit cleanly before the Calm persistence restart"
   tmux -L "$TMUX_SOCKET" kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 160 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$restarted_snapshot" "CALM_WORKING_E2E_RESPONSE" \
     || fail "Pi did not restore the persisted session after restart"
