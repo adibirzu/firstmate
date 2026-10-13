@@ -8,7 +8,7 @@
 # restart. Protocol 20 removes both halves - the pane-creating signature and the
 # persisted field - so a worker's flags can no longer be replayed by any
 # supported backend. This file now pins the CURRENT truth instead, because that
-# absence is exactly the assumption a restored-worker launch-drift check would be built on:
+# absence is exactly the assumption bin/fm-launch-drift-lib.sh is built on:
 #
 #   1. the pane-creating `agent start --cwd/--workspace` signature is gone;
 #   2. no persisted launch-command field exists anywhere in the protocol schema;

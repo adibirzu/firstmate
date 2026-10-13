@@ -20,7 +20,7 @@ It routes a task descriptor through `llm-router-axi`, resolves a matched subscri
 
 `AGENTS.md` section 4 owns the always-loaded intake boundary, load trigger, malformed-config refusal, every-candidate accounting, and strongest-reasoning safety rules.
 `harness-adapters` owns harness verification, model/provider discovery, and effort fallback.
-`llm-router-axi select` is the mechanical owner of arbitrary-profile selection, `llm-router-axi route chain` owns in-run step-down, and `llm-router-axi classify-evidence` owns the subscription-exhaustion vocabulary.
+`llm-router-axi select` is the mechanical owner of arbitrary-profile selection, `llm-router-axi route chain` owns in-run step-down, `llm-router-axi classify-evidence` owns the subscription-exhaustion vocabulary, and `bin/fm-model-fallback.sh` owns the hosted-region opt-in refusal signature.
 `bin/fm-dispatch-select.mjs` is a thin forwarding shim over those verbs, kept only so existing callers keep their command line.
 `quota-axi` remains data-only: it publishes `spendPriority` as a comparable scalar and never recommends, selects, ranks, or infers a route.
 Do not add a daemon, opaque composite score, hard-coded model-specific policy, or producer-side route recommendation.
@@ -120,7 +120,7 @@ The selector is the mechanical owner of dispatch capacity and of ranking among r
 It does not replace reasoning-class fit: keep only candidates that meet the required reasoning class before passing the set, and never use `spendPriority` or remaining quota to silently replace that class.
 When every remaining candidate is tight, dispatch inside the strongest-reasoning class if one of those candidates can proceed, or stop and report that the strongest-class choice cannot proceed rather than downgrading it to spend or conserve quota.
 That rule governs this selection, which is the initial dispatch decision.
-The in-run response to a model that depletes after dispatch is not owned by this skill: the router's `route chain` verb is the only source of step-down order, and no firstmate script in this layer applies it.
+The separate in-run `modelFallback` response to a model that depletes after dispatch (`AGENTS.md` section 4) walks the configured chain for the class already dispatched through `bin/fm-model-fallback.sh apply`, so it never re-opens class choice; under the standing auto-step-down rule it proceeds down that chain automatically even past the strongest entry, logging each switch.
 When every dispatch-side candidate for the required class is spent, stop and report that the strongest-class choice cannot proceed - that is a selection decision, not a depletion response.
 
 Providers exposed by quota-axi, including Claude, Codex, Grok, Cursor, and agy, require fresh telemetry within the configured maximum age and a tightest live percentage strictly above `reservePercent`.
@@ -161,6 +161,7 @@ A blocked credential report must name `harness`, `model`, authentication surface
 Both tools are now required for the dispatch path: `llm-router-axi` owns selection, the step-down chain, the subscription-exhaustion vocabulary of the depletion classifier, and the machine-capacity verdict, and there is no in-repo fallback left.
 When either is not on `PATH`, stop and report the missing tool rather than dispatching by hand.
 Both are unpublished on npm, so build and install each from its GitHub main clone: `git clone https://github.com/adibirzu/llm-router-axi && cd llm-router-axi && npm ci && npm run build && npm install -g --prefix ~/.local .`, then the same for `https://github.com/adibirzu/usage-axi`; `bin/fm-router-lib.sh`'s `fm_router_axi_install_hint` owns the exact hint.
+`bin/fm-capacity-lib.sh` declines a spawn rather than running unguarded when the router is absent.
 
 ## Per-account launches
 

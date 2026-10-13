@@ -16,8 +16,8 @@
 //
 // This file exists only so existing firstmate callers keep their command line.
 // The router policy at ~/.config/llm-router-axi/policy.json now owns the
-// reserve, cooldown, telemetry-age, and machine-capacity settings, and its
-// `route chain` verb owns the step-down order.
+// reserve, cooldown, telemetry-age, and machine-capacity settings, and
+// bin/fm-model-fallback.sh reads its step-down chain from `route chain`.
 //
 // Resolution: FM_LLM_ROUTER_AXI names an executable, else llm-router-axi on
 // PATH. A host without the tool is refused with the one-line install hint

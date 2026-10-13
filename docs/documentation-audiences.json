@@ -683,6 +683,42 @@
     {
       "path": "docs/verification/openrouter-quota.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cline.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/copilot.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cursor-agent.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/code-review.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/verification/agy-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cline-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/copilot-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cursor-agent-adapter.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/fm-harness-usage-bar.md",
+      "audience": "maintainer-verification"
     }
   ]
 }
