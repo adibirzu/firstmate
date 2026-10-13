@@ -261,6 +261,8 @@ backend = "markdown"
 
 [markdown]
 path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
 EOF
   printf '%s\n' "$REMOTE_A" > "$home/data/secondmates.md"
   tasks-axi add "$id" "overflow work $id" --kind ship --file "$home/data/backlog.md" >/dev/null

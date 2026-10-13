@@ -704,6 +704,10 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-remote-overflow-lib.sh
+. "$SCRIPT_DIR/fm-remote-overflow-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -734,6 +738,7 @@ RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
 HERDR_RESUME_LOCK_WAIT=0
+DUPLICATE_OK=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -800,6 +805,7 @@ for a in "$@"; do
     ;;
   --relaunch) RELAUNCH=1 ;;
   --herdr-resume-lock-wait) HERDR_RESUME_LOCK_WAIT=1 ;;
+  --duplicate-ok) DUPLICATE_OK=1 ;;
   --harness) want_value=harness ;;
   --harness=*)
     HARNESS_ARG=${a#--harness=}
@@ -1579,6 +1585,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$BRANCH_PREFIX_SET" -eq 0 ] || shared_args+=(--branch-prefix "$BRANCH_PREFIX")
   [ "$BASE_BRANCH_SET" -eq 0 ] || shared_args+=(--base-branch "$BASE_BRANCH")
   [ "$HERDR_RESUME_LOCK_WAIT" -eq 0 ] || shared_args+=(--herdr-resume-lock-wait)
+  [ "$DUPLICATE_OK" -eq 0 ] || shared_args+=(--duplicate-ok)
   for pair in "${POS[@]}"; do
     case "$pair" in
     *=*) : ;;
@@ -1626,6 +1633,26 @@ if [ -e "$STATE" ] || [ -L "$STATE" ]; then
   }
 elif [ "$RELAUNCH" -eq 1 ]; then
   echo "error: spawn refused: state directory does not exist at $STATE" >&2
+  exit 1
+fi
+# Machine-capacity guard (bin/fm-capacity-lib.sh). Every kind of direct
+# report passes through here before the task lock, backend, worktree, or
+# metadata mutation. A refused fresh ship or scout spawn is first offered
+# to a remote secondmate home with headroom (bin/fm-remote-overflow-lib.sh).
+# Relaunches and secondmates are never overflowable. A tooling failure
+# (router or jq absent) is never overflowed.
+if ! fm_capacity_guard "$CONFIG" "$KIND task $ID"; then
+  if [ "$FM_CAPACITY_GUARD_REASON" = capacity ] \
+    && [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
+    && fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND" 2>/dev/null \
+    && fm_backlog_row_probe "$DATA" "$ID" 2>/dev/null \
+    && [ "$FM_BACKLOG_ROW_STATE" = "queued no no" ] \
+    && [ -n "$(fm_overflow_remote_ids)" ]; then
+    if fm_overflow_try "$ID"; then
+      exit 0
+    fi
+    echo "overflow: task $ID stays queued locally; no remote secondmate home took it" >&2
+  fi
   exit 1
 fi
 # Role partition: spawning NEW work is MAIN-owned while attended. A relaunch of
@@ -4541,6 +4568,25 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" || exit 1
+fi
+
+# Duplicate or superseded-work gate, once the leased worktree is on a current
+# base (bin/fm-duplicate-check.sh). A fresh ship is the surface it covers;
+# --duplicate-ok is the explicit override for one concrete dispatch. Relaunch
+# and secondmates skip the gate; scouts are exempt because investigating
+# covered work is legitimate.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ] && [ "$DUPLICATE_OK" -eq 0 ]; then
+  INTENDED_BRANCH=${BRANCH:-fm/$ID}
+  DUP_RC=0
+  "$FM_ROOT/bin/fm-duplicate-check.sh" "$WT" "$INTENDED_BRANCH" "$ID" >&2 || DUP_RC=$?
+  if [ "$DUP_RC" -ne 0 ]; then
+    if [ "$DUP_RC" -eq 1 ]; then
+      echo "error: duplicate or superseded work detected for $INTENDED_BRANCH; refusing to dispatch a second worker on already-covered ground; review the evidence above or pass --duplicate-ok to override for this dispatch" >&2
+    else
+      echo "error: duplicate check could not answer whether $INTENDED_BRANCH is already covered; refusing to dispatch without that answer; fix the environment above or pass --duplicate-ok to override" >&2
+    fi
+    exit 1
+  fi
 fi
 
 # Re-assert the durable task copy after either treehouse acquisition or endpoint
