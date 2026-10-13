@@ -1857,6 +1857,11 @@ The real lifecycle smoke proved spawn, metadata, nested-subshell worktree discov
 
 Real readiness was verified against `/usr/local/bin/orca` with `/Applications/Orca.app` bundle version 1.4.116.
 
+On 2026-10-13, the app-bundled CLI `/Applications/Orca.app/Contents/Resources/bin/orca` reported version 1.4.224, and `orca status --json` reported a reachable, ready runtime.
+The registered repository identity was inspected read-only; its canonical identity points at the upstream `kunchenguid/firstmate` repository while the selected fork uses `adibirzu/firstmate`, and the registered path is the primary checkout rather than the isolated task worktree.
+This confirms the new identity guard must refuse this registration for the isolated fork worktree.
+No repository registration, worktree creation, terminal creation, spawn, send, or cleanup was performed during this preflight.
+
 ```sh
 orca status --json
 ```

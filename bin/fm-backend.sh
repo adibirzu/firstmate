@@ -373,12 +373,15 @@ fm_backend_required_tool_available() {  # <backend> <tool>
       # desktop). The call is time-bounded because on a Linux DESKTOP the
       # screen reader does not exit - it launches, starts speaking, and never
       # returns - and an unbounded probe here would hang the caller.
-      command -v orca >/dev/null 2>&1 || return 1
+      fm_backend_source orca >/dev/null 2>&1 || return 1
+      fm_backend_orca_tool_check || return 1
+      local orca_bin
+      orca_bin=$(fm_backend_orca_bin) || return 1
       fm_backend_source_timeout_lib 2>/dev/null || true
       if command -v fm_run_timed >/dev/null 2>&1; then
-        fm_run_timed "${FM_BACKEND_ORCA_PROBE_TIMEOUT:-10}" orca status --json >/dev/null 2>&1
+        fm_run_timed "${FM_BACKEND_ORCA_PROBE_TIMEOUT:-10}" "$orca_bin" status --json >/dev/null 2>&1
       else
-        orca status --json >/dev/null 2>&1
+        "$orca_bin" status --json >/dev/null 2>&1
       fi
       ;;
     *) command -v "$tool" >/dev/null 2>&1 ;;

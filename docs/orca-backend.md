@@ -12,15 +12,17 @@ Orca is macOS-only, explicit-only, and does not support secondmate spawns.
 Prerequisites:
 
 - `/Applications/Orca.app` installed, running, and ready.
-- The `orca` CLI, installed with `brew install orca`.
+- The Orca app-bundled CLI at `/Applications/Orca.app/Contents/Resources/bin/orca`, or an explicit absolute executable path in `FM_ORCA_CLI`. Outside Herdr, an `orca` executable on `PATH` is the final fallback. In Herdr, implicit `PATH` fallback is disabled.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
 Select Orca with local `config/backend` containing `orca`, `FM_BACKEND=orca` for one launch, or an explicit request to Firstmate.
 It is never auto-detected.
 
-Before any spawn mutates repository state, Firstmate requires `orca status --json` to report `reachable=true` and `state="ready"`.
-The first task for a project registers that repository with `orca repo add --path` when needed.
-No manual repository registration is required.
+Before any spawn mutates repository state, Firstmate resolves the CLI and requires `orca status --json` to report `reachable=true` and `state="ready"`.
+The project must already be registered in Orca at the same canonical path and with the same repository identity as the project's `origin` remote.
+Firstmate compares the registered base branch with `origin/HEAD` when Orca reports one, and always passes the explicit `origin/HEAD` branch to worktree creation.
+Identity, path, or known base mismatches fail before worktree creation.
+Firstmate never registers or changes an Orca repository automatically.
 
 Open the Orca app to watch a task's terminal.
 Routine supervision uses the recorded endpoint through `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.sh <id> '<text>'`.
@@ -46,7 +48,7 @@ Orca returns `orca_worktree_id=` as that composite of the Orca repo id and the w
 
 ## Current lifecycle and safety
 
-Spawn registers the repository, creates an independent worktree, reuses only the verified `result.terminal.handle` returned by Orca or creates a terminal explicitly, installs harness hooks, records metadata, and launches the selected harness.
+Spawn verifies the existing repository registration, creates an independent worktree, reuses only the verified `result.terminal.handle` returned by Orca or creates a terminal explicitly, installs harness hooks, records metadata, and launches the selected harness.
 Exact command flags and response parsing are owned by `bin/backends/orca.sh` and script help.
 
 `fm-peek.sh` reads with `orca terminal read`.
@@ -71,6 +73,8 @@ Reinstall the CLI and rerun; [`verification/runtime-backends.md`](verification/r
 
 - Orca is macOS-only and explicit-only.
 - The app must be running and report ready.
+- The registered path and canonical origin identity must match the selected project.
+- `origin/HEAD` must resolve to a locally available origin branch before a worktree is created.
 - Secondmate spawns are unsupported.
 - Escape is unsupported.
 - Orca exposes no stable CLI version or protocol marker, so readiness is the compatibility gate rather than a version floor.
