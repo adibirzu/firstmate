@@ -27,7 +27,7 @@
 # Homes are resolved from data/secondmates.md: a remote station matches its
 # `host:` routes, while the local station matches the local routes plus this
 # home. A remote route whose host is `<station>` or `<station>-<suffix>` belongs
-# to that station, so a tailnet alias like `adi2-ts` is reached by `adi2`.
+# to that station, so a tailnet alias like `hst2-ts` is reached by `hst2`.
 #
 # The probe is silent unless the whole station is provably idle, and then it
 # prints exactly one line: `station-idle: <station>`. It never performs an
@@ -52,9 +52,9 @@
 # bin/fm-check-register.sh, so the watcher turns the line into a `check:` wake;
 # `disarm <station>` removes it. Arm each station once, for example:
 #
-#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm adi1
-#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm adi2
-#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm adi3
+#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm hst1
+#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm hst2
+#   FM_HOME=<primary-home> bin/fm-station-idle.sh arm hst3
 #
 # Environment knobs (all overridable for tests):
 #   FM_STATION_TIMEOUT          per-read bound in seconds (8, valid 1..60)

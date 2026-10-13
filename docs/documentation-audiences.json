@@ -645,10 +645,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": "docs/commandopc-wsl-ssh.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/examples/accounts.json",
       "audience": "operator-example"
     },

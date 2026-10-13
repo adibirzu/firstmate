@@ -68,11 +68,11 @@ rm -f "$cfg/$FM_HERDR_NAME_PREFIX_CONFIG"
 [ -z "$(fm_herdr_name_host_optional "$cfg")" ] || fail "an unconfigured home must have NO host segment, got '$(fm_herdr_name_host_optional "$cfg")'"
 pass "fm_herdr_name_host_optional is empty when this home has no host token"
 
-printf ' adi1 \n' > "$cfg/$FM_HERDR_NAME_HOST_CONFIG"
-[ "$(fm_herdr_name_host_optional "$cfg")" = 'adi1' ] || fail "config/herdr-session-host must supply and trim the host token"
+printf ' hst1 \n' > "$cfg/$FM_HERDR_NAME_HOST_CONFIG"
+[ "$(fm_herdr_name_host_optional "$cfg")" = 'hst1' ] || fail "config/herdr-session-host must supply and trim the host token"
 pass "fm_herdr_name_host_optional reads and trims config/herdr-session-host"
 
-[ "$(FM_HERDR_HOST='adi2-ts' fm_herdr_name_host_optional "$cfg")" = 'adi2-ts' ] || fail "FM_HERDR_HOST must win over the config file"
+[ "$(FM_HERDR_HOST='hst2-ts' fm_herdr_name_host_optional "$cfg")" = 'hst2-ts' ] || fail "FM_HERDR_HOST must win over the config file"
 pass "fm_herdr_name_host_optional prefers an explicit FM_HERDR_HOST"
 
 [ -z "$(FM_HERDR_HOST='' fm_herdr_name_host_optional "$TMP_ROOT/no-such-config")" ] || fail "an absent host config and no FM_HERDR_HOST must be empty, never the machine hostname"
@@ -92,10 +92,10 @@ pass "fm_herdr_name_task_segment leaves an id without the fm- prefix untouched"
 [ "$(fm_herdr_name_label adix '' firstmate fm-herdr-session-naming)" = 'adix-firstmate-herdr-session-naming' ] || fail "plain label composition"
 pass "fm_herdr_name_label composes <prefix>-<project>-<task> with no host"
 
-[ "$(fm_herdr_name_label adix adi1 firstmate fm-herdr-session-naming)" = 'adix-adi1-firstmate-herdr-session-naming' ] || fail "host must sit after the prefix, got '$(fm_herdr_name_label adix adi1 firstmate fm-herdr-session-naming)'"
+[ "$(fm_herdr_name_label adix hst1 firstmate fm-herdr-session-naming)" = 'adix-hst1-firstmate-herdr-session-naming' ] || fail "host must sit after the prefix, got '$(fm_herdr_name_label adix hst1 firstmate fm-herdr-session-naming)'"
 pass "fm_herdr_name_label inserts the host after the prefix"
 
-[ "$(fm_herdr_name_label adix adi1 lifeos-adi1 lifeos-adi1)" = 'adix-adi1-lifeos-adi1' ] || fail "an adjacent duplicate segment (secondmate) must collapse, got '$(fm_herdr_name_label adix adi1 lifeos-adi1 lifeos-adi1)'"
+[ "$(fm_herdr_name_label adix hst1 relays-hst1 relays-hst1)" = 'adix-hst1-relays-hst1' ] || fail "an adjacent duplicate segment (secondmate) must collapse, got '$(fm_herdr_name_label adix hst1 relays-hst1 relays-hst1)'"
 pass "fm_herdr_name_label collapses an adjacent duplicate segment"
 
 [ "$(fm_herdr_name_label '' '' firstmate fm-a)" = 'adix-firstmate-a' ] || fail "an empty prefix must fall back to adix"
@@ -112,11 +112,11 @@ pass "fm_herdr_name_label_for uses the project directory name for a ship"
 [ "$(fm_herdr_name_label_for "$cfg" ship herdr-session-naming /Volumes/ExternalNVME/GitHub/firstmate)" = 'adix-firstmate-herdr-session-naming' ] || fail "a firstmate-repo task must use the 'firstmate' project name"
 pass "fm_herdr_name_label_for names a firstmate-repo task's project 'firstmate'"
 
-[ "$(fm_herdr_name_label_for "$cfg" secondmate lifeos-adi1 /home/adi/.firstmate-lifeos)" = 'adix-lifeos-adi1' ] || fail "a secondmate agent must use its own id as the project"
+[ "$(fm_herdr_name_label_for "$cfg" secondmate relays-hst1 /home/ops/.firstmate-relays)" = 'adix-relays-hst1' ] || fail "a secondmate agent must use its own id as the project"
 pass "fm_herdr_name_label_for names a secondmate agent by its own id"
 
-printf 'adi1\n' > "$cfg/$FM_HERDR_NAME_HOST_CONFIG"
-[ "$(fm_herdr_name_label_for "$cfg" secondmate lifeos-adi1 /home/adi/.firstmate-lifeos)" = 'adix-adi1-lifeos-adi1' ] || fail "a host-configured home must add the host segment"
+printf 'hst1\n' > "$cfg/$FM_HERDR_NAME_HOST_CONFIG"
+[ "$(fm_herdr_name_label_for "$cfg" secondmate relays-hst1 /home/ops/.firstmate-relays)" = 'adix-hst1-relays-hst1' ] || fail "a host-configured home must add the host segment"
 pass "fm_herdr_name_label_for adds the host segment only for a host-configured home"
 rm -f "$cfg/$FM_HERDR_NAME_HOST_CONFIG"
 
@@ -127,17 +127,17 @@ pass "fm_herdr_name_label_for honors the configured prefix"
 # --- seed host config --------------------------------------------------------
 
 seedhome="$TMP_ROOT/seedhome"; mkdir -p "$seedhome/config"
-fm_herdr_name_seed_host_config "$seedhome" ' adi1 '
-[ "$(cat "$seedhome/config/$FM_HERDR_NAME_HOST_CONFIG" 2>/dev/null)" = 'adi1' ] || fail "an absent host config must be seeded with the sanitized token"
+fm_herdr_name_seed_host_config "$seedhome" ' hst1 '
+[ "$(cat "$seedhome/config/$FM_HERDR_NAME_HOST_CONFIG" 2>/dev/null)" = 'hst1' ] || fail "an absent host config must be seeded with the sanitized token"
 pass "fm_herdr_name_seed_host_config writes config/herdr-session-host when absent"
 
 printf 'manual\n' > "$seedhome/config/$FM_HERDR_NAME_HOST_CONFIG"
-fm_herdr_name_seed_host_config "$seedhome" 'adi2'
+fm_herdr_name_seed_host_config "$seedhome" 'hst2'
 [ "$(cat "$seedhome/config/$FM_HERDR_NAME_HOST_CONFIG")" = 'manual' ] || fail "an existing host config must never be overwritten"
 pass "fm_herdr_name_seed_host_config never clobbers an existing operator override"
 
 noconfighome="$TMP_ROOT/noconfighome"; mkdir -p "$noconfighome"
-fm_herdr_name_seed_host_config "$noconfighome" 'adi3'
+fm_herdr_name_seed_host_config "$noconfighome" 'hst3'
 [ ! -e "$noconfighome/config" ] || fail "seeding must not create a missing config directory"
 pass "fm_herdr_name_seed_host_config is a no-op without a config directory"
 
@@ -152,20 +152,20 @@ pass "fm_herdr_name_label keeps the legacy owner-less shape for 4-arg callers"
 [ "$(fm_herdr_name_label adix '' firstmate fm-herdr-session-naming firstmate)" = 'adix-firstmate-herdr-session-naming' ] || fail "an owner equal to the project must collapse, got '$(fm_herdr_name_label adix '' firstmate fm-herdr-session-naming firstmate)'"
 pass "fm_herdr_name_label collapses an owner that duplicates the project"
 
-[ "$(fm_herdr_name_label adix adi1 usage-axi fm-add-quota-window '2m-lifeos-adi1')" = 'adix-adi1-2m-lifeos-adi1-usage-axi-add-quota-window' ] || fail "the owner must sit after the host, got '$(fm_herdr_name_label adix adi1 usage-axi fm-add-quota-window '2m-lifeos-adi1')'"
+[ "$(fm_herdr_name_label adix hst1 usage-axi fm-add-quota-window '2m-relays-hst1')" = 'adix-hst1-2m-relays-hst1-usage-axi-add-quota-window' ] || fail "the owner must sit after the host, got '$(fm_herdr_name_label adix hst1 usage-axi fm-add-quota-window '2m-relays-hst1')'"
 pass "fm_herdr_name_label inserts the owner after the host"
 
-[ "$(fm_herdr_name_label adix '' usage-axi fm-add-quota-window '2m-lifeos-adi1')" = 'adix-2m-lifeos-adi1-usage-axi-add-quota-window' ] || fail "the owner must be present without a host, got '$(fm_herdr_name_label adix '' usage-axi fm-add-quota-window '2m-lifeos-adi1')'"
+[ "$(fm_herdr_name_label adix '' usage-axi fm-add-quota-window '2m-relays-hst1')" = 'adix-2m-relays-hst1-usage-axi-add-quota-window' ] || fail "the owner must be present without a host, got '$(fm_herdr_name_label adix '' usage-axi fm-add-quota-window '2m-relays-hst1')'"
 pass "fm_herdr_name_label carries the owner with no host configured"
 
-[ "$(fm_herdr_name_label adix '' lifeos-adi1 lifeos-adi1 firstmate)" = 'adix-firstmate-lifeos-adi1' ] || fail "a secondmate agent tab must name its launcher, got '$(fm_herdr_name_label adix '' lifeos-adi1 lifeos-adi1 firstmate)'"
+[ "$(fm_herdr_name_label adix '' relays-hst1 relays-hst1 firstmate)" = 'adix-firstmate-relays-hst1' ] || fail "a secondmate agent tab must name its launcher, got '$(fm_herdr_name_label adix '' relays-hst1 relays-hst1 firstmate)'"
 pass "fm_herdr_name_label names a secondmate agent's launcher while the duplicate project collapses"
 
 rm -f "$cfg/$FM_HERDR_NAME_PREFIX_CONFIG"
 [ "$(fm_herdr_name_label_for "$cfg" ship fm-herdr-session-naming /x/projects/firstmate firstmate)" = 'adix-firstmate-herdr-session-naming' ] || fail "a primary-home firstmate-repo task must not repeat firstmate, got '$(fm_herdr_name_label_for "$cfg" ship fm-herdr-session-naming /x/projects/firstmate firstmate)'"
 pass "fm_herdr_name_label_for collapses a primary owner against the firstmate project"
 
-[ "$(fm_herdr_name_label_for "$cfg" secondmate lifeos-adi1 /home/adi/.firstmate-lifeos firstmate)" = 'adix-firstmate-lifeos-adi1' ] || fail "a launched secondmate agent must carry its launcher, got '$(fm_herdr_name_label_for "$cfg" secondmate lifeos-adi1 /home/adi/.firstmate-lifeos firstmate)'"
+[ "$(fm_herdr_name_label_for "$cfg" secondmate relays-hst1 /home/ops/.firstmate-relays firstmate)" = 'adix-firstmate-relays-hst1' ] || fail "a launched secondmate agent must carry its launcher, got '$(fm_herdr_name_label_for "$cfg" secondmate relays-hst1 /home/ops/.firstmate-relays firstmate)'"
 pass "fm_herdr_name_label_for names the launcher on a secondmate agent tab"
 
 # --- truncation rule ---------------------------------------------------------
@@ -186,23 +186,23 @@ herdr_sidebar_truncate() {  # <budget-cells> <text>
   fi
 }
 
-new_tab=$(fm_herdr_name_label adix adi1 usage-axi fm-add-quota-window '2m-lifeos-adi1')
-[ "$(herdr_sidebar_truncate 22 "$new_tab")" = 'adix-adi1-2m-lifeos-a…' ] || fail "the 22-cell spaces budget must keep prefix, host, and owner head, got '$(herdr_sidebar_truncate 22 "$new_tab")'"
+new_tab=$(fm_herdr_name_label adix hst1 usage-axi fm-add-quota-window '2m-relays-hst1')
+[ "$(herdr_sidebar_truncate 22 "$new_tab")" = 'adix-hst1-2m-relays-h…' ] || fail "the 22-cell spaces budget must keep prefix, host, and owner head, got '$(herdr_sidebar_truncate 22 "$new_tab")'"
 pass "a truncated tab still names the fleet and the owning firstmate at the spaces budget"
 
 case "$(herdr_sidebar_truncate 18 "$new_tab")" in
-  adix-adi1-2m-*) pass "a truncated tab still names the fleet and the owning firstmate at the grouped budget" ;;
+  adix-hst1-2m-*) pass "a truncated tab still names the fleet and the owning firstmate at the grouped budget" ;;
   *) fail "the 18-cell grouped budget ate the owner head: '$(herdr_sidebar_truncate 18 "$new_tab")'" ;;
 esac
 
-old_tab=$(fm_herdr_name_label adix adi1 usage-axi fm-add-quota-window)
+old_tab=$(fm_herdr_name_label adix hst1 usage-axi fm-add-quota-window)
 case "$(herdr_sidebar_truncate 22 "$old_tab")" in
-  *2m-lifeos-adi1*) fail "the legacy owner-less shape must not name an owner" ;;
+  *2m-relays-hst1*) fail "the legacy owner-less shape must not name an owner" ;;
   *) pass "the legacy owner-less shape loses the owning firstmate under truncation" ;;
 esac
 
-[ "$(herdr_sidebar_truncate 18 '2m-lifeos-adi1')" = '2m-lifeos-adi1' ] || fail "the short mate workspace label must survive the grouped budget whole, got '$(herdr_sidebar_truncate 18 '2m-lifeos-adi1')'"
+[ "$(herdr_sidebar_truncate 18 '2m-relays-hst1')" = '2m-relays-hst1' ] || fail "the short mate workspace label must survive the grouped budget whole, got '$(herdr_sidebar_truncate 18 '2m-relays-hst1')'"
 pass "the 2m-<id> workspace label survives the grouped budget whole"
 
-[ "$(herdr_sidebar_truncate 18 '2ndmate-lifeos-adi1')" = '2ndmate-lifeos-ad…' ] || fail "the legacy mate workspace label must truncate its distinguishing tail first, got '$(herdr_sidebar_truncate 18 '2ndmate-lifeos-adi1')'"
+[ "$(herdr_sidebar_truncate 18 '2ndmate-relays-hst1')" = '2ndmate-relays-hs…' ] || fail "the legacy mate workspace label must truncate its distinguishing tail first, got '$(herdr_sidebar_truncate 18 '2ndmate-relays-hst1')'"
 pass "the legacy 2ndmate-<id> workspace label truncates its distinguishing tail at the grouped budget"

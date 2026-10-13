@@ -99,7 +99,7 @@ write_registry() {  # <home> <line...>
   done
 }
 
-REMOTE_RECORD='- infra-remote - overflow firstmate work (host: adi2-ts; root: /home/adi/firstmate; home: /home/adi/.firstmate-infra; scope: firstmate repo work; projects: ; added 2026-09-13)'
+REMOTE_RECORD='- infra-remote - overflow firstmate work (host: hst2-ts; root: /home/ops/firstmate; home: /home/ops/.firstmate-infra; scope: firstmate repo work; projects: ; added 2026-09-13)'
 LOCAL_RECORD='- fm-infra - local fleet infrastructure (home: /home/other/.firstmate-infra; scope: firstmate repo; projects: ; added 2026-08-02)'
 
 # run_probe <home> <station> <out> [extra NAME=VALUE...]
@@ -194,11 +194,11 @@ test_remote_station_resolves_its_host_and_ignores_other_homes() {
   printf 'worktree=/tmp/w\nkind=ship\n' > "$home/state/local-task.meta"
   write_registry "$home" "$REMOTE_RECORD" "$LOCAL_RECORD"
 
-  # The station is adi2; the record names the host alias adi2-ts, and only that
+  # The station is hst2; the record names the host alias hst2-ts, and only that
   # host's home may be read. The local record is another station's.
-  run_probe "$home" adi2 "$out" "FM_TEST_SSH_LOG=$log"
-  [ "$(cat "$out")" = 'station-idle: adi2' ] || fail "a remote idle station did not report: $(cat "$out")"
-  assert_contains "$(cat "$log")" 'adi2-ts' "the probe did not read through the station's recorded host alias"
+  run_probe "$home" hst2 "$out" "FM_TEST_SSH_LOG=$log"
+  [ "$(cat "$out")" = 'station-idle: hst2' ] || fail "a remote idle station did not report: $(cat "$out")"
+  assert_contains "$(cat "$log")" 'hst2-ts' "the probe did not read through the station's recorded host alias"
   assert_not_contains "$(cat "$log")" '/home/other/.firstmate-infra' "the probe read a home belonging to another station"
   pass "a remote station resolves its host route and ignores other homes"
 }
@@ -208,7 +208,7 @@ test_a_remote_working_pane_keeps_the_station_silent() {
   home=$(make_home remote-busy)
   out="$home/out.txt"
   write_registry "$home" "$REMOTE_RECORD"
-  run_probe "$home" adi2 "$out" "FM_TEST_SSH_HERDR=$HERDR_WORKING"
+  run_probe "$home" hst2 "$out" "FM_TEST_SSH_HERDR=$HERDR_WORKING"
   [ ! -s "$out" ] || fail "a remote working pane did not keep the station silent: $(cat "$out")"
   pass "a remote working pane keeps the station silent"
 }
@@ -218,10 +218,10 @@ test_a_remote_station_with_no_home_is_probed_host_wide() {
   home=$(make_home remote-nohome)
   out="$home/out.txt"
   log="$home/ssh.log"
-  # adi3 has no registered home yet; only herdr is asked, and it is idle.
-  run_probe "$home" adi3 "$out" "FM_TEST_SSH_LOG=$log" FM_TEST_SSH_LS=
-  [ "$(cat "$out")" = 'station-idle: adi3' ] || fail "a home-less idle station did not report: $(cat "$out")"
-  assert_contains "$(cat "$log")" 'adi3' "the probe did not ask the station host itself"
+  # hst3 has no registered home yet; only herdr is asked, and it is idle.
+  run_probe "$home" hst3 "$out" "FM_TEST_SSH_LOG=$log" FM_TEST_SSH_LS=
+  [ "$(cat "$out")" = 'station-idle: hst3' ] || fail "a home-less idle station did not report: $(cat "$out")"
+  assert_contains "$(cat "$log")" 'hst3' "the probe did not ask the station host itself"
   assert_not_contains "$(cat "$log")" 'list --state in_flight' "a home-less station must not read a backlog"
   pass "a remote station with no registered home is probed host-wide"
 }
@@ -281,26 +281,26 @@ test_arm_registers_the_check_and_disarm_removes_it() {
   status=0
   env FM_HOME="$home" FM_STATION_CREW_STATE="$STUB/crew-state" FM_STATION_SSH="$STUB/ssh" \
     FM_STATION_HERDR="$STUB/herdr" FM_STATION_TASKS_AXI="$STUB/tasks-axi" \
-    "$CHECK" arm adi1 >/dev/null 2>&1 || status=$?
+    "$CHECK" arm hst1 >/dev/null 2>&1 || status=$?
   expect_code 0 "$status" "arm exit"
-  assert_present "$home/state/station-idle-adi1.check.sh" "arm did not write the check shim"
-  assert_present "$home/state/station-idle-adi1.check-trust" "arm did not register the check's bytes"
-  [ "$(stat -c %a "$home/state/station-idle-adi1.check.sh" 2>/dev/null || stat -f %Lp "$home/state/station-idle-adi1.check.sh")" = 700 ] \
+  assert_present "$home/state/station-idle-hst1.check.sh" "arm did not write the check shim"
+  assert_present "$home/state/station-idle-hst1.check-trust" "arm did not register the check's bytes"
+  [ "$(stat -c %a "$home/state/station-idle-hst1.check.sh" 2>/dev/null || stat -f %Lp "$home/state/station-idle-hst1.check.sh")" = 700 ] \
     || fail "the check shim is not mode 700"
-  assert_grep 'fm-custom-check-v1' "$home/state/station-idle-adi1.check-trust" "the trust binding has the wrong schema"
+  assert_grep 'fm-custom-check-v1' "$home/state/station-idle-hst1.check-trust" "the trust binding has the wrong schema"
 
   # The shim is the executable check: running it produces the station's line.
   status=0
   env FM_HOME="$home" FM_STATION_CREW_STATE="$STUB/crew-state" FM_STATION_SSH="$STUB/ssh" \
     FM_STATION_HERDR="$STUB/herdr" FM_STATION_TASKS_AXI="$STUB/tasks-axi" FM_STATION_IDLE_WINDOW=0 \
-    "$home/state/station-idle-adi1.check.sh" >"$out" 2>&1 || status=$?
+    "$home/state/station-idle-hst1.check.sh" >"$out" 2>&1 || status=$?
   expect_code 0 "$status" "shim run exit"
-  [ "$(cat "$out")" = 'station-idle: adi1' ] || fail "the armed shim did not probe its station: $(cat "$out")"
+  [ "$(cat "$out")" = 'station-idle: hst1' ] || fail "the armed shim did not probe its station: $(cat "$out")"
 
-  env FM_HOME="$home" "$CHECK" disarm adi1 >/dev/null || fail "disarm failed"
-  assert_absent "$home/state/station-idle-adi1.check.sh" "disarm left the check shim behind"
-  assert_absent "$home/state/station-idle-adi1.check-trust" "disarm left the trust binding behind"
-  assert_absent "$home/state/.station-idle-adi1" "disarm left the idle record behind"
+  env FM_HOME="$home" "$CHECK" disarm hst1 >/dev/null || fail "disarm failed"
+  assert_absent "$home/state/station-idle-hst1.check.sh" "disarm left the check shim behind"
+  assert_absent "$home/state/station-idle-hst1.check-trust" "disarm left the trust binding behind"
+  assert_absent "$home/state/.station-idle-hst1" "disarm left the idle record behind"
   pass "arm registers a trusted check and disarm removes every trace"
 }
 
@@ -309,7 +309,7 @@ test_armed_check_wakes_the_watcher_with_the_idle_line() {
   home=$(make_home wake)
   out="$home/out.txt"
   err="$home/err.txt"
-  env FM_HOME="$home" "$CHECK" arm adi1 >/dev/null || fail "could not arm the station idle check"
+  env FM_HOME="$home" "$CHECK" arm hst1 >/dev/null || fail "could not arm the station idle check"
 
   status=0
   env FM_HOME="$home" FM_STATION_CREW_STATE="$STUB/crew-state" FM_STATION_SSH="$STUB/ssh" \
@@ -318,7 +318,7 @@ test_armed_check_wakes_the_watcher_with_the_idle_line() {
     "$CHECKPOINT" --seconds 10 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "watcher checkpoint exit"
   assert_contains "$(cat "$out")" 'check:' "the armed check did not reach the watcher as a check wake"
-  assert_contains "$(cat "$out")" 'station-idle: adi1' "the wake did not carry the station-idle line"
+  assert_contains "$(cat "$out")" 'station-idle: hst1' "the wake did not carry the station-idle line"
   pass "the armed check reaches the watcher as an ordinary check wake"
 }
 

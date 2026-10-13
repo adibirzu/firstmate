@@ -179,17 +179,17 @@ use_stub "$dir"
 export FM_NM_UPDATE_WINDOW_FM_ON="$rdir/fm-on.sh"
 export FM_NM_ON_ARGSFILE="$rdir/args"
 export FM_NM_ON_EXIT=0
-out=$("$SCRIPT" adi1 --max-wait 120 --target 1.80.1 --interval 45 2>&1); code=$?
+out=$("$SCRIPT" hst1 --max-wait 120 --target 1.80.1 --interval 45 2>&1); code=$?
 expect_code 0 "$code" "delegation passes through the remote exit code"
-assert_grep "adi1" "$rdir/args" "delegation keeps the route first"
+assert_grep "hst1" "$rdir/args" "delegation keeps the route first"
 assert_grep "fm-nm-update-window.sh" "$rdir/args" "delegation names this script"
 assert_grep "--max-wait" "$rdir/args" "delegation forwards flags"
 assert_no_grep "update --beta" "$dir/argv.log" "delegation runs nothing locally"
-[ "$(head -n 1 "$rdir/args")" = "adi1" ] || fail "route must be the first remote argument"
+[ "$(head -n 1 "$rdir/args")" = "hst1" ] || fail "route must be the first remote argument"
 pass "named route delegates through fm-on"
 
 export FM_NM_ON_EXIT=3
-"$SCRIPT" adi1 >/dev/null 2>&1; code=$?
+"$SCRIPT" hst1 >/dev/null 2>&1; code=$?
 expect_code 3 "$code" "remote failure exit code passes through"
 pass "remote exit code passes through"
 

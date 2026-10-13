@@ -111,8 +111,8 @@ test_remote_hosts_merge_by_host() {
   home=$(make_home remote-merge)
   fakebin=$(make_fake_herdr "$home" "$home/projects/alpha-worktree")
   cat > "$home/data/secondmates.md" <<EOF
-- infra-remote - Infra helper (host: adi1; root: /r/firstmate; home: /r/homes/infra; scope: infra work; projects: none; added 2026-09-01)
-- tms-adi2 - TMS helper (host: adi1; root: /r/firstmate; home: /r/homes/tms; scope: tms work; projects: none; added 2026-09-01)
+- infra-remote - Infra helper (host: hst1; root: /r/firstmate; home: /r/homes/infra; scope: infra work; projects: none; added 2026-09-01)
+- tms-hst2 - TMS helper (host: hst1; root: /r/firstmate; home: /r/homes/tms; scope: tms work; projects: none; added 2026-09-01)
 EOF
   cat > "$fakebin/fm-on-stub.sh" <<SH
 #!/usr/bin/env bash
@@ -123,10 +123,10 @@ SH
     FM_FLEET_HERDR_ON_BIN="$fakebin/fm-on-stub.sh" \
     "$COLLECT" --json)
   printf '%s' "$out" | jq -e '
-    [.hosts[].host] | sort == ["adi1","local"]
+    [.hosts[].host] | sort == ["hst1","local"]
   ' >/dev/null || fail "remote hosts must merge once per host: $out"
   printf '%s' "$out" | jq -e '
-    .hosts[] | select(.host == "adi1")
+    .hosts[] | select(.host == "hst1")
     | .ok == true and (.source | startswith("remote-secondmate:"))
     and .sessions[0].agents[0].matched_task_id == "remote-task"
   ' >/dev/null || fail "remote host record must keep remote-side matching: $out"
@@ -138,7 +138,7 @@ test_remote_failure_is_nonfatal() {
   home=$(make_home remote-fail)
   fakebin=$(make_fake_herdr "$home" "$home/projects/alpha-worktree")
   cat > "$home/data/secondmates.md" <<EOF
-- dark-remote - Dark helper (host: adi9; root: /r/firstmate; home: /r/homes/dark; scope: dark work; projects: none; added 2026-09-01)
+- dark-remote - Dark helper (host: hst9; root: /r/firstmate; home: /r/homes/dark; scope: dark work; projects: none; added 2026-09-01)
 EOF
   printf '#!/usr/bin/env bash\nexit 255\n' > "$fakebin/fm-on-dead.sh"
   chmod +x "$fakebin/fm-on-dead.sh"
@@ -148,7 +148,7 @@ EOF
   rc=$?
   [ "$rc" -eq 0 ] || fail "unreachable remote must not fail the collector"
   printf '%s' "$out" | jq -e '
-    .hosts[] | select(.host == "adi9") | .ok == false
+    .hosts[] | select(.host == "hst9") | .ok == false
   ' >/dev/null || fail "unreachable remote must be an ok:false record: $out"
   pass "unreachable remote degrades to an explicit ok:false record"
 }

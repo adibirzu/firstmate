@@ -8,9 +8,9 @@
 # A host segment is inserted after the prefix ONLY when this home has an
 # explicit host token configured, so most tabs stay short:
 #   adix-firstmate-herdr-session-naming      (no host configured)
-#   adix-adi1-firstmate-herdr-session-naming (config/herdr-session-host=adi1)
-#   adix-adi1-2m-lifeos-adi1-fix-sidebar-view (a mate-launched task)
-#   adix-firstmate-lifeos-adi1                (the lifeos-adi1 secondmate itself,
+#   adix-hst1-firstmate-herdr-session-naming (config/herdr-session-host=hst1)
+#   adix-hst1-2m-relays-hst1-fix-sidebar-view (a mate-launched task)
+#   adix-firstmate-relays-hst1                (the relays-hst1 secondmate itself,
 #                                              launched by the primary)
 #
 # The owner names the firstmate home that launched the tab (`firstmate` for

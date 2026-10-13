@@ -375,6 +375,7 @@ JSON4
 EOF4
   chmod +x "$STUB4/quota-axi"
   PATH="$STUB4:$PATH" fm_fleet_budget_ok; BC_RC=$?
+  # shellcheck disable=SC2154  # assigned by fm_fleet_budget_ok in bin/fm-fleet-quota-lib.sh
   BC_REASON=$fm_fleet_budget_reason
 }
 

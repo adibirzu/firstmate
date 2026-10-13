@@ -10,7 +10,7 @@
 # is not opted in or ssh is absent, and fails naming the gap when it is forced on
 # but the station is not configured:
 #
-#   FM_RDS_LIVE=1 FM_RDS_LIVE_STATION=adi2 FM_RDS_LIVE_SECONDMATE=infra-remote \
+#   FM_RDS_LIVE=1 FM_RDS_LIVE_STATION=hst2 FM_RDS_LIVE_SECONDMATE=infra-remote \
 #     bin/fm-test-run.sh tests/fm-remote-dev-session-live-e2e.test.sh
 #
 # FM_RDS_LIVE_STATION names a registered station; FM_RDS_LIVE_SECONDMATE names a

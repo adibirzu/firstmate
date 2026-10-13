@@ -63,7 +63,7 @@ case "$cmd" in
   register)  op=$1; scopes=$2; home=$3; shift 3; fm_fleet_register "$DIR" "$op" "$scopes" "$home" "${1:-}" ;;
   heartbeat) fm_fleet_heartbeat "$DIR" "$1" ;;
   leave)     fm_fleet_leave "$DIR" "$1" ;;
-  budget)    rc=0; fm_fleet_budget_ok || rc=1; echo "$fm_fleet_budget_reason"; exit "$rc" ;;
+  budget)    rc=0; fm_fleet_budget_ok || rc=1; echo "${fm_fleet_budget_reason:-}"; exit "$rc" ;;
   preflight) exec "$SCRIPT_DIR/fm-fleet-preflight.sh" "$@" ;;
   # The cross-operator opt-in, following the config/berths idiom: a gitignored flag
   # file whose ABSENCE leaves this home behaving exactly as a solo home always has.

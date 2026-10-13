@@ -84,7 +84,7 @@ write_registry() {  # <home> <line...>
   done
 }
 
-REMOTE_RECORD='- infra-remote - overflow firstmate work (host: adi2-ts; root: /home/adi/firstmate; home: /home/adi/.firstmate-infra; scope: firstmate repo work; projects: alpha; added 2026-09-13)'
+REMOTE_RECORD='- infra-remote - overflow firstmate work (host: hst2-ts; root: /home/ops/firstmate; home: /home/ops/.firstmate-infra; scope: firstmate repo work; projects: alpha; added 2026-09-13)'
 
 # run_cmd <home> <out> <args...> [NAME=VALUE...]
 # The NAME=VALUE pairs go before the command as environment assignments.
@@ -160,14 +160,14 @@ test_herdr_open_attaches_live_task_and_records_references() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
     FM_TEST_FMON_LOG="$home/fmon.log" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "herdr open exit"
   assert_grep 'fm-remote-doctor.sh' "$home/fmon.log" "the herdr readiness gate did not run the remote doctor"
-  rec="$home/state/remote-dev-sessions/adi2.session"
+  rec="$home/state/remote-dev-sessions/hst2.session"
   assert_present "$rec" "open did not write the continuity record"
   assert_grep 'backend=herdr' "$rec" "record lost the backend"
   assert_grep 'session=fm-remote' "$rec" "record lost the session"
-  assert_grep 'host=adi2-ts' "$rec" "record lost the host"
+  assert_grep 'host=hst2-ts' "$rec" "record lost the host"
   assert_grep 'workspace=wK' "$rec" "record lost the herdr workspace"
   assert_grep 'tab=wK:t2' "$rec" "record lost the herdr tab"
   assert_grep 'pane=wK:p2' "$rec" "record lost the herdr pane"
@@ -176,7 +176,7 @@ test_herdr_open_attaches_live_task_and_records_references() {
   assert_grep 'spawn_gen=s123.456' "$rec" "record lost the spawn generation"
   assert_grep "return_channel=$home/state/t1.status" "$rec" \
     "record lost the return channel"
-  assert_contains "$(cat "$out")" "attach: herdr --remote adi2-ts --session fm-remote" \
+  assert_contains "$(cat "$out")" "attach: herdr --remote hst2-ts --session fm-remote" \
     "the attach command was not printed"
   assert_contains "$(cat "$out")" 'action=attached' "a live endpoint was not attached"
   pass "herdr open attaches a live task and records every continuity reference"
@@ -195,7 +195,7 @@ test_dead_task_endpoint_relaunches_through_the_control_plane() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "relaunch exit"
   assert_contains "$(cat "$out")" 'action=launched' "a dead endpoint was not relaunched"
   assert_contains "$(cat "$control")" 't1 relaunch' "the control plane was not the relaunch path"
@@ -216,7 +216,7 @@ test_dead_task_relaunch_carries_the_deterministic_continuation_note() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "relaunch exit"
   assert_grep 't1 relaunch --note' "$control" "the relaunch did not carry the continuation note"
   assert_grep 'continuation for task t1' "$control" "the note lost the task id"
@@ -230,7 +230,7 @@ test_dead_task_relaunch_carries_the_deterministic_continuation_note() {
   note1=$(grep -F -A4 'Remote development session continuation' "$control" | head -5)
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "second relaunch exit"
   note2=$(grep -F -A4 'Remote development session continuation' "$control" | tail -5)
   assert_equals "$note1" "$note2" "the continuation note was not deterministic"
@@ -258,10 +258,10 @@ test_stale_base_refuses_before_a_dead_endpoint_relaunches() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 4 "$status" "a stale base must refuse even with a dead endpoint"
   assert_absent "$control" "a stale refusal must never reach the control plane"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a stale refusal must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "a stale refusal must not write a record"
   pass "a stale base refuses before a dead endpoint relaunches"
 }
 
@@ -273,7 +273,7 @@ test_dead_secondmate_endpoint_relaunches_through_fm_spawn() {
   {
     printf 'window=fm-remote:wK:p2\n'
     printf 'endpoint_task_id=infra-remote\n'
-    printf 'worktree=/home/adi/.firstmate-infra\n'
+    printf 'worktree=/home/ops/.firstmate-infra\n'
     printf 'project=infra-remote\n'
     printf 'kind=secondmate\n'
     printf 'spawn_gen=s999\n'
@@ -286,7 +286,7 @@ test_dead_secondmate_endpoint_relaunches_through_fm_spawn() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
-    open adi2 --secondmate infra-remote)
+    open hst2 --secondmate infra-remote)
   expect_code 0 "$status" "secondmate relaunch exit"
   assert_contains "$(cat "$out")" 'action=launched' "a dead second mate was not relaunched"
   assert_contains "$(cat "$spawn")" 'infra-remote --secondmate' "the second mate did not relaunch through fm-spawn"
@@ -308,11 +308,11 @@ test_a_readiness_gap_refuses_with_the_doctor_text() {
     FM_TEST_DOCTOR_OUT='check herdr-server=fixable: no fm-remote server
 action: herdr-server: rerun with --fix' \
     FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 5 "$status" "a red doctor must refuse"
   assert_contains "$(cat "$out")" 'check herdr-server=fixable' "the doctor gap text was not surfaced"
   assert_contains "$(cat "$out")" 'action: herdr-server' "the doctor action line was not surfaced"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a refused open must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "a refused open must not write a record"
   pass "a readiness gap refuses and prints the doctor's own gap text"
 }
 
@@ -330,10 +330,10 @@ test_repair_rechecks_read_only_and_never_trusts_the_repair() {
   status=$(run_cmd "$home" "$out" \
     FM_TEST_DOCTOR_RC=1 FM_TEST_FMON_LOG="$fmon" \
     FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha --repair)
+    open hst2 --task t1 --project alpha --repair)
   expect_code 5 "$status" "a failed repair must still refuse"
   assert_grep 'fm-remote-doctor.sh --fix' "$fmon" "the repair was not attempted"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a refused repair must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "a refused repair must not write a record"
   pass "repair runs then re-checks read-only, and a failed repair still refuses"
 }
 
@@ -346,12 +346,12 @@ test_tmux_backend_is_explicit_and_renders_an_equivalent_attach() {
   out="$home/out.txt"
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha --backend tmux)
+    open hst2 --task t1 --project alpha --backend tmux)
   expect_code 0 "$status" "tmux open exit"
-  rec="$home/state/remote-dev-sessions/adi2.session"
+  rec="$home/state/remote-dev-sessions/hst2.session"
   assert_grep 'backend=tmux' "$rec" "record lost the tmux backend"
   assert_grep 'window=fm-remote:wK:p2' "$rec" "record lost the tmux window"
-  assert_contains "$(cat "$out")" "attach: ssh -t adi2-ts tmux attach -t fm-remote" \
+  assert_contains "$(cat "$out")" "attach: ssh -t hst2-ts tmux attach -t fm-remote" \
     "the tmux attach command was not rendered"
   pass "the tmux fallback is explicit and renders an equivalent attach command"
 }
@@ -366,16 +366,16 @@ test_tmux_config_fallback_never_replaces_a_failed_herdr() {
   out="$home/out.txt"
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "configured tmux open exit"
-  rec="$home/state/remote-dev-sessions/adi2.session"
+  rec="$home/state/remote-dev-sessions/hst2.session"
   assert_grep 'backend=tmux' "$rec" "the configured tmux backend was not selected"
 
   # An explicit herdr that fails readiness must refuse, not fall back to tmux.
   status=$(run_cmd "$home" "$out" FM_TEST_DOCTOR_RC=1 \
     FM_TEST_DOCTOR_OUT='check herdr=human: herdr CLI missing' \
     FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha --backend herdr)
+    open hst2 --task t1 --project alpha --backend herdr)
   expect_code 5 "$status" "a failed herdr must not silently fall back to tmux"
   pass "tmux is reachable only by explicit selection and never silently replaces a failed herdr"
 }
@@ -385,7 +385,7 @@ test_unknown_backend_refuses() {
   home=$(make_home backend-bad)
   write_registry "$home" "$REMOTE_RECORD"
   out="$home/out.txt"
-  status=$(run_cmd "$home" "$out" open adi2 --task t1 --backend screen)
+  status=$(run_cmd "$home" "$out" open hst2 --task t1 --backend screen)
   expect_code 2 "$status" "an unknown backend must be invalid use"
   assert_contains "$(cat "$out")" 'unknown backend' "the unknown backend was not named"
   pass "an unknown backend refuses"
@@ -403,7 +403,7 @@ test_unknown_liveness_refuses_to_relaunch() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_RC=1 \
     FM_TEST_CONTROL_LOG="$control" \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 1 "$status" "an unknown liveness must refuse"
   assert_absent "$control" "an unknown liveness must never relaunch"
   assert_contains "$(cat "$out")" 'unknown' "the unknown liveness was not reported"
@@ -423,12 +423,12 @@ test_check_runs_the_gates_without_launching_or_recording() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: done · source: none · x' \
     FM_TEST_CONTROL_LOG="$control" FM_TEST_SPAWN_LOG="$spawn" \
-    check adi2 --task t1 --project alpha)
+    check hst2 --task t1 --project alpha)
   expect_code 0 "$status" "check exit"
   assert_contains "$(cat "$out")" 'check=ok' "check did not report its verdict"
   assert_absent "$control" "check must not launch"
   assert_absent "$spawn" "check must not spawn"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "check must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "check must not write a record"
   pass "check runs the gates without launching or recording"
 }
 
@@ -442,10 +442,10 @@ test_tmux_readiness_gap_refuses() {
 
   status=$(run_cmd "$home" "$out" FM_TEST_SSH_RC=1 \
     FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha --backend tmux)
+    open hst2 --task t1 --project alpha --backend tmux)
   expect_code 5 "$status" "an unavailable remote tmux must refuse"
   assert_contains "$(cat "$out")" 'tmux is not available' "the tmux gap was not named"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a tmux readiness gap must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "a tmux readiness gap must not write a record"
   pass "an unavailable remote tmux refuses instead of silently using herdr"
 }
 
@@ -463,9 +463,9 @@ test_a_duplicate_branch_refuses() {
   # The task's own branch is main; an intended branch that already exists under
   # another name is duplicate work.
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha --branch fm/work)
+    open hst2 --task t1 --project alpha --branch fm/work)
   expect_code 3 "$status" "an existing branch must refuse as duplicate"
-  assert_absent "$home/state/remote-dev-sessions/adi2.session" "a duplicate refusal must not write a record"
+  assert_absent "$home/state/remote-dev-sessions/hst2.session" "a duplicate refusal must not write a record"
   pass "an existing branch refuses as duplicate work"
 }
 
@@ -488,7 +488,7 @@ test_a_stale_base_refuses() {
   out="$home/out.txt"
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 4 "$status" "a branch behind the default must refuse as stale"
   pass "a branch behind the default refuses as stale work"
 }
@@ -513,7 +513,7 @@ test_a_branch_already_landed_refuses() {
   out="$home/out.txt"
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 4 "$status" "a branch already in the default must refuse as stale"
   pass "a branch already contained in the default refuses as stale work"
 }
@@ -530,14 +530,14 @@ test_recover_is_idempotent_and_inherits_the_recorded_target() {
   out="$home/out.txt"
 
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha)
+    open hst2 --task t1 --project alpha)
   expect_code 0 "$status" "first open exit"
   status=$(run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    recover adi2)
+    recover hst2)
   expect_code 0 "$status" "recover exit"
   assert_contains "$(cat "$out")" 'action=attached' "recover did not attach"
-  assert_present "$home/state/remote-dev-sessions/adi2.session" "recover removed the record"
-  sha2=$(sed -n 's/^updated=//p' "$home/state/remote-dev-sessions/adi2.session")
+  assert_present "$home/state/remote-dev-sessions/hst2.session" "recover removed the record"
+  sha2=$(sed -n 's/^updated=//p' "$home/state/remote-dev-sessions/hst2.session")
   [ -n "$sha2" ] || fail "recover left the record without an updated stamp"
   pass "recover is idempotent and inherits the recorded target"
 }
@@ -552,20 +552,20 @@ test_status_and_attach_read_the_record() {
   out="$home/out.txt"
 
   run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha >/dev/null
+    open hst2 --task t1 --project alpha >/dev/null
 
-  status=$(run_cmd "$home" "$out" status adi2)
+  status=$(run_cmd "$home" "$out" status hst2)
   expect_code 0 "$status" "status exit"
   assert_contains "$(cat "$out")" 'task_id=t1' "status did not print the record"
 
-  status=$(run_cmd "$home" "$out" attach adi2)
+  status=$(run_cmd "$home" "$out" attach hst2)
   expect_code 0 "$status" "attach exit"
-  assert_contains "$(cat "$out")" 'herdr --remote adi2-ts --session fm-remote' "attach did not print the command"
+  assert_contains "$(cat "$out")" 'herdr --remote hst2-ts --session fm-remote' "attach did not print the command"
 
   # A malformed record refuses instead of half-trusting it.
-  rec="$home/state/remote-dev-sessions/adi2.session"
+  rec="$home/state/remote-dev-sessions/hst2.session"
   printf 'not-a-record\n' >> "$rec"
-  status=$(run_cmd "$home" "$out" status adi2)
+  status=$(run_cmd "$home" "$out" status hst2)
   expect_code 1 "$status" "a malformed record must refuse"
   pass "status and attach read the durable record and a malformed record refuses"
 }
@@ -580,11 +580,11 @@ test_list_reports_records() {
   out="$home/out.txt"
 
   run_cmd "$home" "$out" FM_TEST_CREW_STATE='state: working · source: pane · busy' \
-    open adi2 --task t1 --project alpha >/dev/null
+    open hst2 --task t1 --project alpha >/dev/null
 
   status=$(run_cmd "$home" "$out" list)
   expect_code 0 "$status" "list exit"
-  assert_contains "$(cat "$out")" 'station=adi2' "list did not report the record"
+  assert_contains "$(cat "$out")" 'station=hst2' "list did not report the record"
 
   status=$(run_cmd "$home" "$out" list --json)
   expect_code 0 "$status" "list --json exit"
@@ -605,19 +605,19 @@ test_invalid_use_refuses() {
   status=$(run_cmd "$home" "$out")
   expect_code 2 "$status" "no action exit"
 
-  status=$(run_cmd "$home" "$out" open adi2)
+  status=$(run_cmd "$home" "$out" open hst2)
   expect_code 2 "$status" "open without a target exit"
 
-  status=$(run_cmd "$home" "$out" frobnicate adi2)
+  status=$(run_cmd "$home" "$out" frobnicate hst2)
   expect_code 2 "$status" "unknown action exit"
 
   status=$(run_cmd "$home" "$out" open 'bad/name' --task t1)
   expect_code 2 "$status" "bad station exit"
 
-  status=$(run_cmd "$home" "$out" status adi2 --task t1)
+  status=$(run_cmd "$home" "$out" status hst2 --task t1)
   expect_code 2 "$status" "status with a target exit"
 
-  status=$(run_cmd "$home" "$out" open adi2 --task t1 --backend 'bad/name')
+  status=$(run_cmd "$home" "$out" open hst2 --task t1 --backend 'bad/name')
   expect_code 2 "$status" "bad backend exit"
 
   status=$(run_cmd "$home" "$out" --help)
@@ -630,7 +630,7 @@ test_a_task_without_a_record_refuses() {
   home=$(make_home no-record)
   write_registry "$home" "$REMOTE_RECORD"
   out="$home/out.txt"
-  status=$(run_cmd "$home" "$out" open adi2 --task ghost)
+  status=$(run_cmd "$home" "$out" open hst2 --task ghost)
   expect_code 1 "$status" "a task with no record must refuse"
   assert_contains "$(cat "$out")" 'no task record' "the missing record was not named"
   pass "a task with no record refuses rather than inventing one"
