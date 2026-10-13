@@ -94,14 +94,8 @@ fm_orca_test_prepare_project() {  # <project-path>
   if ! git -C "$project" remote get-url origin >/dev/null 2>&1; then
     git -C "$project" remote add origin "https://github.com/example/repo.git"
   fi
-  local remote identity local_path
-  remote=$(git -C "$project" remote get-url origin)
-  case "$remote" in
-    file://*) local_path=${remote#file://}; local_path=${local_path#/}; identity="file/$local_path" ;;
-    https://github.com/*) identity=${remote#https://}; identity=${identity%.git} ;;
-    *) identity=${remote#*://}; identity=${identity%.git} ;;
-  esac
-  FM_ORCA_TEST_IDENTITY=$(printf '%s' "$identity" | tr '[:upper:]' '[:lower:]')
+  FM_ORCA_TEST_IDENTITY=$(bash -c '. "$1/bin/backends/orca.sh"; fm_backend_orca_project_origin_identity "$2"' \
+    _ "$ROOT" "$project") || return 1
   export FM_ORCA_TEST_IDENTITY
   head=$(git -C "$project" rev-parse HEAD)
   git -C "$project" update-ref refs/remotes/origin/main "$head"
@@ -1419,6 +1413,25 @@ test_orca_cli_resolver_disables_herdr_path_fallback() {
   pass "fm_backend_orca_bin: refuses implicit PATH lookup under Herdr"
 }
 
+test_orca_identity_normalization_preserves_ports_and_path_case() {
+  local with_port path_case without_port
+  with_port=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example:8443/Team/Repo.git)
+  path_case=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example/team/Repo.git)
+  without_port=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example/Team/Repo.git)
+  [ "$with_port" = "git.example:8443/Team/Repo" ] \
+    || fail "identity normalization should preserve a non-default URL port, got '$with_port'"
+  [ "$path_case" = "git.example/team/Repo" ] \
+    || fail "identity normalization should preserve repository path case, got '$path_case'"
+  [ "$with_port" != "$without_port" ] \
+    || fail "identity normalization conflated distinct URL ports"
+  [ "$path_case" != "$without_port" ] \
+    || fail "identity normalization conflated case-sensitive repository paths"
+  pass "fm_backend_orca_identity_normalize: preserves identity-significant URL ports and path case"
+}
+
 test_orca_identity_mismatch_refuses_before_worktree_mutation() {
   local out status project
   orca_case identity-mismatch
@@ -1469,6 +1482,7 @@ test_orca_missing_origin_refuses_before_repo_read() {
 
 test_orca_cli_resolver_prefers_explicit_path
 test_orca_cli_resolver_disables_herdr_path_fallback
+test_orca_identity_normalization_preserves_ports_and_path_case
 test_orca_identity_mismatch_refuses_before_worktree_mutation
 test_orca_base_mismatch_refuses_before_worktree_mutation
 test_orca_missing_origin_refuses_before_repo_read

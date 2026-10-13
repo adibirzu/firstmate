@@ -47,7 +47,14 @@ case "$1 $2" in
     exit 0
     ;;
   "repo show")
-    exit 1
+    repo_path=
+    for a in "$@"; do
+      case "$a" in path:*) repo_path=${a#path:} ;; esac
+    done
+    [ -n "$repo_path" ] || exit 1
+    printf '{"ok":true,"result":{"repo":{"id":"repo1","path":"%s","gitRemoteIdentity":{"canonicalKey":"%s"},"defaultBaseBranch":"main"}}}\n' \
+      "$repo_path" "${FM_ORCA_TEST_IDENTITY:?}"
+    exit 0
     ;;
   "repo add")
     printf '{"ok":true,"result":{"repo":{"id":"repo1"}}}\n'
@@ -82,7 +89,7 @@ SH
 }
 
 test_orca_fresh_spawn_enters_the_worktree_it_created() {
-  local case_dir home id=orca-fresh-a1 fb out status wt_recorded
+  local case_dir home id=orca-fresh-a1 fb out status wt_recorded identity
   case_dir="$TMP_ROOT/fresh"
   home="$case_dir/home"
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
@@ -90,6 +97,9 @@ test_orca_fresh_spawn_enters_the_worktree_it_created() {
   printf 'codex\n' > "$home/config/crew-harness"
   printf 'manual\n' > "$home/config/backlog-backend"
   fm_git_init_commit "$case_dir/project"
+  fm_git_add_origin "$case_dir/project" "$case_dir/project-origin.git"
+  git -C "$case_dir/project" fetch --quiet origin
+  git -C "$case_dir/project" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
   mkdir -p "$home/data/$id"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
@@ -100,11 +110,14 @@ Exercise an Orca-backed spawn for $id.
 Confirm the launch enters the worktree Orca created for it.
 EOF
   fb=$(make_orca_fakebin "$case_dir")
+  identity=$(bash -c '. "$1/bin/backends/orca.sh"; fm_backend_orca_project_origin_identity "$2"' \
+    _ "$ROOT" "$case_dir/project")
 
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" \
+    FM_ORCA_CLI="$fb/orca" FM_ORCA_TEST_IDENTITY="$identity" PATH="$fb:$PATH" \
     "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
 
