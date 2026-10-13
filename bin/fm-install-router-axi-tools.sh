@@ -2,11 +2,9 @@
 # fm-install-router-axi-tools.sh - install CI's pinned, verified builds of the
 # two unpublished router tools: llm-router-axi and usage-axi.
 #
-# Both tools own firstmate's machine-capacity admission (bin/fm-capacity-lib.sh
-# adapts llm-router-axi), and neither is published on npm yet, so every behavior
-# lane that can spawn an agent must build and install them from a pinned GitHub
-# commit. This is the single owner of that pinned install recipe; the CI jobs
-# and bin/fm-test-run.sh's local lane preflight both call it rather than
+# Neither tool is published on npm yet, so every behavior lane that exercises
+# them must build and install them from a pinned GitHub commit. This is the
+# single owner of that pinned install recipe; CI jobs call it rather than
 # restating the git clone / npm ci / npm run build / npm install sequence.
 #
 # Cache-friendly and idempotent: a destination that already carries the exact

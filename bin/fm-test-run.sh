@@ -689,6 +689,7 @@ list_portable_serial() {
 # balance rather than coverage. That doc owns the refresh procedure.
 portable_serial_weight_hints() {
   cat <<'EOF'
+tests/fm-admiral-optin.test.sh 255
 tests/fm-afk-contract.test.sh 11101
 tests/fm-afk-inject-e2e.test.sh 41958
 tests/fm-afk-pi-herdr-return-e2e.test.sh 52
@@ -698,6 +699,7 @@ tests/fm-agy-signals-live-e2e.test.sh 53
 tests/fm-ask-user-authority.test.sh 171
 tests/fm-backend-cmux-smoke.test.sh 34
 tests/fm-backend-cmux.test.sh 3754
+tests/fm-backend-herdr-launch-argv-e2e.test.sh 22
 tests/fm-backend-orca.test.sh 27102
 tests/fm-backend-tmux-smoke.test.sh 291
 tests/fm-backend-zellij-smoke.test.sh 23
@@ -730,8 +732,11 @@ tests/fm-claude-trust.test.sh 12010
 tests/fm-cmux-claude-composer-live-e2e.test.sh 77
 tests/fm-codex-continuity-live-e2e.test.sh 108
 tests/fm-codex-hook-layer-live-e2e.test.sh 108
+tests/fm-commandopc-wsl-portproxy-refresh.test.sh 192
+tests/fm-commit-identity-check.test.sh 2316
 tests/fm-composer-codex-idle-live-e2e.test.sh 77
 tests/fm-composer-matrix-live-e2e.test.sh 51
+tests/fm-context-report.test.sh 400
 tests/fm-contributions.test.sh 140911
 tests/fm-control-relaunch.test.sh 114115
 tests/fm-control.test.sh 72794
@@ -745,7 +750,10 @@ tests/fm-dispatch-resolve.test.sh 10051
 tests/fm-documentation-audiences.test.sh 1301
 tests/fm-dod-lib.test.sh 2035
 tests/fm-extension-binding.test.sh 11105
+tests/fm-fleet-herdr-collect.test.sh 519
 tests/fm-fleet-ledger.test.sh 19980
+tests/fm-fleet-live.test.sh 4175
+tests/fm-fleet-pulse.test.sh 2922
 tests/fm-fleet-snapshot-view.test.sh 23334
 tests/fm-fleet-sync.test.sh 40541
 tests/fm-forge-detect.test.sh 193
@@ -755,13 +763,17 @@ tests/fm-gemini-harness.test.sh 947
 tests/fm-git-strip-ai-trailers.test.sh 2067
 tests/fm-gitignore-config.test.sh 59
 tests/fm-gotmp.test.sh 1509
+tests/fm-graphify.test.sh 1066
 tests/fm-grok-continuity-live-e2e.test.sh 46
+tests/fm-grok-signals-live-e2e.test.sh 72
 tests/fm-grok-stop-live-e2e.test.sh 48
 tests/fm-guard-stale-banner.test.sh 17234
+tests/fm-handoff-doc.test.sh 623
 tests/fm-harness-adapter-instructions-live-e2e.test.sh 72
 tests/fm-harness-adapter-references.test.sh 64
 tests/fm-harness-liveness-drift-live-e2e.test.sh 1309
 tests/fm-harness-precedence.test.sh 4083
+tests/fm-herdr-name-lib.test.sh 699
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh 55
 tests/fm-herdr-session-cleanup.test.sh 7425
 tests/fm-herdr-submit-confirm-live-e2e.test.sh 51
@@ -771,6 +783,7 @@ tests/fm-host-mirror-live-e2e.test.sh 79
 tests/fm-host-mirror.test.sh 11587
 tests/fm-inactive-reconcile.test.sh 60823
 tests/fm-inbox.test.sh 6062
+tests/fm-install-router-axi-tools.test.sh 7300
 tests/fm-jev-mem-guard.test.sh 336
 tests/fm-kimi-harness.test.sh 58917
 tests/fm-launch-prompt-signals-live-e2e.test.sh 50
@@ -780,14 +793,17 @@ tests/fm-live-lab-up-mate.test.sh 17363
 tests/fm-live-lab.test.sh 79639
 tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
+tests/fm-model-refresh.test.sh 946
 tests/fm-muse-harness.test.sh 46548
 tests/fm-muse-signals-live-e2e.test.sh 52
 tests/fm-nm-test-contract.test.sh 853
+tests/fm-nm-update-window.test.sh 5916
 tests/fm-no-mistakes-required.test.sh 270
 tests/fm-omp-harness.test.sh 63796
 tests/fm-omp-primary-live-e2e.test.sh 74
 tests/fm-on.test.sh 11473
 tests/fm-opencode-primary-live-e2e.test.sh 47
+tests/fm-openrouter-quota.test.sh 21333
 tests/fm-operational-input.test.sh 2404
 tests/fm-peek-remote.test.sh 1082
 tests/fm-pending-reply.test.sh 41090
@@ -811,6 +827,8 @@ tests/fm-public-followup.test.sh 381564
 tests/fm-quota-array-dispatch-live-e2e.test.sh 50
 tests/fm-quota-choose.test.sh 2860
 tests/fm-remote-backlog-handoff.test.sh 82063
+tests/fm-remote-dev-session-live-e2e.test.sh 53
+tests/fm-remote-dev-session.test.sh 2865
 tests/fm-remote-doctor.test.sh 14460
 tests/fm-remote-entrypoint.test.sh 134
 tests/fm-remote-herdr-guard.test.sh 3140
@@ -822,10 +840,11 @@ tests/fm-remote-secondmate-parent-binding.test.sh 42294
 tests/fm-remote-secondmate-relaunch.test.sh 879
 tests/fm-remote-secondmate-trace-context.test.sh 74870
 tests/fm-remote-transport-lanes.test.sh 66089
+tests/fm-router-dispatch.test.sh 628
 tests/fm-rovo-harness.test.sh 15691
 tests/fm-rovo-signals-live-e2e.test.sh 52
-tests/fm-secondmate-harness.test.sh 188187
 tests/fm-secondmate-busy-contract-live-e2e.test.sh 90000
+tests/fm-secondmate-harness.test.sh 188187
 tests/fm-secondmate-lifecycle-e2e.test.sh 11268
 tests/fm-secondmate-liveness.test.sh 24564
 tests/fm-secondmate-reconcile.test.sh 100853
@@ -854,6 +873,8 @@ tests/fm-spawn-worktree-settle.test.sh 9309
 tests/fm-startup-memory-budget.test.sh 8086
 tests/fm-startup-network.test.sh 72106
 tests/fm-stat-shadowing.test.sh 75
+tests/fm-station-bootstrap.test.sh 1063
+tests/fm-station-idle.test.sh 2339
 tests/fm-stow-cascade.test.sh 3058
 tests/fm-subagent-pretool-check.test.sh 998
 tests/fm-supervision-events.test.sh 673
