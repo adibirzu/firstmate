@@ -36,7 +36,6 @@ set -u
 LOG="${FM_ORCA_LOG:?}"
 RESP="${FM_ORCA_RESPONSES:?}"
 COUNT_FILE="$RESP/.count"
-next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 {
   printf 'orca'
   for a in "$@"; do printf '\x1f%s' "$a"; done
@@ -46,6 +45,22 @@ if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ];
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
   exit 0
 fi
+if [ "${1:-}" = repo ] && [ "${2:-}" = show ]; then
+  if [ -f "$RESP/repo.exit" ]; then exit "$(cat "$RESP/repo.exit")"; fi
+  if [ -f "$RESP/repo.out" ]; then cat "$RESP/repo.out"; exit 0; fi
+  next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+  n=$next
+  repo_path=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in path:*) repo_path=${1#path:} ;; esac
+    shift
+  done
+  printf '{"ok":true,"result":{"repo":{"id":"repo-123","path":"%s","gitRemoteIdentity":{"canonicalKey":"%s"},"defaultBaseBranch":"%s"}}}\n' \
+    "$repo_path" "${FM_ORCA_TEST_IDENTITY:-github.com/example/repo}" "${FM_ORCA_TEST_BASE:-main}"
+  echo "$((n + 1))" > "$COUNT_FILE"
+  exit 0
+fi
+next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 n=$next
 echo "$n" > "$COUNT_FILE"
 if [ -f "$RESP/$n.exit" ]; then
@@ -65,6 +80,26 @@ orca_case() {  # <name> -> sets CASE_DIR LOG RESP FB
   RESP="$CASE_DIR/responses"
   : > "$LOG"
   FB=$(make_orca_fakebin "$CASE_DIR")
+  FM_ORCA_CLI="$FB/orca"
+  FM_ORCA_TEST_IDENTITY=github.com/example/repo
+  FM_ORCA_TEST_BASE=main
+  export FM_ORCA_CLI FM_ORCA_TEST_IDENTITY FM_ORCA_TEST_BASE
+}
+
+fm_orca_test_prepare_project() {  # <project-path>
+  local project=$1 head
+  if ! git -C "$project" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fm_git_init_commit "$project"
+  fi
+  if ! git -C "$project" remote get-url origin >/dev/null 2>&1; then
+    git -C "$project" remote add origin "https://github.com/example/repo.git"
+  fi
+  FM_ORCA_TEST_IDENTITY=$(bash -c '. "$1/bin/backends/orca.sh"; fm_backend_orca_project_origin_identity "$2"' \
+    _ "$ROOT" "$project") || return 1
+  export FM_ORCA_TEST_IDENTITY
+  head=$(git -C "$project" rev-parse HEAD)
+  git -C "$project" update-ref refs/remotes/origin/main "$head"
+  git -C "$project" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
 
 neutral_fm_root() {  # <dir> -> echoes a minimal root with a quiet guard
@@ -374,11 +409,11 @@ test_kill_refuses_when_the_orca_cli_is_absent() {
     || fail "the orca-free search path still resolved orca"
   PATH="$orca_free" command -v bash >/dev/null 2>&1 \
     || fail "the orca-free search path lost bash, so this case would pass vacuously"
-  out=$( PATH="$orca_free" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  out=$( PATH="$orca_free" FM_ORCA_CLI=/missing/orca FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "kill reported success for a close its missing CLI never attempted"
-  assert_contains "$out" "backend=orca selected but the 'orca' CLI is not installed" \
+  assert_contains "$out" "configured Orca CLI is not executable" \
     "kill did not name the missing CLI as the reason the close never happened"
   [ ! -s "$LOG" ] || fail "kill invoked orca despite the CLI being absent"
   pass "fm_backend_orca_kill: a close its missing CLI never attempted reports the failure instead of a success"
@@ -423,6 +458,7 @@ test_worktree_path_resolves_id() {
 test_json_get_ignores_undocumented_terminal_id_shapes() {
   local out status wt_id wt_path term
   orca_case parser-pruned-terminal-shapes
+  fm_orca_test_prepare_project "$TMP_ROOT/orca-project"
 
   set +e
   out=$( printf '{"ok":true,"result":{"id":"term-root-id"}}\n' | \
@@ -431,11 +467,9 @@ test_json_get_ignores_undocumented_terminal_id_shapes() {
   set +e
   [ "$status" -ne 0 ] || fail "terminal-handle should not treat undocumented result.id as a terminal handle, got '$out'"
 
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-123"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-123::/orca/wt-123","path":"/tmp/orca-wt","terminal":{"handle":"term-nested"}}}}\n' > "$RESP/3.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create /repo/path fm-task' "$ROOT" )
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$TMP_ROOT/orca-project" )
   wt_id=${out%%$'\t'*}
   wt_path=${out#*$'\t'}
   term=${wt_path#*$'\t'}
@@ -449,12 +483,11 @@ test_json_get_ignores_undocumented_terminal_id_shapes() {
 test_worktree_and_terminal_helpers_parse_json() {
   local out wt_id wt_path term
   orca_case lifecycle-helpers
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-123"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$TMP_ROOT/orca-project"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-123::/orca/wt-123","path":"/tmp/orca-wt"}}}\n' > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"handle":"term-123"}}}\n' > "$RESP/4.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create /repo/path fm-task' "$ROOT" )
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$TMP_ROOT/orca-project" )
   wt_id=${out%%$'\t'*}
   wt_path=${out#*$'\t'}
   [ "$wt_id" = wt-123::/orca/wt-123 ] || fail "worktree helper should print worktree id, got '$wt_id'"
@@ -462,11 +495,11 @@ test_worktree_and_terminal_helpers_parse_json() {
   term=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_terminal_create wt-123::/orca/wt-123 fm-task' "$ROOT" )
   [ "$term" = term-123 ] || fail "terminal helper should print terminal handle, got '$term'"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''repo'$'\x1f''show'$'\x1f''--repo'$'\x1f''path:/repo/path'$'\x1f''--json' \
+  assert_contains "$(cat "$LOG")" "$(printf 'orca\037repo\037show\037--repo\037path:%s\037--json' "$TMP_ROOT/orca-project")" \
     "worktree helper should first check repo registration"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''repo'$'\x1f''add'$'\x1f''--path'$'\x1f''/repo/path'$'\x1f''--json' \
-    "worktree helper should register an absent repo"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''create'$'\x1f''--repo'$'\x1f''id:repo-123'$'\x1f''--name'$'\x1f''fm-task'$'\x1f''--no-parent'$'\x1f''--setup'$'\x1f''skip'$'\x1f''--json' \
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''repo'$'\x1f''add' \
+    "worktree helper must not register or mutate an absent repo"
+  assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''create'$'\x1f''--repo'$'\x1f''id:repo-123'$'\x1f''--name'$'\x1f''fm-task'$'\x1f''--no-parent'$'\x1f''--base-branch'$'\x1f''main'$'\x1f''--setup'$'\x1f''skip'$'\x1f''--json' \
     "worktree helper did not create an independent no-hook worktree"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''create'$'\x1f''--worktree'$'\x1f''id:wt-123::/orca/wt-123'$'\x1f''--title'$'\x1f''fm-task'$'\x1f''--json' \
     "terminal helper did not create a titled terminal for the worktree"
@@ -476,11 +509,10 @@ test_worktree_and_terminal_helpers_parse_json() {
 test_worktree_create_removes_worktree_when_path_missing() {
   local out status
   orca_case lifecycle-missing-path
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-no-path"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$TMP_ROOT/orca-project"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-no-path::/orca/wt-no-path"},"terminal":{"handle":"term-no-path"}}}\n' > "$RESP/3.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create /repo/path fm-task' "$ROOT" 2>&1 )
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$TMP_ROOT/orca-project" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "worktree helper should fail when Orca omits the worktree path"
   assert_contains "$out" "orca worktree create did not return a path for fm-task" \
@@ -500,12 +532,12 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   state="$TMP_ROOT/pathless-cleanup-state"
   config="$TMP_ROOT/pathless-cleanup-config"
   fm_git_init_commit "$proj"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case pathless-cleanup-fail
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-pathless-cleanup"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$proj"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-pathless-cleanup::/orca/wt-pathless-cleanup"}}}\n' > "$RESP/3.out"
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/4.out"
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/5.out"
@@ -536,13 +568,13 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   state="$TMP_ROOT/spawn-state"
   config="$TMP_ROOT/spawn-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case spawn
+  fm_orca_test_prepare_project "$proj"
   log="$LOG"
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-spawn"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn::/orca/wt-spawn","path":"%s"},"terminal":{"handle":"term-spawn"}}}\n' "$wt" > "$RESP/3.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
@@ -611,6 +643,7 @@ test_spawn_refuses_orca_when_runtime_not_ready() {
   state="$TMP_ROOT/runtime-down-state"
   config="$TMP_ROOT/runtime-down-config"
   fm_git_init_commit "$proj"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
@@ -640,12 +673,12 @@ test_spawn_refuses_orca_nonisolated_worktree() {
   state="$TMP_ROOT/bad-spawn-state"
   config="$TMP_ROOT/bad-spawn-config"
   fm_git_init_commit "$proj"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case bad-spawn
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-bad"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$proj"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-bad::/orca/wt-bad","path":"%s"},"terminal":{"handle":"term-bad"}}}\n' "$proj" > "$RESP/3.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
@@ -674,12 +707,12 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   state="$TMP_ROOT/terminal-fail-state"
   config="$TMP_ROOT/terminal-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case terminal-fail
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-terminal-fail"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$proj"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-terminal-fail::/orca/wt-terminal-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '1\n' > "$RESP/4.exit"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -707,12 +740,12 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
   state="$TMP_ROOT/cleanup-fail-state"
   config="$TMP_ROOT/cleanup-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case cleanup-fail
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-cleanup-fail"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$proj"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-cleanup-fail::/orca/wt-cleanup-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '1\n' > "$RESP/4.exit"
   printf '1\n' > "$RESP/5.exit"
@@ -741,11 +774,11 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   state="$TMP_ROOT/meta-fail-state"
   config="$TMP_ROOT/meta-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state/$id.meta" "$config"
   write_spawn_brief "$data" "$id"
   orca_case meta-fail
-  printf '1\n' > "$RESP/1.exit"
-  printf '{"ok":true,"result":{"repo":{"id":"repo-meta-fail"}}}\n' > "$RESP/2.out"
+  fm_orca_test_prepare_project "$proj"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-meta-fail::/orca/wt-meta-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"handle":"term-meta-fail"}}}\n' > "$RESP/4.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -856,6 +889,7 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
   state="$TMP_ROOT/teardown-state"
   config="$TMP_ROOT/teardown-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   printf 'report\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
@@ -892,6 +926,7 @@ test_scout_teardown_refuses_orca_id_path_mismatch() {
   state="$TMP_ROOT/scout-mismatch-state"
   config="$TMP_ROOT/scout-mismatch-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   git -C "$proj" worktree add --quiet -b "fm/$id-other" "$other_wt"
   mkdir -p "$data/$id" "$state" "$config"
   printf 'report\n' > "$data/$id/report.md"
@@ -1024,6 +1059,7 @@ test_ship_teardown_refuses_orca_missing_worktree_path() {
   state="$TMP_ROOT/missing-ship-state"
   config="$TMP_ROOT/missing-ship-config"
   fm_git_init_commit "$proj"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
@@ -1055,6 +1091,7 @@ test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
   state="$TMP_ROOT/ship-match-state"
   config="$TMP_ROOT/ship-match-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
@@ -1090,6 +1127,7 @@ test_ship_teardown_refuses_orca_unresolvable_worktree_id() {
   state="$TMP_ROOT/ship-unresolved-state"
   config="$TMP_ROOT/ship-unresolved-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
@@ -1097,7 +1135,6 @@ test_ship_teardown_refuses_orca_unresolvable_worktree_id() {
     "harness=claude" "kind=ship" "mode=local-only" "yolo=off" \
     "backend=orca" "orca_worktree_id=wt-ship-unresolved::/orca/wt-ship-unresolved"
   orca_case ship-unresolved
-  printf '1\n' > "$RESP/1.exit"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -1128,6 +1165,7 @@ test_ship_teardown_refuses_orca_id_path_mismatch() {
   state="$TMP_ROOT/ship-mismatch-state"
   config="$TMP_ROOT/ship-mismatch-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   git -C "$proj" worktree add --quiet -b "fm/$id-other" "$other_wt"
   mkdir -p "$data/$id" "$state" "$config"
   touch "$state/.last-watcher-beat"
@@ -1166,6 +1204,7 @@ test_teardown_refuses_orca_missing_worktree_id() {
   state="$TMP_ROOT/missing-id-state"
   config="$TMP_ROOT/missing-id-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   printf 'report\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
@@ -1197,6 +1236,7 @@ test_teardown_refuses_orca_worktree_without_terminal_handle() {
   state="$TMP_ROOT/no-terminal-state"
   config="$TMP_ROOT/no-terminal-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
+  fm_orca_test_prepare_project "$proj"
   mkdir -p "$data/$id" "$state" "$config"
   printf 'report\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
@@ -1354,6 +1394,98 @@ test_dispatcher_sources_orca_and_routes_primitives() {
   pass "fm-backend dispatcher: accepts orca and routes capture through bin/backends/orca.sh"
 }
 
+test_orca_cli_resolver_prefers_explicit_path() {
+  local out
+  orca_case cli-resolver
+  out=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_bin' "$ROOT")
+  [ "$out" = "$FB/orca" ] || fail "explicit FM_ORCA_CLI should win, got '$out'"
+  pass "fm_backend_orca_bin: resolves the explicit absolute CLI path"
+}
+
+test_orca_cli_resolver_disables_herdr_path_fallback() {
+  local out status
+  orca_case cli-herdr-no-fallback
+  out=$( PATH="$FB:$PATH" FM_ORCA_CLI=/missing/orca HERDR_ENV=1 \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_bin' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "Herdr should refuse PATH fallback when the bundled CLI is unavailable"
+  assert_contains "$out" "configured Orca CLI is not executable" "Herdr resolver did not fail closed on the configured missing binary"
+  pass "fm_backend_orca_bin: refuses implicit PATH lookup under Herdr"
+}
+
+test_orca_identity_normalization_preserves_ports_and_path_case() {
+  local with_port path_case without_port
+  with_port=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example:8443/Team/Repo.git)
+  path_case=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example/team/Repo.git)
+  without_port=$(bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_identity_normalize "$1"' \
+    "$ROOT" https://git.example/Team/Repo.git)
+  [ "$with_port" = "git.example:8443/Team/Repo" ] \
+    || fail "identity normalization should preserve a non-default URL port, got '$with_port'"
+  [ "$path_case" = "git.example/team/Repo" ] \
+    || fail "identity normalization should preserve repository path case, got '$path_case'"
+  [ "$with_port" != "$without_port" ] \
+    || fail "identity normalization conflated distinct URL ports"
+  [ "$path_case" != "$without_port" ] \
+    || fail "identity normalization conflated case-sensitive repository paths"
+  pass "fm_backend_orca_identity_normalize: preserves identity-significant URL ports and path case"
+}
+
+test_orca_identity_mismatch_refuses_before_worktree_mutation() {
+  local out status project
+  orca_case identity-mismatch
+  project="$TMP_ROOT/identity-project"
+  fm_orca_test_prepare_project "$project"
+  FM_ORCA_TEST_IDENTITY=github.com/other/repo
+  export FM_ORCA_TEST_IDENTITY
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$project" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "identity mismatch should refuse worktree creation"
+  assert_contains "$out" "does not match project origin" "identity mismatch refusal should name the mismatch"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''create' "identity mismatch reached worktree creation"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''repo'$'\x1f''add' "identity mismatch attempted automatic registration"
+  pass "fm_backend_orca_repo_ensure: refuses identity mismatch before worktree mutation"
+}
+
+test_orca_base_mismatch_refuses_before_worktree_mutation() {
+  local out status project
+  orca_case base-mismatch
+  project="$TMP_ROOT/base-project"
+  fm_orca_test_prepare_project "$project"
+  FM_ORCA_TEST_BASE=release
+  export FM_ORCA_TEST_BASE
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$project" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "known registered base mismatch should refuse worktree creation"
+  assert_contains "$out" "does not match origin/HEAD (main)" "base mismatch refusal should identify both branches"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''create' "base mismatch reached worktree creation"
+  pass "fm_backend_orca_repo_ensure: refuses known base mismatch before worktree mutation"
+}
+
+test_orca_missing_origin_refuses_before_repo_read() {
+  local out status project
+  orca_case missing-origin
+  project="$TMP_ROOT/no-origin-project"
+  fm_git_init_commit "$project"
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create "$1" fm-task' "$ROOT" "$project" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "project without origin should refuse worktree creation"
+  assert_contains "$out" "explicit origin remote" "missing-origin refusal should explain the required source identity"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''create' "missing origin reached worktree creation"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''repo'$'\x1f''show' "missing origin should be checked before repo lookup"
+  pass "fm_backend_orca_repo_ensure: refuses missing origin before Orca repo lookup"
+}
+
+test_orca_cli_resolver_prefers_explicit_path
+test_orca_cli_resolver_disables_herdr_path_fallback
+test_orca_identity_normalization_preserves_ports_and_path_case
+test_orca_identity_mismatch_refuses_before_worktree_mutation
+test_orca_base_mismatch_refuses_before_worktree_mutation
+test_orca_missing_origin_refuses_before_repo_read
 test_capture_reads_terminal_tail_json
 test_capture_falls_back_to_text_fields
 test_capture_fails_on_orca_error_json
