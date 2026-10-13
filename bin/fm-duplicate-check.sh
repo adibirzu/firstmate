@@ -137,9 +137,7 @@ if [ -n "$slug" ]; then
     printf 'fm-duplicate-check.sh: open-PR listing failed for %s; cannot answer the duplicate question.\n' "$DIR" >&2
     exit 2
   }
-  while IFS= read -r row; do
-    num=$(printf '%s\n' "$row" | sed -n 's/^ *\([0-9][0-9]*\),"\(.*\)",.*$/\1/p')
-    title=$(printf '%s\n' "$row" | sed -n 's/^ *[0-9][0-9]*,"\([^"]*\)",.*$/\1/p')
+  while IFS=$'\t' read -r num title; do
     [ -n "$num" ] || continue
     title_tokens=" $(printf '%s\n' "$title" | tr -cs '[:alnum:]' '\n' | tr '[:upper:]' '[:lower:]' | tr '\n' ' ')"
     for t in "${tokens[@]:-}"; do
@@ -149,9 +147,7 @@ if [ -n "$slug" ]; then
       printf 'duplicate check: REFUSED - open PR #%s covers token "%s": %s\n' "$num" "$t" "$title"
       break
     done
-  done <<EOF
-$pr_rows
-EOF
+  done < <(printf '%s\n' "$pr_rows" | python3 -c 'import csv, sys; [print(row[0] + "\t" + row[1]) for row in csv.reader(sys.stdin, skipinitialspace=True) if len(row) > 1 and row[0].strip().isdigit()]')
 
   if [ "$matching" -eq 1 ]; then
     if [ "$DUPLICATE_OK" -eq 1 ]; then

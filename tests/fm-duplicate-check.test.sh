@@ -216,6 +216,20 @@ test_punctuated_open_pr_title_token_refuses() {
   pass "punctuation-delimited title tokens refuse duplicate work"
 }
 
+test_quoted_open_pr_title_token_refuses() {
+  local rec checkout bare fakebin out rc rows
+  rec=$(make_origin quoted-token)
+  IFS='|' read -r checkout bare <<< "$rec"
+  fakebin=$(fm_fakebin "$TMP/quoted-token")
+  rows='  46,"fix: parse ""parser"" config",open,alice,no,none'
+  fake_forge "$fakebin" 0 "$rows"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" "$CHECK" "$checkout" fm/parser-config 2>&1) || rc=$?
+  expect_code 1 "$rc" "quoted title token did not refuse duplicate work"
+  assert_contains "$out" 'covers token "parser"' "quoted-token refusal did not name the matching token"
+  pass "CSV-escaped title quotes preserve duplicate token matching"
+}
+
 test_generic_title_token_does_not_refuse() {
   local rec checkout bare fakebin out rc rows
   rec=$(make_origin generic-token)
@@ -285,6 +299,7 @@ test_open_pr_query_failure_refuses
 test_open_pr_covering_branch_refuses
 test_open_pr_title_token_refuses
 test_punctuated_open_pr_title_token_refuses
+test_quoted_open_pr_title_token_refuses
 test_generic_title_token_does_not_refuse
 test_token_match_can_be_overridden
 test_listing_failure_refuses
