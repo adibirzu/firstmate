@@ -415,11 +415,11 @@ test_kill_refuses_when_the_orca_cli_is_absent() {
     || fail "the orca-free search path still resolved orca"
   PATH="$orca_free" command -v bash >/dev/null 2>&1 \
     || fail "the orca-free search path lost bash, so this case would pass vacuously"
-  out=$( PATH="$orca_free" FM_ORCA_BUNDLED_CLI=/missing/orca FM_ORCA_CLI='' FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  out=$( PATH="$orca_free" FM_ORCA_CLI=/missing/orca FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "kill reported success for a close its missing CLI never attempted"
-  assert_contains "$out" "configured bundled Orca CLI is not executable" \
+  assert_contains "$out" "configured Orca CLI is not executable" \
     "kill did not name the missing CLI as the reason the close never happened"
   [ ! -s "$LOG" ] || fail "kill invoked orca despite the CLI being absent"
   pass "fm_backend_orca_kill: a close its missing CLI never attempted reports the failure instead of a success"
@@ -1411,11 +1411,11 @@ test_orca_cli_resolver_prefers_explicit_path() {
 test_orca_cli_resolver_disables_herdr_path_fallback() {
   local out status
   orca_case cli-herdr-no-fallback
-  out=$( PATH="$FB:$PATH" FM_ORCA_CLI='' FM_ORCA_BUNDLED_CLI=/missing/orca HERDR_ENV=1 \
+  out=$( PATH="$FB:$PATH" FM_ORCA_CLI=/missing/orca HERDR_ENV=1 \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_bin' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Herdr should refuse PATH fallback when the bundled CLI is unavailable"
-  assert_contains "$out" "configured bundled Orca CLI is not executable" "Herdr resolver did not fail closed on the configured missing binary"
+  assert_contains "$out" "configured Orca CLI is not executable" "Herdr resolver did not fail closed on the configured missing binary"
   pass "fm_backend_orca_bin: refuses implicit PATH lookup under Herdr"
 }
 

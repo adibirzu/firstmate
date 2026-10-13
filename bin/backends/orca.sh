@@ -29,15 +29,6 @@ fm_backend_orca_bin() {
     return 0
   fi
 
-  if [ -n "${FM_ORCA_BUNDLED_CLI:-}" ]; then
-    candidate=$FM_ORCA_BUNDLED_CLI
-    [ -x "$candidate" ] || {
-      echo "error: configured bundled Orca CLI is not executable: $candidate" >&2
-      return 1
-    }
-    printf '%s' "$candidate"
-    return 0
-  fi
   candidate=$FM_BACKEND_ORCA_BUNDLED_CLI_DEFAULT
   if [ -x "$candidate" ]; then
     printf '%s' "$candidate"
@@ -178,14 +169,14 @@ try {
     pathname = parts.join("/");
   } else {
     const url = new URL(raw);
-    host = url.protocol === "file:" ? "file" : url.hostname;
+    host = url.protocol === "file:" ? "file" : url.host;
     pathname = url.pathname;
     if (url.search || url.hash) process.exit(1);
   }
 } catch (_) {
   process.exit(1);
 }
-pathname = pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "").toLowerCase();
+pathname = pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "");
 host = host.toLowerCase();
 if (!host || !pathname || pathname.split("/").some(part => !part || part === "." || part === "..")) process.exit(1);
 process.stdout.write(`${host}/${pathname}`);
