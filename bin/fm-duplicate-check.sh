@@ -123,9 +123,11 @@ if [ -n "$slug" ]; then
   fi
 
   tokens=()
+  stopwords=' add adding change changes create created fix fixes for from into issue logs new update updates with work task tasks '
   for w in "$BRANCH" "${WORDS[@]}"; do
     while IFS= read -r t; do
       [ -n "$t" ] || continue
+      case "$stopwords" in *" $t "*) continue ;; esac
       case " ${tokens[*]:-} " in *" $t "*) continue ;; esac
       tokens+=("$t")
     done < <(printf '%s\n' "$w" | tr -cs '[:alnum:]' '\n' | tr '[:upper:]' '[:lower:]')

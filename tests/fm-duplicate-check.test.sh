@@ -202,6 +202,20 @@ test_open_pr_title_token_refuses() {
   pass "an open PR whose title covers a description token refuses"
 }
 
+test_generic_title_token_does_not_refuse() {
+  local rec checkout bare fakebin out rc rows
+  rec=$(make_origin generic-token)
+  IFS='|' read -r checkout bare <<< "$rec"
+  fakebin=$(fm_fakebin "$TMP/generic-token")
+  rows='  44,"update logs for unrelated service",open,alice,no,none'
+  fake_forge "$fakebin" 0 "$rows"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" "$CHECK" "$checkout" fm/update-logs update-logs 2>&1) || rc=$?
+  expect_code 0 "$rc" "generic title words refused unrelated work"
+  assert_contains "$out" "clear" "generic-token case did not clear"
+  pass "generic title words do not block unrelated work"
+}
+
 test_token_match_can_be_overridden() {
   local rec checkout bare fakebin out rc rows
   rec=$(make_origin token-override)
@@ -256,6 +270,7 @@ test_unauthenticated_github_refuses
 test_open_pr_query_failure_refuses
 test_open_pr_covering_branch_refuses
 test_open_pr_title_token_refuses
+test_generic_title_token_does_not_refuse
 test_token_match_can_be_overridden
 test_listing_failure_refuses
 test_not_a_git_checkout_usage
