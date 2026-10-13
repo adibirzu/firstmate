@@ -11,8 +11,8 @@ Each script header, skill, or docs page named below remains that contract's owne
 ## Boundary
 
 Upstream owns the lifecycle, task identity, approval and admission, watcher, wake acknowledgement, teardown, and merge authority.
-Every file that `kunchenguid/firstmate` tracks is identical to upstream `main`, except the four repo-local policy files below.
-The fork adds files; it does not edit upstream-owned scripts, tests, or documents to call them.
+Every file that `kunchenguid/firstmate` tracks is identical to upstream `main`, except the four repo-local policy files below and the carried patch to `bin/fm-spawn.sh`.
+The fork adds files and edits no other upstream-owned script, test, or document to call them.
 
 | Repo-local file | Why it differs from upstream |
 |---|---|
@@ -21,7 +21,7 @@ The fork adds files; it does not edit upstream-owned scripts, tests, or document
 | `docs/documentation-audiences.json` | Classifies the fork-only documents so `bin/fm-doc-audience-check.sh` stays green. |
 | `bin/fm-test-run.sh` | Carries serial duration hints for fork-only tests so the unhinted-script guard keeps its upstream threshold. |
 
-To audit the boundary, compare the tree to upstream: `git diff --stat upstream/main -- . ':(exclude).no-mistakes.yaml' ':(exclude).gitignore' ':(exclude)docs/documentation-audiences.json' ':(exclude)bin/fm-test-run.sh'` lists fork-only additions and nothing else.
+To audit the boundary, compare the tree to upstream: `git diff --stat upstream/main -- . ':(exclude).no-mistakes.yaml' ':(exclude).gitignore' ':(exclude)docs/documentation-audiences.json' ':(exclude)bin/fm-test-run.sh' ':(exclude)bin/fm-spawn.sh'` lists fork-only additions and nothing else.
 
 ## Fork-only components
 
@@ -52,6 +52,13 @@ A deterministic condition and action pair can be registered as a watch with `bin
 Both are detectors that wake firstmate; neither can refuse a spawn, replace an agent, or change a lifecycle step.
 Every capability in the next section needs more than detection, so none of them fits either surface today.
 
+## Carried patch
+
+One fork edit to an upstream-owned script is carried, because upstream has no extension point for it.
+`bin/fm-spawn.sh` sources `bin/fm-capacity-lib.sh` and `bin/fm-remote-overflow-lib.sh`, runs the machine-capacity guard (with remote overflow of a refused fresh ship or scout) after the state-directory check, and runs `bin/fm-duplicate-check.sh` for a fresh ship after the worktree base is freshened, with `--duplicate-ok` as the explicit override.
+Both blocks are delimited and self-contained, so an upstream merge re-applies them as an insertion.
+Delete them when upstream gains an admission hook.
+
 ## Dormant components
 
 These fork components are still in the tree, but the edits that called them from files upstream owns are not carried, so nothing invokes them.
@@ -60,8 +67,7 @@ Running one by hand can work, but the integrated behavior it once had does not e
 
 | Capability | Dormant files | What upstream would need |
 |---|---|---|
-| Machine-capacity admission and remote overflow | `bin/fm-capacity.sh`, `bin/fm-capacity-lib.sh`, `bin/fm-remote-overflow-lib.sh` | A documented operator-configured admission command that `fm-spawn.sh` runs before it creates anything. |
-| Stale-base and duplicate-work gates | `bin/fm-base-check.sh`, `bin/fm-duplicate-check.sh` | The same admission command, plus brief and promote steps that name a command rather than a fork script. |
+| Stale-base gate | `bin/fm-base-check.sh` | Brief and promote steps that name a command rather than a fork script. |
 | Restored-worker launch drift | `bin/fm-launch-drift-lib.sh`, `bin/fm-launch-drift-identity-lib.sh` | Launch identity recorded in task metadata and a read-only drift verb. |
 | Herdr task-tab names and per-project berths | `bin/fm-herdr-name-lib.sh` (also used by the fleet tab), `bin/fm-berth.sh` | A label template setting in the Herdr backend and state-slice support. |
 | In-run model fallback and in-place runtime handoff | `bin/fm-model-fallback.sh`, `bin/fm-runtime-handoff.sh` | A documented in-place relaunch verb on `fm-control.sh` and a watcher status-event callback. |
