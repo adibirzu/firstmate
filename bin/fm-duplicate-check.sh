@@ -141,10 +141,10 @@ if [ -n "$slug" ]; then
     num=$(printf '%s\n' "$row" | sed -n 's/^ *\([0-9][0-9]*\),"\(.*\)",.*$/\1/p')
     title=$(printf '%s\n' "$row" | sed -n 's/^ *[0-9][0-9]*,"\([^"]*\)",.*$/\1/p')
     [ -n "$num" ] || continue
-    tl=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]')
+    title_tokens=" $(printf '%s\n' "$title" | tr -cs '[:alnum:]' '\n' | tr '[:upper:]' '[:lower:]' | tr '\n' ' ')"
     for t in "${tokens[@]:-}"; do
       [ "${#t}" -ge 4 ] || continue
-      case " $tl " in *" $t "*) : ;; *) continue ;; esac
+      case "$title_tokens" in *" $t "*) : ;; *) continue ;; esac
       matching=1
       printf 'duplicate check: REFUSED - open PR #%s covers token "%s": %s\n' "$num" "$t" "$title"
       break
