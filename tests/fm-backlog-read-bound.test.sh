@@ -189,7 +189,7 @@ CAPTAIN="$TMP_ROOT/captain"
 CAPTAIN_FAKEBIN=$(fm_fakebin "$CAPTAIN")
 mkdir -p "$CAPTAIN/data" "$CAPTAIN/state" "$CAPTAIN/config"
 make_hanging_tasks_axi "$CAPTAIN_FAKEBIN"
-cp "$ROOT/.tasks.toml" "$CAPTAIN/.tasks.toml"
+fm_test_tasks_toml "$CAPTAIN/.tasks.toml"
 printf '# Backlog\n' > "$CAPTAIN/data/backlog.md"
 
 ADD_LOG="$CAPTAIN/add.log"
@@ -248,7 +248,7 @@ REQ="$TMP_ROOT/req"
 REQ_FAKEBIN=$(fm_fakebin "$REQ")
 mkdir -p "$REQ/data" "$REQ/state" "$REQ/config" "$REQ/state/decision-bindings"
 make_hanging_tasks_axi "$REQ_FAKEBIN"
-cp "$ROOT/.tasks.toml" "$REQ/.tasks.toml"
+fm_test_tasks_toml "$REQ/.tasks.toml"
 printf '# Backlog\n' > "$REQ/data/backlog.md"
 printf 'schema=fm-decision-binding.v1\norigin=wedged-origin\n' \
   > "$REQ/state/decision-bindings/probe.origin"
@@ -408,8 +408,7 @@ fm_write_meta "$E2E_HOME/state/wedged-task.meta" \
 
 DIGEST="$E2E/digest.out"
 DIGEST_START=$(date +%s)
-env -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-  CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="fm-test-session-$$" CLAUDE_PID="$$" \
+env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
   FM_HOME="$E2E_HOME" FM_ROOT_OVERRIDE="$E2E_ROOT" PATH="$E2E_FAKEBIN:$BASE_PATH" \
   FM_BACKLOG_ROW_TIMEOUT_SECS="$BOUND_SECS" \
   "$ROOT/bin/fm-session-start.sh" > "$DIGEST" 2>&1 || true

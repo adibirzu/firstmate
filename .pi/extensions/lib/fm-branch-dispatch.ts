@@ -108,7 +108,6 @@ export interface UnreadWakeScope {
    * heartbeat, which is not scoped by task.
    */
   eligibleTasks: string[];
-  eligibleTaskSeqs: Record<string, string[]>;
   /**
    * True only when this scan itself is untrustworthy: the queue or its
    * metadata could not be read, a line fails the structural tab-field check,
@@ -151,7 +150,6 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   projects: [],
   eligibleSeqs: [],
   eligibleTasks: [],
-  eligibleTaskSeqs: {},
   corrupted: false,
   needsDecisionKeys: [],
   checkSeqs: [],
@@ -164,7 +162,6 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   projects: [],
   eligibleSeqs: [],
   eligibleTasks: [],
-  eligibleTaskSeqs: {},
   corrupted: true,
   needsDecisionKeys: [],
   checkSeqs: [],
@@ -424,7 +421,6 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     .split(/\s+/)
     .filter(Boolean);
   const decisionConfig = `${resolveVerb}\0${heldVerb}\0${reservedPrefixes.join("\0")}`;
-  const eligibleTaskSeqs = new Map<string, string[]>();
   let presentationCursor: ReturnType<typeof readPresentationCursor> | undefined;
   for (const line of rows) {
     const fields = line.split("\t");
@@ -548,9 +544,6 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     if (!project || !task) return UNSAFE_SCOPE;
     projects.add(project);
     eligibleTasks.add(task);
-    const taskSeqs = eligibleTaskSeqs.get(task) ?? [];
-    taskSeqs.push(seq);
-    eligibleTaskSeqs.set(task, taskSeqs);
     eligibleSeqs.push(seq);
   }
   const eligible = eligibleSeqs.length > 0;
@@ -567,7 +560,6 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     projects: [...projects],
     eligibleSeqs,
     eligibleTasks: [...eligibleTasks],
-    eligibleTaskSeqs: Object.fromEntries(eligibleTaskSeqs),
     corrupted: false,
     needsDecisionKeys,
     checkSeqs,

@@ -11,40 +11,7 @@ set -u
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
-SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-pool-base-freshen)
-
-make_spawn_fakebin() {
-  local dir=$1 fakebin
-  fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:?FM_FAKE_PANE_PATH unset}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows|has-session|new-session|new-window|kill-window|send-keys) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  # `get --lease` prints the leased worktree path on stdout, exactly as the real
-  # treehouse does. Firstmate reads that path rather than the pane's cwd, so a
-  # silent stub reports "no usable worktree" and never reaches the base refresh
-  # these tests exist to prove.
-  cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "${1:-}" in
-  get) printf '%s\n' "${FM_FAKE_TREEHOUSE_WT:-}" ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/treehouse"
-  printf '%s\n' "$fakebin"
-}
 
 make_case() {
   local name=$1 id=$2 default=${3:-main} case_dir home project origin pool publisher fakebin initial
@@ -56,10 +23,6 @@ make_case() {
   publisher="$case_dir/publisher"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
 
-  # Callers capture the final record with command substitution. Keep all fixture
-  # setup output on stderr: a local Git hook is allowed to print a diagnostic,
-  # but that diagnostic must never become a path field in the captured record.
-  {
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   fm_test_spawn_brief "$home" "$id"
@@ -68,7 +31,7 @@ make_case() {
   git init --quiet -b "$default" "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
-  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >&2
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
   git clone --quiet --bare "$project" "$origin"
   git -C "$project" remote add origin "file://$origin"
   initial=$(git -C "$project" rev-parse HEAD)
@@ -77,9 +40,8 @@ make_case() {
   git clone --quiet "file://$origin" "$publisher"
   printf 'must survive a newly spawned branch\n' > "$publisher/advanced-main.txt"
   git -C "$publisher" add advanced-main.txt
-  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-main >&2
+  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-main
   git -C "$publisher" push --quiet origin "$default"
-  } >&2
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$initial|$default"
 }
@@ -93,13 +55,8 @@ EOF
 run_spawn() {
   local id=$1
   shift
-  FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
-    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
-    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_FAKE_PANE_PATH="$POOL_DIR" \
-    FM_FAKE_TREEHOUSE_WT="$POOL_DIR" \
-    PATH="$FAKEBIN_DIR:$PATH" \
-    "$SPAWN" "$id" "$PROJECT_DIR" "$@" 2>&1
+  fm_test_run_spawn "$HOME_DIR" "$POOL_DIR" "$FAKEBIN_DIR" \
+    "$id" "$PROJECT_DIR" "$@"
 }
 
 test_remote_seeded_home_spawns_from_treehouse_pool() {
@@ -187,12 +144,14 @@ test_linked_spawning_home_rejects_primary_before_refresh() {
         || fail "spawn did not refresh the genuine scout copy"
     else
       [ "$status" -ne 0 ] || fail "linked spawning home accepted $returned as a disposable copy"
-      # None of these is a leaseable isolated copy. The lease result is screened
-      # before it can be sent to the pane, so the spawning directory and the
-      # repository primary (including its symlink) fail before any refresh or
-      # worktree settlement can touch them.
-      assert_contains "$out" "did not yield an isolated worktree" \
+      # None of these is an isolated copy, so the worktree poll never adopts one
+      # and the wait runs out instead: the spawning directory fails the poll's
+      # own project comparison, and the repository primary (named directly or
+      # through a symlink) fails the isolation screen the poll shares with the
+      # guard. The refusal names the last path the pane reported.
+      assert_contains "$out" "did not enter an isolated worktree" \
         "spawn did not explain its isolation refusal"
+      assert_contains "$out" "last seen" "refusal did not name the path the pane reported"
       [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
       [ ! -e "$primary/.git/FETCH_HEAD" ] || fail "refused spawn fetched before proving isolation"
     fi
@@ -511,9 +470,6 @@ make_submodule_case() {  # <name> <id>
   sub="$case_dir/sub-origin"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
 
-  # This record is likewise captured by its callers. Quarantine all setup
-  # diagnostics on stderr so a hook cannot corrupt a parsed path field.
-  {
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   fm_test_spawn_brief "$home" "$id"
@@ -522,10 +478,10 @@ make_submodule_case() {  # <name> <id>
   git init --quiet -b main "$sub"
   printf 'pin one\n' > "$sub/lib.txt"
   git -C "$sub" add lib.txt
-  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm sub-one >&2
+  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm sub-one
   subpin1=$(git -C "$sub" rev-parse HEAD)
   printf 'pin two\n' > "$sub/lib.txt"
-  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam sub-two >&2
+  git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam sub-two
   subpin2=$(git -C "$sub" rev-parse HEAD)
   git -C "$sub" checkout --quiet "$subpin1"
 
@@ -534,7 +490,7 @@ make_submodule_case() {  # <name> <id>
   git -C "$project" add README.md
   git -C "$project" -c protocol.file.allow=always -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
     submodule --quiet add "file://$sub" ui
-  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial >&2
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
   git clone --quiet --bare "$project" "$origin"
   git -C "$project" remote add origin "file://$origin"
   git -C "$project" worktree add --quiet --detach "$pool" HEAD
@@ -544,10 +500,9 @@ make_submodule_case() {  # <name> <id>
   git clone --quiet "file://$origin" "$publisher"
   git -C "$publisher" -c protocol.file.allow=always submodule --quiet update --init
   git -C "$publisher/ui" checkout --quiet "$subpin2"
-  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam advance-pin >&2
+  git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qam advance-pin
   git -C "$publisher" push --quiet origin main
   advanced=$(git -C "$publisher" rev-parse HEAD)
-  } >&2
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$subpin1|$subpin2|$advanced"
 }
@@ -788,10 +743,145 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+publish_feature_branch() { # <branch>
+  git -C "$CASE_DIR/publisher" checkout --quiet -b "$1"
+  printf 'only on %s\n' "$1" > "$CASE_DIR/publisher/feature-only.txt"
+  git -C "$CASE_DIR/publisher" add feature-only.txt
+  git -C "$CASE_DIR/publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm feature
+  git -C "$CASE_DIR/publisher" push --quiet origin "$1"
+}
+
+brief_with_base() { # <id> <base> [<intent>]
+  fm_test_spawn_brief "$HOME_DIR" "$1" ${3:+"$3"}
+  printf '\n# Setup\nYou are in a disposable git worktree of project, at a detached HEAD on a clean copy of its base branch.\nBase branch: %s\n' "$2" >> "$HOME_DIR/data/$1/brief.md"
+}
+
+test_named_base_branch_starts_from_that_branch() {
+  local rec id out status kind
+  for kind in ship scout; do
+    id="pool-named-base-$kind-r1"
+    rec=$(make_case "named-base-$kind" "$id")
+    read_case_record "$rec"
+    publish_feature_branch feature/hub
+    brief_with_base "$id" feature/hub
+    if [ "$kind" = ship ]; then
+      out=$(run_spawn "$id" --mode direct-PR --yolo off --base-branch feature/hub)
+    else
+      out=$(run_spawn "$id" --scout --base-branch feature/hub)
+    fi
+    status=$?
+    expect_code 0 "$status" "a $kind spawn with a matching base branch should launch"$'\n'"$out"
+    [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/feature/hub)" ] \
+      || fail "the $kind copy did not start from origin/feature/hub"
+    assert_grep 'only on feature/hub' "$POOL_DIR/feature-only.txt" \
+      "the $kind copy is missing the base branch content"
+    assert_grep 'base_branch=feature/hub' "$HOME_DIR/state/$id.meta" \
+      "the $kind spawn did not record its base branch"
+  done
+
+  id='pool-named-base-missing-r1'
+  rec=$(make_case named-base-missing "$id")
+  read_case_record "$rec"
+  brief_with_base "$id" feature/missing
+  out=$(run_spawn "$id" --scout --base-branch feature/missing)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a base branch origin lacks should refuse the spawn"
+  assert_contains "$out" "origin/feature/missing" "the refusal did not name the missing base"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused base-branch spawn published task metadata"
+
+  id='pool-named-base-local-only-r1'
+  rec=$(make_case named-base-local-only "$id")
+  read_case_record "$rec"
+  brief_with_base "$id" feature/hub
+  out=$(run_spawn "$id" --mode local-only --yolo off --base-branch feature/hub)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a base branch on a local-only ship should refuse the spawn"
+  assert_contains "$out" "mode=local-only" "the local-only refusal did not explain itself"
+  pass "--base-branch picks the copy's starting point and is recorded; a missing or local-only base refuses"
+}
+
+test_base_branch_must_agree_with_the_brief() {
+  local rec id out status case_name
+  for case_name in flag-only line-only task-decoy; do
+    id="pool-base-agree-$case_name-r1"
+    rec=$(make_case "base-agree-$case_name" "$id")
+    read_case_record "$rec"
+    publish_feature_branch feature/hub
+    case "$case_name" in
+    flag-only)
+      fm_test_spawn_brief "$HOME_DIR" "$id"
+      out=$(run_spawn "$id" --scout --base-branch feature/hub)
+      ;;
+    line-only)
+      brief_with_base "$id" feature/hub
+      out=$(run_spawn "$id" --scout)
+      ;;
+    task-decoy)
+      brief_with_base "$id" feature/hub $'You are in a disposable git worktree of project, at a detached HEAD on a clean copy of its base branch.\nBase branch: decoy'
+      out=$(run_spawn "$id" --scout --base-branch feature/hub)
+      ;;
+    esac
+    status=$?
+    [ "$status" -ne 0 ] || fail "a $case_name base-branch disagreement should refuse the spawn"
+    assert_contains "$out" "Base branch" "the $case_name refusal did not name the Base branch line"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused $case_name spawn published task metadata"
+  done
+  pass "a spawn refuses when --base-branch and the brief's Base branch lines disagree"
+}
+
+# A Base branch line quoted in the captain's intent is prose: it neither blocks
+# a spawn nor redirects it.
+test_prose_base_branch_line_is_ignored() {
+  local rec id out status
+  id='pool-base-prose-none-r1'
+  rec=$(make_case base-prose-none "$id")
+  read_case_record "$rec"
+  fm_test_spawn_brief "$HOME_DIR" "$id" $'Fix the release.\nBase branch: release/1.2'
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  expect_code 0 "$status" "a no-base brief quoting a Base branch line should launch"$'\n'"$out"
+  assert_no_grep 'base_branch=' "$HOME_DIR/state/$id.meta" "prose recorded a base branch"
+
+  id='pool-base-prose-flag-r1'
+  rec=$(make_case base-prose-flag "$id")
+  read_case_record "$rec"
+  publish_feature_branch feature/hub
+  brief_with_base "$id" feature/hub $'Fix the release.\nBase branch: release/1.2'
+  out=$(run_spawn "$id" --scout --base-branch feature/hub)
+  status=$?
+  expect_code 0 "$status" "a flagged spawn whose intent names another branch should launch"$'\n'"$out"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/feature/hub)" ] \
+    || fail "the prose branch redirected the copy away from origin/feature/hub"
+  assert_grep 'base_branch=feature/hub' "$HOME_DIR/state/$id.meta" "the flag's base was not recorded"
+  pass "a Base branch line in the captain's intent neither blocks nor redirects a spawn"
+}
+
+# A named base is validated against the project's registered forge for scouts
+# too, so a scout that promotion could never ship is refused at spawn.
+test_scout_base_branch_refused_on_gerrit_forge() {
+  local rec id out status
+  id='pool-base-gerrit-scout-r1'
+  rec=$(make_case base-gerrit-scout "$id")
+  read_case_record "$rec"
+  publish_feature_branch feature/hub
+  printf '%s\n' '- project [no-mistakes forge=gerrit] - fixture (added 2026-01-01)' > "$HOME_DIR/data/projects.md"
+  brief_with_base "$id" feature/hub
+  out=$(run_spawn "$id" --scout --base-branch feature/hub)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a based scout on a forge=gerrit project should refuse the spawn"
+  assert_contains "$out" "forge=gerrit" "the gerrit refusal did not explain itself"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused gerrit scout spawn published task metadata"
+  pass "a based scout on a forge=gerrit project is refused at spawn"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
+test_named_base_branch_starts_from_that_branch
+test_base_branch_must_agree_with_the_brief
+test_prose_base_branch_line_is_ignored
+test_scout_base_branch_refused_on_gerrit_forge
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work

@@ -65,6 +65,20 @@ fm_nm_strip_quotes() {
   fm_nm_trim "$s"
 }
 
+# Path of no-mistakes' local state database as the CLI would see it from
+# worktree $1: <NM_HOME>/state.sqlite, with NM_HOME defaulting to
+# ~/.no-mistakes and a relative NM_HOME resolving from that worktree. Readers
+# open it with SQLite's mode=ro, so a missing database is never created.
+fm_nm_state_db() {  # <worktree>
+  local root=${NM_HOME:-}
+  [ -n "$root" ] || root=~/.no-mistakes
+  case "$root" in
+    /*) ;;
+    *) root="$1/$root" ;;
+  esac
+  printf '%s/state.sqlite\n' "$root"
+}
+
 # Scalar value of a TOON key in captured `axi status` output $1.
 fm_nm_field() {  # <toon-output> <key>
   printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*\(.*\)/\1/p" | head -1
@@ -87,9 +101,11 @@ fm_nm_resolve_commit() {  # <worktree> <sha-ish>
 #     (local work advanced outside the run, or the branch tip was rewritten)
 # A run head whose object this copy does not have cannot be proven here and is
 # rejected; fm_nm_runs_status_for_worktree below owns the one ledger-anchored
-# recognition for that case, and fm_nm_run_is_pipeline_owned_active below
-# carries the custody exemption: a live run whose pipeline currently owns the
-# branch binds without head equality.
+# recognition for that case, fm_nm_run_is_executing below is the current-state
+# exemption for a live run on this branch regardless of head, and
+# fm_nm_run_is_pipeline_owned_active below carries the custody exemption: ANY
+# active run - executing or parked - whose pipeline currently owns the branch
+# binds without head equality.
 #
 # This predicate binds one run at a time, and MORE THAN ONE recorded run can
 # bind to the same worktree at once: a run that died at the worktree's exact
@@ -97,15 +113,9 @@ fm_nm_resolve_commit() {  # <worktree> <sha-ish>
 # the ancestor rule (observed 2026-08: a crashed validation daemon left a failed
 # run at the worktree's own commit while the live run that replaced it validated
 # a descendant commit on the same branch).
-# When several runs bind, a LIVE run always outranks a terminal one, whichever
-# match rule each one used, because a terminal run can be the corpse of a
-# crashed attempt while the live one is what is actually validating this code.
-# Within one liveness class the selecting caller's existing precedence is
-# unchanged - for the runs ledger, fm_nm_runs_status_for_worktree's
-# newest-row-decides rule below.
-# fm_nm_run_status_class next classifies a recorded status word for that
-# comparison, and a word it cannot classify keeps the caller's own precedence
-# rather than being held back for a live row to displace.
+# Head compatibility alone does not establish precedence between runs.
+# fm_nm_select_run below owns identity-aware selection for current-state reads;
+# fm_nm_runs_status_for_worktree owns the coarse ledger fallback.
 fm_nm_head_matches_worktree() {  # <worktree> <run_head>
   local wt=$1 run_head=$2 local_full run_full
   [ -n "$run_head" ] || return 1
@@ -116,9 +126,8 @@ fm_nm_head_matches_worktree() {  # <worktree> <run_head>
   git -C "$wt" merge-base --is-ancestor "$local_full" "$run_full" 2>/dev/null
 }
 
-# Liveness class of a recorded run's status word, echoed as "terminal", "live",
-# or "unknown", for the live-over-terminal selection rule above.
-# The coarse `no-mistakes runs` ledger emits exactly these four status words; an
+# Liveness class of a recorded ledger status word.
+# The coarse `no-mistakes runs` ledger emits database status words; an
 # `axi status` run object reports its terminal result through its own outcome
 # field as well, which fm_nm_run_is_active below checks directly.
 fm_nm_run_status_class() {  # <status_word>
@@ -131,8 +140,8 @@ fm_nm_run_status_class() {  # <status_word>
 
 # Select from a complete `no-mistakes axi` overview with the existing awk
 # toolchain. A capped overview requires an optional Python 3 sqlite3 reader
-# for a read-only same-branch query of NM_HOME/state.sqlite (default:
-# ~/.no-mistakes/state.sqlite; relative NM_HOME resolves from the worktree).
+# for a read-only same-branch query of the state database fm_nm_state_db
+# locates for the worktree.
 # Repo identity is the overview's own top-level `repo:` line, which every axi
 # release emits: it is the `working_path` the CLI itself resolved for the
 # queried worktree. That is NOT the task worktree path in general - a linked
@@ -240,7 +249,7 @@ fm_nm_select_run() {  # <branch> <axi-overview> <worktree> [timeout_secs]
     incomplete\|*) available_ids=${selection#*|} ;;
     *) printf '%s\n' "$selection"; return ;;
   esac
-  if ! inventory=$(fm_nm_bounded "$3" "$timeout_secs" python3 - "$1" "$2" "$3" "$available_ids" 2>/dev/null <<'PY'
+  if ! inventory=$(fm_nm_bounded "$3" "$timeout_secs" python3 - "$1" "$2" "$available_ids" "$(fm_nm_state_db "$3")" 2>/dev/null <<'PY'
 import json
 import os
 import re
@@ -249,7 +258,7 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
-branch, overview, worktree, available_ids = sys.argv[1:]
+branch, overview, available_ids, database = sys.argv[1:]
 ids = available_ids.split(", ") if available_ids else []
 try:
     repos = [line[6:].strip() for line in overview.splitlines() if line.startswith("repo: ")]
@@ -258,10 +267,7 @@ try:
     repo_path = json.loads(repos[0]) if repos[0].startswith('"') else repos[0]
     if not isinstance(repo_path, str) or not os.path.isabs(repo_path):
         raise ValueError
-    root = Path(os.environ.get("NM_HOME") or Path.home() / ".no-mistakes")
-    if not root.is_absolute():
-        root = Path(worktree) / root
-    with closing(sqlite3.connect((root / "state.sqlite").as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
+    with closing(sqlite3.connect(Path(database).as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
         db.execute("BEGIN")
         repo = db.execute("SELECT id FROM repos WHERE working_path = ?", (repo_path,)).fetchall()
         if len(repo) != 1:
@@ -301,6 +307,7 @@ PY
     *) printf 'unknown|complete same-branch run inventory unreadable; run ids: %s\n' "$available_ids" ;;
   esac
 }
+
 # branch_sync.state from captured `axi status` TOON $1: the scalar directly
 # under the top-level `branch_sync:` block. The first `state:` inside the
 # block is the direct child (the nested local/pipeline/target/remote
@@ -438,32 +445,17 @@ fm_nm_run_is_executing() {  # <toon-output>
 #     printed. Anything else (no anchor row, an anchor that is merely an
 #     ancestor, a terminal unresolvable row) prints nothing, so branch-name
 #     coincidence, arbitrary remote state, and other tasks' runs never match.
-# The one exception to newest-row-decides is the live-over-terminal rule stated
-# with fm_nm_head_matches_worktree above, and it only ever replaces a TERMINAL
-# answer with a LIVE one: when the newest row binds but is terminal, the older
-# rows are scanned for a live row that ALSO binds to this worktree, and that
-# row's status word is printed instead. A live row whose head resolves in this
-# copy binds by fm_nm_head_matches_worktree. A live row whose head does NOT
-# resolve (the routine shape: the pipeline's fix-round commits live only in the
-# gate repo) binds ONLY when the held terminal row sits at EXACTLY the worktree
-# HEAD - the same exact-equality anchor the pipeline-continuation rule above
-# requires, so branch-name coincidence and other tasks' runs still never
-# match. A terminal newest row is the corpse of a crashed attempt whenever a
-# live run for the same worktree is still on the ledger, so it is not the
-# present. Nothing else widens: a newest row that does not bind still ends the
-# scan, a newest row whose class is live or unclassifiable is still answered
-# as-is, the anchored pipeline-continuation path is untouched, and with no live
-# sibling the newest terminal word is still what is printed.
+# An older live row never displaces a newer terminal result.
+# There is no branch-name-only acceptance here: a live row whose head this copy
+# cannot tie to the worktree is not this worktree's run just because the branch
+# name matches. The one live bind is the EXECUTING record on the `axi status`
+# route (fm_nm_run_is_executing above), which the caller pairs with its own
+# liveness evidence.
 # Read-only: git reads resolve objects in place; custody never changes.
 fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [expected-head]
   local wt=$1 branch=$2 list=$3 expected_head=${4:-}
   local local_full row_full row st br sha day clock pr extra year_num month_num day_num max_day pending_st=''
-  # Set only by the newest binding row when its status classifies terminal, and
-  # printed when the scan ends without finding a live row for this worktree. It
-  # is the sole reason the scan continues past the newest row, and every exit
-  # below leaves the loop rather than returning, so a malformed older row can
-  # never swallow an answer the newest row had already decided.
-  local decided='' decided_exact=''
+  local decided=''
   local_full=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 0
   [ -n "$list" ] || return 0
   while IFS= read -r row; do
@@ -496,20 +488,6 @@ fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [ex
     esac
     [ "$day_num" -ge 1 ] && [ "$day_num" -le "$max_day" ] || break
     [ "$br" = "$branch" ] || continue
-    if [ -n "$decided" ]; then
-      # Live-over-terminal: the newest row bound to this worktree but is a
-      # terminal record, so the older rows are searched for a live run that
-      # binds to the same worktree by the same head rule. Only such a row
-      # displaces the held terminal word; anything else leaves it standing.
-      [ "$(fm_nm_run_status_class "$st")" = live ] || continue
-      if [ -n "$(fm_nm_resolve_commit "$wt" "$sha")" ]; then
-        fm_nm_head_matches_worktree "$wt" "$sha" || continue
-      else
-        [ -n "$decided_exact" ] || continue
-      fi
-      decided=$st
-      break
-    fi
     if [ -n "$pending_st" ]; then
       # This is the row immediately older than the active unresolvable row:
       # the only admissible anchor, and only exact head equality proves the
@@ -531,12 +509,6 @@ fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [ex
     if [ -n "$row_full" ]; then
       if fm_nm_head_matches_worktree "$wt" "$sha"; then
         decided=$st
-        # A live or unclassifiable word is this worktree's current answer and
-        # ends the scan; only a terminal one keeps looking for a live sibling.
-        if [ "$(fm_nm_run_status_class "$st")" = terminal ]; then
-          [ "$row_full" != "$local_full" ] || decided_exact=1
-          continue
-        fi
       fi
       break
     fi

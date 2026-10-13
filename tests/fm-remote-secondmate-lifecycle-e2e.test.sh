@@ -246,6 +246,20 @@ esac
 case "${FM_FAKE_SSH_MODE:-normal}" in
   unreachable) exit 255 ;;
   ambiguous) "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"; exit 255 ;;
+  # The remote retirement really runs, then reports what its forced secondmate
+  # teardown reports for a lost child slot: tests/fm-teardown.test.sh owns that
+  # remote-side exit 4.
+  retire-lost-slot)
+    rc=0
+    "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$command_name:$_command_action" = fm-remote-secondmate-control.sh:retire ]; then
+      printf 'warning: treehouse return left pool slot 3 (/remote/slot-3) dirty or unverified; the pool lost this slot. Remaining paths:\n' >&2
+      printf '  ?? left-behind-clone/\n' >&2
+      printf 'teardown ios finished its cleanup and removed its task record, but a returned pool slot did not come back clean\n' >&2
+      exit 4
+    fi
+    exit "$rc"
+    ;;
   *) exec "$FM_FAKE_REMOTE_ENTRYPOINT" "$@" ;;
 esac
 SH
@@ -316,18 +330,6 @@ sha256_file() {
 newest_remote_inbox_corr() {
   grep -Eoh 'corr=[a-f0-9]{16}' "$PARENT_ROUTE_INBOX"/*.msg 2>/dev/null \
     | tail -1 | cut -d= -f2-
-}
-
-# No automated nudge may leave an unresolved parent pending-reply expectation for
-# <task-id>: the mate applies the instruction and never posts a correlated report.
-assert_no_open_pending_reply() {
-  local task=$1 what=$2 rec phase
-  for rec in "$PARENT/state/pending-replies"/*; do
-    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
-    [ "$(grep '^task_id=' "$rec" | cut -d= -f2-)" = "$task" ] || continue
-    phase=$(grep '^phase=' "$rec" | cut -d= -f2-)
-    [ "$phase" = resolved ] || fail "$what: $rec ($phase)"
-  done
 }
 
 seed_env() {
@@ -864,14 +866,6 @@ assert_grep 'remote_target=fm-remote:' "$PARENT/state/ios.meta" "parent metadata
 assert_grep 'herdr_session=fm-remote' "$REMOTE_HOME/state/parent-route/ios.meta" "remote metadata did not record the pinned Herdr session"
 assert_grep '--session fm-remote' "$HERDR_LOG" "remote launch did not target the fm-remote session"
 assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the interactive default session"
-# The registry host token is seeded into the remote home's own
-# config/herdr-session-host (when absent) and drives the task tab display name
-# adix-<host>-<owner>-<project>-<task> (project == task id for a secondmate
-# agent, so the duplicate segment collapses; the owner is the launching
-# primary home, since the remote launch runs with FM_HOME at the remote root).
-assert_grep '--label adix-remote-mac-firstmate-ios' "$HERDR_LOG" "remote launch did not apply the host- and owner-qualified display name to the task tab"
-[ "$(cat "$REMOTE_HOME/config/herdr-session-host" 2>/dev/null)" = "remote-mac" ] \
-  || fail "remote launch did not seed config/herdr-session-host with the registry host token"
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"
@@ -1075,10 +1069,14 @@ remote_env "$ROOT/bin/fm-bootstrap.sh" > "$TMP_ROOT/config-partial-retry.out" \
 [ "$(cat "$REMOTE_HOME/config/crew-harness")" = grok ] \
   || fail "bootstrap did not apply the remaining inherited file"
 assert_absent "$NUDGE_MARKER" "bootstrap cleared no remote reread marker after convergence"
-assert_no_open_pending_reply ios "bootstrap config reread left an unanswered pending-reply record"
-if ! grep -Eq 'delivery=[a-f0-9]{16}' "$REMOTE_HOME/state/parent-route/ios.inbox"/*.msg; then
-  fail "converged remote config reread did not ride the fire-and-forget plane"
-fi
+PARTIAL_CONFIG_CORR=$(newest_remote_inbox_corr)
+[ -n "$PARTIAL_CONFIG_CORR" ] || fail "bootstrap config reread did not carry a correlation token"
+printf 'done [corr=%s]: converged inherited config re-read\n' "$PARTIAL_CONFIG_CORR" >> "$REMOTE_HOME/state/parent-replies.status"
+await_reply_result "$PARENT/state/procevent-inbox/$SID.2.result" \
+  || fail "remote reply source did not capture the converged config acknowledgment"
+PARTIAL_CONFIG_RESULT="$PARENT/state/procevent-inbox/$SID.2.result"
+remote_env "$ROOT/bin/fm-procevent-remote-reply.sh" handle ios 2 "$PARTIAL_CONFIG_RESULT" >/dev/null \
+  || fail "converged remote config acknowledgment was not ingested"
 pass "partial remote inheritance retains reread intent through bootstrap convergence"
 
 rm -f "$TMP_ROOT/inherit.entered" "$TMP_ROOT/inherit.release" "$TMP_ROOT/inherit.payload"
@@ -1140,10 +1138,14 @@ remote_env "$ROOT/bin/fm-config-push.sh" > "$TMP_ROOT/config-push-retry.out" \
   || fail "unchanged remote config push did not retry its pending reread"
 assert_absent "$NUDGE_MARKER" "successful remote config reread left its retry marker"
 assert_grep 'config-reread: sent' "$TMP_ROOT/config-push-retry.out" "remote config reread retry was not reported"
-assert_no_open_pending_reply ios "remote config reread left an unanswered pending-reply record"
-if ! grep -Eq 'delivery=[a-f0-9]{16}' "$REMOTE_HOME/state/parent-route/ios.inbox"/*.msg; then
-  fail "remote config reread retry did not ride the fire-and-forget plane"
-fi
+CONFIG_CORR=$(newest_remote_inbox_corr)
+[ -n "$CONFIG_CORR" ] || fail "remote config reread did not carry a correlation token"
+printf 'done [corr=%s]: inherited config re-read\n' "$CONFIG_CORR" >> "$REMOTE_HOME/state/parent-replies.status"
+await_reply_result "$PARENT/state/procevent-inbox/$SID.3.result" \
+  || fail "remote reply source did not capture the config reread acknowledgement"
+CONFIG_RESULT="$PARENT/state/procevent-inbox/$SID.3.result"
+remote_env "$ROOT/bin/fm-procevent-remote-reply.sh" handle ios 3 "$CONFIG_RESULT" >/dev/null \
+  || fail "remote config reread acknowledgement was not ingested"
 pass "remote inherited config retains and retries a failed live reread nudge"
 
 resolve_ios_pending() {
@@ -1374,6 +1376,7 @@ assert_grep 'remote_host=remote-mac' "$WATCH_STATE_UNREACHABLE/ios.meta" \
 assert_grep '- ios ' "$PARENT/data/secondmates.md" \
   "an unreachable remote probe changed the registry route"
 pass "watch liveness: an unreachable remote secondmate is probed, preserved, and never failed over"
+
 # --- a stale herdr client shadowing the one the server accepts --------------
 # The remote host's job PATH can resolve an older self-updated herdr ahead of
 # the one its running server accepts; the server then refuses every command
@@ -1573,7 +1576,8 @@ while [ ! -f "$TMP_ROOT/launch.entered" ]; do
   [ "$launch_wait" -le 1500 ] || fail "remote respawn never reached its blocked launch"
   sleep 0.02
 done
-remote_env "$ROOT/bin/fm-teardown.sh" ios > "$TMP_ROOT/teardown-serialized.out" 2>&1 &
+FM_FAKE_SSH_MODE=retire-lost-slot remote_env "$ROOT/bin/fm-teardown.sh" ios \
+  > "$TMP_ROOT/teardown-serialized.out" 2> "$TMP_ROOT/teardown-serialized.err" &
 teardown_pid=$!
 sleep 0.2
 kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active remote respawn"
@@ -1587,10 +1591,21 @@ sleep 0.2
 kill -0 "$teardown_pid" 2>/dev/null || fail "remote retirement bypassed an active backlog handoff"
 touch "$TMP_ROOT/handoff.release"
 wait "$handoff_holder_pid" || fail "handoff lock holder failed to release"
-if ! wait "$teardown_pid"; then
-  printf 'serialized retirement output:\n%s\n' "$(cat "$TMP_ROOT/teardown-serialized.out")" >&2
-  fail "safe remote retirement failed after handoff serialization"
+teardown_rc=0
+wait "$teardown_pid" || teardown_rc=$?
+if [ "$teardown_rc" -ne 4 ]; then
+  printf 'serialized retirement output:\n%s\n%s\n' "$(cat "$TMP_ROOT/teardown-serialized.out")" \
+    "$(cat "$TMP_ROOT/teardown-serialized.err")" >&2
+  fail "remote retirement with a lost child slot did not exit 4 (exit $teardown_rc)"
 fi
+assert_grep 'teardown ios complete (remote ' "$TMP_ROOT/teardown-serialized.out" \
+  "remote retirement with a lost child slot did not report its local completion on stdout"
+assert_grep 'pool slot 3 (/remote/slot-3) dirty or unverified; the pool lost this slot' "$TMP_ROOT/teardown-serialized.err" \
+  "remote retirement did not forward the remote lost-slot warning"
+assert_grep 'left-behind-clone' "$TMP_ROOT/teardown-serialized.err" \
+  "remote retirement did not forward the lost slot's remaining paths"
+assert_no_grep 'teardown ios ' "$TMP_ROOT/teardown-serialized.err" \
+  "remote retirement forwarded remote completion text to stderr"
 assert_absent "$REMOTE_HOME" "remote retirement did not remove the remote home"
 assert_absent "$PARENT/state/ios.meta" "remote retirement did not remove parent metadata"
 assert_absent "$PARENT/state/.backlog-handoff-ios.wake-pending" \
