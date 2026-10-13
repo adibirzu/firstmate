@@ -378,7 +378,9 @@ pass "launch drift: Cursor detector evidence leaves session-lock identity unchan
   # task from being annotated with a severe primary-checkout landing.
   # shellcheck disable=SC2329 # The assertion proves this decoy is not called.
   fm_backend_tmux_current_path() { printf '/unbound/tmux\n'; }
+  # shellcheck disable=SC2329  # invoked only through the launch-drift wiring that is not carried
   fm_backend_tmux_bound_current_path() { printf '/passive/tmux\n'; }
+  # shellcheck disable=SC2329  # invoked only through the launch-drift wiring that is not carried
   fm_backend_herdr_current_path() { printf '/passive/herdr\n'; }
   # shellcheck disable=SC2329 # The dispatcher must return unknown without this active probe.
   fm_backend_zellij_current_path() { return 23; }
