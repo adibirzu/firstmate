@@ -28,6 +28,7 @@ To audit the boundary, compare the tree to upstream: `git diff --stat upstream/m
 These are standalone: an operator or a skill runs them directly, and no file upstream owns calls them.
 They are the reusable operator features intended to ship as AXI packages.
 Until a published package exists, they stay here, and each moves out as its package lands.
+Components whose call sites are not carried are listed under Dormant components below.
 
 | Component | Owner paths | Role |
 |---|---|---|
@@ -51,27 +52,28 @@ A deterministic condition and action pair can be registered as a watch with `bin
 Both are detectors that wake firstmate; neither can refuse a spawn, replace an agent, or change a lifecycle step.
 Every capability in the next section needs more than detection, so none of them fits either surface today.
 
-## Capabilities not carried
+## Dormant components
 
-The fork previously implemented these by editing upstream-owned scripts.
-They are not carried, because upstream exposes no supported extension point for them and the fork must not own admission, lifecycle, watcher, or teardown behavior.
-Each needs an upstream extension point or an upstream change before a package can provide it again.
+These fork components are still in the tree, but the edits that called them from files upstream owns are not carried, so nothing invokes them.
+They are not migrated and not verified against the upstream core; each stays until a tested package implementation or an upstream extension point replaces it.
+Running one by hand can work, but the integrated behavior it once had does not exist.
 
-| Capability | What upstream would need |
-|---|---|
-| Machine-capacity admission and remote overflow | A documented operator-configured admission command that `fm-spawn.sh` runs before it creates anything. |
-| Stale-base and duplicate-work gates | The same admission command, plus brief and promote steps that name a command rather than a fork script. |
-| Restored-worker launch drift | Launch identity recorded in task metadata and a read-only drift verb. |
-| Configurable Herdr task-tab names and per-project berths | A label template setting in the Herdr backend and state-slice support. |
-| In-run model fallback and in-place runtime handoff | A documented in-place relaunch verb on `fm-control.sh` and a watcher status-event callback. |
-| Own-agent context hygiene | A watcher-side idle callback. |
-| File-configured wake-coalescing window and idle-heartbeat backoff | A watcher setting for each; upstream reads only the matching environment variables. |
-| Extra crewmate adapters (cline, copilot, cursor-agent) | A per-adapter registry that `fm-spawn.sh` and `fm-control.sh` read. |
-| Two-stage code review and the direct-PR attestation bypass | Review belongs to the no-mistakes pipeline; the attestation bypass is not restored. |
-| Per-crew usage row | A renderer hook in the fleet snapshot; `usage-axi` owns the data. |
-| Fork fixes to upstream-owned scripts | Upstream pull requests; each fix is recorded with its original commit in the maintainer's private disposition. |
+| Capability | Dormant files | What upstream would need |
+|---|---|---|
+| Machine-capacity admission and remote overflow | `bin/fm-capacity.sh`, `bin/fm-capacity-lib.sh`, `bin/fm-remote-overflow-lib.sh` | A documented operator-configured admission command that `fm-spawn.sh` runs before it creates anything. |
+| Stale-base and duplicate-work gates | `bin/fm-base-check.sh`, `bin/fm-duplicate-check.sh` | The same admission command, plus brief and promote steps that name a command rather than a fork script. |
+| Restored-worker launch drift | `bin/fm-launch-drift-lib.sh`, `bin/fm-launch-drift-identity-lib.sh` | Launch identity recorded in task metadata and a read-only drift verb. |
+| Herdr task-tab names and per-project berths | `bin/fm-herdr-name-lib.sh` (also used by the fleet tab), `bin/fm-berth.sh` | A label template setting in the Herdr backend and state-slice support. |
+| In-run model fallback and in-place runtime handoff | `bin/fm-model-fallback.sh`, `bin/fm-runtime-handoff.sh` | A documented in-place relaunch verb on `fm-control.sh` and a watcher status-event callback. |
+| Own-agent context hygiene, file-configured wake-coalescing window and idle-heartbeat backoff | `bin/fm-context-hygiene-lib.sh` | A watcher-side idle callback and a setting for each window; upstream reads only the matching environment variables. |
+| Extra crewmate adapters (cline, copilot, cursor-agent) | the three harness reference documents, their verification documents and tests | A per-adapter registry that `fm-spawn.sh` and `fm-control.sh` read. |
+| Two-stage code review and the direct-PR attestation bypass | `bin/fm-review.sh`, `bin/fm-install-ocr.sh`, `bin/fm-direct-pr-attestation.sh`, `docs/code-review.md` | Review belongs to the no-mistakes pipeline; the attestation bypass is not wired into the required-pipeline workflow. |
+| Per-crew usage row | `bin/fm-crew-usage-lib.sh`, `bin/fm-statusline-quota.sh`, `bin/fm-statusline-quota-lib.sh` | A renderer hook in the fleet snapshot; `usage-axi` owns the data. |
+| Worker isolation assertion and treehouse user config | `bin/fm-worker-isolation-check.sh`, `bin/fm-treehouse-lib.sh` | Upstream already asserts isolation in its own brief and spawn; the lease config needs an upstream decision. |
+| Crew names | `bin/fm-name.sh` | A name-resolver setting read by the session-start digest. |
+| Fork fixes to upstream-owned scripts | the tests that pin each fix | Upstream pull requests; each fix is recorded with its original commit in the maintainer's private disposition. |
 
-The full pre-merge history, including every removed implementation, remains reachable from this repository's history.
+The full pre-merge history, including the original call sites, remains reachable from this repository's history.
 
 ## Syncing upstream
 
