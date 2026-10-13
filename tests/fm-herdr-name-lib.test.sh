@@ -109,7 +109,7 @@ pass "fm_herdr_name_label honors a custom prefix"
 [ "$(fm_herdr_name_label_for "$cfg" ship add-quota-window /x/projects/usage-axi)" = 'adix-usage-axi-add-quota-window' ] || fail "ship label_for uses the project directory basename"
 pass "fm_herdr_name_label_for uses the project directory name for a ship"
 
-[ "$(fm_herdr_name_label_for "$cfg" ship herdr-session-naming /Volumes/ExternalNVME/GitHub/firstmate)" = 'adix-firstmate-herdr-session-naming' ] || fail "a firstmate-repo task must use the 'firstmate' project name"
+[ "$(fm_herdr_name_label_for "$cfg" ship herdr-session-naming /srv/work/firstmate)" = 'adix-firstmate-herdr-session-naming' ] || fail "a firstmate-repo task must use the 'firstmate' project name"
 pass "fm_herdr_name_label_for names a firstmate-repo task's project 'firstmate'"
 
 [ "$(fm_herdr_name_label_for "$cfg" secondmate relays-hst1 /home/ops/.firstmate-relays)" = 'adix-relays-hst1' ] || fail "a secondmate agent must use its own id as the project"
