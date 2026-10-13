@@ -4,13 +4,16 @@
 #
 # The step-down chain and the depletion vocabulary now live in llm-router-axi,
 # so these tests drive a fake router and pin what this script still owns:
-#   - it classifies evidence through the router and ignores declared-pause
-#     bookkeeping
+#   - it classifies evidence through the router and keeps only the worker's own
+#     `failed:`/`blocked:` failure and obstacle lines, so declared-pause
+#     bookkeeping and third-party PR-review narrative (a "usage limit" under
+#     working:/done:) are ignored
 #   - it asks the router for the next move and prints one action block
 #   - apply relaunches in place through fm-runtime-handoff.sh with the next
 #     model and a visibility note, records the provider outcome, advances the
 #     evidence cursor, logs the downgrade, and cannot double-step on the same
-#     evidence - while a failure before the relaunch consumes nothing
+#     evidence - while a failure before the relaunch consumes nothing and a
+#     completed negative classification consumes what it evaluated
 #   - an absent router refuses loudly rather than improvising
 #   - the real handoff path preserves the worktree, commits, and dirt
 set -u
@@ -198,7 +201,7 @@ setup_case() {  # <name> <id> <chain-json> <status-body> [classification]
 
 STEP_CHAIN='{"action":"harness-step","harness":"agy","fromModel":"gemini-3.7-flash-high","toModel":"gemini-3.6-flash-high","chain":["gemini-3.7-flash-high","gemini-3.6-flash-high","gemini-3.5-flash-high"]}'
 EXHAUSTED_CHAIN='{"action":"exhausted","harness":"agy","fromModel":"gemini-3.7-flash-high","reason":"every model in the '"'"'agy'"'"' chain is depleted and no fallbackLanes successor exists","chain":["gemini-3.7-flash-high"],"fallbackLanes":[]}'
-DEPLETED_LINE='working: hit API Error 429 - Resource Exhausted: Quota exceeded for metric'
+DEPLETED_LINE='failed: hit API Error 429 - Resource Exhausted: Quota exceeded for metric'
 
 # --- evidence routing ---------------------------------------------------------
 
@@ -242,6 +245,62 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   [ "$rc" -eq 0 ] || fail "real evidence after a paused line should still plan, rc=$rc: $out"
   assert_contains "$out" "action=harness-step" "genuine live evidence after a paused line still plans"
   pass "filtering paused: bookkeeping never hides genuine evidence that follows it"
+}
+
+# A status line's leading verb scopes the evidence: a PR-review summary that
+# merely mentions a rate/usage/quota limit is ordinary narrative written under
+# working:/done:, never the worker's own failure, so it must not reach the
+# shared classifier. The fake router answers "depleted" for ANY non-empty
+# input, so a quiet action=none proves the line never became evidence.
+PR_CHECK_LINE='working: addressed Cursor Bugbot review on the PR; Bugbot flagged the usage limit accounting but the change is correct'
+{
+  setup_case pr-check-narrative plan-e5 "$STEP_CHAIN" "$PR_CHECK_LINE" depleted
+  out=$("$FALLBACK" plan-e5 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "PR-check-narrative plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "a working: PR-review line is narrative, not worker failure evidence"
+  pass "third-party PR-review prose mentioning a usage limit never triggers a fallback"
+}
+
+# The narrative scope is the verb, not the phrase: the same PR-review prose
+# written under done: is equally not the worker's own failure report.
+{
+  setup_case pr-check-done plan-e6 "$STEP_CHAIN" 'done: PR https://example.test/pr/1 checks green; Copilot noted our quota limit is generous' depleted
+  out=$("$FALLBACK" plan-e6 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "PR-check-done plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "a done: PR-review line is narrative, not worker failure evidence"
+  pass "third-party prose under done: is never read as the worker's own depletion"
+}
+
+# The worker's OWN obstacle verb is in scope: the crew brief channels a stuck
+# worker's "the runtime could not serve" report to blocked:, so a genuine quota
+# message there must still trigger the step-down.
+{
+  setup_case blocked-evidence plan-e7 "$STEP_CHAIN" 'blocked: the provider keeps returning usage limit exceeded for my own model' depleted
+  out=$("$FALLBACK" plan-e7 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "blocked-evidence plan should succeed, rc=$rc: $out"
+  assert_contains "$out" "action=harness-step" "a blocked: line reporting the worker's own exhaustion is evidence"
+  pass "the worker's own blocked: exhaustion report still triggers the fallback"
+}
+
+# The script's own bookkeeping lines are never worker evidence, even if the
+# cursor resets (a truncated status log): its exhaustion `blocked:` line and its
+# step-down `working:` line both describe a fallback it already acted on.
+{
+  setup_case self-exhausted-line plan-e8 "$STEP_CHAIN" \
+    'blocked: model fallback exhausted for agy (gemini-3.7-flash-high); needs a routing decision; triage: quota_exhausted via fallback' depleted
+  out=$("$FALLBACK" plan-e8 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "self-exhausted-line plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "the script's own exhaustion line is never re-read as worker evidence"
+  pass "the fallback's own exhaustion line cannot self-trigger after a cursor reset"
+}
+
+{
+  setup_case self-working-line plan-e9 "$STEP_CHAIN" \
+    'working: automatic model fallback agy gemini-3.7-flash-high -> gemini-3.6-flash-high; auto-step-down logged per standing quota rule' depleted
+  out=$("$FALLBACK" plan-e9 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "self-working-line plan should stay quiet-successful, rc=$rc: $out"
+  assert_contains "$out" "action=none" "the script's own step-down line is never re-read as worker evidence"
+  pass "the fallback's own step-down line cannot self-trigger after a cursor reset"
 }
 
 # --- router failures and refusals --------------------------------------------
@@ -333,6 +392,51 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   grep -q '^fallback_cursor=' "$CASE_HOME/state/apply-a5.meta" \
     && fail "a failed relaunch must not consume the evidence"
   pass "when the relaunch fails, the evidence stays unconsumed for the retry supervisor"
+}
+
+# A negative classification is a completed outcome: the candidate failure line
+# it evaluated is consumed so the same text is never rescanned on every later
+# status event. The fake router answers "none" for this case, so the run must
+# refuse (no fallback trigger) yet still advance the cursor past the evidence.
+{
+  setup_case apply-negative apply-a7 "$STEP_CHAIN" "$DEPLETED_LINE" none
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a7 apply 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -eq 1 ] || fail "a negative classification must not relaunch, rc=$rc: $out"
+  assert_contains "$out" "no depletion evidence" "negative outcome still refuses as no-evidence"
+  cursor=$(sed -n 's/^fallback_cursor=//p' "$CASE_HOME/state/apply-a7.meta")
+  status_size=$(wc -c < "$CASE_HOME/state/apply-a7.status" | tr -d ' ')
+  [ "$cursor" = "$status_size" ] || fail "a completed negative classification must consume its candidate evidence ($cursor != $status_size)"
+  if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a7 apply 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -eq 1 ] || fail "consumed negative evidence must stay quiet, rc=$rc: $out"
+  [ ! -s "$FM_FAKE_HANDOFF_LOG" ] || fail "consumed negative evidence must never relaunch"
+  pass "a negative classification consumes the evidence it evaluated and is never rescanned"
+}
+
+# A router that cannot answer is inconclusive, never a negative verdict: the
+# evidence must stay for the retry supervisor, and the run must still produce
+# its ordinary no-evidence refusal rather than aborting under `set -e`.
+{
+  setup_case apply-inconclusive apply-a8 "$STEP_CHAIN" "$DEPLETED_LINE" depleted
+  farm=$(make_bin_farm "$CASE_DIR" 1)
+  : > "$FM_FAKE_HANDOFF_LOG"
+  cat > "$CASE_DIR/llm-router-axi" <<'SH'
+#!/usr/bin/env bash
+exit 5
+SH
+  chmod +x "$CASE_DIR/llm-router-axi"
+  out=$("$FALLBACK" apply-a8 plan 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || fail "an inconclusive router must still plan quietly, rc=$rc: $out"
+  assert_contains "$out" "action=none" "an inconclusive router plans nothing"
+  assert_contains "$out" "classifier could not answer" "plan names the inconclusive classifier, not a false no-evidence verdict"
+  if out=$(FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a8 apply 2>&1); then rc=0; else rc=$?; fi
+  [ "$rc" -eq 1 ] || fail "an inconclusive router must still refuse with rc 1, rc=$rc: $out"
+  assert_contains "$out" "no depletion evidence" "an inconclusive router refuses as no-evidence"
+  grep -q '^fallback_cursor=' "$CASE_HOME/state/apply-a8.meta" \
+    && fail "an inconclusive router must not consume the evidence"
+  [ ! -s "$FM_FAKE_HANDOFF_LOG" ] || fail "an inconclusive router must never relaunch"
+  pass "a router that cannot answer is inconclusive and leaves the evidence unconsumed"
 }
 
 {
@@ -436,7 +540,7 @@ PAUSED_BOOKKEEPING_LINE='paused: session exited on purpose (OpenCode balance exh
   [ "$cursor_line" -lt "$pr_line" ] || fail "the fallback cursor was appended after the PR identity block"
   [ "$(grep -c '^fallback_cursor=' "$meta")" -eq 1 ] || fail "the first advance duplicated the cursor"
 
-  printf 'working: gemini-3.6-flash-high also returned 429 quota exceeded\n' \
+  printf 'failed: gemini-3.6-flash-high also returned 429 quota exceeded\n' \
     >> "$CASE_HOME/state/apply-a6.status"
   FM_ROOT_OVERRIDE="$ROOT" "$farm/fm-model-fallback.sh" apply-a6 apply >/dev/null 2>&1 \
     || fail "a second fresh-evidence apply should step again"
@@ -505,15 +609,15 @@ REFUSAL_LINE='failed: model deepseek-v4.1-flash is deprecated: latest version on
 }
 
 {
-  setup_case refusal-near-miss plan-f2 "$STEP_CHAIN" 'working: the vendor asks every user to opt in to the new beta program' none
+  setup_case refusal-near-miss plan-f2 "$STEP_CHAIN" 'failed: the vendor asks every user to opt in to the new beta program' none
   out=$("$FALLBACK" plan-f2 plan 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || fail "near-miss plan should stay quiet-successful, rc=$rc: $out"
   assert_contains "$out" "action=none" "opt-in wording without the hosted-region anchor plans nothing"
-  setup_case refusal-near-miss-2 plan-f3 "$STEP_CHAIN" 'working: the model card notes weights hosted in China for the open release' none
+  setup_case refusal-near-miss-2 plan-f3 "$STEP_CHAIN" 'failed: the model card notes weights hosted in China for the open release' none
   out=$("$FALLBACK" plan-f3 plan 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || fail "near-miss plan should stay quiet-successful, rc=$rc: $out"
   assert_contains "$out" "action=none" "hosted-region wording without the opt-in anchor plans nothing"
-  setup_case refusal-task-content plan-f5 "$STEP_CHAIN" 'working: the policy requires data hosted in China to opt in' none
+  setup_case refusal-task-content plan-f5 "$STEP_CHAIN" 'failed: the policy requires data hosted in China to opt in' none
   out=$("$FALLBACK" plan-f5 plan 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || fail "task-content plan should stay quiet-successful, rc=$rc: $out"
   assert_contains "$out" "action=none" "task content with both anchors must not trigger a fallback"
