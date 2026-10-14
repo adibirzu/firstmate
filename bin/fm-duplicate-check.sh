@@ -92,9 +92,17 @@ if git -C "$DIR" ls-remote --heads --exit-code origin "$BRANCH" >/dev/null 2>&1;
   exit 1
 fi
 
-# GitHub origin: query open PRs through gh-axi so a fork checkout is never
-# resolved against a CLI default repository.
-slug=$(fm_pr_github_repo_from_checkout "$DIR" 2>/dev/null) || slug=
+# GitHub origin: query open PRs through gh-axi, resolving the repository from
+# the raw origin URL so a fork checkout is never resolved against a CLI default.
+origin_url=$(git -C "$DIR" config --get remote.origin.url 2>/dev/null) || origin_url=
+slug=
+case "$origin_url" in
+  git@github.com:*) slug=${origin_url#git@github.com:} ;;
+  ssh://git@github.com/*) slug=${origin_url#ssh://git@github.com/} ;;
+  https://github.com/*) slug=${origin_url#https://github.com/} ;;
+esac
+slug=${slug%.git}
+case "$slug" in */*) ;; *) slug= ;; esac
 if [ -n "$slug" ]; then
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'fm-duplicate-check.sh: %s has a GitHub origin but python3 is missing; cannot answer the duplicate question.\n' "$DIR" >&2
@@ -128,7 +136,7 @@ if [ -n "$slug" ]; then
 
   tokens=()
   stopwords=' add adding change changes create created fix fixes for from into issue logs new update updates with work task tasks '
-  for w in "$BRANCH" "${WORDS[@]}"; do
+  for w in "$BRANCH" "${WORDS[@]:-}"; do
     while IFS= read -r t; do
       [ -n "$t" ] || continue
       case "$stopwords" in *" $t "*) continue ;; esac
@@ -141,6 +149,15 @@ if [ -n "$slug" ]; then
     printf 'fm-duplicate-check.sh: open-PR listing failed for %s; cannot answer the duplicate question.\n' "$DIR" >&2
     exit 2
   }
+  parsed_rows=$(printf '%s\n' "$pr_rows" | python3 -c 'import csv, sys
+lines = sys.stdin.read().splitlines()
+start = next((i + 1 for i, line in enumerate(lines) if line.startswith("pull_requests[")), 0)
+for row in csv.reader(lines[start:], skipinitialspace=True):
+    if len(row) > 1 and row[0].strip().isdigit():
+        print(row[0].strip() + "\t" + row[1])') || {
+    printf 'fm-duplicate-check.sh: could not parse open-PR listing for %s; cannot answer the duplicate question.\n' "$DIR" >&2
+    exit 2
+  }
   while IFS=$'\t' read -r num title; do
     [ -n "$num" ] || continue
     title_tokens=" $(printf '%s\n' "$title" | tr -cs '[:alnum:]' '\n' | tr '[:upper:]' '[:lower:]' | tr '\n' ' ')"
@@ -151,7 +168,7 @@ if [ -n "$slug" ]; then
       printf 'duplicate check: REFUSED - open PR #%s covers token "%s": %s\n' "$num" "$t" "$title"
       break
     done
-  done < <(printf '%s\n' "$pr_rows" | python3 -c 'import csv, sys; [print(row[0] + "\t" + row[1]) for row in csv.reader(sys.stdin, skipinitialspace=True) if len(row) > 1 and row[0].strip().isdigit()]')
+  done <<< "$parsed_rows"
 
   if [ "$matching" -eq 1 ]; then
     if [ "$DUPLICATE_OK" -eq 1 ]; then

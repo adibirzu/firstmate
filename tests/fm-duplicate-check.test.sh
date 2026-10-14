@@ -46,7 +46,7 @@ make_origin() {
 path_without_forge() {
   local dir=$1 tool
   mkdir -p "$dir"
-  for tool in bash env git sh sed grep awk cut tr cat mkdir printf dirname basename sort comm readlink stat; do
+  for tool in bash env git sh sed grep awk cut tr cat mkdir printf dirname basename sort comm readlink stat python3; do
     if t=$(command -v "$tool" 2>/dev/null); then
       ln -sf "$t" "$dir/$tool"
     fi
@@ -94,7 +94,7 @@ if [ "\$1" = pr ] && [ "\$2" = list ]; then
 $rows
 ROWS
 )
-      [ -z "\$rows" ] || printf 'pull_requests:\n%s\n' "\$rows"
+      [ -z "\$rows" ] || printf 'pull_requests[1]{number,title,author,review}:\n%s\n' "\$rows"
       exit "\${FM_FAKE_LIST_RC:-0}"
       ;;
   esac

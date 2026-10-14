@@ -15,7 +15,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
 LIB="$ROOT/bin/fm-remote-overflow-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -251,6 +251,23 @@ EOF
 
 # --- spawn-level ---------------------------------------------------------------
 
+# tasks-axi 0.2.6 fixed the task/backlog contract used by the real spawn
+# handoff. Keep the isolated library cases above available on older hosts, but
+# do not treat the spawn-level integration as valid below that floor.
+tasks_version=$(tasks-axi --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+tasks_supported=0
+if [ -n "$tasks_version" ]; then
+  IFS=. read -r tasks_major tasks_minor tasks_patch <<< "$tasks_version"
+  if [ "$tasks_major" -gt 0 ] \
+    || { [ "$tasks_major" -eq 0 ] && [ "$tasks_minor" -gt 2 ]; } \
+    || { [ "$tasks_major" -eq 0 ] && [ "$tasks_minor" -eq 2 ] && [ "$tasks_patch" -ge 6 ]; }; then
+    tasks_supported=1
+  fi
+fi
+if [ "$tasks_supported" -ne 1 ]; then
+  echo "skip: spawn-level overflow cases require tasks-axi 0.2.6 or newer (found ${tasks_version:-unknown})"
+else
+
 make_spawn_home() {  # <name> <task-id> -> prints home dir
   local name=$1 id=$2 home
   home="$TMP_ROOT/$name"
@@ -343,5 +360,6 @@ run_spawn_refused() {  # <home> <id> <out-file> -> exit status
   [ ! -s "$TMP_ROOT/spawn-tooling.log" ] || fail "no remote handoff may run for a tooling failure"
   pass "a tooling-failure refusal never triggers remote overflow"
 }
+fi
 
 printf 'All fm-remote-overflow tests passed.\n'
