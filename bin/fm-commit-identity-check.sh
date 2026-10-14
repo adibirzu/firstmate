@@ -96,7 +96,7 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if ! git log --reverse --format='%H%x09%an%x09%ae%x09%cn%x09%ce' "$MERGE_BASE..HEAD" > "$RECORDS"; then
+if ! git log --first-parent --reverse --format='%H%x09%an%x09%ae%x09%cn%x09%ce' "$MERGE_BASE..HEAD" > "$RECORDS"; then
   printf 'fm-commit-identity-check.sh: cannot read commits in %s..HEAD; refusing push.\n' "$MERGE_BASE" >&2
   exit 1
 fi
