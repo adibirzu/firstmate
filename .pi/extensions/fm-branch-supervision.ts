@@ -600,8 +600,7 @@ export default function (pi: ExtensionAPI) {
   // `fleet` included, so a report typed from memory about a task the wake
   // never named is never stored or delivered. Null outside a wake prompt and
   // during a heartbeat review, which is not scoped by task.
-  let wakeTaskScope: { rows: string[]; tasks: Set<string>; taskRows: Record<string, string[]>; heartbeat: boolean } | null = null;
-  let wakeReportIdentity: string | null = null;
+  let wakeTaskScope: { rows: string[]; tasks: Set<string> } | null = null;
   let mainStreaming = false;
   let shuttingDown = false;
   // Bumps at every session replacement so a stale chain continuation from the
@@ -654,10 +653,16 @@ export default function (pi: ExtensionAPI) {
   // queued for the captain's next prompt. The durable truth is the store's
   // processed marker; this only paces re-presentation and resets with the
   // session generation.
-  type ProcessingState = { sequences: string; through: number; triggered: number; pending: boolean; nextTurnQueued: boolean };
+  type ProcessingState = { sequences: string; through: number; triggered: number; pending: boolean; nextTurnQueued: boolean; visibleFinals: Set<string> };
   let processing: ProcessingState | null = null;
   let queuedProcessingContent: string | null = null;
   let processingOpenedThisRun = false;
+  // Compare only replies to the same consumed sequence set. A retry can be
+  // the first real handling, so only an empty or exact-repeat final is hidden.
+  // Buffer retry streaming until message_end can make that decision; tool
+  // messages always keep their prose, and a user message ends this scope.
+  let activeProcessing: { request: ProcessingState; retry: boolean } | null = null;
+  let userMessageThisTurn = false;
   let processedInitializedGeneration = -1;
   // One revision for BOTH selections: a model or effort change invalidates an
   // in-flight branch build exactly the same way.
@@ -1096,7 +1101,7 @@ export default function (pi: ExtensionAPI) {
     }
     if (processing?.pending) return true;
     if (!processing || processing.sequences !== sequences) {
-      processing = { sequences, through, triggered: 0, pending: false, nextTurnQueued: false };
+      processing = { sequences, through, triggered: 0, pending: false, nextTurnQueued: false, visibleFinals: new Set() };
     }
     // A presentation already sent is consumed by the run it joins or opens;
     // until that run settles, sending a widened or identical copy would hand
@@ -1178,7 +1183,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function wakeScopeRefusal(task: string): string {
-    if (!wakeTaskScope || wakeTaskScope.heartbeat || wakeTaskScope.tasks.has(task)) return "";
+    if (!wakeTaskScope || wakeTaskScope.tasks.has(task)) return "";
     const named = [...wakeTaskScope.tasks].sort().join(", ");
     const rows = wakeTaskScope.rows.join(", ");
     return `report refused: the wake being handled (row ${rows}) names ${named}, not ${task}; report only that task, never fleet or a task from memory`;
@@ -1204,7 +1209,6 @@ export default function (pi: ExtensionAPI) {
         silent: Type.Optional(Type.Boolean({
           description: "True only for an eligible routine no-change outcome; captain outcomes are never silent, and actions, state changes, or new results stay rendered",
         })),
-        wakeRow: Type.Optional(Type.String({ description: "The durable wake-queue sequence this report handles" })),
       }),
       execute: async (_toolCallId, params) => {
         const task = String((params as { task: unknown }).task || "").trim();
@@ -1212,7 +1216,6 @@ export default function (pi: ExtensionAPI) {
         const summary = String((params as { summary: unknown }).summary || "").trim();
         const wake = String((params as { wake?: unknown }).wake ?? "").trim();
         const silent = (params as { silent?: unknown }).silent === true;
-        const wakeRow = String((params as { wakeRow?: unknown }).wakeRow ?? "").trim();
         if (!task || !summary || (verdictRaw !== "routine" && verdictRaw !== "captain")) {
           return {
             content: [{ type: "text", text: "invalid report: task, verdict (routine|captain), and summary are required" }],
@@ -1232,12 +1235,7 @@ export default function (pi: ExtensionAPI) {
         if (scopeRefusal) {
           return { content: [{ type: "text", text: scopeRefusal }], details: undefined, isError: true };
         }
-        if (wakeTaskScope && (!/^[0-9]+$/.test(wakeRow) || !wakeTaskScope.rows.includes(wakeRow) || (!wakeTaskScope.heartbeat && !wakeTaskScope.taskRows[task]?.includes(wakeRow)))) {
-          return { content: [{ type: "text", text: "report refused: name the durable wake row being handled" }], details: undefined, isError: true };
-        }
         const appendArgs = ["append", "--task", task, "--verdict", verdict, "--summary", summary, "--silent", String(silent)];
-        const eventId = wakeReportIdentity && wakeRow ? `${wakeReportIdentity}:${wakeRow}` : "";
-        if (eventId) appendArgs.push("--event-id", eventId);
         if (wake) appendArgs.push("--wake", wake);
         // Ownership, the durable append, and the delivery it authorizes are
         // ONE unit of the delivery queue: store-before-visible-delivery and
@@ -1546,21 +1544,11 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        wakeReportIdentity = heartbeat
-          ? `heartbeat:${scope.eligibleSeqs.join(",")}`
-          : `rows:${scope.eligibleSeqs.join(",")}`;
-        // Heartbeat wakes keep the full scope (taskRows + heartbeat) so a
-        // report still has to name a row from this wake. A claimed check row
-        // names no task, so a non-heartbeat prompt carrying one is not
+        // A claimed check row names no task, so a prompt carrying one is not
         // scoped by task (only possible in the away posture).
-        wakeTaskScope = !heartbeat && (scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0)
+        wakeTaskScope = heartbeat || scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0
           ? null
-          : {
-              rows: [...scope.eligibleSeqs],
-              tasks: new Set(scope.eligibleTasks),
-              taskRows: scope.eligibleTaskSeqs,
-              heartbeat,
-            };
+          : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
         // Same residual: archive during snapshot publish or read-back still
         // lets this prompt proceed; the guarded scripts revalidate, and the
         // durable queue keeps every row (bin/fm-lease-lib.sh role-partition).
@@ -1569,7 +1557,6 @@ ${context.command}
           await session.prompt(branchWakePrompt(message, "fm_branch_report", postureTail));
         } finally {
           wakeTaskScope = null;
-          wakeReportIdentity = null;
         }
         const providerError = settledPromptProviderError(sessionManager, entryOffset);
         if (providerError) {
@@ -1696,7 +1683,6 @@ ${context.command}
     // duplicate suppression. Operational extension injections are not dialog.
     const prompt = event.prompt;
     processingOpenedThisRun = queuedProcessingContent !== null && prompt === queuedProcessingContent;
-    if (processingOpenedThisRun) queuedProcessingContent = null;
     const trimmed = prompt.trim();
     if (!trimmed || isOperationalUserText(trimmed)) return;
     const file = currentMainSession.getSessionFile() ?? "";
@@ -1710,6 +1696,48 @@ ${context.command}
     // Pi delivers a queued nextTurn copy with the prompt that starts this run,
     // so a fresh copy may be queued again once this run settles unacknowledged.
     if (processing) processing.nextTurnQueued = false;
+  });
+  pi.on?.("turn_start", () => {
+    userMessageThisTurn = false;
+  });
+  pi.on?.("message_start", (event) => {
+    if (event.message.role === "user") {
+      userMessageThisTurn = true;
+      activeProcessing = null;
+    } else if (
+      event.message.role === "custom" &&
+      isProcessingCustomMessage(event.message) &&
+      queuedProcessingContent !== null &&
+      event.message.content === queuedProcessingContent
+    ) {
+      // message_start covers both an idle custom prompt and a follow-up
+      // consumed inside an existing run; neither needs before_agent_start.
+      activeProcessing = !userMessageThisTurn && processing ? { request: processing, retry: processing.triggered > 1 } : null;
+      queuedProcessingContent = null;
+    }
+  });
+  pi.registerMarkdownTransformer?.((markdown, context) =>
+    activeProcessing?.retry && context.isStreaming && context.messageType !== "user" ? "" : markdown,
+  );
+  pi.on?.("message_end", (event) => {
+    if (!activeProcessing || event.message.role !== "assistant") return;
+    // message_end runs before tool execution. Keep the whole message when
+    // it carries a call, including prose alongside fm_branch_processed.
+    if (event.message.content.some((part) => part.type === "toolCall")) return;
+    const text = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
+    const { request, retry } = activeProcessing;
+    if (!retry || (text && !request.visibleFinals.has(text))) {
+      if (text) request.visibleFinals.add(text);
+      return;
+    }
+    // Pi applies the replacement before persistence and transcript rendering.
+    // Preserve the message envelope, including provider usage accounting.
+    return {
+      message: {
+        ...event.message,
+        content: [],
+      },
+    };
   });
   pi.on?.("context", (event, ctx) => {
     if (!afkPostureRecordPresent(state)) return;
@@ -1733,6 +1761,7 @@ ${context.command}
     mainStreaming = false;
     queuedProcessingContent = null;
     processingOpenedThisRun = false;
+    activeProcessing = null;
     if (processing) processing.pending = false;
     const settledGeneration = generation;
     await enqueueDelivery(async () => {
@@ -1792,6 +1821,8 @@ ${context.command}
     consecutiveProviderErrors = 0;
     providerRecovery = null;
     generation += 1;
+    activeProcessing = null;
+    userMessageThisTurn = false;
     mirrorCollection.collectAnchor = null;
     mirrorCollection.pendingCursor = null;
     mirrorCollection.stagedCaptain = null;
@@ -1840,6 +1871,9 @@ ${context.command}
     shuttingDown = true;
     generation += 1;
     processing = null;
+    queuedProcessingContent = null;
+    activeProcessing = null;
+    userMessageThisTurn = false;
     pendingMirror.length = 0;
     currentMainSession = null;
     mirrorCollection.collectAnchor = null;
@@ -2157,8 +2191,6 @@ ${context.command}
         { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
         root,
       );
-      probe.markExecutionStarted();
-      probe.setArgsComplete();
       probe.updateResult({
         content: [{ type: "text", text: probeTokens.join("\n") }],
         isError: false,
@@ -2242,18 +2274,14 @@ ${context.command}
     }),
     renderShell: "self",
     renderCall: (args, theme, context) => {
-      if (calmPresentation.stockExportRendering) {
-        throw new Error("Use Pi stock export rendering");
-      }
+      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
       shellState.call = new Text(stockToolCallHeader("fm_branch_outcomes", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
-      if (calmPresentation.stockExportRendering) {
-        throw new Error("Use Pi stock export rendering");
-      }
+      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("tool-result")) return new Container();
       const output = result.content
         .filter((item) => item.type === "text")
@@ -2308,18 +2336,14 @@ ${context.command}
     }),
     renderShell: "self",
     renderCall: (args, theme, context) => {
-      if (calmPresentation.stockExportRendering) {
-        throw new Error("Use Pi stock export rendering");
-      }
+      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
       shellState.call = new Text(stockToolCallHeader("fm_branch_processed", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
-      if (calmPresentation.stockExportRendering) {
-        throw new Error("Use Pi stock export rendering");
-      }
+      if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("tool-result")) return new Container();
       const output = result.content
         .filter((item) => item.type === "text")
@@ -2368,6 +2392,9 @@ ${context.command}
           };
         }
         const remaining = await readUnprocessedOutcomes(acknowledgedGeneration);
+        if (acknowledgedGeneration === generation && activeProcessing && through >= activeProcessing.request.through) {
+          activeProcessing = null;
+        }
         if (remaining !== null && remaining.length === 0) processing = null;
         const open = remaining === null
           ? "the remaining outcomes could not be read"

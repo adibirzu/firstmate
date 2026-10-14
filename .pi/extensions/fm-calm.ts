@@ -37,7 +37,6 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
-  AgentSession,
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
@@ -124,70 +123,10 @@ function installCalmPresentationAdapter(name: string, install: () => void): void
   }
 }
 
-const CALM_EXPORT_CONVERSATION_BOUNDARY = Symbol.for(
-  "firstmate:calm-export-conversation-boundary",
-);
-const HIDDEN_HOOK_STRIP_SCRIPT = `<script data-firstmate-calm-export-boundary="1">
-(function () {
-  var strip = function () {
-    var messages = document.getElementById("messages");
-    if (!messages) return;
-    messages.querySelectorAll(".hook-message-hidden").forEach(function (node) { node.remove(); });
-  };
-  var messages = document.getElementById("messages");
-  if (messages) new MutationObserver(strip).observe(messages, { childList: true, subtree: true });
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", strip);
-  else strip();
-})();
-</script>`;
-
-type HtmlExportSession = {
-  exportToHtml(outputPath?: string, options?: object): Promise<string>;
-};
-
-function installCalmExportConversationBoundary(): void {
-  const registry = globalThis as typeof globalThis & {
-    [CALM_EXPORT_CONVERSATION_BOUNDARY]?: true;
-  };
-  if (registry[CALM_EXPORT_CONVERSATION_BOUNDARY]) return;
-  if (typeof AgentSession !== "function") {
-    throw new Error("Firstmate Calm requires Pi AgentSession");
-  }
-  const proto = AgentSession.prototype as HtmlExportSession;
-  const original = proto.exportToHtml;
-  if (typeof original !== "function") {
-    throw new Error("Firstmate Calm requires AgentSession.exportToHtml");
-  }
-  proto.exportToHtml = async function exportToHtmlWithConversationBoundary(outputPath, options) {
-    const filePath = await original.call(this, outputPath, options);
-    let html = readFileSync(filePath, "utf8");
-    // Pi serializes display:false custom_message rows as hidden hook messages
-    // inside #messages. Remove those serialized rows so dump-dom cannot leak
-    // synthetic provenance even if page JS never runs, then keep the observer
-    // for rows Pi injects after load.
-    html = html.replace(
-      /<div class="hook-message hook-message-hidden"[^>]*>[\s\S]*?<\/div>/g,
-      "",
-    );
-    if (!html.includes('data-firstmate-calm-export-boundary="1"')) {
-      const marker = "</body>";
-      const index = html.lastIndexOf(marker);
-      if (index === -1) {
-        throw new Error("exported HTML is missing a body close tag");
-      }
-      html = `${html.slice(0, index)}${HIDDEN_HOOK_STRIP_SCRIPT}\n${html.slice(index)}`;
-    }
-    writeFileSync(filePath, html, "utf8");
-    return filePath;
-  };
-  registry[CALM_EXPORT_CONVERSATION_BOUNDARY] = true;
-}
-
 export default function (pi: ExtensionAPI) {
   installCalmPresentationAdapter("collapsed-thinking", installCalmAssistantLayout);
   installCalmPresentationAdapter("operational-user-row", installCalmOperationalUserLayout);
   installCalmPresentationAdapter("queued-operational-row", installCalmPendingOperationalLayout);
-  installCalmPresentationAdapter("export-conversation-boundary", installCalmExportConversationBoundary);
 
   let exportRendering = false;
   let removeTerminalInputHandler: (() => void) | undefined;
@@ -196,6 +135,7 @@ export default function (pi: ExtensionAPI) {
   // continuations, retries, or compaction that stay inside the same run.
   let agentRunActive = false;
   let workingShipShown = false;
+  let workingShipWidgetDisposed = false;
   // One animation instance per extension lifetime. Hiding the working widget freezes
   // this state; the next working period resumes it. session_start resets it so a fresh
   // Pi session starts at the normal initial position. Never module-global.
@@ -203,6 +143,8 @@ export default function (pi: ExtensionAPI) {
 
   // Single owner of Calm's working-row presentation choice. The widget is only created
   // or removed on a real transition, so repeated starts cannot duplicate its timer.
+  // The slot is shared with standalone Pi Calm; the dispose signal prevents turning
+  // Firstmate Calm off from clearing a widget that the other extension installed.
   const applyWorkingPresentation = (
     ui: ExtensionUIContext,
     forceStockVisibility = false,
@@ -210,14 +152,23 @@ export default function (pi: ExtensionAPI) {
     const showShip = agentRunActive && calmPresentationIsActive();
     if (showShip !== workingShipShown) {
       workingShipShown = showShip;
-      ui.setWidget(
-        CALM_WORKING_SHIP_WIDGET_KEY,
-        showShip
-          ? (tui) => createCalmWorkingShipWidget(tui, workingShipAnimation)
-          : undefined,
-      );
-      ui.setWorkingVisible(!showShip);
-    } else if (forceStockVisibility && !showShip) {
+      if (showShip) {
+        ui.setWidget(CALM_WORKING_SHIP_WIDGET_KEY, (tui) => {
+          workingShipWidgetDisposed = false;
+          const widget = createCalmWorkingShipWidget(tui, workingShipAnimation);
+          const dispose = widget.dispose;
+          widget.dispose = () => {
+            workingShipWidgetDisposed = true;
+            dispose();
+          };
+          return widget;
+        });
+        ui.setWorkingVisible(false);
+      } else if (!workingShipWidgetDisposed) {
+        ui.setWidget(CALM_WORKING_SHIP_WIDGET_KEY, undefined);
+        ui.setWorkingVisible(true);
+      }
+    } else if (forceStockVisibility && !showShip && !workingShipWidgetDisposed) {
       ui.setWorkingVisible(true);
     }
   };

@@ -2,9 +2,6 @@
 # Tests for bounded foreground watcher checkpoints used by Codex supervision.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-
 # shellcheck source=tests/wake-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 
@@ -18,6 +15,19 @@ make_home() {
   printf '%s\n' "$home"
 }
 
+wait_for_checkpoint_lock() {
+  local home=$1 i=0
+  while [ "$i" -lt 100 ]; do
+    if [ -s "$home/state/.watch.lock/pid" ] \
+      && [ -e "$home/state/.last-watcher-beat" ]; then
+      return 0
+    fi
+    sleep 0.05
+    i=$((i + 1))
+  done
+  return 1
+}
+
 test_quiet_checkpoint_exits_124_cleanly() {
   local home out err status
   home=$(make_home quiet)
@@ -27,13 +37,143 @@ test_quiet_checkpoint_exits_124_cleanly() {
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
   expect_code 124 "$status" "quiet checkpoint exit"
   assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" "quiet checkpoint line missing"
-  local i=0
-  while [ -e "$home/state/.watch.lock/pid" ] && [ "$i" -lt 50 ]; do
-    sleep 0.02
-    i=$((i + 1))
-  done
   assert_absent "$home/state/.watch.lock/pid" "watch lock pid survived quiet checkpoint timeout"
   pass "quiet checkpoint exits 124 with a clean checkpoint line and no live lock"
+}
+
+test_perl_timeout_fallback_honors_cleanup_bound_before_escalating() {
+  local home fallback_bin tool tool_path status watcher_pid
+  home=$(make_home perl-fallback)
+  fallback_bin="$home/fallback-bin"
+  mkdir -p "$home/root/bin" "$fallback_bin"
+  cp "$CHECKPOINT" "$home/root/bin/fm-watch-checkpoint.sh"
+  cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$home/root/bin/fm-supervision-engine-lib.sh"
+  for tool in bash dirname mktemp rm perl grep cat; do
+    tool_path=$(command -v "$tool") || fail "could not locate $tool for the Perl fallback fixture"
+    ln -s "$tool_path" "$fallback_bin/$tool"
+  done
+  cat > "$home/root/bin/fm-watch.sh" <<'PL'
+#!/usr/bin/env perl
+use strict;
+use warnings;
+$SIG{INT} = 'IGNORE';
+open my $pid_file, '>', "$ENV{FM_HOME}/watcher.pid" or die "open pid file: $!";
+printf {$pid_file} "%s\n", $$;
+close $pid_file;
+sleep 7;
+open my $cleanup_file, '>', "$ENV{FM_HOME}/cleanup-reached" or die "open cleanup marker: $!";
+print {$cleanup_file} "reached\n";
+close $cleanup_file;
+END {
+  if (open my $exit_file, '>', "$ENV{FM_HOME}/natural-exit") {
+    print {$exit_file} "natural\n";
+  }
+}
+sleep 20;
+PL
+  chmod +x "$home/root/bin/fm-watch-checkpoint.sh" "$home/root/bin/fm-watch.sh"
+
+  status=0
+  PATH="$fallback_bin" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_WATCHER_CLEANUP_LOCK_BOUND=8 \
+    "$home/root/bin/fm-watch-checkpoint.sh" --seconds 1 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+
+  expect_code 124 "$status" "Perl fallback checkpoint exit"
+  assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" \
+    "Perl fallback did not return a quiet checkpoint"
+  [ -e "$home/cleanup-reached" ] || fail "the Perl fallback killed the watcher before its 8-second cleanup bound"
+  [ ! -e "$home/natural-exit" ] || fail "the INT-ignoring watcher exited naturally instead of being killed"
+  [ -s "$home/watcher.pid" ] || fail "the INT-ignoring watcher did not start"
+  watcher_pid=$(cat "$home/watcher.pid")
+  if kill -0 "$watcher_pid" 2>/dev/null; then
+    fail "the INT-ignoring watcher survived the Perl fallback escalation"
+  fi
+  pass "Perl fallback honors the cleanup bound before escalating an INT-ignoring direct watcher"
+}
+
+test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
+  local home out err status marker
+  home=$(make_home announced-recovery)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  append_wake "$home/state" check buried 'check: unacknowledged durable wake' \
+    || fail "could not append the unacknowledged durable wake"
+
+  status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  expect_code 0 "$status" "first recovery checkpoint exit"
+  assert_contains "$(cat "$out")" "check: rearm-resurface" \
+    "first checkpoint did not announce the pending recovery"
+  marker=$(cat "$home/state/.watcher-down")
+  case "$marker" in
+    announced:downtime:*) ;;
+    *) fail "first checkpoint did not leave an announced generation: $marker" ;;
+  esac
+  [ -s "$home/state/.wake-queue" ] \
+    || fail "durable wake did not stay unacknowledged after the announcement"
+
+  status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
+
+  expect_code 124 "$status" "announced recovery checkpoint exit"
+  assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" \
+    "announced recovery checkpoint did not supervise for its bound"
+  assert_not_contains "$(cat "$out")" "check: rearm-resurface" \
+    "announced recovery was reannounced by the next checkpoint"
+  [ "$(cat "$home/state/.watcher-down")" = "$marker" ] \
+    || fail "announced recovery checkpoint changed the outstanding generation"
+  grep "$(printf '\tcheck\tburied\tcheck: unacknowledged durable wake')" \
+    "$home/state/.wake-queue" >/dev/null \
+    || fail "unacknowledged durable wake was not retained"
+  pass "an announced recovery is not reannounced by the next foreground checkpoint"
+}
+
+test_never_announced_recovery_is_announced_once() {
+  local home out err status
+  home=$(make_home pending-recovery)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  printf 'pending:downtime:unreported.1.aaa\n' > "$home/state/.watcher-down"
+
+  status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+
+  expect_code 0 "$status" "pending recovery checkpoint exit"
+  [ "$(grep -c '^check: rearm-resurface$' "$out" || true)" -eq 1 ] \
+    || fail "never-announced recovery did not surface exactly once: $(cat "$out")"
+  [ "$(cat "$home/state/.watcher-down")" = 'announced:downtime:unreported.1.aaa' ] \
+    || fail "never-announced recovery did not retain its announced generation"
+  pass "a never-announced recovery still surfaces once from a foreground checkpoint"
+}
+
+test_queue_append_during_checkpoint_still_resurfaces() {
+  local home out err status checkpoint_pid
+  home=$(make_home queue-append)
+  out="$home/out.txt"
+  err="$home/err.txt"
+
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" &
+  checkpoint_pid=$!
+  wait_for_checkpoint_lock "$home" || {
+    kill "$checkpoint_pid" 2>/dev/null || true
+    wait "$checkpoint_pid" 2>/dev/null || true
+    fail "queue-append checkpoint did not take the watcher lock"
+  }
+  append_wake "$home/state" check concurrent 'check: appended during checkpoint' \
+    || fail "could not append a durable wake during the checkpoint"
+  status=0
+  wait "$checkpoint_pid" || status=$?
+
+  expect_code 0 "$status" "queue-append checkpoint exit"
+  assert_contains "$(cat "$out")" "check: rearm-resurface" \
+    "queue append during checkpoint did not resurface"
+  grep "$(printf '\tcheck\tconcurrent\tcheck: appended during checkpoint')" \
+    "$home/state/.wake-queue" >/dev/null \
+    || fail "queue append was not retained durably after checkpoint recovery"
+  pass "a queue append during a foreground checkpoint still resurfaces"
 }
 
 test_signal_passes_through_and_exits_zero() {
@@ -87,60 +227,6 @@ test_existing_singleton_watcher_is_not_success() {
   assert_contains "$(cat "$out")" "watcher: already running" "singleton watcher output was not passed through"
   assert_contains "$(cat "$err")" "outside this foreground checkpoint" "singleton watcher failure was not explained"
   pass "checkpoint rejects an existing watcher singleton as unowned"
-}
-
-test_rearm_resurface_is_absorbed_and_holds_budget() {
-  local home out err status start end elapsed
-  home=$(make_home rearm-absorbed)
-  out="$home/out.txt"
-  err="$home/err.txt"
-  printf 'x\n' > "$home/state/demo.meta"
-  append_wake "$home/state" check drain-test 'synthetic durable wake' \
-    || fail "could not seed durable wake"
-  status=0
-  start=$(date +%s)
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 3 >"$out" 2>"$err" || status=$?
-  end=$(date +%s)
-  elapsed=$((end - start))
-  expect_code 124 "$status" "rearm-absorbed checkpoint exit"
-  assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 3s" "absorbed checkpoint line missing"
-  if grep -F 'rearm-resurface' "$out" >/dev/null; then
-    fail "internal rearm wake leaked into checkpoint output: $(cat "$out")"
-  fi
-  assert_contains "$(cat "$err")" "absorbed" "absorbed rearm note missing from stderr"
-  [ "$elapsed" -ge 2 ] || fail "checkpoint exited after ${elapsed}s instead of holding the 3s budget"
-  grep -F 'drain-test' "$home/state/.wake-queue" >/dev/null \
-    || fail "durable wake was consumed instead of preserved for drain"
-  local i=0
-  while [ -e "$home/state/.watch.lock/pid" ] && [ "$i" -lt 50 ]; do
-    sleep 0.02
-    i=$((i + 1))
-  done
-  assert_absent "$home/state/.watch.lock/pid" "watch lock pid survived absorbed checkpoint"
-  pass "checkpoint absorbs internal rearm-resurface, holds the full budget, and preserves the queue for drain"
-}
-
-test_chained_checkpoint_without_new_work_holds_budget() {
-  local home out err status start end elapsed
-  home=$(make_home chained-quiet)
-  out="$home/out.txt"
-  err="$home/err.txt"
-  printf 'x\n' > "$home/state/demo.meta"
-  status=0
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 2 >"$out" 2>"$err" || status=$?
-  expect_code 124 "$status" "first chained checkpoint exit"
-  status=0
-  start=$(date +%s)
-  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 2 >"$out" 2>"$err" || status=$?
-  end=$(date +%s)
-  elapsed=$((end - start))
-  expect_code 124 "$status" "second chained checkpoint exit"
-  assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 2s" "chained checkpoint line missing"
-  if grep -F 'rearm-resurface' "$out" >/dev/null; then
-    fail "internal rearm wake leaked into chained checkpoint output: $(cat "$out")"
-  fi
-  [ "$elapsed" -ge 1 ] || fail "chained checkpoint exited after ${elapsed}s instead of holding the 2s budget"
-  pass "a chained checkpoint with no new work holds the full budget instead of exiting on the recovery echo"
 }
 
 # A home opted into the supervision host whose checkpoint runs a stub host in
@@ -259,11 +345,13 @@ test_real_host_checkpoint_ends_quietly_at_its_bound() {
 }
 
 test_quiet_checkpoint_exits_124_cleanly
+test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
+test_announced_recovery_is_not_reannounced_by_next_checkpoint
+test_never_announced_recovery_is_announced_once
+test_queue_append_during_checkpoint_still_resurfaces
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
-test_rearm_resurface_is_absorbed_and_holds_budget
-test_chained_checkpoint_without_new_work_holds_budget
 test_host_checkpoint_bounds_the_park_by_posture
 test_host_checkpoint_passes_a_handback_and_reports_a_stand_down
 test_host_checkpoint_needs_the_file_and_honors_off

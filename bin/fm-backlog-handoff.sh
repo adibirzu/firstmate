@@ -46,6 +46,9 @@
 # everywhere; the `config/backlog-backend=manual` knob only governs firstmate's
 # own hand-editing of its own backlog, not this validated helper. Idempotent:
 # re-running converges. Atomic: on any move failure nothing moves.
+# Every move names its markdown backlog files explicitly and pins
+# `--backend markdown`, so a `.tasks.toml` in the caller's working directory
+# cannot redirect the move to another backend.
 # See AGENTS.md project management and task lifecycle.
 # Remote routes use an outbox handoff: one atomic local tasks-axi mv removes the
 # selected set from the dispatchable backlog into data/handoff/<id>.outbox.md,
@@ -392,17 +395,20 @@ receiver_wake_mark() { # <secondmate-id> <prepared|pending> [batch-id]
     [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
     value=$(cat "$marker" 2>/dev/null || true)
     case "$value" in
-      prepared:*)
-        corr=${value#*:}
-        corr=${corr%%:*}
-        rec=$(fm_pending_reply_path "$STATE" "$corr")
-        [ -f "$rec" ] && [ ! -L "$rec" ] \
-          && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ]
-        return $?
-        ;;
-      pending:*) receiver_wake_pending_valid "$id"; return $? ;;
-      pending) ;;
-      *) return 1 ;;
+    prepared:*)
+      corr=${value#*:}
+      corr=${corr%%:*}
+      rec=$(fm_pending_reply_path "$STATE" "$corr")
+      [ -f "$rec" ] && [ ! -L "$rec" ] &&
+        [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ]
+      return $?
+      ;;
+    pending:*)
+      receiver_wake_pending_valid "$id"
+      return $?
+      ;;
+    pending) ;;
+    *) return 1 ;;
     esac
   fi
   corr=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$id" "$RECEIVER_WAKE_MESSAGE") || return 1
@@ -477,8 +483,6 @@ receiver_wake_pending_valid() { # <secondmate-id>
   case "$value" in pending:*) corr=${value#pending:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
-  [ -f "$rec" ] && [ ! -L "$rec" ] \
-    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] || return 1
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] || return 1
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
@@ -493,9 +497,6 @@ receiver_wake_pending_delivered_valid() { # <secondmate-id>
   case "$value" in pending:*) corr=${value#pending:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
-  [ -f "$rec" ] && [ ! -L "$rec" ] \
-    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] \
-    && [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] &&
     [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
@@ -509,9 +510,6 @@ receiver_wake_confirmed_valid() { # <secondmate-id>
   case "$value" in confirmed:*) corr=${value#confirmed:} ;; *) return 1 ;; esac
   printf '%s' "$corr" | grep -Eq '^[a-f0-9]{16}$' || return 1
   rec=$(fm_pending_reply_path "$STATE" "$corr")
-  [ -f "$rec" ] && [ ! -L "$rec" ] \
-    && [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] \
-    && [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
   [ -f "$rec" ] && [ ! -L "$rec" ] &&
     [ "$(fm_pending_reply_get "$rec" task_id)" = "$id" ] &&
     [ -n "$(fm_pending_reply_get "$rec" delivered_epoch)" ]
@@ -745,7 +743,7 @@ remove_interrupted_source_duplicates() { # <outbox> <keys...>
       backlog_key_section "$outbox" "$key" >/dev/null 2>&1 || continue
       if backlog_key_section "$MAIN_BACKLOG" "$key" >/dev/null 2>&1; then
         remaining=$((remaining + 1))
-        if tasks-axi rm "$key" --file "$MAIN_BACKLOG" >/dev/null 2>&1; then
+        if tasks-axi rm "$key" --file "$MAIN_BACKLOG" --backend markdown >/dev/null 2>&1; then
           progress=$((progress + 1))
         fi
       fi
@@ -829,7 +827,7 @@ remote_handoff() { # <secondmate-id> <keys...>
   fi
   seed_backlog_scaffold "$outbox"
   if [ "${#to_move[@]}" -gt 0 ]; then
-    if ! mv_out=$(tasks-axi mv "${to_move[@]}" --file "$MAIN_BACKLOG" --to "$outbox" 2>&1); then
+    if ! mv_out=$(tasks-axi mv "${to_move[@]}" --file "$MAIN_BACKLOG" --to "$outbox" --backend markdown 2>&1); then
       [ -z "$mv_out" ] || printf '%s\n' "$mv_out" >&2
       echo "error: atomic outbox staging failed; nothing new was handed off" >&2
       return 1
@@ -911,7 +909,6 @@ resume_pending_wakes() {
     name=$(basename "$marker")
     id=${name#.backlog-handoff-}
     id=${id%.wake-pending}
-    case "$id" in ''|*[!A-Za-z0-9._-]*) echo "error: unsafe pending wake id: $id" >&2; failed=1; continue ;; esac
     case "$id" in '' | *[!A-Za-z0-9._-]*)
       echo "error: unsafe pending wake id: $id" >&2
       failed=1
@@ -1075,7 +1072,7 @@ fi
 # together and, on any failure, neither backlog's content changes - the only
 # cleanup is a scaffold we just created. tasks-axi writes both its success and
 # error output to stdout, so capture it and surface it only on failure.
-if ! MV_OUT=$(tasks-axi mv "${TO_MOVE[@]}" --file "$MAIN_BACKLOG" --to "$SUB_BACKLOG" 2>&1); then
+if ! MV_OUT=$(tasks-axi mv "${TO_MOVE[@]}" --file "$MAIN_BACKLOG" --to "$SUB_BACKLOG" --backend markdown 2>&1); then
   if [ "$SUB_CREATED" -eq 1 ]; then
     rm -f "$SUB_BACKLOG"
   fi

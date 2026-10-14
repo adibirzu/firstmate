@@ -47,13 +47,10 @@
 # instruction. There is no delivered-unconfirmed
 # outcome on this plane: "did the doorbell land" is no longer the question -
 # "was the message acted on" is, and that is answered asynchronously for an
-# ordinary record by the worker's acknowledgement move into handled/. The
-# watcher re-rings an unacknowledged message while its endpoint remains
-# available, escalates after the bounded ladder, and instead routes a positively
-# dead or missing endpoint directly to recovery without typing. An explicit
-# fire-and-forget record is excluded from that ladder.
-# bin/fm-task-inbox-lib.sh owns the record format, the doorbell line, and the
-# re-ring ladder. The composer pre-check before the ring is ADVISORY only: when
+# ordinary record by the worker's acknowledgement move into handled/.
+# bin/fm-task-inbox-lib.sh owns the record format, doorbell line, and retry and
+# escalation policy for ordinary and fire-and-forget records.
+# The composer pre-check before the ring is ADVISORY only: when
 # the composer visibly holds pending text the ring is skipped with a notice and
 # the watcher re-rings an ordinary record later; no composer verdict is
 # delivery proof on this plane, and a failed ring never fails the send.
@@ -84,11 +81,6 @@
 # routing a remote "/..." or "$..." through the record changes nothing the
 # parser would have seen); only --key still crosses to the remote pane as a
 # keystroke.
-#
-# Before any typed text is sent to a recorded task selector, a positively
-# agent-free endpoint (a bare shell left by an exited agent) is refused rather
-# than typed into (fm_send_require_live_agent below). An explicit backend
-# target is the escape hatch and is not checked.
 #
 # Stage-1 compatibility boundary: classification uses the original pre-marker
 # text, but secondmate marking still precedes every typed submission. Therefore
@@ -446,32 +438,6 @@ fm_send_resolve_target() { # <raw-target>
   return 1
 }
 
-# fm_send_require_live_agent: refuse to type text into a task pane whose agent
-# has exited. An exited agent leaves a bare shell behind, and text typed there is
-# executed as a shell command or swallowed into whatever continuation prompt the
-# shell is sitting in (a `quote>`, `dquote>`, or heredoc prompt), which is how a
-# steer once silently wedged a task and then consumed the relaunch that
-# followed. The verdict comes from the ONE owner of agent liveness
-# (bin/fm-backend.sh's fm_backend_agent_state, whose `dead` verdict for a bare
-# shell rests on bin/fm-composer-lib.sh's dead-shell rule); this adds no second
-# classifier. Only a positively `dead` or `missing` endpoint refuses - an
-# `ambiguous`, `unreadable`, or `unverified` endpoint keeps its prior behavior,
-# exactly as the inbox doorbell's own narrow skip does. Only a recorded task
-# selector is checked: an explicit backend target is the documented escape hatch
-# naming an arbitrary endpoint (not a task), and passes through unchanged.
-fm_send_require_live_agent() {  # <backend> <target> <resolution>
-  local backend=$1 target=$2 resolution=$3 state
-  [ "$backend" != remote ] || return 0
-  state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)
-  case "$state" in
-    dead|missing)
-      echo "error: refusing to type into $target ($backend; tried $resolution) because no agent is running there (state=$state), so the pane holds a bare shell that could execute or swallow the text. Relaunch the task's agent with bin/fm-control.sh <id> relaunch first. Nothing was typed." >&2
-      return 1
-      ;;
-  esac
-  return 0
-}
-
 RAW_TARGET=$1
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
@@ -783,13 +749,11 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # unknown and treated as non-codex (the safe default that keeps the fast path).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
-# A typed-plane send to a recorded task selector additionally refuses when its
-# endpoint positively has no agent (fm_send_require_live_agent below). This is
-# not a readiness substitute: active send paths still own backend readiness
-# (herdr routes through its session-aware target_ready path before sending,
-# while zellij verifies pane labels in its send implementation), and a failed
-# backend send is still surfaced below as a hard error with the attempted
-# resolution attached.
+# Do not add a separate passive liveness preflight here. Active send paths own
+# backend readiness: herdr, for example, must route through its session-aware
+# target_ready path before sending, while zellij verifies pane labels in its
+# send implementation. A failed backend send is still surfaced below as a hard
+# error with the attempted resolution attached.
 
 if [ "${1:-}" = "--key" ]; then
   [ -z "$FIRE_AND_FORGET_ID" ] ||
@@ -1118,19 +1082,25 @@ else
     # bounded re-ring ladder or direct unavailable-endpoint recovery.
     ring_rc=0
     fm_task_inbox_ring "$TARGET_BACKEND" "$T" "$INBOX_RECORD" "$EXPECTED_LABEL" || ring_rc=$?
+    ring_retry="the watcher will re-ring"
+    if [ -n "$FIRE_AND_FORGET_ID" ] \
+      && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/wait-no-turns" ]; then
+      case "$ring_rc" in
+      1|2)
+        if fm_task_inbox_mark_retry "$STATE" "$INBOX_TASK_ID" "$INBOX_RECORD"; then
+          ring_retry="the watcher will ring it once more"
+        else
+          ring_retry="its one retry ring could not be recorded, so nothing will ring it again"
+        fi
+        ;;
+      esac
+    fi
     case "$ring_rc" in
-    1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
-    2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and the watcher will re-ring" >&2 ;;
+    1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
+    2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
     esac
     exit 0
-  fi
-  # Typed plane only (the inbox plane above handles its own dead-pane skip).
-  # Refuse before typing when a recorded task pane positively has no agent: a
-  # bare shell executes or swallows the text instead of reaching a worker. An
-  # explicit backend target keeps its escape-hatch behavior.
-  if [ -n "$TARGET_SELECTOR" ]; then
-    fm_send_require_live_agent "$TARGET_BACKEND" "$T" "$RESOLUTION_TRIED" || exit 1
   fi
   # Slash commands open a completion popup in some TUIs (verified on codex);
   # submitting too fast selects nothing, so give the popup time to settle before

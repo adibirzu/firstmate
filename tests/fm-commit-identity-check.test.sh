@@ -20,8 +20,8 @@ GLOBAL_CONFIG="$TMP/global.gitconfig"
 
 cat > "$GLOBAL_CONFIG" <<'EOF'
 [user]
-	name = Adrian Birzu
-	email = adibirzu@gmail.com
+	name = Fork Operator
+	email = operator@example.invalid
 EOF
 
 export GIT_CONFIG_GLOBAL="$GLOBAL_CONFIG"
@@ -43,16 +43,16 @@ git -C "$REPO" commit -qam 'correct identity'
 
 out=$(cd "$REPO" && "$CHECK" 2>&1) \
   || fail "identity check refused a correctly authored branch commit"$'\n'"$out"
-assert_contains "$out" "verified 1 commit(s) as Adrian Birzu <adibirzu@gmail.com>" \
+assert_contains "$out" "verified 1 commit(s) as Fork Operator <operator@example.invalid>" \
   "pass case did not report the configured identity"
 pass "commit identity gate accepts the pull-request range with the configured identity"
 
 GIT_AUTHOR_NAME='Crewmate' GIT_AUTHOR_EMAIL='crewmate@pai-private' \
-  GIT_COMMITTER_NAME='Adrian Birzu' GIT_COMMITTER_EMAIL='adibirzu@gmail.com' \
+  GIT_COMMITTER_NAME='Fork Operator' GIT_COMMITTER_EMAIL='operator@example.invalid' \
   git -C "$REPO" commit -q --allow-empty -m 'wrong author'
 wrong_author_sha=$(git -C "$REPO" rev-parse HEAD)
 
-GIT_AUTHOR_NAME='Adrian Birzu' GIT_AUTHOR_EMAIL='adibirzu@gmail.com' \
+GIT_AUTHOR_NAME='Fork Operator' GIT_AUTHOR_EMAIL='operator@example.invalid' \
   GIT_COMMITTER_NAME='Crewmate' GIT_COMMITTER_EMAIL='crewmate@pai-private' \
   git -C "$REPO" commit -q --allow-empty -m 'wrong committer'
 wrong_committer_sha=$(git -C "$REPO" rev-parse HEAD)
