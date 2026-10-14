@@ -3,9 +3,9 @@
 #
 # The expected author and committer identity is the operator's global Git
 # identity (`git config --global user.name` and `user.email`).
-# Every commit in the pull-request range (the merge-base with origin/main, or
-# local main when that tracking ref is absent, through HEAD) must use that exact
-# name and email for both its author and committer.
+# Every commit in the pull-request range must use that exact name and email
+# for both its author and committer, except commits already reachable from the
+# upstream default branch.
 #
 # Usage:
 #   fm-commit-identity-check.sh [--base REF]
@@ -101,11 +101,25 @@ if ! git log --reverse --format='%H%x09%an%x09%ae%x09%cn%x09%ce' "$MERGE_BASE..H
   exit 1
 fi
 
+UPSTREAM_REF=
+if git remote get-url upstream >/dev/null 2>&1; then
+  UPSTREAM_REF=$(git symbolic-ref -q refs/remotes/upstream/HEAD 2>/dev/null || true)
+  if [ -n "$UPSTREAM_REF" ] && ! git rev-parse --verify -q "$UPSTREAM_REF^{commit}" >/dev/null 2>&1; then
+    UPSTREAM_REF=
+  fi
+  if [ -z "$UPSTREAM_REF" ] && git rev-parse --verify -q upstream/main^{commit} >/dev/null 2>&1; then
+    UPSTREAM_REF=upstream/main
+  fi
+fi
+
 COUNT=0
 OFFENDING=0
 TAB=$(printf '\t')
 while IFS="$TAB" read -r sha author_name author_email committer_name committer_email; do
   [ -n "$sha" ] || continue
+  if [ -n "$UPSTREAM_REF" ] && git merge-base --is-ancestor "$sha" "$UPSTREAM_REF" 2>/dev/null; then
+    continue
+  fi
   COUNT=$((COUNT + 1))
   commit_bad=0
   if [ "$author_name" != "$EXPECTED_NAME" ] || [ "$author_email" != "$EXPECTED_EMAIL" ]; then

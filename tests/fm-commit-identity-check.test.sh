@@ -47,6 +47,30 @@ assert_contains "$out" "verified 1 commit(s) as Fork Operator <operator@example.
   "pass case did not report the configured identity"
 pass "commit identity gate accepts the pull-request range with the configured identity"
 
+# Commits already present on upstream are carried history and retain their
+# original authorship. A later fork commit still has to match the operator.
+git -C "$REPO" remote add upstream "file://$REMOTE"
+git -C "$REPO" fetch -q upstream main:refs/remotes/upstream/main
+git -C "$REPO" update-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main
+GIT_AUTHOR_NAME='Upstream Author' GIT_AUTHOR_EMAIL='upstream@example.invalid' \
+  GIT_COMMITTER_NAME='Upstream Author' GIT_COMMITTER_EMAIL='upstream@example.invalid' \
+  git -C "$REPO" commit -q --allow-empty -m 'upstream authored'
+upstream_sha=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" update-ref refs/remotes/upstream/main "$upstream_sha"
+out=$(cd "$REPO" && "$CHECK" 2>&1) \
+  || fail "identity check refused upstream-authored commit"$'\n'"$out"
+assert_contains "$out" "verified 0 commit(s) as Fork Operator <operator@example.invalid>" \
+  "upstream commit was not exempted"
+GIT_AUTHOR_NAME='Crewmate' GIT_AUTHOR_EMAIL='crewmate@pai-private' \
+  GIT_COMMITTER_NAME='Crewmate' GIT_COMMITTER_EMAIL='crewmate@pai-private' \
+  git -C "$REPO" commit -q --allow-empty -m 'wrong fork identity'
+rc=0
+out=$(cd "$REPO" && "$CHECK" 2>&1) || rc=$?
+expect_code 1 "$rc" "identity check with wrong non-upstream commit"
+assert_contains "$out" "author is Crewmate <crewmate@pai-private>" \
+  "wrong non-upstream identity was not enforced"
+pass "upstream commits are exempt while fork commits remain identity-checked"
+
 GIT_AUTHOR_NAME='Crewmate' GIT_AUTHOR_EMAIL='crewmate@pai-private' \
   GIT_COMMITTER_NAME='Fork Operator' GIT_COMMITTER_EMAIL='operator@example.invalid' \
   git -C "$REPO" commit -q --allow-empty -m 'wrong author'
@@ -64,7 +88,7 @@ assert_contains "$out" "commit $wrong_author_sha author is Crewmate <crewmate@pa
   "refusal did not name the wrong author commit and identity"
 assert_contains "$out" "commit $wrong_committer_sha committer is Crewmate <crewmate@pai-private>" \
   "refusal did not name the wrong committer commit and identity"
-assert_contains "$out" "2 offending commit(s)" \
+assert_contains "$out" "3 offending commit(s)" \
   "refusal did not summarize every offending commit"
 assert_contains "$out" "refusing push" \
   "refusal did not state that the push is blocked"
