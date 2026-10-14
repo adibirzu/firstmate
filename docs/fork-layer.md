@@ -1,8 +1,8 @@
 # Fork layer
 
-This fork tracks upstream Firstmate exactly. Every tracked file equals upstream
-except the small set below, and every fork-specific behavior ships as an
-installable AXI plugin instead of a patch to upstream-owned files.
+This fork's target tree tracks upstream Firstmate except for the small set
+below. Remaining fork-specific capabilities are planned for separate AXI
+plugin work instead of patches to upstream-owned files.
 
 ## Carried files
 
@@ -16,12 +16,11 @@ installable AXI plugin instead of a patch to upstream-owned files.
 ## Everything else
 
 Capacity admission, duplicate-work gating, fleet views, quota surfaces,
-model fallback, runtime handoff, and the other fork capabilities are delivered
-by the AXI plugin packages, not by files in this repository. Install and update
-them with the plugin installer; do not patch upstream-owned scripts here.
+model fallback, runtime handoff, and the other fork capabilities are not
+included in this tree. Their AXI plugin implementation and installation
+instructions belong to the separate plugin work; do not patch upstream-owned
+scripts here.
 
 ## Updating
 
-Use the native `/updatefirstmate` flow. The fork's default branch is a
-fast-forward descendant of upstream's tree, so the updater needs no special
-handling.
+Use the native `/updatefirstmate` flow to refresh the fork from upstream.
