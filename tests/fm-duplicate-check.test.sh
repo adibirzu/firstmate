@@ -54,6 +54,17 @@ path_without_forge() {
   printf '%s\n' "$dir"
 }
 
+path_without_python3() {
+  local dir=$1 tool
+  mkdir -p "$dir"
+  for tool in bash env git sh sed grep awk cut tr cat mkdir printf dirname basename sort comm readlink stat; do
+    if t=$(command -v "$tool" 2>/dev/null); then
+      ln -sf "$t" "$dir/$tool"
+    fi
+  done
+  printf '%s\n' "$dir"
+}
+
 # fake_forge <fakebin> <head-count> [rows]: a gh-axi/gh pair that answers the
 # duplicate detector's two PR queries deterministically. head-count is the
 # `count:` the exact-head query prints; rows are the plain open-PR listing.
@@ -145,6 +156,20 @@ test_github_origin_with_missing_gh_refuses() {
   expect_code 2 "$rc" "a GitHub origin with gh missing did not refuse as unanswerable"
   assert_contains "$out" "gh-axi/gh is missing" "missing-gh refusal did not say so"
   pass "a GitHub origin with gh/gh-axi missing refuses the duplicate question"
+}
+
+test_github_origin_with_missing_python3_refuses() {
+  local rec checkout bare fakebin toolbin out rc
+  rec=$(make_origin missing-python3)
+  IFS='|' read -r checkout bare <<< "$rec"
+  fakebin=$(fm_fakebin "$TMP/missing-python3")
+  fake_forge "$fakebin" 0
+  toolbin=$(path_without_python3 "$TMP/missing-python3/bin")
+  rc=0
+  out=$(PATH="$fakebin:$toolbin" "$CHECK" "$checkout" fm/missing-python3-task 2>&1) || rc=$?
+  expect_code 2 "$rc" "a GitHub origin with python3 missing did not refuse as unanswerable"
+  assert_contains "$out" "python3 is missing" "missing-python3 refusal did not explain the unavailable parser"
+  pass "a GitHub origin with python3 missing refuses the duplicate question"
 }
 
 test_unauthenticated_github_refuses() {
@@ -294,6 +319,7 @@ test_origin_less_and_local_origin_with_no_branch_clears
 test_existing_branch_refuses
 test_duplicate_ok_overrides_existing_branch
 test_github_origin_with_missing_gh_refuses
+test_github_origin_with_missing_python3_refuses
 test_unauthenticated_github_refuses
 test_open_pr_query_failure_refuses
 test_open_pr_covering_branch_refuses

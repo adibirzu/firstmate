@@ -96,6 +96,10 @@ fi
 # resolved against a CLI default repository.
 slug=$(fm_pr_github_repo_from_checkout "$DIR" 2>/dev/null) || slug=
 if [ -n "$slug" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'fm-duplicate-check.sh: %s has a GitHub origin but python3 is missing; cannot answer the duplicate question.\n' "$DIR" >&2
+    exit 2
+  fi
   if ! command -v gh-axi >/dev/null 2>&1 || ! command -v gh >/dev/null 2>&1; then
     printf 'fm-duplicate-check.sh: %s has a GitHub origin but gh-axi/gh is missing; cannot answer the duplicate question.\n' "$DIR" >&2
     exit 2
