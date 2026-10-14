@@ -107,7 +107,7 @@ if git remote get-url upstream >/dev/null 2>&1; then
   if [ -n "$UPSTREAM_REF" ] && ! git rev-parse --verify -q "$UPSTREAM_REF^{commit}" >/dev/null 2>&1; then
     UPSTREAM_REF=
   fi
-  if [ -z "$UPSTREAM_REF" ] && git rev-parse --verify -q upstream/main^{commit} >/dev/null 2>&1; then
+  if [ -z "$UPSTREAM_REF" ] && git rev-parse --verify -q 'upstream/main^{commit}' >/dev/null 2>&1; then
     UPSTREAM_REF=upstream/main
   fi
 fi
