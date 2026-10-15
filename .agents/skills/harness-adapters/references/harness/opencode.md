@@ -26,7 +26,6 @@ If the pane shows the exit banner, use the verified resume path above.
 
 The current 1.x status-panel and placeholder safety boundaries are owned by [`fm-composer-lib.sh`](../../../../../bin/fm-composer-lib.sh).
 The token-free native refresh guard is [`fm-opencode-control-live-e2e.test.sh`](../../../../../tests/fm-opencode-control-live-e2e.test.sh); its color-capability precondition, version limits and dated results belong to [runtime backend verification](../../../../../docs/verification/runtime-backends.md#opencode-119-native-status-panel).
-A palette or plain placeholder-looking composer remains refused because its capture cannot exclude matching real draft text.
 
 ## Busy-queued Enter
 

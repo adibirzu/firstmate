@@ -1374,7 +1374,9 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 
 # OpenCode 1.19 renders cwd/activity and shortcut cells immediately below its
 # floor. Normalize only that positively bounded panel (at most two adjacent
-# physical rows), never arbitrary transcript or composer input.
+# physical rows), with the mode/model row proving the floor and the complete
+# `tab agents` / `ctrl+p commands` pair proving the panel. Either missing cell
+# retains refusal; arbitrary transcript or composer input is never normalized.
 _fm_composer_opencode_footer_end() { # <plain-screen> <floor-row>
   local plain=$1 floor=$2 mode
   mode=$(_fm_composer_screen_row "$((floor - 1))" "$plain")
@@ -1668,9 +1670,9 @@ EOF
     # proves it is furniture. If the same placeholder-looking bytes survive
     # styling, they are real user input and must remain in the extracted content
     # (the zellij paste proof depends on observing exactly what was typed).
-    # OpenCode's left-bar hint and legacy shell-glyph boxed placeholders have no
-    # such styling proof, so their structurally fixed positions remain the two
-    # idle-regex exceptions here.
+    # OpenCode's left-bar hint needs the position-scoped styling proof in
+    # _fm_composer_leftbar_idle_hint. Only legacy shell-glyph boxed placeholders
+    # retain a position-only idle-regex exception here.
     if [ -z "$content" ] \
        || { { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
               || { [ "$FM_COMPOSER_SELECTED_KIND" = box ] && [ "$prompt_is_shell" = 1 ]; }; } \
