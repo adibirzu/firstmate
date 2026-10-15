@@ -740,6 +740,47 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
+### OpenCode 1.19 native status panel
+
+The native OpenCode control guard is `tests/fm-opencode-control-live-e2e.test.sh`, selected by `bin/fm-test-run.sh` in `live-harness-optin` and gated with `fm_live_gate` as a default-on, zero-provider-inference check.
+It requires a supported 1.x `opencode` on PATH and uses a deterministic loopback HTTP model transport to drive the real binary, native tool permission UI and native busy queue.
+The transport never forwards requests, uses no real provider credential, and proves no provider allowance or inference capability.
+An unsupported executable version fails by name before launching; this guard makes no OpenCode 2.x launch or plugin claim.
+
+The supported isolated child profile explicitly sets `TERM=xterm-256color` and `COLORTERM=truecolor` and uses the default OpenCode theme.
+A second child omits `COLORTERM` and must preserve refusal for its palette-rendered placeholder and a real hint-like draft.
+Plain or palette placeholders remain unknown/pending; this is an intentional limit on what those captures can prove, including the plain Orca/cmux profiles.
+This result does not establish compatibility with custom themes or remapped shortcut cells; those require their own live proof.
+
+The shared classifier owns the bounded status-panel rule in `bin/fm-composer-lib.sh`; its real-frame portable regressions are in `tests/fm-composer-lib.test.sh`.
+Herdr and zellij use the styled cursorless profile exercised by those frames; tmux retains cursor anchoring and the same placeholder draft protection.
+Other harnesses' shape selectors and every backend's endpoint identity and semantic busy source are unchanged.
+
+Refresh with the intended 1.x executable on PATH:
+
+```sh
+bin/fm-test-run.sh tests/fm-opencode-control-live-e2e.test.sh
+```
+
+On 2026-10-16, a macOS arm64 lab used official OpenCode 1.19.0 and Herdr 0.9.1 without installing or replacing the canonical OpenCode 2.0.22 executable.
+An identical-environment comparison retained exact ANSI frames and changed only `COLORTERM=truecolor`: the idle hint changed from palette `38;5;244` and verdict `pending` to truecolor `38;2;128;128;128` and verdict `empty`.
+Real quoted hint-like draft text stayed `pending` in both profiles and in the reference terminal profile.
+The same guard then completed with the following actual 1.19.0 results on Herdr 0.9.1:
+
+```text
+ok - opencode (1.19.0): unsupported palette hint and real hint-like draft retain refusal
+ok - opencode (1.19.0): real drafts, including quoted hint text, survive refused control exit
+ok - opencode (1.19.0): observed native model overlay refuses injection
+ok - opencode (1.19.0): control exit preserves the exact endpoint and uncommitted work
+ok - opencode (1.19.0): real native tool permission overlay refuses injection without approving access
+ok - opencode (1.19.0): native busy queued Enter reaches the deterministic loopback model transport
+```
+
+The draft check requires the pending-text refusal reason, so an unrelated metadata refusal cannot satisfy it.
+The model-overlay check requires the native Select model heading before judging its composer.
+The queue check requires the exact next user instruction to reach the local transport after the held native turn is released; it does not accept a title-generation request as delivery.
+A separate authorized read-only real spent-free capture retained `unknown` for the usage-exceeded upsell/retry row; it was never used as evidence for an empty composer.
+
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
 Verified on 2026-09-20 on macOS arm64 (Darwin 25.6.0) against Claude Code 2.1.236 running as Firstmate workers in Herdr 0.8.0 panes, read through Herdr's ANSI capture with its exact capability descriptor (`styled=1`, `cursor=0`, `identity=1`, `rows=20`).

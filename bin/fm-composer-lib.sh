@@ -477,8 +477,8 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in
 # an EMPTY composer that a plain capture cannot tell from typed text. Grok's
 # bordered placeholder and opencode's left-bar hint (which uses either three
-# ASCII periods or U+2026 and continues with a rotating quoted suggestion,
-# hence the unanchored tail). cursor-agent renders
+# ASCII periods or U+2026 and an optional, end-anchored quoted suggestion).
+# cursor-agent renders
 # two, both anchored: `Plan, search, build anything` in a fresh session and
 # `Add a follow-up` once a turn has completed (verified live on cursor-agent
 # 2026.08.11-e8db854). cline renders `What can I do for you?` on first ready and
@@ -490,7 +490,7 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # make away-mode supervision refuse to deliver into it.
 # FM_COMPOSER_IDLE_RE overrides for an unverified harness; matching is
 # case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^What can I do for you\?$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Plan something\.\.\.$|^Ask Devin to build features, fix bugs, or work on your code$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^What can I do for you\?$|^Ask anything(\.\.\.|…)([[:space:]]+"[^"]*")?$|^Plan, search, build anything$|^Add a follow-up$|^Plan something\.\.\.$|^Ask Devin to build features, fix bugs, or work on your code$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -1309,6 +1309,19 @@ _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row
   if [ "$styled" = 1 ]; then printf 'pending'; else printf 'unknown'; fi
 }
 
+# A placeholder-looking typed draft needs styling proof, not wording alone.
+_fm_composer_leftbar_idle_hint() { # <raw-row> <content> <styled>
+  local raw=$1 content=$2 styled=$3 ghost
+  [ "$styled" = 1 ] || return 1
+  fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive || return 1
+  # OpenCode 1.19's default placeholder has luminance 128 exactly; scope the
+  # inclusive ceiling to this already identified hint position, never globally.
+  ghost=$(FM_COMPOSER_GHOST_LUMA_MAX=129 _fm_composer_row_content "$raw" 1)
+  case "$ghost" in '┃'*) ghost=${ghost#┃} ;; esac
+  fm_composer_normalize_trim_var ghost
+  [ -z "$ghost" ]
+}
+
 # _fm_composer_classify_leftbar: opencode's left-bar composer. Blank rows and
 # the idle hint read empty; the run's LAST row may be the mode/model footer
 # (composer furniture, never typed text). Real content is pending when styling
@@ -1333,7 +1346,7 @@ _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
     fi
     leading_blank=0
     if [ "$placeholder_position" = 1 ] \
-       && fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; then
+       && _fm_composer_leftbar_idle_hint "$raw" "$content" "$styled"; then
       row=$((row + 1)); continue
     fi
     if [ "$row" -eq "$last" ] \
@@ -1357,6 +1370,49 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
     *) return 1 ;;
   esac
   [ -z "${blocks//▀/}" ]
+}
+
+# OpenCode 1.19 renders cwd/activity and shortcut cells immediately below its
+# floor. Normalize only that positively bounded panel (at most two adjacent
+# physical rows), never arbitrary transcript or composer input. Either native
+# shortcut cell proves furniture independently; unknown left cells, extra rows
+# and retry/upsell text fail closed. See the live OpenCode footer guard.
+_fm_composer_opencode_footer_end() { # <plain-screen> <floor-row>
+  local plain=$1 floor=$2 mode
+  mode=$(_fm_composer_screen_row "$((floor - 1))" "$plain")
+  fm_composer_normalize_trim_var mode
+  case "$mode" in '┃'*) mode=${mode#┃} ;; *) return 1 ;; esac
+  fm_composer_normalize_trim_var mode
+  fm_composer_idle_matches "$mode" "$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT" sensitive || return 1
+  printf '%s\n' "$plain" | LC_ALL=C awk -v floor="$floor" '
+    function trim(s) {sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s}
+    NR <= floor + 1 {next}
+    {
+      if (trim($0) == "") {ended=1; next}
+      if (ended) next
+      n++
+      if (n > 2) {bad=1; next}
+      rows[n]=$0
+      a=index($0,"tab agents"); b=index($0,"ctrl+p")
+      p=a && b ? (a < b ? a : b) : (a ? a : b)
+      if (p && (!col || p < col)) col=p
+    }
+    END {
+      if (bad || !n || !col) exit 1
+      for (i=1;i<=n;i++) {
+        prefix=trim(substr(rows[i],1,col-1))
+        left=left prefix
+        right=right " " trim(substr(rows[i],col))
+      }
+      right=trim(right)
+      gsub(/[ \t\r]+/," ",right)
+      # Independent source-owned shortcut cells, not one contiguous phrase.
+      sub(/agentsctrl\+p/,"agents ctrl+p",right)
+      if (right != "tab agents" && right != "ctrl+p commands" && right != "tab agents ctrl+p commands") exit 1
+      if (left != "" && left !~ /^(~\/|\/)[^ \t\r]+$/ && left !~ /^(⬝|■){8}  *esc interrupt$/) exit 1
+      print floor+n
+    }
+  '
 }
 
 # _fm_composer_row_is_composer_furniture: 0 when <trimmed-row> is DEMONSTRABLY
@@ -1450,7 +1506,7 @@ _fm_composer_locate_footer_zone() {  # <plain>
 }
 
 _fm_composer_select_cursorless() {
-  local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0
+  local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0 status_end
   FM_COMPOSER_SELECTED_KIND=
   FM_COMPOSER_SELECTED_FIRST=-1
   FM_COMPOSER_SELECTED_LAST=-1
@@ -1537,6 +1593,9 @@ _fm_composer_select_cursorless() {
       fm_composer_normalize_trim_var trimmed
       if _fm_composer_leftbar_floor_row "$trimmed"; then
         boundary=$next
+        if status_end=$(_fm_composer_opencode_footer_end "$plain" "$boundary"); then
+          boundary=$status_end
+        fi
       fi
     fi
     # The same footer zone, read from the other side: rows this envelope's own
@@ -1620,7 +1679,11 @@ EOF
        || { { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
               || { [ "$FM_COMPOSER_SELECTED_KIND" = box ] && [ "$prompt_is_shell" = 1 ]; }; } \
             && [ "$placeholder_position" = 1 ] \
-            && fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive; } \
+            && { if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ]; then
+                   _fm_composer_leftbar_idle_hint "$raw" "$content" "$styled"
+                 else
+                   fm_composer_idle_matches "$content" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive
+                 fi; }; } \
        || { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
             && [ "$row" -eq "$FM_COMPOSER_SELECTED_LAST" ] \
             && fm_composer_idle_matches "$content" "$footer_re" sensitive; }; then

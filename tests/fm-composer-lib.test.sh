@@ -681,10 +681,10 @@ test_matrix_opencode_leftbar_signals() {
   assert_screen "opencode idle on tmux (cursor on hint)" empty "$CAPS_TMUX" "$dim_screen" 1
   assert_screen "opencode idle on herdr" empty "$CAPS_STYLED" "$dim_screen"
   assert_screen "opencode idle on zellij" empty "$CAPS_STYLED_NOID" "$dim_screen"
-  assert_screen "opencode idle on cmux/orca" empty "$CAPS_PLAIN" "$screen"
+  assert_screen "opencode plain hint cannot exclude a draft on cmux/orca" unknown "$CAPS_PLAIN" "$screen"
   # This sanitized live OpenCode 1.18.30 capture preserves its U+2026 hint and
-  # RGB 128 styling. RGB 128 is deliberately outside the ghost threshold, so
-  # the placeholder spelling is the independent empty signal. The completed-
+  # RGB 128 styling. The left-bar hint proof includes that measured muted
+  # boundary only at a recognized placeholder position. The completed-
   # turn row above the active composer also pins the incident's idle layout.
   captured_idle=$'  ▣ Build · Big Pickle · 3.4s\n\n  ┃\n  ┃  '"${ESC}[38;2;128;128;128mAsk anything… \"Fix a TODO in the codebase\"${ESC}[38;2;255;255;255m"$'\n  ┃\n  ┃  Build · Big Pickle OpenCode Zen\n  ╹▀▀▀▀▀▀▀▀'
   assert_screen "opencode 1.18.30 completed-turn idle hint on tmux" empty "$CAPS_TMUX" "$captured_idle" 3
@@ -869,7 +869,7 @@ test_cursorless_container_rejects_contiguous_lower_activity() {
 
   grok=$'╭────────────────────────╮\n│ ❯                      │\n╰──────── Grok 4.5 ──────╯\n\nGrok status'
   kimi=$'╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯\n\nKimi status'
-  opencode=$'┃\n┃  Ask anything...\n┃\n┃  Build · GPT-5.5 Fast OpenAI · high\n╹▀▀▀▀▀▀▀▀\n\nOpenCode status'
+  opencode=$'┃\n┃  '"${ESC}[2mAsk anything...${ESC}[0m"$'\n┃\n┃  Build · GPT-5.5 Fast OpenAI · high\n╹▀▀▀▀▀▀▀▀\n\nOpenCode status'
   assert_screen "blank-separated grok footer" empty "$CAPS_STYLED_NOID" "$grok"
   assert_screen "blank-separated kimi footer" empty "$CAPS_PLAIN" "$kimi"
   assert_screen "left-bar floor and blank-separated footer" empty "$CAPS_STYLED_NOID" "$opencode"
@@ -1026,3 +1026,70 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+
+# Real OpenCode 1.19 frames: only ANSI/cwd sanitization, no fake renderer.
+test_opencode_bounded_status_panel() {
+  local fixtures="$ROOT/tests/fixtures/opencode-1.19" screen frame out caps
+  for caps in "$CAPS_STYLED" "$CAPS_STYLED_NOID"; do
+    for frame in home-idle native-idle-wrapped busy queued; do
+      screen=$(cat "$fixtures/$frame.ansi")
+      assert_screen "OpenCode 1.19 $frame bounded status panel" empty "$caps" "$screen"
+    done
+    for frame in draft model-overlay permission-overlay; do
+      screen=$(cat "$fixtures/$frame.ansi")
+      out=$(fm_composer_classify_screen "$caps" "$screen")
+      [ "$out" != empty ] || fail "OpenCode 1.19 $frame must never authorize typing"
+    done
+  done
+  # The same bright text as a quoted placeholder is still an actual draft.
+  screen=$(sed 's/KEEP_119_DRAFT "quoted" do not submit/Ask anything… "keep me"/' "$fixtures/draft.ansi")
+  assert_screen "OpenCode quoted hint-like real draft" pending "$CAPS_STYLED" "$screen"
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen")
+  [ "$out" = 'Ask anything… "keep me"' ] || fail "hint-like draft extraction lost text: $out"
+  screen=$(sed 's/KEEP_119_DRAFT "quoted" do not submit/Ask anything... please investigate/' "$fixtures/draft.ansi")
+  assert_screen "OpenCode prefix hint-like real draft" pending "$CAPS_STYLED" "$screen"
+  # Styling loss cannot prove a placeholder-looking line is not a draft.
+  screen=$(cat "$fixtures/home-idle.ansi")
+  assert_screen "OpenCode plain placeholder is ambiguous" unknown "$CAPS_PLAIN" "$screen"
+  pass "OpenCode 1.19: bounded status rows preserve drafts and native overlays"
+}
+
+test_opencode_status_panel_refusal_boundaries() {
+  local base="$ROOT/tests/fixtures/opencode-1.19/native-idle-wrapped.ansi" screen plain variant out
+  screen=$(cat "$base")
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  # No floor, no model row, unknown left cell, a third contiguous row, or
+  # unrecognized shortcut wording never gets normalized to a safe composer.
+  for variant in \
+    "$(printf '%s\n' "$plain" | sed '/╹▀/d')" \
+    "$(printf '%s\n' "$plain" | sed 's/Build ·/Other ·/')" \
+    "$(printf '%s\n' "$plain" | sed 's|/srv/|DRAFT|')" \
+    "$(printf '%s\n' "$plain" | sed '/commands/a\
+ third-row activity')" \
+    "$(printf '%s\n' "$plain" | sed 's/tab agents/key unknown/;s/ctrl+p/ctrl+x/')"; do
+    out=$(fm_composer_classify_screen "$CAPS_STYLED" "$variant")
+    [ "$out" != empty ] || fail "unproven OpenCode status area became empty"
+  done
+  screen=$'┃\n┃\n┃  Build · Model\n╹▀▀▀▀▀▀▀\n⬝■■■■■■⬝ Free usage exceeded, subscribe to Go [retrying] esc interrupt'
+  assert_screen "OpenCode spending/retry text below floor" unknown "$CAPS_STYLED" "$screen"
+  screen=$'┃\n┃\n┃  Build · Model\n╹▀▀▀▀▀▀▀\nWorking on request... tab agents ctrl+p commands'
+  assert_screen "activity cannot borrow a shortcut substring" unknown "$CAPS_STYLED" "$screen"
+  pass "OpenCode status normalization: unknown activity, missing proof and spending retain refusal"
+}
+
+test_opencode_status_signals_are_independent() {
+  local screen agents_only commands_only
+  screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/native-idle-wrapped.ansi" | fm_composer_strip_ansi)
+  # Preserve cell widths while blinding each independent signal in turn.
+  agents_only=$(printf '%s\n' "$screen" | sed 's/ctrl+p/      /;s/commands/        /')
+  commands_only=$(printf '%s\n' "$screen" | sed 's/tab agents/          /')
+  [ "$screen" != "$agents_only" ] && [ "$screen" != "$commands_only" ] \
+    || fail "OpenCode signal separation became vacuous"
+  assert_screen "agents cell survives command-cell loss" empty "$CAPS_STYLED" "$agents_only"
+  assert_screen "wrapped command cell survives agents-cell loss" empty "$CAPS_STYLED" "$commands_only"
+  pass "OpenCode status furniture: each independent shortcut cell survives losing the other"
+}
+
+test_opencode_bounded_status_panel
+test_opencode_status_panel_refusal_boundaries
+test_opencode_status_signals_are_independent
