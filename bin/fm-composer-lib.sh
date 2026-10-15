@@ -1374,9 +1374,7 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 
 # OpenCode 1.19 renders cwd/activity and shortcut cells immediately below its
 # floor. Normalize only that positively bounded panel (at most two adjacent
-# physical rows), never arbitrary transcript or composer input. Either native
-# shortcut cell proves furniture independently; unknown left cells, extra rows
-# and retry/upsell text fail closed. See the live OpenCode footer guard.
+# physical rows), never arbitrary transcript or composer input.
 _fm_composer_opencode_footer_end() { # <plain-screen> <floor-row>
   local plain=$1 floor=$2 mode
   mode=$(_fm_composer_screen_row "$((floor - 1))" "$plain")
@@ -1393,8 +1391,7 @@ _fm_composer_opencode_footer_end() { # <plain-screen> <floor-row>
       n++
       if (n > 2) {bad=1; next}
       rows[n]=$0
-      a=index($0,"tab agents"); b=index($0,"ctrl+p")
-      p=a && b ? (a < b ? a : b) : (a ? a : b)
+      p=index($0,"tab agents")
       if (p && (!col || p < col)) col=p
     }
     END {
@@ -1406,9 +1403,8 @@ _fm_composer_opencode_footer_end() { # <plain-screen> <floor-row>
       }
       right=trim(right)
       gsub(/[ \t\r]+/," ",right)
-      # Independent source-owned shortcut cells, not one contiguous phrase.
       sub(/agentsctrl\+p/,"agents ctrl+p",right)
-      if (right != "tab agents" && right != "ctrl+p commands" && right != "tab agents ctrl+p commands") exit 1
+      if (right != "tab agents ctrl+p commands") exit 1
       if (left != "" && left !~ /^(~\/|\/)[^ \t\r]+$/ && left !~ /^(⬝|■){8}  *esc interrupt$/) exit 1
       print floor+n
     }

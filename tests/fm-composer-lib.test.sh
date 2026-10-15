@@ -1077,19 +1077,26 @@ test_opencode_status_panel_refusal_boundaries() {
   pass "OpenCode status normalization: unknown activity, missing proof and spending retain refusal"
 }
 
-test_opencode_status_signals_are_independent() {
-  local screen agents_only commands_only
-  screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/native-idle-wrapped.ansi" | fm_composer_strip_ansi)
-  # Preserve cell widths while blinding each independent signal in turn.
-  agents_only=$(printf '%s\n' "$screen" | sed 's/ctrl+p/      /;s/commands/        /')
-  commands_only=$(printf '%s\n' "$screen" | sed 's/tab agents/          /')
-  [ "$screen" != "$agents_only" ] && [ "$screen" != "$commands_only" ] \
-    || fail "OpenCode signal separation became vacuous"
-  assert_screen "agents cell survives command-cell loss" empty "$CAPS_STYLED" "$agents_only"
-  assert_screen "wrapped command cell survives agents-cell loss" empty "$CAPS_STYLED" "$commands_only"
-  pass "OpenCode status furniture: each independent shortcut cell survives losing the other"
+test_opencode_status_requires_complete_shortcut_pair() {
+  local screen variant frame caps out
+  for frame in home-idle native-idle-wrapped busy queued; do
+    screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/$frame.ansi")
+    for variant in \
+      "$(printf '%s\n' "$screen" | sed 's/ctrl+p/      /;s/commands/        /')" \
+      "$(printf '%s\n' "$screen" | sed 's/tab /    /;s/agents/      /')"; do
+      [ "$screen" != "$variant" ] || fail "OpenCode incomplete-pair case became vacuous"
+      for caps in "$CAPS_STYLED" "$CAPS_STYLED_NOID"; do
+        out=$(fm_composer_classify_screen "$caps" "$variant")
+        [ "$out" != empty ] || fail "OpenCode $frame incomplete shortcut pair authorized typing"
+        if fm_composer_extract_selected_content "$caps" "$variant" >/dev/null; then
+          fail "OpenCode $frame incomplete shortcut pair allowed extraction"
+        fi
+      done
+    done
+  done
+  pass "OpenCode status furniture: either missing shortcut cell retains refusal"
 }
 
 test_opencode_bounded_status_panel
 test_opencode_status_panel_refusal_boundaries
-test_opencode_status_signals_are_independent
+test_opencode_status_requires_complete_shortcut_pair
