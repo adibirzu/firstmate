@@ -16,12 +16,15 @@ BIN=$(command -v opencode)
 ORIGINAL_PATH=$PATH
 HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 SESSION=$("$HELPER" name opencode-control)
-D=$(mktemp -d "${TMPDIR:-/tmp}/fm-opencode-control.XXXXXX")
+D=$(mktemp -d /tmp/fmoc.XXXXXX)
 D=$(cd "$D" && pwd -P)
+grid_pid=
 cleanup() {
   local rc=$?
   trap - EXIT
+  exec 9>&-
   PATH="$ORIGINAL_PATH" "$HELPER" teardown "$SESSION" || rc=1
+  if [ -n "$grid_pid" ]; then wait "$grid_pid" || rc=1; fi
   if [ -n "${FM_OPENCODE_CONTROL_EVIDENCE_DIR:-}" ]; then
     mkdir -p "$FM_OPENCODE_CONTROL_EVIDENCE_DIR"
     cp "$D"/*.ansi "$FM_OPENCODE_CONTROL_EVIDENCE_DIR/" 2>/dev/null || true
@@ -127,6 +130,14 @@ sleep 0.2
 pass "opencode ($VERSION): unsupported palette hint and real hint-like draft retain refusal"
 launch drafts
 record
+mkfifo "$D/grid.in"
+lab terminal session control "$PANE" --cols 120 --rows 60 < "$D/grid.in" > "$D/grid.log" 2>&1 &
+grid_pid=$!
+exec 9> "$D/grid.in"
+sleep 0.3
+kill -0 "$grid_pid" 2>/dev/null || fail "native grid controller exited before the session guard"
+lab pane get "$PANE" | jq -e '.result.pane.scroll.viewport_rows == 60' >/dev/null \
+  || fail "opencode ($VERSION): session guard did not obtain its 60-row viewport"
 for draft in 'KEEP_REAL_DRAFT "quoted"' 'Ask anything… "keep me"' 'Ask anything... please investigate'; do
   lab pane send-text "$PANE" "$draft" >/dev/null
   sleep 0.2
@@ -138,6 +149,20 @@ for draft in 'KEEP_REAL_DRAFT "quoted"' 'Ask anything… "keep me"' 'Ask anythin
   sleep 0.1
 done
 pass "opencode ($VERSION): real drafts, including quoted hint text, survive refused control exit"
+# Enter an actual session before opening /models: the home dialog hides the
+# composer, whereas the session dialog leaves its floor and shortcuts intact.
+lab pane send-text "$PANE" FM_SESSION_PROBE >/dev/null
+lab pane send-keys "$PANE" enter >/dev/null
+seen=0
+for _ in $(seq 1 60); do
+  screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  if printf '%s\n' "$plain" | grep -q 'FM_LOCAL_FINISHED' \
+     && [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ]; then seen=1;break;fi
+  sleep 0.2
+done
+[ "$seen" = 1 ] || fail "opencode ($VERSION): native session blank composer was not observed"
+printf '%s\n' "$screen" > "$D/session-idle.ansi"
 lab pane send-text "$PANE" /models >/dev/null
 for _ in $(seq 1 20); do
   [ "$(fm_backend_herdr_composer_content "$TARGET")" != /models ] || break
@@ -154,11 +179,27 @@ for _ in $(seq 1 30); do
   sleep 0.1
 done
 [ "$seen" = 1 ] || { printf '%s\n' "$plain" | tail -20 >&2; fail "opencode ($VERSION): native model overlay was not observed"; }
+# Removing only the dialog rows must expose the still-provable composer. This
+# rejects vacuous refusals caused by an obscured floor or wrapped shortcuts.
+underlying=$(printf '%s\n' "$screen" | sed -n '/┃/,$p' | tail -n 8)
+[ "$(fm_composer_classify_screen styled=1 "$underlying")" = empty ] \
+  || fail "opencode ($VERSION): model dialog did not leave the underlying composer/status intact"
 [ "$(fm_backend_herdr_composer_state "$TARGET")" != empty ] || fail "opencode ($VERSION): observed model overlay became injectable"
-pass "opencode ($VERSION): observed native model overlay refuses injection"
+if out=$(control exit); then fail "opencode ($VERSION): exit accepted the active session model dialog: $out"; fi
+case "$out" in *"composer state is 'unknown', not proven empty"*) ;; *) fail "opencode ($VERSION): model dialog exit refused for an unrelated reason: $out" ;; esac
+fm_backend_herdr_visible_capture "$TARGET" | grep -q 'Select model' || fail "refused exit changed the active model dialog"
+pass "opencode ($VERSION): observed native session model overlay above intact composer/status refuses injection"
 lab pane send-keys "$PANE" escape >/dev/null
-sleep 0.2
-[ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ] || fail "opencode ($VERSION): model overlay did not close to a proven composer"
+seen=0
+for _ in $(seq 1 30); do
+  screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+  printf '%s\n' "$screen" > "$D/session-after-model-close.ansi"
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  if ! printf '%s\n' "$plain" | grep -q 'Select model' \
+     && [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ]; then seen=1;break;fi
+  sleep 0.1
+done
+[ "$seen" = 1 ] || { printf '%s\n' "$plain" | tail -12 >&2; fail "opencode ($VERSION): model overlay did not close to a proven composer"; }
 out=$(control exit) || fail "opencode ($VERSION): normal exit failed: $out"
 [ "$(fm_backend_agent_state herdr "$TARGET")" = dead ] || fail "opencode ($VERSION): exit did not stop its actual process"
 lab pane get "$PANE" >/dev/null

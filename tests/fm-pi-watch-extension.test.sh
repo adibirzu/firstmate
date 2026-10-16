@@ -2798,6 +2798,7 @@ if (beforeAgentStarts !== 0) throw new Error(`streaming follow-ups raised before
 
 // The run reaches the first queued follow-up; the second is still queued when
 // the captain replaces the session, so only the second rides the handoff.
+handlers.get("before_agent_start")?.({ messageType: "custom", message: { role: "custom", content: prompts[1] } }, {});
 consumeQueued(prompts[0]);
 await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
 const handoffPath = `${process.env.FM_HOME}/state/extensions/pi-primary-watch/session-replacement-actionable.json`;

@@ -770,14 +770,17 @@ The same guard then completed with the following actual 1.19.0 results on Herdr 
 ```text
 ok - opencode (1.19.0): unsupported palette hint and real hint-like draft retain refusal
 ok - opencode (1.19.0): real drafts, including quoted hint text, survive refused control exit
-ok - opencode (1.19.0): observed native model overlay refuses injection
+ok - opencode (1.19.0): observed native session model overlay above intact composer/status refuses injection
 ok - opencode (1.19.0): control exit preserves the exact endpoint and uncommitted work
 ok - opencode (1.19.0): real native tool permission overlay refuses injection without approving access
 ok - opencode (1.19.0): native busy queued Enter reaches the deterministic loopback model transport
 ```
 
 The draft check requires the pending-text refusal reason, so an unrelated metadata refusal cannot satisfy it.
-The model-overlay check requires the native Select model heading before judging its composer.
+The model-overlay check enters a real loopback-backed session in a short cwd at 120 columns by 60 rows before opening the native Select model dialog.
+It proves the blank composer is empty first, observes the dialog above an intact composer/floor and complete shortcut pair, requires both classification and control exit to refuse, then closes the dialog back to empty.
+The same strengthened guard failed against the preceding classifier with `observed model overlay became injectable` and passed with the dialog veto.
+Portable regressions replay the original native session ANSI frames through classification with and without a cursor and through selected-content extraction; the earlier wrapped-cwd overlay captures remain refusal evidence.
 The queue check requires the exact next user instruction to reach the local transport after the held native turn is released; it does not accept a title-generation request as delivery.
 A separate authorized read-only real spent-free capture retained `unknown` for the usage-exceeded upsell/retry row; it was never used as evidence for an empty composer.
 

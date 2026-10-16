@@ -1329,6 +1329,10 @@ _fm_composer_leftbar_idle_hint() { # <raw-row> <content> <styled>
 _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
   local screen=$1 styled=$2 first=$3 last=$4
   local row raw content pending_seen=0 footer_re leading_blank=1 placeholder_position=0
+  if _fm_composer_opencode_model_dialog "$screen" "$first" "$last"; then
+    printf 'unknown'
+    return 0
+  fi
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
   row=$first
   while [ "$row" -le "$last" ]; do
@@ -1370,6 +1374,46 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
     *) return 1 ;;
   esac
   [ -z "${blocks//▀/}" ]
+}
+
+# A native session model selector can leave its entire underlying composer
+# visible. Veto only above a selected OpenCode mode/floor, with the aligned
+# title, search, selected option and action footer forming one dialog.
+_fm_composer_opencode_model_dialog() { # <screen> <first-row> <last-row>
+  local screen=$1 first=$2 last=$3 plain floor mode
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  floor=$(_fm_composer_screen_row "$((last + 1))" "$plain")
+  fm_composer_normalize_trim_var floor
+  _fm_composer_leftbar_floor_row "$floor" || return 1
+  mode=$(_fm_composer_screen_row "$last" "$plain")
+  fm_composer_normalize_trim_var mode
+  mode=${mode#┃}
+  fm_composer_normalize_trim_var mode
+  fm_composer_idle_matches "$mode" "$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT" sensitive || return 1
+  printf '%s\n' "$plain" | LC_ALL=C awk -v first="$first" '
+    function trim(s) {sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s}
+    NR > first {exit}
+    {
+      text=trim($0)
+      if (text ~ /^Select model  +esc$/) {
+        col=index($0,"Select model"); search=0; options=0; selected=0
+        next
+      }
+      if (!col || text == "") next
+      if (text == "Search" && index($0,"Search") == col) {search=1; next}
+      if (!search) {col=0; next}
+      if (text ~ /^Connect provider ctrl\+a  +Favorite ctrl\+f$/ && index($0,"Connect provider") == col) {
+        if (selected && options >= 2) found=1
+        col=0; next
+      }
+      if (index($0,"● ") == col-2) {selected=1; options++; next}
+      if (trim(substr($0,1,col-1)) == "" && substr($0,col,1) != " ") {
+        options++; next
+      }
+      col=0
+    }
+    END {exit !found}
+  '
 }
 
 # OpenCode 1.19 renders cwd/activity and shortcut cells immediately below its
@@ -1626,6 +1670,10 @@ EOF
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" '' 1
   _fm_composer_select_cursorless "$plain" || return 1
+  if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
+     && _fm_composer_opencode_model_dialog "$screen" "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"; then
+    return 1
+  fi
   row=$FM_COMPOSER_SELECTED_FIRST
   while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")

@@ -1031,14 +1031,29 @@ test_queued_enter_verdict_does_not_convert_other_states
 test_opencode_bounded_status_panel() {
   local fixtures="$ROOT/tests/fixtures/opencode-1.19" screen frame out caps
   for caps in "$CAPS_STYLED" "$CAPS_STYLED_NOID"; do
-    for frame in home-idle native-idle-wrapped busy queued; do
+    for frame in home-idle native-idle-wrapped busy queued session-idle; do
       screen=$(cat "$fixtures/$frame.ansi")
       assert_screen "OpenCode 1.19 $frame bounded status panel" empty "$caps" "$screen"
+      case "$frame" in session-idle)
+        assert_screen "OpenCode native session blank with underlying composer cursor" empty \
+          "$caps"$'\ncursor=1\ncy=52' "$screen"
+        out=$(fm_composer_extract_selected_content "$caps" "$screen") \
+          || fail "OpenCode native blank session refused content extraction"
+        [ -z "$out" ] || fail "OpenCode native blank session extracted nonempty content"
+        ;;
+      esac
     done
-    for frame in draft model-overlay permission-overlay; do
+    for frame in draft model-overlay permission-overlay session-model-overlay; do
       screen=$(cat "$fixtures/$frame.ansi")
       out=$(fm_composer_classify_screen "$caps" "$screen")
       [ "$out" != empty ] || fail "OpenCode 1.19 $frame must never authorize typing"
+      if [ "$frame" = session-model-overlay ]; then
+        if fm_composer_extract_selected_content "$caps" "$screen" >/dev/null; then
+          fail "native session model dialog allowed composer extraction"
+        fi
+        assert_screen "native session model dialog with underlying composer cursor" unknown \
+          "$caps"$'\ncursor=1\ncy=52' "$screen"
+      fi
     done
   done
   # The same bright text as a quoted placeholder is still an actual draft.
