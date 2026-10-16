@@ -86,7 +86,7 @@ fm_tmux_composer_cursor_row() {  # <target>
 # fm_tmux_composer_caps: the tmux capability descriptor - static data, not
 # logic (see the capability model in bin/fm-composer-lib.sh).
 fm_tmux_composer_caps() {
-  printf 'styled=1\ncursor=1\nidentity=1\nrows=0\n'
+  printf 'styled=1\nviewport=1\ncursor=1\nidentity=1\nrows=0\n'
 }
 
 # fm_tmux_composer_identity: the tmux agent-identity probe backing the

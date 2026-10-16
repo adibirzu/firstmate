@@ -532,9 +532,9 @@ fm_backend_zellij_composer_capture() {  # <target> [expected-label]
 fm_backend_zellij_composer_state() {  # <target> [expected-label] -> empty|pending|pending-unproven|unknown
   local target=$1 expected_label=${2:-} cap caps verdict
   if cap=$(fm_backend_zellij_composer_capture "$target" "$expected_label"); then
-    caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+    caps=$(printf 'styled=1\nviewport=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
   elif cap=$(fm_backend_zellij_capture "$target" "$FM_COMPOSER_CAPTURE_LINES" "$expected_label") && [ -n "$cap" ]; then
-    caps=$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+    caps=$(printf 'styled=0\nviewport=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
   else
     printf 'unknown'
     return 0
@@ -547,7 +547,7 @@ fm_backend_zellij_composer_state() {  # <target> [expected-label] -> empty|pendi
 fm_backend_zellij_composer_content() {  # <target> [expected-label]
   local target=$1 expected_label=${2:-} cap caps
   cap=$(fm_backend_zellij_composer_capture "$target" "$expected_label") || return 1
-  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+  caps=$(printf 'styled=1\nviewport=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
   fm_composer_extract_selected_content "$caps" "$cap"
 }
 
@@ -555,7 +555,7 @@ fm_backend_zellij_composer_observed_append() {  # <target> <before> <text> [expe
   local target=$1 before=$2 text=$3 expected_label=${4:-} cap caps after expected
   [ -n "$text" ] || return 1
   cap=$(fm_backend_zellij_composer_capture "$target" "$expected_label") || return 1
-  caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
+  caps=$(printf 'styled=1\nviewport=0\ncursor=0\nidentity=0\nrows=%s' "$FM_COMPOSER_CAPTURE_LINES")
   after=$(fm_composer_extract_selected_content "$caps" "$cap") || return 1
   fm_composer_normalize_spaces_var before
   fm_composer_normalize_spaces_var text
