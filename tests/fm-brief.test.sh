@@ -221,6 +221,83 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# --forge forgejo is the Forgejo value of the project's registered forge binding
+# (bin/fm-project-mode.sh --forge), passed at intake exactly like --mode. It
+# names tea instead of gh-axi in the ship brief's forge-CLI rule and in the
+# direct-PR Definition of done's own open-a-PR line, and it marks the delivery
+# contract line so bin/fm-spawn.sh can check it against the registry. A brief
+# with no --forge renders the unchanged gh-axi wording. The forge is a ship
+# input only, and the closed set refuses anything else.
+test_forge_selection_renders_correct_cli() {
+  local home brief out rc
+  home="$TMP_ROOT/forge-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-default some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "a ship brief with no --forge should still scaffold"
+  brief="$home/data/brief-forge-default/brief.md"
+  assert_grep "3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations." "$brief" \
+    "a brief with no --forge must render the exact pre-existing gh-axi Rule 3 line"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'open a PR with `gh-axi`' "$brief" \
+    "a direct-PR brief with no --forge must still tell the worker to open the PR with gh-axi"
+  grep -qx "Delivery contract: mode=direct-PR" "$brief" \
+    || fail "a brief with no --forge must keep the bare delivery contract line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-forgejo some-proj --mode direct-PR --forge forgejo >/dev/null 2>&1 \
+    || fail "--forge forgejo should scaffold a direct-PR ship brief"
+  brief="$home/data/brief-forge-forgejo/brief.md"
+  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+    "--forge forgejo must render the tea Rule 3 line"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'open a PR with `tea`' "$brief" \
+    "--forge forgejo's direct-PR DOD must tell the worker to open the PR with tea"
+  grep -qx "Delivery contract: mode=direct-PR forge=forgejo" "$brief" \
+    || fail "--forge forgejo must mark the delivery contract line for the spawn's registry check"
+  # shellcheck disable=SC2016 # Backticks and braces are literal generated brief text.
+  assert_grep 'confirm it is not a draft (`tea api --repo <owner>/<repo> /repos/{owner}/{repo}/pulls/<number>` must show `draft` as false' "$brief" \
+    "--forge forgejo's direct-PR DOD must read the draft state back with tea"
+  # shellcheck disable=SC2016 # Backticks are literal generated brief text.
+  assert_grep 'remove that prefix with `tea pulls edit <number>' "$brief" \
+    "--forge forgejo's direct-PR DOD must clear a draft with tea"
+  assert_no_grep 'gh-axi pr view' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi for the draft read-back"
+  assert_no_grep 'gh-axi pr ready' "$brief" \
+    "--forge forgejo's direct-PR DOD must not send the worker to gh-axi to clear a draft"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-nm some-proj --mode no-mistakes --forge forgejo >/dev/null 2>&1 \
+    || fail "--forge forgejo should scaffold a no-mistakes ship brief"
+  brief="$home/data/brief-forge-nm/brief.md"
+  assert_grep "3. Use tea for Forgejo operations and chrome-devtools-axi for browser operations." "$brief" \
+    "a no-mistakes --forge forgejo brief must render the tea Rule 3 line"
+  grep -qx "Delivery contract: mode=no-mistakes forge=forgejo" "$brief" \
+    || fail "a no-mistakes --forge forgejo brief must mark the delivery contract line"
+  # shellcheck disable=SC2016 # Backticks and braces are literal generated brief text.
+  assert_grep 'confirm it is not a draft (`tea api --repo <owner>/<repo> /repos/{owner}/{repo}/pulls/<number>` must show `draft` as false' "$brief" \
+    "a no-mistakes --forge forgejo DOD must read the draft state back with tea"
+  assert_no_grep 'gh-axi pr view' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi for the draft read-back"
+  assert_no_grep 'gh-axi pr ready' "$brief" \
+    "a no-mistakes --forge forgejo DOD must not send the worker to gh-axi to clear a draft"
+
+  while IFS='|' read -r label args expect; do
+    [ -n "$label" ] || continue
+    # shellcheck disable=SC2086 # The row's arguments must split into words.
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-forge-bad some-proj $args 2>&1); rc=$?
+    expect_code 1 "$rc" "$label must be refused"
+    assert_contains "$out" "$expect" "$label was refused without its reason"
+    [ ! -e "$home/data/brief-forge-bad/brief.md" ] || fail "$label left a brief behind"
+  done <<'ROWS'
+a value outside the closed set|--mode direct-PR --forge gitlab|expected none, gerrit, or forgejo
+the removed github value|--mode direct-PR --forge github|expected none, gerrit, or forgejo
+forgejo on local-only|--mode local-only --forge forgejo|cannot ship mode=local-only
+a shape on forgejo|--mode direct-PR --forge forgejo --shape squash|--shape applies only with --forge gerrit
+forgejo on a scout|--scout --forge forgejo|apply only to ship briefs
+ROWS
+
+  pass "fm-brief.sh: --forge forgejo names tea in Rule 3, the direct-PR DOD, and the draft read-back, marks the delivery contract, and the closed set refuses everything else"
+}
+
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
 # unusable value must stop the scaffold instead of silently defaulting. The
 # no-mistakes-prod-only row is the conditional registry policy: it is never a task
@@ -920,7 +997,8 @@ SIGNALS
 test_ship_and_scout_teach_validation_round_pause() {
   local home kind id brief
   home="$TMP_ROOT/validation-round-pause-home"
-  mkdir -p "$home/data"
+  mkdir -p "$home/data" "$home/config"
+  : > "$home/config/wait-no-turns"
 
   for kind in ship scout; do
     id="brief-validation-round-pause-$kind"
@@ -930,6 +1008,12 @@ test_ship_and_scout_teach_validation_round_pause() {
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
+    assert_grep "your own validation round, which you declare once just before its blocking hold" "$brief" \
+      "$kind brief did not teach workers to declare their validation-round wait before holding it"
+    assert_grep "append \`paused:\` once just before its first blocking command, then stay in the command" "$brief" \
+      "$kind brief's Waiting section does not declare the validation round once and then hold it"
+    assert_no_grep "is not a \`paused:\` wait" "$brief" \
+      "$kind brief still tells workers never to declare a wait they hold in a command"
     assert_grep "your own validation round" "$brief" \
       "$kind brief did not teach workers to declare their validation-round wait"
     assert_grep 'Before ending your turn with your own background shell or monitor still running' "$brief" \
@@ -941,7 +1025,7 @@ test_ship_and_scout_teach_validation_round_pause() {
     assert_grep 'Do not declare active implementation or reasoning as a wait' "$brief" \
       "$kind brief did not limit the declaration to actual waits"
   done
-  pass "fm-brief.sh: ship and scout scaffolds teach validation-round pauses"
+  pass "fm-brief.sh: ship and scout scaffolds declare a validation-round pause once, then hold it"
 }
 
 test_scout_and_secondmate_load_decision_hold_policy() {
@@ -965,146 +1049,6 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 
 # A scout brief offers the Lavish review loop for every compatible board version,
 # including older builds that use the legacy reply path.
-
-test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
-  local home brief
-  home="$TMP_ROOT/worker-safety-home"
-  mkdir -p "$home/data"
-
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-ship firstmate --mode direct-PR >/dev/null 2>&1
-  brief="$home/data/brief-safety-ship/brief.md"
-  assert_present "$brief" "ship brief was not scaffolded"
-  assert_grep "Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply" "$brief" \
-    "ship brief did not forbid rendering a decision as an interactive prompt"
-  assert_grep "nobody reads this pane" "$brief" \
-    "ship brief did not explain why an interactive prompt is unsafe"
-  assert_grep "Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off" "$brief" \
-    "ship brief did not forbid worker-side polling loops"
-  assert_grep "Firstmate already supervises every task centrally" "$brief" \
-    "ship brief did not explain why worker-side polling is unsafe"
-
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-safety-scout firstmate --scout >/dev/null 2>&1
-  brief="$home/data/brief-safety-scout/brief.md"
-  assert_present "$brief" "scout brief was not scaffolded"
-  assert_grep "Never render it as an interactive question, confirmation, menu, or any other construct that waits on a human reply" "$brief" \
-    "scout brief did not forbid rendering a decision as an interactive prompt"
-  assert_grep "Never arm your own watch, poll, sleep, or retry loop to wait on a step you already handed off" "$brief" \
-    "scout brief did not forbid worker-side polling loops"
-  pass "fm-brief.sh: ship and scout briefs forbid interactive-prompt decisions and worker-side polling loops"
-}
-
-# The instruction-inbox contract is delivered to the crewmate exactly once per
-# brief. A merge resolution that kept both parents' placement of the section
-# emitted it twice back to back, which spends the home's startup-memory budget
-# on a repeated contract and reads to the agent as a generation bug. The
-# assertion is on the generated brief - the prompt actually handed to the agent
-# - not on the scaffold's source.
-test_instruction_inbox_contract_is_delivered_once_per_brief() {
-  local home brief kind kind_brief count
-  home="$TMP_ROOT/inbox-once-home"
-  mkdir -p "$home/data"
-
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-ship some-proj --mode no-mistakes >/dev/null 2>&1
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-scout some-proj --scout >/dev/null 2>&1
-  for kind_brief in "ship:$home/data/brief-inbox-ship/brief.md" "scout:$home/data/brief-inbox-scout/brief.md"; do
-    kind=${kind_brief%%:*}
-    brief=${kind_brief#*:}
-    assert_present "$brief" "$kind brief was not scaffolded"
-    count=$(grep -c '^# Firstmate instruction inbox$' "$brief")
-    [ "$count" = 1 ] \
-      || fail "$kind brief delivers the instruction-inbox contract $count times, expected exactly 1"
-    count=$(grep -c 'The move IS the acknowledgement' "$brief")
-    [ "$count" = 1 ] \
-      || fail "$kind brief repeats the inbox acknowledgement rule $count times, expected exactly 1"
-  done
-  pass "fm-brief.sh: ship and scout briefs deliver the instruction-inbox contract exactly once"
-}
-
-# Every ship and scout brief carries the graph-first context instruction: query
-# the DevViz code graph before broad file reads, with a fail-soft fallback to
-# normal file reads when the graph surface is unreachable.
-test_ship_and_scout_carry_graph_first_instruction() {
-  local home brief kind kind_brief
-  home="$TMP_ROOT/graph-first-home"
-  mkdir -p "$home/data"
-
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-ship some-proj --mode no-mistakes >/dev/null 2>&1
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-graph-scout some-proj --scout >/dev/null 2>&1
-  for kind_brief in "ship:$home/data/brief-graph-ship/brief.md" "scout:$home/data/brief-graph-scout/brief.md"; do
-    kind=${kind_brief%%:*}
-    brief=${kind_brief#*:}
-    assert_present "$brief" "$kind brief was not scaffolded"
-    assert_grep "# Graph-first context" "$brief" \
-      "$kind brief missing the graph-first context section"
-    assert_grep "query the code graph first" "$brief" \
-      "$kind brief did not instruct querying the graph before reading files"
-    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
-    assert_grep 'call the `graph_first` MCP tool, or run `devviz graph-first "<question>"`' "$brief" \
-      "$kind brief lost the concrete graph-first call surfaces"
-    assert_grep "never parse \`data/graphs/*/graph.json\` directly" "$brief" \
-      "$kind brief did not forbid parsing raw graph.json"
-    assert_grep "If the graph-first surface is unreachable, proceed with normal targeted file reads" "$brief" \
-      "$kind brief lost the fail-soft fallback - graph-first must never block work"
-  done
-  pass "fm-brief.sh: ship and scout briefs carry the fail-soft graph-first instruction"
-}
-
-# The worktree-isolation assertion must name the exact assigned worktree through
-# the {WORKTREE} placeholder bin/fm-spawn.sh substitutes, and must run the check
-# that enforces it, so a worker misdirected into a firstmate home or the primary
-# checkout stops at its first command. Both ship and scout carry it.
-test_isolation_assertion_names_the_assigned_worktree() {
-  local home id brief kind count
-  home="$TMP_ROOT/isolation-assert-home"
-  mkdir -p "$home/data"
-  for kind in ship scout; do
-    id="brief-isolation-$kind"
-    if [ "$kind" = scout ]; then
-      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
-    else
-      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
-    fi
-    brief="$home/data/$id/brief.md"
-    assert_present "$brief" "$kind brief was not scaffolded"
-    assert_grep "Your assigned worktree is {WORKTREE}." "$brief" \
-      "$kind brief did not name the assigned worktree"
-    assert_grep 'fm-worker-isolation-check.sh" {WORKTREE}`' "$brief" \
-      "$kind brief did not run the isolation check against the assigned worktree"
-    assert_grep "when your shell is not exactly that worktree or when it is a firstmate home or a primary checkout" "$brief" \
-      "$kind brief did not explain what the isolation check rejects"
-    count=$(grep -c -F '{WORKTREE}' "$brief")
-    [ "$count" = 2 ] \
-      || fail "$kind brief must carry exactly two {WORKTREE} usages, found $count"
-  done
-  pass "fm-brief.sh: ship and scout name the assigned worktree and enforce it"
-}
-
-# Scout and secondmate paths still scaffold well-formed briefs.
-test_scout_and_secondmate_scaffold() {
-  local brief
-  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-scout-q6 alpha --scout >/dev/null 2>&1 \
-    || fail "fm-brief.sh scout scaffold exited non-zero"
-  brief="$BRIEF_HOME/data/brief-scout-q6/brief.md"
-  assert_present "$brief" "scout brief was not scaffolded"
-  assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
-  assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
-  assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
-  assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
-  assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
-
-  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
-    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
-    || fail "fm-brief.sh secondmate scaffold exited non-zero"
-  brief="$BRIEF_HOME/data/brief-sm-q6/brief.md"
-  assert_present "$brief" "secondmate charter was not scaffolded"
-  assert_grep "persistent second mate" "$brief" \
-    "secondmate charter must declare its role"
-  assert_no_grep "## Captain's intent" "$brief" \
-    "secondmate charter must not grow ship/scout Task subsections"
-  assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
-    "secondmate charter must not carry the Firstmate spec placeholder"
-  pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
-}
 test_scout_lavish_line_follows_presentation_floor() {
   local base label version expect case_dir fakebin brief n=0
   local hosting='use the lavish-axi rule'
@@ -1137,6 +1081,95 @@ lavish-axi below the board compatibility floor^0.1.76^text
 absent lavish-axi^absent^text
 ROWS
   pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
+}
+
+# Scout and secondmate paths still scaffold well-formed briefs.
+test_scout_and_secondmate_scaffold() {
+  local brief
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-scout-q6 alpha --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-scout-q6/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
+  assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
+  assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
+  assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
+
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  brief="$BRIEF_HOME/data/brief-sm-q6/brief.md"
+  assert_present "$brief" "secondmate charter was not scaffolded"
+  assert_grep "persistent second mate" "$brief" \
+    "secondmate charter must declare its role"
+  assert_no_grep "## Captain's intent" "$brief" \
+    "secondmate charter must not grow ship/scout Task subsections"
+  assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
+    "secondmate charter must not carry the Firstmate spec placeholder"
+  pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
+}
+
+# Contract: a waiting worker spends no turns. A decision wait ends the turn, an
+# external wait sleeps in one bounded blocking shell command sized per harness,
+# and a waiting worker neither polls its inbox nor polls a pipeline between holds.
+test_workers_wait_without_spending_turns() {
+  local home id brief
+  home="$TMP_ROOT/wait-home"
+  mkdir -p "$home/data" "$home/config"
+  : > "$home/config/wait-no-turns"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-ship some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-scout some-proj --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  for id in brief-wait-ship brief-wait-scout; do
+    brief="$home/data/$id/brief.md"
+    assert_grep "end your turn at once" "$brief" "$id: a decision wait must end the turn"
+    assert_grep "with ONE blocking shell command that returns when the state changes" "$brief" \
+      "$id: an external wait must sleep in one blocking shell command"
+    assert_grep "gh pr checks <pr> --watch" "$brief" "$id: the CI wait primitive is missing"
+    assert_grep "a \`timeout\` of at most 2700 seconds" "$brief" "$id: the Pi ceiling is missing"
+    assert_grep "its maximum \`timeout\` of 600000 ms" "$brief" "$id: the Claude Code ceiling is missing"
+    assert_grep "empty \`write_stdin\` polls of up to 300000 ms" "$brief" "$id: the Codex ceiling is missing"
+    assert_grep "is the sanctioned foreground wait" "$brief" \
+      "$id: the wait a Claude Code worker may use is not named"
+    assert_grep "reattach with \`no-mistakes axi run --wait\` instead, and never send the same \`respond\` again" "$brief" \
+      "$id: a timed-out respond must reattach with axi run, never resend its answer"
+    assert_grep "Do not poll or list the inbox while waiting; a waiting instruction rings." "$brief" \
+      "$id: polling the inbox while waiting is not forbidden"
+    assert_grep "natural checkpoint" "$brief" "$id: the flag dropped the natural-checkpoint inbox check"
+  done
+  brief="$home/data/brief-wait-ship/brief.md"
+  assert_grep "issue the same foreground call again" "$brief" \
+    "the no-mistakes DOD must reattach with the same foreground call"
+  assert_no_grep "background the drive call" "$brief" "the no-mistakes DOD still backgrounds the drive call"
+
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-sm --secondmate --no-projects >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  brief="$home/data/brief-wait-sm/brief.md"
+  assert_grep "Do not poll or list the inbox while waiting; a waiting instruction rings." "$brief" \
+    "secondmate: polling the inbox while waiting is not forbidden"
+  assert_grep "natural checkpoint" "$brief" "secondmate: the flag dropped the natural-checkpoint inbox check"
+  pass "fm-brief: workers end the turn on a decision, wait in one bounded shell command, and never poll"
+}
+
+# Without config/wait-no-turns the scaffold matches the pre-flag brief and drive text.
+test_wait_no_turns_absent_keeps_the_previous_brief() {
+  local home brief
+  home="$TMP_ROOT/wait-off"
+  mkdir -p "$home/data"
+  [ ! -e "$home/config/wait-no-turns" ]
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-off some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  brief="$home/data/brief-wait-off/brief.md"
+  assert_no_grep "end your turn at once" "$brief" "an absent flag still added the waiting section"
+  assert_grep "natural checkpoint" "$brief" "an absent flag dropped the unprompted inbox check"
+  assert_no_grep "Do not poll or list the inbox while waiting" "$brief" "an absent flag still added the no-poll inbox line"
+  assert_grep "background the drive call" "$brief" "an absent flag replaced the backgrounded drive text"
+  assert_no_grep "issue the same foreground call again" "$brief" \
+    "an absent flag still asked for the foreground reattach"
+  pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were"
 }
 
 test_worker_role_scope() {
@@ -1218,6 +1251,76 @@ test_home_brief_include_is_appended_last() {
   assert_contains "$out" "brief-include.md must be a readable regular file" "unusable include refusal did not name the file"
   assert_absent "$home/data/include-unusable" "an unusable include left a partial scaffold behind"
   pass "fm-brief.sh: the home brief include lands last on ship and scout, verbatim, and fails closed"
+}
+
+# --base-branch names the branch a task starts from and a ship's PR targets. It is
+# recorded as a Base branch line under # Setup, which fm-spawn reads back, and is
+# refused where no pull request carries the work.
+test_base_branch_is_rendered_and_bounded() {
+  local home out rc brief base meta_base
+  home="$TMP_ROOT/base-branch-home"
+  mkdir -p "$home/data"
+  # shellcheck source=bin/fm-dod-lib.sh
+  . "$ROOT/bin/fm-dod-lib.sh"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-dp-b1 some-proj --mode direct-PR --base-branch feature/hub >/dev/null 2>&1 \
+    || fail "direct-PR --base-branch should scaffold"
+  brief="$home/data/brief-base-dp-b1/brief.md"
+  base=$(fm_brief_base_branches "$brief")
+  [ "$base" = feature/hub ] || fail "the direct-PR brief recorded base '$base', not feature/hub"
+  # shellcheck disable=SC2016  # literal backticks in rendered prose must stay unexpanded
+  assert_grep 'open a PR with `gh-axi` that is ready for review, not a draft, against the base branch `feature/hub` (`--base feature/hub`)' "$brief" \
+    "the direct-PR definition of done does not target the base branch"
+  # shellcheck disable=SC2016
+  assert_grep 'Never push to the base branch `feature/hub` or the default branch' "$brief" \
+    "the direct-PR safety rule does not protect the base branch"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-nm-b2 some-proj --mode no-mistakes --base-branch release/1.2 >/dev/null 2>&1 \
+    || fail "no-mistakes --base-branch should scaffold"
+  brief="$home/data/brief-base-nm-b2/brief.md"
+  # shellcheck disable=SC2016
+  assert_grep 'pass `--base-branch release/1.2` on every `no-mistakes axi run`' "$brief" \
+    "the no-mistakes definition of done does not pass the base branch to the pipeline"
+
+  # A base git accepts but the shell would expand is quoted in worker commands.
+  # shellcheck disable=SC2016  # the literal $HOTFIX is the point
+  meta_base='release/$HOTFIX'
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-meta-b8 some-proj --mode no-mistakes --base-branch "$meta_base" >/dev/null 2>&1 \
+    || fail "no-mistakes --base-branch with a shell metacharacter should scaffold"
+  brief="$home/data/brief-base-meta-b8/brief.md"
+  base=$(fm_brief_base_branches "$brief")
+  [ "$base" = "$meta_base" ] || fail "the brief recorded base '$base', not $meta_base"
+  # shellcheck disable=SC2016
+  assert_grep 'pass `--base-branch release/\$HOTFIX` on every' "$brief" \
+    "the no-mistakes command did not shell-quote the base branch"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-meta-b9 some-proj --mode direct-PR --base-branch "$meta_base" >/dev/null 2>&1 \
+    || fail "direct-PR --base-branch with a shell metacharacter should scaffold"
+  # shellcheck disable=SC2016
+  assert_grep '(`--base release/\$HOTFIX`)' "$home/data/brief-base-meta-b9/brief.md" \
+    "the direct-PR command did not shell-quote the base branch"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-scout-b3 some-proj --scout --base-branch feature/hub >/dev/null 2>&1 \
+    || fail "scout --base-branch should scaffold"
+  base=$(fm_brief_base_branches "$home/data/brief-base-scout-b3/brief.md")
+  [ "$base" = feature/hub ] || fail "the scout brief recorded base '$base', not feature/hub"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-none-b4 some-proj --mode direct-PR >/dev/null 2>&1
+  brief="$home/data/brief-base-none-b4/brief.md"
+  ! fm_brief_base_branches "$brief" >/dev/null || fail "a brief without --base-branch recorded a base"
+  assert_grep 'at a detached HEAD on a clean default branch.' "$brief" \
+    "a brief without --base-branch changed its default-branch setup line"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-lo-b5 some-proj --mode local-only --base-branch feature/hub 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "local-only --base-branch should be refused"
+  assert_contains "$out" "mode=local-only" "the local-only refusal did not explain itself"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-base-bad-b6 some-proj --mode direct-PR --base-branch 'bad..name' 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "an invalid base branch name should be refused"
+  out=$(FM_HOME="$home" FM_SECONDMATE_CHARTER=charter "$ROOT/bin/fm-brief.sh" brief-base-sm-b7 --secondmate --no-projects --base-branch feature/hub 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "a secondmate charter should refuse --base-branch"
+  for id in brief-base-lo-b5 brief-base-bad-b6 brief-base-sm-b7; do
+    [ ! -e "$home/data/$id/brief.md" ] || fail "a refused --base-branch scaffold wrote $id"
+  done
+  pass "fm-brief.sh: --base-branch records the base, targets the PR at it, and is refused where no PR carries it"
 }
 
 # (a) An unregistered/default project - no --branch-prefix passed at all - must
@@ -1443,6 +1546,7 @@ test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
+test_forge_selection_renders_correct_cli
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
@@ -1463,13 +1567,12 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
-test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
-test_instruction_inbox_contract_is_delivered_once_per_brief
-test_ship_and_scout_carry_graph_first_instruction
-test_isolation_assertion_names_the_assigned_worktree
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
+test_workers_wait_without_spending_turns
+test_wait_no_turns_absent_keeps_the_previous_brief
 test_home_brief_include_is_appended_last
+test_base_branch_is_rendered_and_bounded
 test_ship_branch_prefix_defaults_to_legacy_fm
 test_ship_branch_prefix_override_is_consistent_across_modes
 test_ship_branch_prefix_empty_override_yields_bare_task_id

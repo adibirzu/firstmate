@@ -1,9 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
-import { ACTIONABLE_RE, FAILED_RE, HEALTHY_RE, OWNED_RE, classifyArmClose } from "./lib/fm-watch-arm-close.js";
-import { isArmEligibleRoot } from "./lib/fm-watch-arm-eligibility.js";
 
 // Supervision host: a home opted in with config/supervision-host
 // (docs/configuration.md "Supervision host" owns the gate, which
@@ -29,28 +27,17 @@ const ARM_RETIRE_TIMEOUT_MS = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 
 const REARM_RETRY_BASE_MS = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
-const ARM_ESTABLISHED_MS = positiveInteger("FM_WATCH_ARM_ESTABLISHED_MS", 60000);
-const IDLE_EXHAUSTION_KEY = "opencode-arm:idle-exhausted";
 
 let child = null;
+let armStatus = "idle";
 let retryTimer = null;
 let retryFailures = 0;
-// The failure budget is process-wide, but a notice can only be seen by the
-// session it was delivered to. Concurrent, child, and replaced sessions each
-// own their own entry here, so every session surfaces at most once and no
-// session change hands out a fresh budget.
-const retryExhaustionSurfaced = new Set();
-const retryExhaustionPending = new Set();
-let retryBudgetToken = 0;
-let idleRetries = 0;
-let idleExhaustionNoticed = false;
 let launchInFlight = null;
 let restorationInFlight = null;
 let armClose = new WeakMap();
 let armReadiness = new WeakMap();
 let armRecovery = new WeakMap();
 let armHostMode = new WeakMap();
-let armStatus = "idle";
 
 function positiveInteger(name, fallback) {
   const value = Number(process.env[name]);
@@ -119,23 +106,43 @@ function effectivePaths(root) {
   return { root: fmRoot, home: fmHome, state, config };
 }
 
-function hasEntriesEndingWith(dir, suffix) {
-  try {
-    return readdirSync(dir).some((name) => name.endsWith(suffix));
-  } catch {
-    return false;
-  }
+async function isPrimaryRoot(root, home) {
+  if (!root) return false;
+  if (!existsSync(`${root}/AGENTS.md`) || !existsSync(`${root}/bin`)) return false;
+  if (existsSync(`${root}/.fm-secondmate-home`)) return false;
+  if (home && home !== root && existsSync(`${home}/.fm-secondmate-home`)) return false;
+  const gitDir = await runProcess("git", ["-C", root, "rev-parse", "--git-dir"]);
+  const commonDir = await runProcess("git", ["-C", root, "rev-parse", "--git-common-dir"]);
+  if (gitDir.code !== 0 || commonDir.code !== 0) return false;
+  return gitDir.stdout.trim() === commonDir.stdout.trim();
 }
 
-// Mirrors the supervision-need predicate of bin/fm-supervision-lib.sh
-// (fm_supervision_status): in-flight task metadata, an X-mode relay poll, or a
-// registered process-event source all need a watcher.
+// bin/fm-supervision-lib.sh's fm_supervision_needed is the single owner of the
+// arm condition set (the turn-end guard decides with the same shared
+// predicate), so this plugin can never disagree with the guard again. Away
+// mode stays a local decline: its daemon owns supervision. X-mode homes arm
+// before their relay poll is registered in the state directory.
 function shouldArm(paths) {
   if (existsSync(`${paths.state}/.afk`)) return false;
   if (existsSync(`${paths.config}/x-mode.env`)) return true;
-  if (existsSync(`${paths.state}/x-watch.check.sh`)) return true;
-  if (hasEntriesEndingWith(`${paths.state}/procevent`, ".source")) return true;
-  return hasEntriesEndingWith(paths.state, ".meta");
+  return supervisionNeeded(paths);
+}
+
+// fm_supervision_needed <state-dir> exits 0 exactly when the shared predicate
+// says the home needs supervision; exit 0 means arm here.
+function supervisionNeeded(paths) {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      '. "$1/bin/fm-supervision-lib.sh" && fm_supervision_needed "$2"',
+      "fm-primary-watch-arm",
+      paths.root,
+      paths.state,
+    ],
+    { stdio: "ignore" },
+  );
+  return result.status === 0;
 }
 
 async function sessionOwnsLock(paths) {
@@ -157,6 +164,8 @@ async function sessionOwnsLock(paths) {
   return false;
 }
 
+// An away record, never quiet mode's (bin/fm-afk-contract.sh mode owns that
+// reading): a record whose mode cannot be read as quiet reads as away.
 function awayRecordPresent(paths) {
   if (!existsSync(`${paths.state}/.afk-contract`)) return false;
   const result = spawnSync("bash", [`${paths.root}/bin/fm-afk-contract.sh`, "mode"], {
@@ -166,6 +175,8 @@ function awayRecordPresent(paths) {
   return String(result.stdout || "").trim() !== "quiet";
 }
 
+// Whether this home runs the supervision host for an OpenCode primary; the
+// gate's owner answers, and a query that cannot run reads as no host.
 function hostModeEnabled(paths) {
   const result = spawnSync("bash", [`${paths.root}/bin/fm-supervision-engine-lib.sh`, "enabled", paths.config, "opencode"], {
     stdio: "ignore",
@@ -173,6 +184,8 @@ function hostModeEnabled(paths) {
   return result.status === 0;
 }
 
+// The host-mode wake message: every "supervision-host:" line in order, wake
+// lines capped at eight, and the away note while an away record exists.
 function hostWakeMessage(paths, combined) {
   let shown = 0;
   const lines = combined.split(/\r?\n/).filter((line) => {
@@ -190,25 +203,62 @@ function hostWakeMessage(paths, combined) {
   return lines.join("\n");
 }
 
+function classifyArmClose(paths, hostMode, stdout, stderr, code, signal) {
+  const combined = `${stdout}\n${stderr}`;
+  if (hostMode) {
+    const message = hostWakeMessage(paths, combined);
+    if (message) return { kind: "actionable", message };
+    const stoodDown = combined.split(/\r?\n/).find((line) => /^supervision-host stood down:/.test(line));
+    if (stoodDown) return { kind: "failure", message: `watcher: FAILED - ${stoodDown}` };
+  }
+  const reason = combined.split(/\r?\n/).find((line) => WAKE_LINE.test(line));
+  if (reason) return { kind: "actionable", message: reason };
+  const healthy = combined.split(/\r?\n/).find((line) => /^watcher: healthy\b/.test(line));
+  if (healthy) {
+    return {
+      kind: "failure",
+      message: `watcher: FAILED - OpenCode arm child found an external healthy watcher instead of owning wake delivery\n${healthy}`,
+    };
+  }
+  const failed = combined.split(/\r?\n/).find((line) => /^watcher: FAILED/.test(line));
+  if (failed) return { kind: "failure", message: failed };
+  if (signal) {
+    return {
+      kind: "failure",
+      message: `watcher: FAILED - OpenCode arm child ended from ${signal}${combined.trim() ? `\n${combined.trim()}` : ""}`,
+    };
+  }
+  if (code && code !== 0) {
+    const script = hostMode ? "fm-supervision-host.sh" : "fm-watch-arm.sh";
+    return {
+      kind: "failure",
+      message: `watcher: FAILED - ${script} exited ${code}${combined.trim() ? `\n${combined.trim()}` : ""}`,
+    };
+  }
+  return {
+    kind: "failure",
+    message: "watcher: FAILED - OpenCode arm cycle ended without an actionable reason",
+  };
+}
+
 function observeArmOutput(hostMode, stdout, stderr, settleReadiness) {
-  const lines = `${stdout}\n${stderr}`.split(/\r?\n/);
-  const carries = (pattern) => lines.some((line) => pattern.test(line));
-  if (carries(ACTIONABLE_RE) || (hostMode && carries(HOST_LINE))) {
+  const combined = `${stdout}\n${stderr}`;
+  if (combined.split(/\r?\n/).some((line) => WAKE_LINE.test(line) || (hostMode && HOST_LINE.test(line)))) {
     setArmStatus("wake");
     settleReadiness("wake");
     return;
   }
-  if (carries(OWNED_RE)) {
+  if (combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
     setArmStatus("armed");
     settleReadiness("armed");
     return;
   }
-  if (carries(HEALTHY_RE)) {
-    setArmStatus("healthy");
-    settleReadiness("healthy");
+  if (combined.split(/\r?\n/).some((line) => /^watcher: healthy\b/.test(line))) {
+    setArmStatus("external");
+    settleReadiness("external");
     return;
   }
-  if (carries(FAILED_RE)) {
+  if (combined.split(/\r?\n/).some((line) => /^watcher: FAILED/.test(line))) {
     setArmStatus("failed");
     settleReadiness("failed");
   }
@@ -278,53 +328,10 @@ function wakePrompt(reason) {
   return `WATCHER FIRED - drain queued wakes with bin/fm-wake-drain.sh and handle the reported wake. Watcher continuity is plugin-owned.\n\n${reason}`;
 }
 
-// Resolves true only when the notice actually reached the session. Never
-// rejects: continuity restoration never waits on prompting, and callers that
-// ignore the result keep their fire-and-forget shape.
 function surfaceFailure(paths, client, sessionID, reason) {
-  return sendPrompt(paths, client, sessionID, wakePrompt(reason)).then(
-    () => true,
-    () => false,
-  );
-}
-
-function replenishRetryBudgets() {
-  retryFailures = 0;
-  retryExhaustionSurfaced.clear();
-  retryExhaustionPending.clear();
-  // A replenished budget owns its own notice, so an in-flight delivery from the
-  // spent budget can no longer settle onto it.
-  retryBudgetToken += 1;
-  idleRetries = 0;
-  idleExhaustionNoticed = false;
-}
-
-function noteIdleExhaustion(paths, reason) {
-  if (idleExhaustionNoticed) return;
-  const payload = `check: OpenCode watch-arm stopped silent re-arming after ${REARM_RETRY_LIMIT} empty watcher cycles; supervision is off until the next arm - ${reason}`;
-  try {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        '. "$FM_ROOT_OVERRIDE/bin/fm-wake-lib.sh" && { fm_wake_queued_keys check | grep -qx -- "$1" || fm_wake_append check "$1" "$2"; }',
-        "_",
-        IDLE_EXHAUSTION_KEY,
-        payload,
-      ],
-      {
-        cwd: paths.root,
-        encoding: "utf8",
-        env: { ...process.env, FM_HOME: paths.home, FM_STATE_OVERRIDE: paths.state, FM_ROOT_OVERRIDE: paths.root },
-      },
-    );
-    // Only a durably recorded notice retires the attempt; a failed append stays
-    // retryable so the record is not lost silently. Cross-process dedupe is the
-    // in-bash queued-key guard above, never this flag.
-    if (result.status === 0) idleExhaustionNoticed = true;
-  } catch {
-    // The durable queue is best-effort here; exhaustion never spends a model turn.
-  }
+  void sendPrompt(paths, client, sessionID, wakePrompt(reason)).catch(() => {
+    // OpenCode owns delivery errors; continuity restoration never waits on prompting.
+  });
 }
 
 function retryDelay(attempt) {
@@ -362,85 +369,46 @@ function restorationFailure(status) {
 
 async function restoreAfterActionableClose(paths, sessionID, client, predecessorArmPid) {
   let failure = "";
-  let deferrals = 0;
-  for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; ) {
+  for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; attempt += 1) {
     const { status, armChild } = await ensureArm(paths, sessionID, client, predecessorArmPid, true);
     if (status === "armed") return { failure: "", recovery: armRecovery.get(armChild) };
     // An actionable line belongs to this arm's close handler.
     // Do not retire it before that handler can start the successor cycle.
     if (status === "wake") return { failure: "", recovery: armRecovery.get(armChild) };
-    if (status === "not-needed") return { failure: "" };
-    // A pending silent re-arm is this plugin's own timer already holding
-    // continuity, not an unready successor. Wait for it on a separate bound
-    // instead of spending an attempt reserved for real successor checks.
-    if (status === "retrying" && deferrals < REARM_RETRY_LIMIT) {
-      deferrals += 1;
-      await waitForRetry(deferrals);
-      continue;
-    }
     failure = restorationFailure(status);
     if (!(await retireArm(armChild))) {
+      setArmStatus("failed");
       return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity because the unready successor arm did not exit within ${ARM_RETIRE_TIMEOUT_MS}ms` };
     }
     if (status === "read-only" || status === "not-primary" || status === "skipped") break;
-    attempt += 1;
-    if (attempt > REARM_RETRY_LIMIT) break;
-    await waitForRetry(attempt);
+    if (attempt === REARM_RETRY_LIMIT) break;
+    await waitForRetry(attempt + 1);
   }
+  setArmStatus("failed");
   return { failure: `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries` };
 }
 
-async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid, silent = false) {
+async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid) {
   if (child || retryTimer) return;
   if (!(await sessionOwnsLock(paths))) {
-    if (!silent) {
-      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode cannot restore continuity because this session no longer owns the lock\n${reason}`);
-    }
+    setArmStatus("failed");
+    surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode cannot restore continuity because this session no longer owns the lock\n${reason}`);
     return;
   }
-  const attempt = (silent ? idleRetries : retryFailures) + 1;
-  if (silent) idleRetries = attempt;
-  else retryFailures = attempt;
-  if (attempt > REARM_RETRY_LIMIT) {
-    // Exhaustion is surfaced once per budget, on the close that actually
-    // followed the retries. Later failure closes keep arming on session.idle
-    // but never re-spend a model turn on the same unreplenished budget, so a
-    // home that cannot establish supervision costs one turn, not one per idle.
-    // Only a delivered notice retires the attempt: an undelivered one leaves the
-    // budget retryable rather than silencing the home with nothing surfaced.
-    if (silent) {
-      noteIdleExhaustion(paths, reason);
-    } else if (!retryExhaustionSurfaced.has(sessionID) && !retryExhaustionPending.has(sessionID)) {
-      const budgetToken = retryBudgetToken;
-      retryExhaustionPending.add(sessionID);
-      void surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`).then((delivered) => {
-        // Keyed to the budget this attempt was spent from: a budget replenished
-        // mid-delivery already cleared the markers and owns its own notice, so a
-        // late settle must not latch a notice the current budget never sent.
-        if (budgetToken !== retryBudgetToken) return;
-        retryExhaustionPending.delete(sessionID);
-        if (delivered) retryExhaustionSurfaced.add(sessionID);
-      });
-    }
+  retryFailures += 1;
+  if (retryFailures > REARM_RETRY_LIMIT) {
+    setArmStatus("failed");
+    surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries\n${reason}`);
     return;
   }
+  setArmStatus("retrying");
   const timer = setTimeout(() => {
     if (retryTimer === timer) retryTimer = null;
-    // No relaunch outcome is surfaced here: a live arm - however slowly it
-    // confirms readiness - is owned by its own close handler, a pending retry by
-    // its timer, and a coordinator decline means this home no longer needs or
-    // owns supervision from this session. Only a relaunch that could not run at
-    // all leaves nobody holding continuity.
-    void ensureArm(paths, sessionID, client, predecessorArmPid).catch((error) => {
-      if (silent) return;
-      surfaceFailure(
-        paths,
-        client,
-        sessionID,
-        `watcher: FAILED - OpenCode could not launch a continuity retry\n${String(error?.message ?? error)}`,
-      );
+    void ensureArm(paths, sessionID, client, predecessorArmPid).then((status) => {
+      if (["armed", "starting", "wake"].includes(status)) return;
+      surfaceFailure(paths, client, sessionID, `watcher: FAILED - OpenCode could not launch a continuity retry (${status})`);
     });
-  }, retryDelay(attempt));
+  }, retryDelay(retryFailures));
   timer.unref();
   retryTimer = timer;
 }
@@ -464,13 +432,11 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   });
   armHostMode.set(armChild, hostMode);
   child = armChild;
-  const spawnedAt = Date.now();
   let stdout = "";
   let stderr = "";
   let settled = false;
   let resolveClosed = null;
   let readinessSettled = false;
-  let readinessStatus = "";
   let resolveReadiness = null;
   const readiness = new Promise((resolve) => {
     resolveReadiness = resolve;
@@ -479,7 +445,6 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   const settleReadiness = (status) => {
     if (readinessSettled) return;
     readinessSettled = true;
-    readinessStatus = status;
     resolveReadiness(status);
   };
   const closed = new Promise((resolveClosedChild) => {
@@ -508,37 +473,13 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settled = true;
     resolveClosed();
     releaseChild();
-    const combined = `${stdout}\n${stderr}`;
-    let classification;
-    if (hostMode) {
-      const hostMessage = hostWakeMessage(paths, combined);
-      if (hostMessage) {
-        classification = { kind: "actionable", message: hostMessage };
-      } else {
-        const stoodDown = combined.split(/\r?\n/).find((line) => /^supervision-host stood down:/.test(line));
-        classification = stoodDown
-          ? { kind: "failure", message: `watcher: FAILED - ${stoodDown}` }
-          : classifyArmClose(stdout, stderr, code, signal);
-      }
-    } else {
-      classification = classifyArmClose(stdout, stderr, code, signal);
-    }
-    const acceptedBeforeClose = readinessSettled;
-    const established =
-      (readinessStatus === "armed" || readinessStatus === "healthy") && Date.now() - spawnedAt >= ARM_ESTABLISHED_MS;
-    settleReadiness(
-      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "healthy" : "failed",
-    );
+    const classification = classifyArmClose(paths, hostMode, stdout, stderr, code, signal);
+    settleReadiness(classification.kind === "actionable" ? "wake" : "failed");
     const predecessor = String(armChild.pid ?? "");
-    if (established) replenishRetryBudgets();
-    if (classification.kind === "idle") {
-      if (restorationInFlight && !acceptedBeforeClose) return;
-      void scheduleRetry(paths, sessionID, client, classification.message, predecessor, true);
-      return;
-    }
     if (classification.kind === "actionable") {
       if (restorationInFlight) return;
-      replenishRetryBudgets();
+      retryFailures = 0;
+      setArmStatus("wake");
       const restoration = restoreAfterActionableClose(paths, sessionID, client, predecessor);
       restorationInFlight = restoration;
       void restoration.then(async (result) => {
@@ -559,7 +500,10 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
       });
       return;
     }
-    if (restorationInFlight) return;
+    if (restorationInFlight) {
+      setArmStatus("failed");
+      return;
+    }
     void scheduleRetry(paths, sessionID, client, classification.message, predecessor);
   });
   armChild.on("error", (error) => {
@@ -568,7 +512,10 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     resolveClosed();
     releaseChild();
     settleReadiness("failed");
-    if (restorationInFlight) return;
+    if (restorationInFlight) {
+      setArmStatus("failed");
+      return;
+    }
     void scheduleRetry(
       paths,
       sessionID,
@@ -582,7 +529,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
 
 async function beginArm(paths, sessionID, client, predecessorArmPid) {
   if (!sessionID) return { status: "skipped", armChild: null };
-  if (!(await isArmEligibleRoot(paths.root))) return { status: "not-primary", armChild: null };
+  if (!(await isPrimaryRoot(paths.root, paths.home))) return { status: "not-primary", armChild: null };
   if (!(await sessionOwnsLock(paths))) return { status: "read-only", armChild: null };
   if (child) return { status: "existing", armChild: child };
   if (retryTimer) return { status: "retrying", armChild: null };

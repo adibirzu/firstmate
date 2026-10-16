@@ -8,6 +8,8 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$ROOT/bin/fm-timeout-lib.sh"
 
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
@@ -164,20 +166,15 @@ if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
   esac
 fi
 if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
-  # fm-spawn labels each new task tab <prefix>-[<host>-][<owner>-]<project>-<task-id>, so
-  # match the display name by its task-id suffix rather than the legacy fm-<id> form.
   case "$label" in
-    *-active-seeded)
+    fm-active-seeded)
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/task-pane"
       printf '%s\n' task-created > "$ACTIVE_SEEDED_CONTROL/stage"
       ;;
-    *-abort-a)
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-a"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane"
-      ;;
-    *-abort-b)
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/abort-b"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane"
+    fm-abort-a|fm-abort-b)
+      task=${label#fm-}
+      mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
+      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
       ;;
   esac
 fi
@@ -214,14 +211,6 @@ set -u
   printf '\n'
 } >> "$TREEHOUSE_CALL_LOG"
 if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ "${1:-}" = get ]; then
-  # Post-create abort: yield a path that exists but is NOT an isolated worktree —
-  # the invoking project checkout itself. Under the leased-acquisition flow the
-  # spawn then proceeds past acquisition with WT=<primary checkout> and must be
-  # stopped by the armed isolation validation, which is the invariant this
-  # fixture exists to pin. (A bare `exit 0` with no output now dies earlier on
-  # the leased flow's empty-path check, a different error, so the armed
-  # validation would never be reached.)
-  pwd
   exit 0
 fi
 # Treehouse's pool allocator is outside the Herdr concurrency contract under
@@ -276,20 +265,7 @@ chmod +x "$FAKEBIN/herdr" "$FAKEBIN/treehouse"
 chmod +x "$FAKEBIN/herdr-workspace-mover"
 export PATH="$FAKEBIN:$PATH"
 export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
-# This suite deliberately races two teardowns against one herdr session and
-# asserts BOTH complete - that is what "concurrent projected cleanup is
-# serialized" means. Real herdr work by the lock holder can exceed the 5s
-# default bound on a loaded machine, and the loser then refuses with
-# "presentation lock is contended", failing whichever of fixture A or B lost the
-# race - it alternated run to run, which is what identified this as a bound and
-# not a defect. Wait up to 60s here so the assertion tests serialization rather
-# than machine speed. The product default is unchanged for real teardowns.
-export FM_HERDR_PRESENTATION_LOCK_RETRIES=600
 
-# This suite drives the real fm-spawn.sh without tests/lib.sh, so it pins the
-# machine-capacity measurements itself (tests/capacity-pin.sh owns them).
-# shellcheck source=tests/capacity-pin.sh
-. "$ROOT/tests/capacity-pin.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
 # This suite runs against its own isolated lab session, so a Herdr pane
@@ -304,13 +280,18 @@ export HERDR_SESSION="$HERDR_LAB_SESSION" HERDR_LAB_SESSION
 LAB_READY=0
 RECORDED_WORKTREES=""
 LOCK_CONTENTION_OWNER_PID=
+LOCK_REFUSE_HOLDER_PID=
+LOCK_WAIT_HOLDER_PID=
 cleanup_all() {
-  local wt
-  if [ -n "$LOCK_CONTENTION_OWNER_PID" ]; then
-    kill "$LOCK_CONTENTION_OWNER_PID" 2>/dev/null || true
-    wait "$LOCK_CONTENTION_OWNER_PID" 2>/dev/null || true
-    LOCK_CONTENTION_OWNER_PID=
-  fi
+  local wt pid
+  for pid in "$LOCK_CONTENTION_OWNER_PID" "$LOCK_REFUSE_HOLDER_PID" "$LOCK_WAIT_HOLDER_PID"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  LOCK_CONTENTION_OWNER_PID=
+  LOCK_REFUSE_HOLDER_PID=
+  LOCK_WAIT_HOLDER_PID=
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     [ -d "$wt" ] || continue
@@ -432,10 +413,14 @@ Verify projected workspace behavior for $id.
 EOF
 }
 
-spawn_task() {  # <id> <home> <project>
+spawn_task() {  # <id> <home> <project> [extra fm-spawn args...]; SPAWN_DEADLINE_SECONDS bounds the run
   local id=$1 home=$2 project=$3
+  shift 3
+  local -a deadline_cmd=()
+  [ -z "${SPAWN_DEADLINE_SECONDS:-}" ] || deadline_cmd=(fm_run_timed "$SPAWN_DEADLINE_SECONDS")
   FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$project" "sh -c 'while :; do sleep 60; done'" --mode no-mistakes --yolo off --backend herdr
+    ${deadline_cmd[@]+"${deadline_cmd[@]}"} "$ROOT/bin/fm-spawn.sh" "$id" "$project" "sh -c 'while :; do sleep 60; done'" \
+    --mode no-mistakes --yolo off --backend herdr "$@"
 }
 
 finish_concurrent_spawn() {  # <id> <status> <stdout> <stderr>
@@ -482,12 +467,6 @@ finish_concurrent_teardown() {  # <id> <status> <stdout> <stderr>
     || fail "projected teardown $id retry failed after presentation cleanup completed: $(cat "$err")"
 }
 
-# normalize_meta erases every field that legitimately differs between two
-# spawns of the same task: the Herdr container IDs that name the endpoint, the
-# fresh per-spawn incarnation marker, and the live pane shell process identity
-# that spawn records as the teardown worker-process root (worker_root_pid/start
-# are birth-bound, so they change every launch exactly like spawn_gen). Every
-# other metadata byte must match, which is what the comparison below proves.
 normalize_meta() {  # <meta>
   sed -E \
     -e 's|^window=.*$|window=<herdr-container-id>|' \
@@ -495,8 +474,6 @@ normalize_meta() {  # <meta>
     -e 's|^herdr_tab_id=.*$|herdr_tab_id=<herdr-container-id>|' \
     -e 's|^herdr_pane_id=.*$|herdr_pane_id=<herdr-container-id>|' \
     -e 's|^spawn_gen=.*$|spawn_gen=<spawn-incarnation>|' \
-    -e 's|^worker_root_pid=.*$|worker_root_pid=<worker-process-root>|' \
-    -e 's|^worker_root_start=.*$|worker_root_start=<worker-process-birth>|' \
     "$1"
 }
 
@@ -650,9 +627,9 @@ fi
 # projected workspaces that are still live, so this retired one starts them clean.
 : > "$MOVE_CALL_LOG"
 
-SECOND_ONE_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label 2m-alpha --no-focus) \
+SECOND_ONE_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label 2ndmate-alpha --no-focus) \
   || fail "could not create the first secondmate presentation fixture"
-SECOND_TWO_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label 2m-bravo --focus) \
+SECOND_TWO_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label 2ndmate-bravo --focus) \
   || fail "could not create the focused secondmate presentation fixture"
 SECOND_ONE_WSID=$(printf '%s' "$SECOND_ONE_OUT" | jq -r '.result.workspace.workspace_id // empty')
 SECOND_TWO_WSID=$(printf '%s' "$SECOND_TWO_OUT" | jq -r '.result.workspace.workspace_id // empty')
@@ -696,8 +673,8 @@ PROJECTED_PANES=$(lab pane list --workspace "$PROJECTED_WSID")
 [ "$(printf '%s' "$PROJECTED_PANES" | jq -r '.result.panes | length')" = 1 ] \
   || fail "projected workspace did not contain exactly one task pane"
 printf '%s' "$PROJECTED_TABS" | jq -e --arg tab "$PROJECTED_TAB" \
-  '.result.tabs[0].tab_id == $tab and (.result.tabs[0].label | endswith("-shape"))' >/dev/null 2>&1 \
-  || fail "projected workspace's only tab was not the task's <prefix>-[<host>-][<owner>-]<project>-<task-id> display-name tab"
+  '.result.tabs[0].tab_id == $tab and .result.tabs[0].label == "fm-shape"' >/dev/null 2>&1 \
+  || fail "projected workspace's only tab was not the normal fm-shape task tab"
 printf '%s' "$PROJECTED_PANES" | jq -e --arg pane "$PROJECTED_PANE" \
   '.result.panes[0].pane_id == $pane' >/dev/null 2>&1 \
   || fail "projected workspace's only pane was not the exact recorded task pane"
@@ -817,7 +794,7 @@ remember_meta_worktree "$ORDER_B_META" >/dev/null
 
 ORDER_LIST=$(lab workspace list) || fail "could not inspect concurrent presentation ordering"
 CREATED_LABELS=$(projection_labels_from_log "$PROJECTION_ORDER_START")
-EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\n2m-alpha\n2m-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
+EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\n2ndmate-alpha\n2ndmate-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
 ACTUAL_LABELS=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[].label')
 [ "$ACTUAL_LABELS" = "$EXPECTED_LABELS" ] || fail "workspace order was not firstmate, stable primary block, secondmates: $ACTUAL_LABELS"
 PRIMARY_IDS=$(printf '%s' "$ORDER_LIST" | jq -r '
@@ -831,7 +808,7 @@ MOVE_TARGETS=$(cut -f2 "$MOVE_CALL_LOG")
 MOVE_INDEXES=$(cut -f3 "$MOVE_CALL_LOG")
 [ "$MOVE_INDEXES" = $'1\n2\n3' ] \
   || fail "concurrent primary workers did not append stably to the contiguous block: $MOVE_INDEXES"
-SECOND_ORDER_AFTER=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[] | select(.label | startswith("2m-")) | .workspace_id')
+SECOND_ORDER_AFTER=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[] | select(.label | startswith("2ndmate-")) | .workspace_id')
 [ "$SECOND_ORDER_AFTER" = "$SECOND_ORDER_BEFORE" ] \
   || fail "primary workspace ordering changed secondmate relative order"
 [ "$(lab workspace get "$SECOND_TWO_WSID" | jq -r '.result.workspace.focused')" = true ] \
@@ -885,41 +862,23 @@ if wait "$ABORT_A_PID"; then ABORT_A_STATUS=0; else ABORT_A_STATUS=$?; fi
 if wait "$ABORT_B_PID"; then ABORT_B_STATUS=0; else ABORT_B_STATUS=$?; fi
 finish_concurrent_expected_abort abort-a "$ABORT_A_STATUS" "$TMP_ROOT/abort-a.out" "$TMP_ROOT/abort-a.err"
 finish_concurrent_expected_abort abort-b "$ABORT_B_STATUS" "$TMP_ROOT/abort-b.out" "$TMP_ROOT/abort-b.err"
-# The failure can be reported either by the lease discovery poll or by the
-# post-create validation path.  Both are safe refusals of the same bad pane
-# state; the observable contract below proves the important behavior: each
-# exact pane is retired, no metadata is published, and presentation cleanup
-# remains serialized without stealing focus.  Do not make this live test depend
-# on a diagnostic wording that varies with which bounded guard wins the race.
+# The forced foreground_cwd is a plain non-git directory, which the discovery
+# poll now screens out on every read rather than adopting, so the armed failure
+# arrives as the poll's own deadline refusal naming that path.
+grep -F "did not enter an isolated worktree" "$TMP_ROOT/abort-a.err" >/dev/null 2>&1 \
+  || fail "post-create abort fixture A did not reach the armed validation failure"
+grep -F "did not enter an isolated worktree" "$TMP_ROOT/abort-b.err" >/dev/null 2>&1 \
+  || fail "post-create abort fixture B did not reach the armed validation failure"
 ABORT_A_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-a/task-pane")
 ABORT_B_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/task-pane")
-ABORT_A_WS=$(cat "$POST_CREATE_ABORT_CONTROL/abort-a/workspace")
-ABORT_B_WS=$(cat "$POST_CREATE_ABORT_CONTROL/abort-b/workspace")
-# Serialization is asserted on the mutations the abort path actually emits.
-# The task pane is NOT removed with pane.close: the emptying-close plan proves a
-# lone idle shell and ends it, so Herdr removes the emptied workspace through its
-# own focus-preserving pane-death path (the raw explicit close steals focus to the
-# neighbour workspace - upstream #1328).
-# That path still reaches Herdr as a pane close, so the task pane contributes its
-# own pane-close mutation on Herdr 0.7.4 rather than none at all.
-# It is excluded by exact pane id below for the same reason the focus assertion
-# that follows excludes it: it is a separate, expected cleanup category whose
-# focus excursion is restored by the tab-focus that trails it, not part of the
-# ordering this sequence measures.
-# What must hold is that each spawn completes its whole presentation critical
-# section - create, then its own seeded prune - before the other spawn creates
-# anything. That is exactly what the lock exists to guarantee, and counting the
-# task-pane close as a second prune measured cleanup volume instead of ordering.
-# assert_cleanup_focus_preserved below is what proves the task panes are gone.
-ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v aw="$ABORT_A_WS" -v bw="$ABORT_B_WS" -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
+ABORT_SEQUENCE=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
   $1 == "workspace-create" && $4 ~ /^└ abort-a · p:/ { print "create-a" }
   $1 == "workspace-create" && $4 ~ /^└ abort-b · p:/ { print "create-b" }
-  $1 == "pane-close" && $4 != a && $4 != b {
-                       ws = $4; sub(/:.*$/, "", ws)
-                       if (ws == aw) print "prune-a"; else if (ws == bw) print "prune-b" }
+  $1 == "pane-close" && $4 == a { print "close-a" }
+  $1 == "pane-close" && $4 == b { print "close-b" }
 ')
 case "$ABORT_SEQUENCE" in
-  $'create-a\nprune-a\ncreate-b\nprune-b'|$'create-b\nprune-b\ncreate-a\nprune-a') ;;
+  $'create-a\nclose-a\ncreate-b\nclose-b'|$'create-b\nclose-b\ncreate-a\nclose-a') ;;
   *) fail "concurrent post-create abort cleanup interleaved outside the presentation lock: $ABORT_SEQUENCE" ;;
 esac
 ABORT_UNRESTORED=$(sed -n "$((ABORT_FOCUS_START + 1)),\$p" "$FOCUS_AUDIT_LOG" | awk -F '\t' -v a="$ABORT_A_PANE" -v b="$ABORT_B_PANE" '
@@ -947,7 +906,7 @@ teardown_task shape "$HOME_DIR" > "$TMP_ROOT/on-teardown.out" 2> "$TMP_ROOT/on-t
   || fail "projected teardown failed: $(cat "$TMP_ROOT/on-teardown.err")"
 assert_focus_is "$CAPTAIN_FOCUS" "projected teardown"
 assert_cleanup_focus_preserved "$SHAPE_CLEANUP_AUDIT_START" "$PROJECTED_PANE" "$CAPTAIN_FOCUS"
-pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs, spawn incarnation, and the per-spawn worker process root"
+pass "real Herdr lab: Treehouse commands and metadata shape are byte-identical except for endpoint IDs and spawn incarnation"
 if lab workspace get "$PROJECTED_WSID" >/dev/null 2>&1; then
   fail "closing the exact projected task pane did not remove its last-tab workspace"
 fi
@@ -992,11 +951,11 @@ for ROUND in 1 2 3; do
   assert_focus_is "$CAPTAIN_FOCUS" "focus wave $ROUND concurrent spawns"
   assert_raw_presentation_mutations_preserved_since "$WAVE_FOCUS_START" "focus wave $ROUND concurrent spawns"
   WAVE_LABELS=$(projection_labels_from_log "$WAVE_LOG_START")
-  WAVE_EXPECTED=$(printf 'firstmate\n%s\n2m-alpha\n2m-bravo' "$WAVE_LABELS")
-  WAVE_ACTUAL=$(lab workspace list | jq -r '.result.workspaces[] | select(.label == "firstmate" or (.label | startswith("└ ")) or (.label | startswith("2m-"))) | .label')
+  WAVE_EXPECTED=$(printf 'firstmate\n%s\n2ndmate-alpha\n2ndmate-bravo' "$WAVE_LABELS")
+  WAVE_ACTUAL=$(lab workspace list | jq -r '.result.workspaces[] | select(.label == "firstmate" or (.label | startswith("└ ")) or (.label | startswith("2ndmate-"))) | .label')
   [ "$WAVE_ACTUAL" = "$WAVE_EXPECTED" ] \
     || fail "focus wave $ROUND lost stable contiguous ordering: $WAVE_ACTUAL"
-  WAVE_SECOND_ORDER=$(lab workspace list | jq -r '.result.workspaces[] | select(.label | startswith("2m-")) | .workspace_id')
+  WAVE_SECOND_ORDER=$(lab workspace list | jq -r '.result.workspaces[] | select(.label | startswith("2ndmate-")) | .workspace_id')
   [ "$WAVE_SECOND_ORDER" = "$SECOND_ORDER_BEFORE" ] \
     || fail "focus wave $ROUND changed secondmate relative order"
 
@@ -1010,7 +969,7 @@ for ROUND in 1 2 3; do
   finish_concurrent_teardown "focus-$ROUND-b" "$WAVE_B_TEARDOWN_STATUS" "$TMP_ROOT/focus-$ROUND-b-teardown.out" "$TMP_ROOT/focus-$ROUND-b-teardown.err"
   assert_focus_is "$CAPTAIN_FOCUS" "focus wave $ROUND concurrent teardowns"
   WAVE_REMAINING=$(lab workspace list | jq -r '.result.workspaces[].label')
-  [ "$WAVE_REMAINING" = $'firstmate\n2m-alpha\n2m-bravo' ] \
+  [ "$WAVE_REMAINING" = $'firstmate\n2ndmate-alpha\n2ndmate-bravo' ] \
     || fail "focus wave $ROUND cleanup left a projected workspace behind: $WAVE_REMAINING"
 done
 pass "real Herdr lab: three repeated concurrent create/order/cleanup waves have zero active workspace or tab drift"
@@ -1019,8 +978,8 @@ pass "real Herdr lab: three repeated concurrent create/order/cleanup waves have 
 # Multi-home topology: real secondmate FM_HOME spawn paths, inheritance,
 # concurrent cross-home waves, and session-scoped lock contention.
 # ------------------------------------------------------------------
-SECOND_HOME_A="$TMP_ROOT/home-2m-alpha"
-SECOND_HOME_B="$TMP_ROOT/home-2m-bravo"
+SECOND_HOME_A="$TMP_ROOT/home-2ndmate-alpha"
+SECOND_HOME_B="$TMP_ROOT/home-2ndmate-bravo"
 mkdir -p "$SECOND_HOME_A/state" "$SECOND_HOME_A/config" "$SECOND_HOME_A/data" \
   "$SECOND_HOME_B/state" "$SECOND_HOME_B/config" "$SECOND_HOME_B/data"
 printf 'alpha\n' > "$SECOND_HOME_A/.fm-secondmate-home"
@@ -1060,7 +1019,7 @@ SECOND_META="$HOME_DIR/state/alpha.meta"
   || fail "secondmate spawn did not record kind=secondmate"
 SECOND_WSID=$(grep '^herdr_workspace_id=' "$SECOND_META" | cut -d= -f2-)
 SECOND_LABEL=$(lab workspace get "$SECOND_WSID" | jq -r '.result.workspace.label')
-[ "$SECOND_LABEL" = 2m-alpha ] \
+[ "$SECOND_LABEL" = 2ndmate-alpha ] \
   || fail "secondmate spawn did not use its flat parent workspace: $SECOND_LABEL"
 [ -z "$(projection_labels_from_log "$SECOND_SPAWN_LOG_START")" ] \
   || fail "secondmate spawn created a corner projection workspace"
@@ -1080,7 +1039,7 @@ propagate_inheritable_config "$HOME_DIR/config" "$SECOND_HOME_B/config" \
   || fail "primary presentation setting did not reach secondmate B"
 pass "real Herdr lab: the primary presentation setting inherits into real secondmate homes"
 
-# Keep the pre-existing 2m-alpha/bravo workspaces as owning parents and captain focus.
+# Keep the pre-existing 2ndmate-alpha/bravo workspaces as owning parents and captain focus.
 assert_focus_is "$CAPTAIN_FOCUS" "multi-home captain focus"
 
 mkdir -p "$SECOND_HOME_A/data/a1" "$SECOND_HOME_A/data/a2" \
@@ -1134,16 +1093,16 @@ MULTI_LABELS=$(printf '%s' "$MULTI_LIST" | jq -r '
   .result.workspaces[]
   | select(
       .label == "firstmate"
-      or .label == "2m-alpha"
-      or .label == "2m-bravo"
+      or .label == "2ndmate-alpha"
+      or .label == "2ndmate-bravo"
       or (.label | startswith("└ "))
     )
   | .label
 ')
 MULTI_EXPECTED=$(printf '%s\n' \
   firstmate "$P1_LABEL" "$P2_LABEL" \
-  2m-alpha "$A1_LABEL" "$A2_LABEL" \
-  2m-bravo "$B1_LABEL" "$B2_LABEL")
+  2ndmate-alpha "$A1_LABEL" "$A2_LABEL" \
+  2ndmate-bravo "$B1_LABEL" "$B2_LABEL")
 [ "$MULTI_LABELS" = "$MULTI_EXPECTED" ] \
   || fail "multi-home topology was not owning-parent grouped: $MULTI_LABELS"
 pass "real Herdr lab: primary and two secondmate homes each own a top-level contiguous child block"
@@ -1171,8 +1130,8 @@ assert_raw_presentation_mutations_preserved_since "$WAVE_CROSS_FOCUS" "cross-hom
 CROSS_LIST=$(lab workspace list)
 printf '%s' "$CROSS_LIST" | jq -e '
   ([.result.workspaces[].label] | index("firstmate")) as $fm
-  | ([.result.workspaces[].label] | index("2m-alpha")) as $a
-  | ([.result.workspaces[].label] | index("2m-bravo")) as $b
+  | ([.result.workspaces[].label] | index("2ndmate-alpha")) as $a
+  | ([.result.workspaces[].label] | index("2ndmate-bravo")) as $b
   | $fm != null and $a != null and $b != null
   and $fm < $a and $a < $b
 ' >/dev/null 2>&1 || fail "cross-home concurrent wave reordered parents"
@@ -1180,8 +1139,8 @@ PCW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$HOME_DIR/state/pc
 ACW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$SECOND_HOME_A/state/acw.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
 BCW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$SECOND_HOME_B/state/bcw.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
 case "$PCW_LABEL" in $'└ pcw · p:'*|firstmate) ;; *) fail "cross-home primary label wrong: $PCW_LABEL" ;; esac
-case "$ACW_LABEL" in $'└ acw · p:'*|2m-alpha) ;; *) fail "cross-home A label wrong: $ACW_LABEL" ;; esac
-case "$BCW_LABEL" in $'└ bcw · p:'*|2m-bravo) ;; *) fail "cross-home B label wrong: $BCW_LABEL" ;; esac
+case "$ACW_LABEL" in $'└ acw · p:'*|2ndmate-alpha) ;; *) fail "cross-home A label wrong: $ACW_LABEL" ;; esac
+case "$BCW_LABEL" in $'└ bcw · p:'*|2ndmate-bravo) ;; *) fail "cross-home B label wrong: $BCW_LABEL" ;; esac
 pass "real Herdr lab: concurrent primary/A/B spawns preserve parent order and exact focus"
 
 # Hold the shared session lock from a different home and force flat fallback.
@@ -1215,7 +1174,7 @@ grep -F "presentation focus lock unavailable; using the ordinary flat layout wit
 remember_meta_worktree "$SECOND_HOME_A/state/aflat.meta" >/dev/null
 AFLAT_WSID=$(grep '^herdr_workspace_id=' "$SECOND_HOME_A/state/aflat.meta" | cut -d= -f2-)
 AFLAT_LABEL=$(lab workspace get "$AFLAT_WSID" | jq -r '.result.workspace.label')
-[ "$AFLAT_LABEL" = 2m-alpha ] \
+[ "$AFLAT_LABEL" = 2ndmate-alpha ] \
   || fail "cross-home lock contention did not use the ordinary secondmate home workspace: $AFLAT_LABEL"
 [ ! -e "$SECOND_HOME_A/state/aflat.herdr-presentation" ] \
   || fail "cross-home lock contention published a projection journal"
@@ -1401,12 +1360,135 @@ teardown_task "$BRAVO_WAVE_ID" "$SECOND_HOME_B" > "$TMP_ROOT/bravo-wave-teardown
 "$REAL_TREEHOUSE" return --force "$BRAVO_WAVE_NEW_WT" >/dev/null 2>&1 || true
 pass "real Herdr lab: concurrent cross-home recoveries replace exact husks under one session lock with no focus drift"
 
+# Exact-resume presentation-lock contention refuses by default. Hold the
+# shared session lock from an unrelated process past the bounded-retry window
+# and assert the default resume hard-refuses without the opt-in flag.
+LOCK_REFUSE_ID=lock-refuse-resume-r1
+mkdir -p "$HOME_DIR/data/$LOCK_REFUSE_ID"
+write_ship_brief "$HOME_DIR" "$LOCK_REFUSE_ID" 'Resume lock-refuse fixture.'
+spawn_task "$LOCK_REFUSE_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/lock-refuse-first.out" 2> "$TMP_ROOT/lock-refuse-first.err" \
+  || fail "lock-refuse recovery fixture failed: $(cat "$TMP_ROOT/lock-refuse-first.err")"
+LOCK_REFUSE_META="$HOME_DIR/state/$LOCK_REFUSE_ID.meta"
+LOCK_REFUSE_OLD_WT=$(remember_meta_worktree "$LOCK_REFUSE_META")
+LOCK_REFUSE_OLD_PANE=$(grep '^herdr_pane_id=' "$LOCK_REFUSE_META" | cut -d= -f2-)
+PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION" >/dev/null \
+  || fail "could not stop the isolated session for resume lock-refuse"
+PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
+  || fail "could not reprovision the isolated session for resume lock-refuse"
+
+LOCK_REFUSE_READY="$TMP_ROOT/lock-refuse-ready"
+LOCK_REFUSE_HOLD_SECONDS=15
+LOCK_REFUSE_PATH=$(session_presentation_lock_path) \
+  || fail "could not resolve session lock for resume lock-refuse"
+ROOT="$ROOT" READY="$LOCK_REFUSE_READY" HOLD="$LOCK_REFUSE_HOLD_SECONDS" LOCK="$LOCK_REFUSE_PATH" bash -c '
+  . "$ROOT/bin/fm-wake-lib.sh"
+  fm_lock_try_acquire "$LOCK" || exit 1
+  : > "$READY"
+  sleep "$HOLD"
+  fm_lock_release "$LOCK"
+' &
+LOCK_REFUSE_HOLDER_PID=$!
+while [ ! -e "$LOCK_REFUSE_READY" ] && kill -0 "$LOCK_REFUSE_HOLDER_PID" 2>/dev/null; do sleep 0.01; done
+[ -e "$LOCK_REFUSE_READY" ] || fail "could not hold the session presentation lock for resume lock-refuse"
+
+LOCK_REFUSE_FOCUS=$(focus_snapshot)
+if spawn_task "$LOCK_REFUSE_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" \
+    > "$TMP_ROOT/lock-refuse-resume.out" 2> "$TMP_ROOT/lock-refuse-resume.err"; then
+  LOCK_REFUSE_STATUS=0
+else
+  LOCK_REFUSE_STATUS=$?
+fi
+if [ "$LOCK_REFUSE_STATUS" -eq 0 ]; then
+  kill "$LOCK_REFUSE_HOLDER_PID" 2>/dev/null || true
+  wait "$LOCK_REFUSE_HOLDER_PID" 2>/dev/null || true
+  fail "default resumed identity succeeded under session lock contention instead of refusing: $(cat "$TMP_ROOT/lock-refuse-resume.out")"
+fi
+wait "$LOCK_REFUSE_HOLDER_PID" || fail "resume lock-refuse lock holder failed"
+LOCK_REFUSE_HOLDER_PID=
+[ "$LOCK_REFUSE_STATUS" -ne 0 ] \
+  || fail "default resumed identity returned success under contention"
+grep -F "refusing a concurrent resume" "$TMP_ROOT/lock-refuse-resume.err" >/dev/null 2>&1 \
+  || fail "default resume under contention did not refuse with the concurrent-resume message: $(cat "$TMP_ROOT/lock-refuse-resume.err")"
+# Fixture metadata and husk must be unchanged after the refused resume.
+[ "$(grep '^herdr_pane_id=' "$LOCK_REFUSE_META" | cut -d= -f2-)" = "$LOCK_REFUSE_OLD_PANE" ] \
+  || fail "refused resume mutated the recorded pane id"
+assert_focus_is "$LOCK_REFUSE_FOCUS" "resume lock-refuse"
+# Leave the journal/meta in place so the opt-in wait path below can resume the
+# same identity after another stop/reprovision cycle.
+pass "real Herdr lab: default resumed identity refuses session lock contention"
+
+# With --herdr-resume-lock-wait, the same exact resume WAITS for session lock
+# contention rather than treating a short bounded window as fatal. Hold the
+# shared session lock from an unrelated process for a duration well past any
+# plausible bounded-retry window so the assertion below is deterministic
+# rather than a race that could pass by luck on a fast machine.
+LOCK_WAIT_ID=$LOCK_REFUSE_ID
+LOCK_WAIT_META=$LOCK_REFUSE_META
+LOCK_WAIT_OLD_WT=$LOCK_REFUSE_OLD_WT
+LOCK_WAIT_WSID=$(grep '^herdr_workspace_id=' "$LOCK_WAIT_META" | cut -d= -f2-)
+LOCK_WAIT_OLD_PANE=$LOCK_REFUSE_OLD_PANE
+PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION" >/dev/null \
+  || fail "could not stop the isolated session for resume lock-wait"
+PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
+  || fail "could not reprovision the isolated session for resume lock-wait"
+
+LOCK_WAIT_READY="$TMP_ROOT/lock-wait-ready"
+LOCK_WAIT_HOLD_SECONDS=30
+LOCK_WAIT_PATH=$(session_presentation_lock_path) \
+  || fail "could not resolve session lock for resume lock-wait"
+ROOT="$ROOT" READY="$LOCK_WAIT_READY" HOLD="$LOCK_WAIT_HOLD_SECONDS" LOCK="$LOCK_WAIT_PATH" bash -c '
+  . "$ROOT/bin/fm-wake-lib.sh"
+  fm_lock_try_acquire "$LOCK" || exit 1
+  : > "$READY"
+  sleep "$HOLD"
+  fm_lock_release "$LOCK"
+' &
+LOCK_WAIT_HOLDER_PID=$!
+while [ ! -e "$LOCK_WAIT_READY" ] && kill -0 "$LOCK_WAIT_HOLDER_PID" 2>/dev/null; do sleep 0.01; done
+[ -e "$LOCK_WAIT_READY" ] || fail "could not hold the session presentation lock for resume lock-wait"
+
+LOCK_WAIT_DEADLINE_SECONDS=$((LOCK_WAIT_HOLD_SECONDS + 60))
+LOCK_WAIT_FOCUS=$(focus_snapshot)
+LOCK_WAIT_START=$(date +%s)
+if SPAWN_DEADLINE_SECONDS=$LOCK_WAIT_DEADLINE_SECONDS \
+    spawn_task "$LOCK_WAIT_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" --herdr-resume-lock-wait \
+    > "$TMP_ROOT/lock-wait-resume.out" 2> "$TMP_ROOT/lock-wait-resume.err"; then
+  LOCK_WAIT_STATUS=0
+else
+  LOCK_WAIT_STATUS=$?
+fi
+LOCK_WAIT_ELAPSED=$(( $(date +%s) - LOCK_WAIT_START ))
+wait "$LOCK_WAIT_HOLDER_PID" || fail "resume lock-wait lock holder failed"
+LOCK_WAIT_HOLDER_PID=
+if [ "$LOCK_WAIT_STATUS" -eq 124 ]; then
+  fail "opt-in resumed recovery hung for over ${LOCK_WAIT_DEADLINE_SECONDS}s instead of waiting out a ${LOCK_WAIT_HOLD_SECONDS}s session lock hold"
+fi
+[ "$LOCK_WAIT_STATUS" -eq 0 ] \
+  || fail "opt-in resumed identity refused instead of waiting out session lock contention: $(cat "$TMP_ROOT/lock-wait-resume.err")"
+[ "$LOCK_WAIT_ELAPSED" -ge $((LOCK_WAIT_HOLD_SECONDS - 5)) ] \
+  || fail "opt-in resumed recovery returned after ${LOCK_WAIT_ELAPSED}s, too soon to have genuinely waited out a ${LOCK_WAIT_HOLD_SECONDS}s hold"
+LOCK_WAIT_NEW_WT=$(remember_meta_worktree "$LOCK_WAIT_META")
+[ "$(grep '^herdr_workspace_id=' "$LOCK_WAIT_META" | cut -d= -f2-)" = "$LOCK_WAIT_WSID" ] \
+  || fail "opt-in resume lock-wait flattened the task into a different workspace"
+LOCK_WAIT_NEW_PANE=$(grep '^herdr_pane_id=' "$LOCK_WAIT_META" | cut -d= -f2-)
+[ "$LOCK_WAIT_NEW_PANE" != "$LOCK_WAIT_OLD_PANE" ] \
+  || fail "opt-in resume lock-wait reused the old husk pane"
+if lab pane get "$LOCK_WAIT_OLD_PANE" >/dev/null 2>&1; then
+  fail "opt-in resume lock-wait left the old husk pane behind"
+fi
+assert_focus_is "$LOCK_WAIT_FOCUS" "resume lock-wait"
+teardown_task "$LOCK_WAIT_ID" "$HOME_DIR" > "$TMP_ROOT/lock-wait-teardown.out" 2> "$TMP_ROOT/lock-wait-teardown.err" \
+  || fail "resume lock-wait fixture teardown failed: $(cat "$TMP_ROOT/lock-wait-teardown.err")"
+"$REAL_TREEHOUSE" return --force "$LOCK_WAIT_OLD_WT" >/dev/null 2>&1 || true
+"$REAL_TREEHOUSE" return --force "$LOCK_WAIT_NEW_WT" >/dev/null 2>&1 || true
+pass "real Herdr lab: --herdr-resume-lock-wait waits out session lock contention instead of refusing"
+
 # Seed a legacy old-format primary projection and a flat secondmate tab; correction must not migrate them.
 LEGACY_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label "firstmate/legacy-seed · p:AbCdEfGhIjKlMnOpQrStUv" --no-focus) \
   || fail "could not seed a legacy old-format presentation space"
 LEGACY_WSID=$(printf '%s' "$LEGACY_OUT" | jq -r '.result.workspace.workspace_id // empty')
 [ -n "$LEGACY_WSID" ] || fail "legacy seed returned no workspace id"
-FLAT_TAB_OUT=$(lab tab create --workspace "$(lab workspace list | jq -r '.result.workspaces[] | select(.label == "2m-alpha") | .workspace_id' | head -1)" --cwd "$PROJECT_DIR" --label fm-flat-legacy-tab --no-focus) \
+FLAT_TAB_OUT=$(lab tab create --workspace "$(lab workspace list | jq -r '.result.workspaces[] | select(.label == "2ndmate-alpha") | .workspace_id' | head -1)" --cwd "$PROJECT_DIR" --label fm-flat-legacy-tab --no-focus) \
   || fail "could not seed a flat secondmate child tab"
 FLAT_TAB_ID=$(printf '%s' "$FLAT_TAB_OUT" | jq -r '.result.tab.tab_id // empty')
 mkdir -p "$HOME_DIR/data/post-legacy"

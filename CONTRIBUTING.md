@@ -29,10 +29,6 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
 7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
-8. Push every follow-up commit on that open PR through the gate as well, never with a plain `git push`.
-   The attestation in the PR body binds to the exact head it was produced for, so any head the gate has not attested yet fails `Require no-mistakes` with a head mismatch.
-   A plain `git push` leaves the PR body bound to the older head permanently, so re-run `git push no-mistakes` to bind the attestation to the current head.
-   A red `Require no-mistakes` while a pipeline is still running is expected instead: the head lands before the gate rewrites the PR body, and the body edit reruns the check against the new head.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
@@ -131,7 +127,6 @@ Its header and `--help` own the flags, family labels, lanes, and changed-file ma
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
-Starting a full suite (`--lane`, `--family`, or `--all`) asks `llm-router-axi capacity --for suite` and refuses while another suite holds the one-suite-at-a-time slot, so never start a second full suite beside a running one; targeted script and `--changed` runs are unchanged.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated; pushes to `main` are never cancelled, and the workflow owns that contract and its rationale.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
@@ -140,7 +135,7 @@ Those sleeps look like recoverable overhead - `fm-watch-triage.test.sh` alone is
 Sampling less often does not remove that wait, it only delays detection: raising the interval to 0.5s and charging each sample proportionally measured `fm-watch-triage.test.sh` at 435s and 440s against 390s and 393s for the unchanged script, back to back on 2026-09-03, because each of its ~40 poll-cycle waits and ~73 process-exit waits paid up to half a second more.
 Some of those loops are also catching a transient rather than waiting for a settled condition, so a coarser sample can step over the state they assert on.
 Discover tests by listing `tests/*.test.sh`: each is a self-contained bash script named `<subject>.test.sh`, and its header comment describes what it covers, so pass one to `bin/fm-test-run.sh` to focus on a subject with canonical timing output.
-Shared test helpers live in `tests/lib.sh` (reporters, temp roots, git fixtures), `tests/fixtures.sh` (fake toolchain and spawn-world builders), `tests/wake-helpers.sh`, `tests/secondmate-helpers.sh`, and `tests/git-config-helpers.sh` (fixture Git isolation from the host's global and system configuration, already sourced by `tests/lib.sh` and `tests/herdr-test-safety.sh`; a suite that sources neither must source it itself before its first Git operation so a direct invocation stays isolated).
+Shared test helpers live in `tests/lib.sh` (reporters, temp roots, git fixtures), `tests/fixtures.sh` (fake toolchain and spawn-world builders), `tests/wake-helpers.sh`, `tests/secondmate-helpers.sh`, and `tests/git-config-helpers.sh` (fixture Git isolation from the host's global and system configuration and from an inherited repository location such as `GIT_DIR`, already sourced by `tests/lib.sh` and `tests/herdr-test-safety.sh`; a suite that sources neither must source it itself before its first Git operation so a direct invocation stays isolated).
 Source those instead of copying a fake toolchain into a new suite.
 A fixture may shorten a production timeout to keep a failure path prompt, but never below what the real work inside that window costs on a loaded machine: a fork, an exec, a lock acquisition, a beacon publication, or a first-poll check.
 Where a case's assertion is not about the timeout itself, give that window headroom over the measured loaded cost, and bound the test's own waiting with iteration-counted poll loops, which stretch under load where a wall-clock budget does not.

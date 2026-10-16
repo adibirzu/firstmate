@@ -21,8 +21,6 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
 FAKE_CLAUDE="$FAKEBIN/claude"
 export FAKE_CLAUDE
-export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=fm-autoarm-test
-unset CLAUDE_PID
 
 # Copy the hook and its sourced dependencies into a fixture checkout.
 install_autoarm_scripts() {
@@ -85,7 +83,6 @@ run_autoarm() {
   local dir=$1 payload=${2:-'{"session_id":"sess-autoarm","stop_hook_active":false}'} rc=0
   printf '%s\n' "$payload" \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="autoarm-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1 || rc=$?
@@ -243,7 +240,6 @@ run_autoarm_bg() {
   local dir=$1 out=$2
   printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="autoarm-background-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' > "$out" 2>&1 &
@@ -304,7 +300,6 @@ test_reclaims_stale_session_lock_before_arming() {
   write_arm_fixture "$dir" actionable
   out=$(printf '%s\n' '{"session_id":"stale"}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="stale-lock-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1); status=$?
@@ -391,7 +386,6 @@ test_resolves_outermost_claude_pid_in_nested_bgspare_chain() {
   # collapse the two-hop chain this test depends on down to one hop.
   out=$(printf '%s\n' '{"session_id":"nested"}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="nested-chain-fixture-$$" CLAUDE_PID=$$
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FAKE_CLAUDE" -c "
           printf \"%s\n\" \"\$\$\" > \"\$FM_HOME/state/inner-pid\"
@@ -784,7 +778,6 @@ test_single_flight_admits_exactly_one_owner() {
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" slow-actionable
   FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-    export CLAUDECODE=1 CLAUDE_CODE_SESSION_ID="single-flight-fixture-$$" CLAUDE_PID=$$
     printf "%s\n" "$$" > "$FM_HOME/state/.lock"
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err1" &
     p1=$!
@@ -1418,6 +1411,24 @@ write_host_fixture() {
       stood-down)
         printf "printf 'supervision-host stood down: this session no longer owns supervision\\n'\n"
         ;;
+      lost-handback|lost-announced-handback)
+        local marker=pending
+        [ "$kind" = lost-handback ] || marker=announced
+        printf "printf '%s:handling:fixture-generation\\\\n' > \"\$FM_HOME/state/.watcher-down\"\\n" "$marker"
+        cat <<'SH'
+printf 'signal: fixture.status\n'
+printf 'supervision-host: branch-outcome: fixture\n'
+printf 'supervision-host: watcher downtime could not be restored for the main hand-back\n'
+exit 1
+SH
+        ;;
+      benign-refusal)
+        cat <<'SH'
+printf 'acked:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+printf 'signal: fixture.status\n'
+printf 'supervision-host: branch-outcome: fixture\n'
+SH
+        ;;
       handed-back-many)
         cat <<'SH'
 printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
@@ -1577,6 +1588,56 @@ test_host_stand_down_is_silent() {
   pass "auto-arm: a host that stood down closes silently without a retry"
 }
 
+# Main already drained and acknowledged the wake, so the rewake is refused on a
+# marker that is no longer downtime: that refusal stays silent and opens no
+# failure episode.
+test_host_benign_rewake_refusal_opens_no_failure_episode() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/host-benign-refusal")
+  mkdir -p "$dir/config"
+  rm -f "$dir/config/supervision-host-off"
+  : > "$dir/state/task.meta"
+  write_host_fixture "$dir" benign-refusal
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 0 "$status" "a refused rewake on an acknowledged marker must stay silent"
+  assert_not_contains "$out" "auto-arm FAILED" "a benign refusal must not deliver a failure notice"
+  assert_absent "$dir/state/.claude-autoarm-failure-notified" "a benign refusal opened a failure episode"
+  [ "$(epoch_outcome "$dir")" != failed ] || fail "a benign refusal must not record outcome=failed"
+  pass "auto-arm: a host rewake refused on an acknowledged marker opens no failure episode"
+}
+
+# The host handed a wake back but left the marker in handling (pending or
+# announced) with no live successor, so no rewake can commit: the hook delivers
+# the failure notice once per episode and keeps exiting 2 without repeating it.
+assert_host_lost_handback_notifies_once_per_episode() {
+  local kind=$1 dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/host-$kind")
+  mkdir -p "$dir/config"
+  rm -f "$dir/config/supervision-host-off"
+  : > "$dir/state/task.meta"
+  write_host_fixture "$dir" "$kind"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a lost hand-back must reach main"
+  assert_contains "$out" "auto-arm FAILED - the supervision host returned an actionable wake" "a lost hand-back must deliver the failure notice"
+  assert_present "$dir/state/.claude-autoarm-failure-notified" "a lost hand-back did not record its failure episode"
+  [ "$(epoch_outcome "$dir")" = failed ] || fail "a lost hand-back must record outcome=failed, got: $(epoch_outcome "$dir")"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a repeated lost hand-back must still reach main"
+  assert_not_contains "$out" "auto-arm FAILED" "a repeated lost hand-back must not repeat the failure notice"
+  [ "$(epoch_outcome "$dir")" = failed-suppressed ] \
+    || fail "a repeated lost hand-back must record outcome=failed-suppressed, got: $(epoch_outcome "$dir")"
+}
+
+test_host_lost_handback_notifies_once_per_episode() {
+  assert_host_lost_handback_notifies_once_per_episode lost-handback
+  pass "auto-arm: a lost host hand-back notifies once per failure episode"
+}
+
+test_host_lost_announced_handback_notifies_once_per_episode() {
+  assert_host_lost_handback_notifies_once_per_episode lost-announced-handback
+  pass "auto-arm: a lost host hand-back on an announced marker notifies once per failure episode"
+}
+
 test_host_crash_is_retried_then_reported() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/host-crash")
@@ -1699,6 +1760,9 @@ test_host_handback_beside_a_quiet_record_carries_no_away_note
 test_plain_arm_banner_keeps_its_wake_line_cap
 test_host_handback_carries_every_host_line
 test_host_stand_down_is_silent
+test_host_benign_rewake_refusal_opens_no_failure_episode
+test_host_lost_handback_notifies_once_per_episode
+test_host_lost_announced_handback_notifies_once_per_episode
 test_host_crash_is_retried_then_reported
 test_arguments_never_arm
 test_fm_lock_status_still_works_with_shared_lib

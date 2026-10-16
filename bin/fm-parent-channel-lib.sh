@@ -123,55 +123,47 @@ fm_parent_channel_destination() {  # <home> <state>
   esac
 }
 
+# The outbound parent-channel status path that lives INSIDE <state>, printed,
+# when <home> is a remote mate; non-zero for a main home, a local mate, or an
+# unusable identity or binding. Only the remote route resolves the channel into
+# the mate's own state dir, so parent-replies.status there is the mate's parent
+# channel rather than a self-home task status file: a home's own status scans
+# and decision folds exclude exactly this resolved path (the same special case
+# fm-pending-reply-lib.sh's wrong-home detection applies). A local mate's
+# channel lives in the parent home's state/<id>.status, which the parent's
+# scans must keep classifying, so only the remote route resolves here.
+fm_parent_channel_outbound_status() {  # <home> <state>
+  local home=$1 state=$2 destination rc=0
+  destination=$(fm_parent_channel_destination "$home" "$state") || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  # The substitution above ran the resolver in a subshell, so its route global
+  # died with it; resolve once more in this shell (stdout discarded, the same
+  # shape fm-pending-reply-lib.sh's wrong-home detection uses) so the route
+  # check reads the resolver's own verdict rather than re-deriving it.
+  fm_parent_channel_destination "$home" "$state" >/dev/null || return 1
+  [ "$FM_PARENT_CHANNEL_ROUTE" = remote ] || return 1
+  printf '%s\n' "$destination"
+}
+
 # Fold <text> onto one bounded line, so a note copied from a child ledger or a
 # hold reason cannot break the channel's line framing.
 fm_parent_channel_clean_note() {  # <text>
   printf '%s' "$1" | LC_ALL=C tr '\t\r\n' '   ' | cut -c1-1200
 }
 
-# Append <line> to <path> unless that exact line is already there, serializing
-# the check and append per channel so concurrent publishers cannot duplicate it.
 # Append <line> once, using fm-classify-lib.sh's retry contract. Time-insensitive:
 # the caller declaring a new event is the one that stamps it.
 fm_parent_channel_append_once() {  # <path> <line>
-  local path=$1 line=$2 lock pid owner_pid
+  local path=$1 line=$2
   if [ -e "$path" ] || [ -L "$path" ]; then
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
   else
     mkdir -p "$(dirname "$path")" || return 1
   fi
-  lock="$path.lock"
-  while ! mkdir "$lock" 2>/dev/null; do
-    if [ -r "$lock/pid" ]; then
-      pid=$(cat "$lock/pid" 2>/dev/null || true)
-      case "$pid" in
-        ''|*[!0-9]*) ;;
-        *)
-          if ! kill -0 "$pid" 2>/dev/null; then
-            rm -rf -- "$lock"
-            continue
-          fi
-          ;;
-      esac
-    fi
-    # A lock without a readable owner may be freshly acquired. Never remove it
-    # based only on that observation, or a concurrent publisher could be split.
-    sleep 0.01
-  done
-  owner_pid=$$
-  if ! printf '%s\n' "$owner_pid" > "$lock/pid"; then
-    rm -rf -- "$lock"
-    return 1
-  fi
   if status_event_recorded "$path" "$line"; then
-    rm -rf -- "$lock"
     return 0
   fi
-  if ! printf '%s\n' "$line" >> "$path"; then
-    rm -rf -- "$lock"
-    return 1
-  fi
-  rm -rf -- "$lock"
+  printf '%s\n' "$line" >> "$path"
 }
 
 # Publish one parent-facing line from <home>. See the return codes above.

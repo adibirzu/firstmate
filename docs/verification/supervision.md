@@ -53,7 +53,7 @@ The installed pi-signed 0.82.0 wrapper repeated the shared Pi primary extension 
 The omp Run-tier adapter was verified on 2026-09-05 with omp 18.1.11 and the openai-codex `gpt-6-astra` model through `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh`, which drives a real omp in its JSON-RPC stdio mode inside an isolated lab clone.
 Both tracked `.omp/extensions/*.ts` files loaded by auto-discovery alone (no `-e`, no trust dialog), `before_agent_start` returned the digest as a persistent context message, the model quoted the lab's `SESSION START -` heading back on its first turn, `state/.session-start-complete` was recorded, and `state/.lock` named the omp process, so ancestry detection identified the markerless binary.
 omp's `session_start` payload carries no reason field, so the adapter derives the source: the first start of the process is `startup` (or `resume` from a `--continue`/`--resume` launch line) and a later in-process start is `clear`; `tests/fm-omp-harness.test.sh` pins that mapping over a fake omp API.
-A file named both by `-e` and by auto-discovery loads twice (two factory calls, doubled `session_stop` continuations), which is why the secondmate launch names no `-e` and the per-task worker extension lives in `state/`.
+A file named both by `-e` and by auto-discovery loads twice (two factory calls, doubled `session_stop` continuations), which is why a secondmate launch never names its auto-discovered primary extensions with `-e` and the per-task busy extension lives in `state/`.
 
 ### Run-tier source vocabulary and context-reset injection
 
@@ -340,12 +340,34 @@ That inertness result is scoped to the builds it exercised: it did not establish
 
 The secondmate-home scope and manual-repair wake path were measured with Claude Code 2.1.207 on 2026-07-12, when a native background completion re-invoked the idle model with no human input.
 The current Stop-owned main/secondmate inclusion and child-worktree exclusion are covered deterministically by `tests/fm-claude-stop-autoarm.test.sh`.
-Session-lock ownership in `bin/fm-session-lock-lib.sh` verifies a published identity binding rather than trusting Claude Code's reparented worker-pool ancestry on its own.
-When one published field is stale on a lock this session still owns - Claude Code regenerates its session ID on `/clear` while the same process keeps the lock - only that claude session-id comparison is exempted, after every other identity check (live holder, matching kind, matching session pid) already held; a non-claude binding carries its session identity in its pid, so a session mismatch there is a same-pid successor and still fails closed, as does a lock recorded to a different live pid.
-Claude acquisition requires its stable session ID plus a live claude pid — Claude Code's served `CLAUDE_PID`, or the live claude ancestry pid when a homebrew build exports the session ID but not `CLAUDE_PID` — while other supported harnesses retain their verified ancestry identity.
+Session-lock ownership in `bin/fm-session-lock-lib.sh` is decided against a session's whole contiguous harness ancestry rather than one chosen pid, so the Stop auto-arm reaches its lock owner wherever that owner sits: a pid of Claude Code's multi-level `bg-spare` hook worker chain, or an inner pid when a harness-named daemon parents the session.
+A background Claude session whose transient helper chain is recycled loses that contiguity while its recorded owner stays alive, so the library also accepts a trusted same-session id: `CLAUDE_CODE_SESSION_ID` counts only when `CLAUDE_PID` is a Claude-shaped member of the current run, it must equal the id `bin/fm-lock.sh` recorded in `state/.lock-session`, and the recorded pid must still be a live harness, while every weaker combination (no id, no sidecar, an untrusted id, a different id, a dead recorded pid) leaves the ancestry verdict unchanged.
+For such a session `bin/fm-lock.sh` records `CLAUDE_PID` on lock line 1 instead of the outermost chain pid, so a shared daemon or front-end that outlives the session never keeps a dead session's lock alive, and a same-session confirmation never rewrites a live line 1.
 Harness identity is read from the executable path and `argv[0]` as well as the command basename, because Claude Code's native installer names the per-session executable by its version (`.../share/claude/versions/2.1.220`): `ps -o comm=` reports that path on macOS and the bare version string on Linux, and neither basename names a harness.
-`tests/fm-lock-ownership.test.sh` exercises new lock acquisition through `bin/fm-lock.sh`, proving same-session re-entry, re-admission after a `/clear` session-ID change, and sibling-session rejection after Claude worker-pool reparenting.
-`tests/fm-session-lock-ancestry.test.sh` pins both platforms' harness reporting semantics behind a deterministic process table and runs the real Stop auto-arm in version-named, daemon-parented, and combined real process trees.
+`tests/fm-session-lock-ancestry.test.sh` pins both platforms' reporting semantics behind a deterministic process table and runs the real Stop auto-arm in version-named, daemon-parented, and combined real process trees.
+The same suite drives the ancestry and session-id signals apart in that table, asserting the divergence itself so no case is vacuous, and runs a real orphaned front-end, daemon, pty-host, and bg-spare tree whose daemon is ended mid-run: the same id keeps arming through the real `bin/fm-lock.sh`, `bin/fm-claude-stop-autoarm.sh`, and `bin/fm-turnend-guard.sh --claude` with lock line 1 and the sidecar untouched, a different id, an untrusted id, and no id each keep the live-owner refusal naming the recorded id, and the dead front-end is reclaimed onto the spare's pid rather than the outermost pty-host.
+`tests/fm-turnend-foreign-owner-repro.py` keeps the genuinely foreign live owner as the negative control and adds the same-id positive control.
+Both ran on 2026-09-18 on macOS with bash 3.2.57 as the fake harness interpreter:
+
+```sh
+tests/fm-session-lock-ancestry.test.sh
+tests/fm-turnend-foreign-owner-arm-fix.test.sh
+```
+
+Observed output, bounded to the lines the new coverage adds:
+
+```text
+ok - session-lock: a trusted same-session id keeps owning a recycled background chain, and nothing weaker does
+ok - session-lock: a trusted id anchors the lock on the model-loop process, anything else on the outermost pid
+ok - session-lock e2e: a background session keeps its lock and its supervision across a recycled helper chain
+same-session acquisition rc=0 stdout='lock acquired: harness pid 41994\nlock_rc=0\n' stderr=''
+other-session acquisition rc=0 stdout='lock_rc=1\n' stderr='error: another live firstmate session holds the lock (pid 41994, session synthetic-same); operate read-only until resolved\n'
+FIXED same-session id owns the lock; a different id is still foreign
+COMPLETE
+```
+
+No live unattended Claude background session ran on the verifying machine: that topology is documented by the real process listings in issues #3902, #2314, #3398, and #4066, and the coverage above is the structural predicate plus those executable fixtures, not a live pass.
+[`sessionstart-nudge.md`](../sessionstart-nudge.md#shared-wrapper-and-safety) owns the nudge wrapper's separate ancestry check and its redundant-nudge behavior after helper-chain recycling.
 `tests/fm-watch-arm.test.sh` runs real watcher and arm cycles against durable on-disk state to verify that a delivered reason survives until post-handling acknowledgement and stops replaying after acknowledgement, while an unrelated queue append cannot make a watcher cycle that delivered nothing look successful.
 The same suite ingests a keyed remote-secondmate parent reply through the real adapter, establishes the incremental OPEN DECISIONS cursor, interrupts supervision, and proves re-arm replays every unacknowledged queue row plus the still-open decision through the ordinary drain path.
 It also covers decision-only recovery, interrupted handling, handling-window generation reuse, non-fatal moved-generation acknowledgement with sequence-bounded consumption, and a persistent successor remaining live after recovery is acknowledged.
@@ -556,6 +578,74 @@ ok - unacknowledged recovery is announced at most once per generation and the su
 FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=59357
 ```
 
+The Codex foreground-checkpoint behavior was exercised hermetically on 2026-09-14 with real watcher processes and isolated home state.
+That run observed an announced recovery remain announced through a quiet checkpoint, a never-announced generation surface once, and a durable wake appended during a live checkpoint resurface.
+Its announced-recovery fixture had no unacknowledged durable queue row, so it did not establish that the old behavior reproduced the regression; the revised counterfactual fixture and result are recorded separately below.
+This state transition depends on Firstmate's checkpoint wrapper rather than vendor output, so no live Codex prompt was required.
+
+```sh
+bin/fm-test-run.sh tests/fm-watch-checkpoint.test.sh
+```
+
+Observed output:
+
+```text
+ok - an announced recovery is not reannounced by the next foreground checkpoint
+ok - a never-announced recovery still surfaces once from a foreground checkpoint
+ok - a queue append during a foreground checkpoint still resurfaces
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=11750
+```
+
+On 2026-10-07 the announced-recovery fixture was revised so it reproduces the original failure.
+It appends a durable queue row, lets a first checkpoint announce that recovery generation while the row stays unacknowledged, then runs a second checkpoint and asserts it supervises for its full bound with the generation and row unchanged.
+The fixture was run on its own in an isolated copy of the test file, once with the checkpoint wrapper as committed and once with its `FM_WATCH_FOREGROUND_CHECKPOINT=1` export removed.
+From the repository root, this command isolates that test function, runs it against the committed wrapper, then runs it against a temporary control wrapper with the checkpoint export removed:
+
+```sh
+set -eu
+root=$PWD
+runner=$(mktemp tests/.fm-watch-checkpoint.XXXXXX)
+control_bin=$(mktemp -d tests/.fm-watch-checkpoint-bin.XXXXXX)
+trap 'rm -rf "$runner" "$control_bin"' EXIT
+for source in "$root"/bin/*; do
+  [ -f "$source" ] || continue
+  name=${source##*/}
+  [ "$name" = fm-watch-checkpoint.sh ] || ln -s "$source" "$control_bin/$name"
+done
+sed '/^export FM_WATCH_FOREGROUND_CHECKPOINT=1$/d' \
+  "$root/bin/fm-watch-checkpoint.sh" > "$control_bin/fm-watch-checkpoint.sh"
+chmod +x "$control_bin/fm-watch-checkpoint.sh"
+awk '
+  /^test_quiet_checkpoint_exits_124_cleanly$/ { exit }
+  /^CHECKPOINT=/ {
+    print "CHECKPOINT=\"${FM_TEST_CHECKPOINT:-$ROOT/bin/fm-watch-checkpoint.sh}\""
+    next
+  }
+  { print }
+' "$root/tests/fm-watch-checkpoint.test.sh" > "$runner"
+printf '%s\n' 'test_announced_recovery_is_not_reannounced_by_next_checkpoint' >> "$runner"
+FM_TEST_CHECKPOINT= bash "$runner"
+status=0
+FM_TEST_CHECKPOINT="$control_bin/fm-watch-checkpoint.sh" bash "$runner" \
+  > "$control_bin/control.out" 2>&1 || status=$?
+cat "$control_bin/control.out"
+[ "$status" -eq 1 ] \
+  && grep -Fqx 'not ok - announced recovery checkpoint exit: expected exit 124, got 0' \
+    "$control_bin/control.out"
+```
+
+Observed output with the checkpoint distinction:
+
+```text
+ok - an announced recovery is not reannounced by the next foreground checkpoint
+```
+
+Observed output without the checkpoint distinction:
+
+```text
+not ok - announced recovery checkpoint exit: expected exit 124, got 0
+```
+
 Deterministic entry points:
 
 ```sh
@@ -564,6 +654,7 @@ tests/fm-pi-primary-types.test.sh
 tests/fm-watcher-lock.test.sh
 tests/fm-watch-arm.test.sh
 tests/fm-watch-recovery-loop.test.sh
+tests/fm-watch-checkpoint.test.sh
 tests/fm-wake-queue.test.sh
 tests/fm-subagent-pretool-check.test.sh
 tests/fm-claude-stop-autoarm.test.sh
@@ -693,7 +784,17 @@ ok - cursor 2026.09.23-86fc751: the tracked registrations mirrored the captain p
 ok - host mirror live: 2 harness(es) proved their writers
 ```
 
-The run above exercised these payload fields:
+On 2026-10-07, the Claude path passed again on Linux 7.0.0-34-generic x86_64 with Claude Code 2.1.293 (`haiku`) and a managed policy that displayed `auto mode on` at its idle composer.
+The guard ran in its private tmux socket and required both an idle verdict from the Claude-scoped rendered busy-state check and an empty composer before submitting its prompt.
+
+```text
+$ FM_HOST_MIRROR_LIVE_E2E=1 FM_HOST_MIRROR_LIVE_HARNESSES=claude bash tests/fm-host-mirror-live-e2e.test.sh
+ok - claude 2.1.293 (Claude Code): a turn the harness started itself was not mirrored as the captain's words
+ok - claude 2.1.293 (Claude Code): the tracked registrations mirrored the captain prompt and main reply
+ok - host mirror live: 1 harness(es) proved their writers
+```
+
+The runs above exercised these payload fields:
 
 | Primary | Captain text | Main text |
 | --- | --- | --- |
