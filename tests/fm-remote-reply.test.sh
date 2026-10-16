@@ -174,6 +174,9 @@ pass "a captured delta is applied, acknowledged, and re-armed without a handler"
 
 # Now the handler's own retry path, from the state a crash between applying and
 # acknowledging leaves behind: the acknowledgement is gone and re-arming fails.
+# Replay cases replace the registration. Stop the continuous listener first so
+# it cannot exit on a superseded launch after await_reply_result observes it live.
+stop_reply_listener || fail "the reply listener did not stop before the re-arm failure"
 rm -f "$PARENT/state/procevent-inbox/$SID.1.handled"
 rm -rf "$PARENT/state/procevent"
 : > "$PARENT/state/procevent"
@@ -218,6 +221,7 @@ RESULT_TWO="$PARENT/state/procevent-inbox/$SID.2.result"
 # The runner already applied and acknowledged this capture. Drop that genuine
 # acknowledgement and put an unsafe one in its place, so the handler's refusal
 # to trust a non-regular marker stays under test.
+stop_reply_listener || fail "the reply listener did not stop before the unsafe acknowledgement"
 rm -f "$PARENT/state/procevent-inbox/$SID.2.handled"
 ln -s "$TMP_ROOT/missing-handled-marker" "$PARENT/state/procevent-inbox/$SID.2.handled"
 set +e
@@ -230,9 +234,7 @@ printf 'done [corr=2222222222222222]: third generation\n' \
   >> "$REMOTE/state/parent-replies.status"
 await_reply_result "$PARENT/state/procevent-inbox/$SID.3.result" \
   || fail "third reply generation was not captured"
-RESULT_THREE="$PARENT/state/procevent-inbox/$SID.3.result"
-remote_env "$ADAPTER" handle ios 3 "$RESULT_THREE" >/dev/null \
-  || fail "third reply generation was not handled"
+stop_reply_listener || fail "the reply listener did not stop before the earlier-generation replay"
 rm -f "$PARENT/state/procevent-inbox/$SID.2.handled"
 out=$(remote_env "$ADAPTER" handle ios 2 "$RESULT_TWO")
 assert_contains "$out" 'ingested: ios appended=0' "earlier generation did not replay from its durable ingestion receipt"
@@ -266,8 +268,6 @@ fm_pending_reply_mark_delivered "$PARENT/state" "$PENDING_CORR" \
 await_reply_result "$PARENT/state/procevent-inbox/$SID.4.result" \
   || fail "the mirrored status stream was not captured"
 RESULT_FOUR="$PARENT/state/procevent-inbox/$SID.4.result"
-remote_env "$ADAPTER" handle ios 4 "$RESULT_FOUR" > "$TMP_ROOT/handle-mirror.out" 2>&1 \
-  || fail "an uncorrelated status line stopped the delta: $(cat "$TMP_ROOT/handle-mirror.out")"
 assert_grep 'working [key=version-audit]' "$PARENT/state/ios.status" "an uncorrelated progress line never reached the parent stream"
 assert_grep 'needs-decision [key=rough-cut-version]' "$PARENT/state/ios.status" "a newly raised remote decision never reached the parent stream"
 assert_grep "done [corr=$PENDING_CORR]" "$PARENT/state/ios.status" "the correlated answer sharing the delta was lost"
@@ -301,7 +301,8 @@ pass "a remote mate's new decision folds open exactly as a local mate's does"
 
 # Ingesting the same generation again is idempotent: no duplicated lines and no
 # cursor movement, so a replay can never wedge or double-count the stream.
-remote_env "$ADAPTER" handle ios 4 "$RESULT_FOUR" >/dev/null 2>&1 || true
+stop_reply_listener || fail "the reply listener did not stop before the mirrored-delta replay"
+remote_env "$ADAPTER" handle ios 4 "$RESULT_FOUR" >/dev/null 2>&1 || fail "mirrored-delta replay failed"
 [ "$(grep -cF 'needs-decision [key=rough-cut-version]' "$PARENT/state/ios.status")" -eq 1 ] \
   || fail "replaying the mirrored delta duplicated the new decision"
 assert_grep "offset=$mirror_offset" "$PARENT/state/remote-replies/ios.cursor" \
@@ -325,9 +326,6 @@ printf 'blocked [key=ctl]: escape \033[31mhere\033[0m bell \007 caf\xc3\xa9 end\
   >> "$REMOTE/state/parent-replies.status"
 await_reply_result "$PARENT/state/procevent-inbox/$SID.5.result" \
   || fail "the control-character line was not captured"
-RESULT_FIVE="$PARENT/state/procevent-inbox/$SID.5.result"
-remote_env "$ADAPTER" handle ios 5 "$RESULT_FIVE" >/dev/null 2>&1 \
-  || fail "a control character stopped the stream"
 assert_grep 'blocked [key=ctl]: escape ?[31mhere' "$PARENT/state/ios.status" \
   "the control-character line was not mirrored in normalized form"
 [ -z "$(LC_ALL=C tr -d '\11\12\40-\176\200-\377' < "$PARENT/state/ios.status")" ] \
@@ -342,9 +340,6 @@ pass "transported control bytes are normalized in place and never stop the strea
 printf 'status=delta\n' >> "$REMOTE/state/parent-replies.status"
 await_reply_result "$PARENT/state/procevent-inbox/$SID.6.result" \
   || fail "the header-collision line was not captured"
-RESULT_SIX="$PARENT/state/procevent-inbox/$SID.6.result"
-remote_env "$ADAPTER" handle ios 6 "$RESULT_SIX" >/dev/null 2>&1 \
-  || fail "a payload protocol-field name stopped the stream"
 assert_grep 'status=delta' "$PARENT/state/ios.status" \
   "the payload protocol-field line did not reach the parent stream"
 collision_offset=$(LC_ALL=C wc -c < "$REMOTE/state/parent-replies.status" | tr -d ' ')
@@ -355,9 +350,6 @@ pass "payload protocol-field names cannot collide with transport metadata"
 printf 'working [key=nul-byte]: before\000after\n' >> "$REMOTE/state/parent-replies.status"
 await_reply_result "$PARENT/state/procevent-inbox/$SID.7.result" \
   || fail "the NUL-bearing line was not captured"
-RESULT_SEVEN="$PARENT/state/procevent-inbox/$SID.7.result"
-remote_env "$ADAPTER" handle ios 7 "$RESULT_SEVEN" >/dev/null 2>&1 \
-  || fail "a NUL byte stopped the stream"
 assert_grep 'working [key=nul-byte]: before?after' "$PARENT/state/ios.status" \
   "the NUL byte was not normalized in place"
 nul_offset=$(LC_ALL=C wc -c < "$REMOTE/state/parent-replies.status" | tr -d ' ')
