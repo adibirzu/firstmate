@@ -753,7 +753,12 @@ Plain or palette placeholders remain unknown/pending; this is an intentional lim
 This result does not establish compatibility with custom themes or remapped shortcut cells; those require their own live proof.
 
 The shared classifier owns the bounded status-panel rule in `bin/fm-composer-lib.sh`; its real-frame portable regressions are in `tests/fm-composer-lib.test.sh`.
-Herdr and zellij use the styled cursorless profile exercised by those frames; tmux retains cursor anchoring and the same placeholder draft protection.
+OpenCode classification and selected-content extraction additionally require `viewport=1`, explicit adapter provenance that the capture contains the entire current visible viewport without tail truncation or scrollback substitution.
+Herdr supplies that provenance from `--source visible`; tmux supplies it from its full current-screen capture and retains cursor anchoring.
+Zellij's styled dump is currently trimmed to a bounded tail, Orca requests a bounded terminal tail, and cmux reads scrollback then trims a tail; these adapters explicitly report `viewport=0` and refuse the OpenCode left-bar shape as `unknown`.
+That refusal also applies to a genuinely blank OpenCode composer because these captures cannot prove that no dialog owns input above it.
+The portable backend regressions replay actual native OpenCode frames through each production capture path, proving the dialog disappears from the bounded capture while classification still refuses.
+Those transport replays do not establish native Zellij, Orca or cmux compatibility.
 Other harnesses' shape selectors and every backend's endpoint identity and semantic busy source are unchanged.
 
 Refresh with the intended 1.x executable on PATH:
@@ -770,7 +775,7 @@ The same guard then completed with the following actual 1.19.0 results on Herdr 
 ```text
 ok - opencode (1.19.0): unsupported palette hint and real hint-like draft retain refusal
 ok - opencode (1.19.0): real drafts, including quoted hint text, survive refused control exit
-ok - opencode (1.19.0): observed native session model overlay above intact composer/status refuses injection
+ok - opencode (1.19.0): native unfiltered, filtered and zero-result model dialogs preserve queries and refuse control
 ok - opencode (1.19.0): control exit preserves the exact endpoint and uncommitted work
 ok - opencode (1.19.0): real native tool permission overlay refuses injection without approving access
 ok - opencode (1.19.0): native busy queued Enter reaches the deterministic loopback model transport
@@ -778,9 +783,12 @@ ok - opencode (1.19.0): native busy queued Enter reaches the deterministic loopb
 
 The draft check requires the pending-text refusal reason, so an unrelated metadata refusal cannot satisfy it.
 The model-overlay check enters a real loopback-backed session in a short cwd at 120 columns by 60 rows before opening the native Select model dialog.
-It proves the blank composer is empty first, observes the dialog above an intact composer/floor and complete shortcut pair, requires both classification and control exit to refuse, then closes the dialog back to empty.
-The same strengthened guard failed against the preceding classifier with `observed model overlay became injectable` and passed with the dialog veto.
-Portable regressions replay the original native session ANSI frames through classification with and without a cursor and through selected-content extraction; the earlier wrapped-cwd overlay captures remain refusal evidence.
+It proves the blank composer is empty first, observes the native dialog above the same blank composer/floor and complete shortcut pair, then exercises unfiltered, populated-query and zero-result states without selecting a model.
+Each state must refuse classification, selected-content extraction and control exit, preserve the exact dialog/query after refusal, and close back to a proven blank composer.
+The modal veto uses the aligned title/escape controls, input-row spacing and action footer; query contents, result count and selection are deliberately excluded from its proof.
+Actual native filtered and zero-result frames reproduced unsafe `empty` and successful empty extraction before this correction; the corrected classifier returns `unknown` and refuses extraction for those same bytes.
+Portable regressions replay those frames with and without a cursor supplied as the actual positional argument, verify the cursor points inside the real composer, and deliberately move it outside to lose proof.
+Missing, false or unknown viewport provenance refuses both classification and extraction even when supplied a complete frame; the earlier wrapped-cwd overlay captures remain refusal evidence.
 The queue check requires the exact next user instruction to reach the local transport after the held native turn is released; it does not accept a title-generation request as delivery.
 A separate authorized read-only real spent-free capture retained `unknown` for the usage-exceeded upsell/retry row; it was never used as evidence for an empty composer.
 

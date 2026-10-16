@@ -35,6 +35,10 @@
 #               the tmux pi foreground-process probe). Identity is what makes
 #               Pi's blank separated composer provable; with identity=0 that
 #               shape stays `unknown`.
+#   viewport=1  the capture contains the entire CURRENT visible viewport,
+#               without tail truncation or scrollback substitution. OpenCode
+#               requires this proof because a modal above its intact composer
+#               owns input. Missing/0 provenance refuses only that shape.
 #   rows=<n>    the capture's bounded row count (informational).
 #
 # THE STRICT BLANK-ROW RULE (captain decision blank-row-injection-posture,
@@ -1326,8 +1330,9 @@ _fm_composer_leftbar_idle_hint() { # <raw-row> <content> <styled>
 # the idle hint read empty; the run's LAST row may be the mode/model footer
 # (composer furniture, never typed text). Real content is pending when styling
 # can prove it real, unknown otherwise.
-_fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
-  local screen=$1 styled=$2 first=$3 last=$4
+_fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row> <viewport>
+  local screen=$1 styled=$2 first=$3 last=$4 viewport=$5
+  if [ "$viewport" != 1 ]; then printf 'unknown'; return 0; fi
   local row raw content pending_seen=0 footer_re leading_blank=1 placeholder_position=0
   if _fm_composer_opencode_model_dialog "$screen" "$first" "$last"; then
     printf 'unknown'
@@ -1377,8 +1382,9 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 }
 
 # A native session model selector can leave its entire underlying composer
-# visible. Veto only above a selected OpenCode mode/floor, with the aligned
-# title, search, selected option and action footer forming one dialog.
+# visible. Its aligned title/escape control, input-row spacing and action
+# footer prove a dialog above the selected mode/floor. Query text, result
+# count, provider layout and the selected option are data, never this proof.
 _fm_composer_opencode_model_dialog() { # <screen> <first-row> <last-row>
   local screen=$1 first=$2 last=$3 plain floor mode
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
@@ -1396,21 +1402,15 @@ _fm_composer_opencode_model_dialog() { # <screen> <first-row> <last-row>
     {
       text=trim($0)
       if (text ~ /^Select model  +esc$/) {
-        col=index($0,"Select model"); search=0; options=0; selected=0
+        col=index($0,"Select model"); title=NR; gap=0
         next
       }
-      if (!col || text == "") next
-      if (text == "Search" && index($0,"Search") == col) {search=1; next}
-      if (!search) {col=0; next}
-      if (text ~ /^Connect provider ctrl\+a  +Favorite ctrl\+f$/ && index($0,"Connect provider") == col) {
-        if (selected && options >= 2) found=1
-        col=0; next
-      }
-      if (index($0,"● ") == col-2) {selected=1; options++; next}
-      if (trim(substr($0,1,col-1)) == "" && substr($0,col,1) != " ") {
-        options++; next
-      }
-      col=0
+      if (!col) next
+      if (NR == title+1) {gap=(text == ""); next}
+      if (gap && NR >= title+5 && previous == "" &&
+          text ~ /^Connect provider ctrl\+a  +Favorite ctrl\+f$/ &&
+          index($0,"Connect provider") == col) {found=1; col=0}
+      previous=text
     }
     END {exit !found}
   '
@@ -1660,19 +1660,21 @@ _fm_composer_select_cursorless() {
 
 fm_composer_extract_selected_content() {  # <caps> <screen>
   local caps=$1 screen=$2 styled=0 kv plain row raw content glyph joined='' footer_re prompt_row=-1
-  local leading_blank=1 placeholder_position=0 prompt_is_shell=0
+  local leading_blank=1 placeholder_position=0 prompt_is_shell=0 viewport=0
   footer_re=${FM_COMPOSER_LEFTBAR_FOOTER_RE:-$FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT}
   while IFS= read -r kv; do
-    [ "$kv" = styled=1 ] && styled=1
+    case "$kv" in styled=1) styled=1 ;; viewport=1) viewport=1 ;; esac
   done <<EOF
 $caps
 EOF
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   _fm_composer_scan_screen "$plain" '' 1
   _fm_composer_select_cursorless "$plain" || return 1
-  if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
-     && _fm_composer_opencode_model_dialog "$screen" "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"; then
-    return 1
+  if [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ]; then
+    [ "$viewport" = 1 ] || return 1
+    if _fm_composer_opencode_model_dialog "$screen" "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"; then
+      return 1
+    fi
   fi
   row=$FM_COMPOSER_SELECTED_FIRST
   while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
@@ -1744,12 +1746,13 @@ EOF
 
 fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
   local caps=$1 screen=$2 cy=${3:-} identity=${4:-}
-  local styled=0 cursor=0 has_identity=0 kv plain
+  local styled=0 cursor=0 has_identity=0 viewport=0 kv plain
   while IFS= read -r kv; do
     case "$kv" in
       styled=1) styled=1 ;;
       cursor=1) cursor=1 ;;
       identity=1) has_identity=1 ;;
+      viewport=1) viewport=1 ;;
     esac
   done <<EOF
 $caps
@@ -1774,7 +1777,7 @@ EOF
        && [ "$cy" -ge "$FM_COMPOSER_SCAN_LEFTBAR_START" ] \
        && [ "$cy" -le "$FM_COMPOSER_SCAN_LEFTBAR_END" ]; then
       _fm_composer_classify_leftbar "$screen" "$styled" \
-        "$FM_COMPOSER_SCAN_LEFTBAR_START" "$FM_COMPOSER_SCAN_LEFTBAR_END"
+        "$FM_COMPOSER_SCAN_LEFTBAR_START" "$FM_COMPOSER_SCAN_LEFTBAR_END" "$viewport"
       return 0
     fi
     if [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ] && [ "$cy" -eq "$FM_COMPOSER_SCAN_BARE_ROW" ]; then
@@ -1844,7 +1847,7 @@ EOF
       ;;
     leftbar)
       _fm_composer_classify_leftbar "$screen" "$styled" \
-        "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST"
+        "$FM_COMPOSER_SELECTED_FIRST" "$FM_COMPOSER_SELECTED_LAST" "$viewport"
       ;;
   esac
 }

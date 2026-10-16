@@ -417,7 +417,7 @@ fm_backend_orca_composer_capture() {  # <terminal-id> [expected-label]
 # on the verification machine), so styled stays 0 - the conservative
 # degradation - until a live capture proves otherwise.
 fm_backend_orca_composer_caps() {
-  printf 'styled=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
+  printf 'styled=0\nviewport=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
 }
 
 # fm_backend_orca_composer_state: thin adapter - capture plus capabilities in,

@@ -1538,3 +1538,24 @@ test_teardown_refuses_orca_worktree_without_terminal_handle
 test_secondmate_force_teardown_removes_orca_child_via_orca
 test_secondmate_force_teardown_refuses_orca_child_id_path_mismatch
 test_secondmate_force_teardown_refuses_partial_orca_child
+
+test_opencode_modal_above_bounded_capture() {
+  local frame out
+  for frame in session-idle session-model-overlay session-model-filtered session-model-zero; do
+    orca_case "opencode-viewport-$frame"
+    # Native terminal-read protocol returns only its requested tail, not a
+    # proven current viewport. Replay the actual frame at that boundary.
+    node -e 'const fs=require("fs");const rows=fs.readFileSync(process.argv[1],"utf8").trimEnd().split("\n");process.stdout.write(JSON.stringify({ok:true,result:{terminal:{tail:rows.slice(-20)}}}));' \
+      "$ROOT/tests/fixtures/opencode-1.19/$frame.ansi" > "$RESP/1.out"
+    cp "$RESP/1.out" "$RESP/2.out"
+    out=$(PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" bash -c '
+      . "$0/bin/backends/orca.sh"
+      cap=$(fm_backend_orca_composer_capture term-123) || exit 1
+      printf "%s\n" "$cap" | fm_composer_strip_ansi | grep -q "Select model" && exit 2
+      [ "$(fm_backend_orca_composer_state term-123)" = unknown ] || exit 3
+    ' "$ROOT") || fail "orca $frame bounded tail authorized composer: $out"
+    assert_contains "$(cat "$LOG")" $'\x1f''--limit'$'\x1f''20' "Orca composer capture changed its bounded protocol"
+  done
+  pass "orca OpenCode: bounded terminal-read protocol refuses unseen-modal ambiguity"
+}
+test_opencode_modal_above_bounded_capture

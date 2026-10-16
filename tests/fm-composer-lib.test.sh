@@ -147,17 +147,18 @@ test_real_text_is_pending() {
 # 1.0.0 (bordered box with a TITLED bottom border), plus claude captured
 # inside zellij through `dump-screen --ansi` (`ESC[m` `❯` U+00A0).
 #
-# Capability profiles mirror the real adapters' descriptors: tmux
-# (styled+cursor+identity), herdr/zellij (styled), cmux/orca (plain). Every
+# Complete-viewport fixture profiles cover styled captures with/without
+# cursor/identity. Actual bounded backend captures are exercised separately.
+# The plain profile retains the bounded cmux/orca capabilities. Every
 # emptiness verdict is asserted under the ambient UTF-8 locale AND LC_ALL=C,
 # pinning the locale-safe Unicode-space normalization (issue #1988).
 # =============================================================================
 
 ESC=$(printf '\033')
 NBSP=$(printf '\302\240')
-CAPS_TMUX=$'styled=1\ncursor=1\nidentity=1\nrows=0'
-CAPS_STYLED=$'styled=1\ncursor=0\nidentity=1\nrows=20'      # herdr
-CAPS_STYLED_NOID=$'styled=1\ncursor=0\nidentity=0\nrows=20' # zellij
+CAPS_TMUX=$'styled=1\nviewport=1\ncursor=1\nidentity=1\nrows=0'
+CAPS_STYLED=$'styled=1\nviewport=1\ncursor=0\nidentity=1\nrows=0' # herdr
+CAPS_STYLED_NOID=$'styled=1\nviewport=1\ncursor=0\nidentity=0\nrows=0' # complete styled fixture
 CAPS_PLAIN=$'styled=0\ncursor=0\nidentity=0\nrows=20'       # cmux, orca
 
 # assert_screen <label> <want> <caps> <screen> [cursor] [identity]: one
@@ -680,7 +681,7 @@ test_matrix_opencode_leftbar_signals() {
   dim_screen=$'  ┃\n  ┃  '"${ESC}[2mAsk anything...${ESC}[0m"$'\n  ┃\n  ┃  Build · GPT-5.5 Fast OpenAI · high\n  ╹▀▀▀▀'
   assert_screen "opencode idle on tmux (cursor on hint)" empty "$CAPS_TMUX" "$dim_screen" 1
   assert_screen "opencode idle on herdr" empty "$CAPS_STYLED" "$dim_screen"
-  assert_screen "opencode idle on zellij" empty "$CAPS_STYLED_NOID" "$dim_screen"
+  assert_screen "opencode idle on complete styled capture" empty "$CAPS_STYLED_NOID" "$dim_screen"
   assert_screen "opencode plain hint cannot exclude a draft on cmux/orca" unknown "$CAPS_PLAIN" "$screen"
   # This sanitized live OpenCode 1.18.30 capture preserves its U+2026 hint and
   # RGB 128 styling. The left-bar hint proof includes that measured muted
@@ -1036,24 +1037,25 @@ test_opencode_bounded_status_panel() {
       assert_screen "OpenCode 1.19 $frame bounded status panel" empty "$caps" "$screen"
       case "$frame" in session-idle)
         assert_screen "OpenCode native session blank with underlying composer cursor" empty \
-          "$caps"$'\ncursor=1\ncy=52' "$screen"
+          "$caps"$'\ncursor=1' "$screen" 53
         out=$(fm_composer_extract_selected_content "$caps" "$screen") \
           || fail "OpenCode native blank session refused content extraction"
         [ -z "$out" ] || fail "OpenCode native blank session extracted nonempty content"
         ;;
       esac
     done
-    for frame in draft model-overlay permission-overlay session-model-overlay; do
+    for frame in draft model-overlay permission-overlay session-model-overlay session-model-filtered session-model-zero; do
       screen=$(cat "$fixtures/$frame.ansi")
       out=$(fm_composer_classify_screen "$caps" "$screen")
       [ "$out" != empty ] || fail "OpenCode 1.19 $frame must never authorize typing"
-      if [ "$frame" = session-model-overlay ]; then
+      case "$frame" in session-model-*)
         if fm_composer_extract_selected_content "$caps" "$screen" >/dev/null; then
           fail "native session model dialog allowed composer extraction"
         fi
         assert_screen "native session model dialog with underlying composer cursor" unknown \
-          "$caps"$'\ncursor=1\ncy=52' "$screen"
-      fi
+          "$caps"$'\ncursor=1' "$screen" 53
+        ;;
+      esac
     done
   done
   # The same bright text as a quoted placeholder is still an actual draft.
@@ -1115,3 +1117,31 @@ test_opencode_status_requires_complete_shortcut_pair() {
 test_opencode_bounded_status_panel
 test_opencode_status_panel_refusal_boundaries
 test_opencode_status_requires_complete_shortcut_pair
+
+# The same complete frame is insufficient without capture provenance; rows=0
+# is informational, not evidence that a backend returned the current viewport.
+test_opencode_viewport_provenance() {
+  local frame screen caps out
+  for frame in session-idle session-model-overlay session-model-filtered session-model-zero draft; do
+    screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/$frame.ansi")
+    for caps in $'styled=1\nrows=0' $'styled=1\nviewport=0' $'styled=1\nviewport=unknown'; do
+      assert_screen "OpenCode $frame lacks viewport proof" unknown "$caps" "$screen"
+      if fm_composer_extract_selected_content "$caps" "$screen" >/dev/null; then
+        fail "OpenCode $frame extraction accepted insufficient capture provenance"
+      fi
+    done
+  done
+  screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/session-idle.ansi")
+  # Real zero-based row 53 is inside the native composer. Row zero is blank
+  # outside it: deliberately moving the positional argument must lose proof.
+  out=$(_fm_composer_screen_row 53 "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)")
+  fm_composer_normalize_trim_var out
+  [ "$out" = '┃' ] || fail "actual native cursor fixture no longer points inside the composer"
+  assert_screen "OpenCode real composer cursor" empty "$CAPS_TMUX" "$screen" 53
+  assert_screen "OpenCode cursor moved outside composer" unknown "$CAPS_TMUX" "$screen" 0
+  # Ordinary transcript mentions do not form the native aligned dialog.
+  screen=$(printf '%s\n%s' 'Discuss Select model and Connect provider ctrl+a Favorite ctrl+f here.' "$screen")
+  assert_screen "OpenCode transcript mention is not a modal" empty "$CAPS_STYLED" "$screen"
+  pass "OpenCode viewport provenance and actual positional cursor remain required"
+}
+test_opencode_viewport_provenance

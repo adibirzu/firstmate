@@ -91,7 +91,7 @@ EOF
   if [ "$(fm_backend_herdr_composer_state "$TARGET")" != empty ]; then
     printf '# initial OpenCode frame (%s):\n' "$label" >&2
     printf '%s\n' "$plain" | tail -24 >&2
-    printf '# direct verdict=%s\n' "$(fm_composer_classify_screen $'styled=1\ncursor=0\nidentity=1' "$screen")" >&2
+    printf '# direct verdict=%s\n' "$(fm_composer_classify_screen $'styled=1\nviewport=1\ncursor=0\nidentity=1' "$screen")" >&2
     fail "opencode ($VERSION): initial composer did not prove empty"
   fi
 }
@@ -163,43 +163,79 @@ for _ in $(seq 1 60); do
 done
 [ "$seen" = 1 ] || fail "opencode ($VERSION): native session blank composer was not observed"
 printf '%s\n' "$screen" > "$D/session-idle.ansi"
-lab pane send-text "$PANE" /models >/dev/null
-for _ in $(seq 1 20); do
-  [ "$(fm_backend_herdr_composer_content "$TARGET")" != /models ] || break
-  sleep 0.1
+for query in '' Local FM_NOMATCH_CONTROL; do
+  lab pane send-text "$PANE" /models >/dev/null
+  for _ in $(seq 1 20); do
+    [ "$(fm_backend_herdr_composer_content "$TARGET")" != /models ] || break
+    sleep 0.1
+  done
+  [ "$(fm_backend_herdr_composer_content "$TARGET")" = /models ] || fail "opencode ($VERSION): /models did not reach the actual composer"
+  lab pane send-keys "$PANE" enter >/dev/null
+  seen=0
+  for _ in $(seq 1 30); do
+    screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+    plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+    if printf '%s\n' "$plain" | grep -q 'Select model'; then seen=1;break;fi
+    sleep 0.1
+  done
+  [ "$seen" = 1 ] || fail "opencode ($VERSION): native model overlay was not observed"
+  if [ -n "$query" ]; then lab pane send-text "$PANE" "$query" >/dev/null; fi
+  seen=0
+  for _ in $(seq 1 30); do
+    screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+    plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+    dialog=$(printf '%s\n' "$plain" | sed -n '/Select model/,/Connect provider/p')
+    if printf '%s\n' "$dialog" | grep -Eq "^[[:space:]]*${query:-Search}[[:space:]]*$"; then seen=1;break;fi
+    sleep 0.1
+  done
+  [ "$seen" = 1 ] || fail "opencode ($VERSION): native model query was not observed: $query"
+  printf '%s\n' "$screen" > "$D/models-${query:-unfiltered}.ansi"
+  case "$query" in
+    FM_NOMATCH_CONTROL)
+      if printf '%s\n' "$dialog" | grep -Eq 'Local (control|alternate)|●'; then
+        fail "opencode ($VERSION): zero-result native dialog still contained an option"
+      fi ;;
+    *) printf '%s\n' "$dialog" | grep -q '●' \
+         || fail "opencode ($VERSION): populated native model dialog had no options" ;;
+  esac
+  # Prove the live full frame still selects the intact blank composer and
+  # complete status panel. A truncated slice cannot assert viewport authority.
+  _fm_composer_scan_screen "$plain" '' 1
+  _fm_composer_select_cursorless "$plain" || fail "opencode ($VERSION): modal obscured the underlying composer"
+  [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] || fail "opencode ($VERSION): modal no longer overlays the selected OpenCode composer"
+  floor=$((FM_COMPOSER_SELECTED_LAST + 1))
+  footer_end=$(_fm_composer_opencode_footer_end "$plain" "$floor")
+  [ "$footer_end" -gt "$floor" ] || fail "opencode ($VERSION): modal obscured the complete status panel"
+  row=$FM_COMPOSER_SELECTED_FIRST
+  while [ "$row" -lt "$FM_COMPOSER_SELECTED_LAST" ]; do
+    content=$(_fm_composer_screen_row "$row" "$plain")
+    fm_composer_normalize_trim_var content
+    content=${content#┃}
+    fm_composer_normalize_trim_var content
+    [ -z "$content" ] || fail "opencode ($VERSION): native modal case no longer has a blank underlying composer"
+    row=$((row + 1))
+  done
+  [ "$(fm_backend_herdr_composer_state "$TARGET")" = unknown ] || fail "opencode ($VERSION): observed model overlay became injectable: $query"
+  if fm_backend_herdr_composer_content "$TARGET" >/dev/null; then fail "opencode ($VERSION): active model dialog allowed extraction: $query"; fi
+  if out=$(control exit); then fail "opencode ($VERSION): exit accepted the active session model dialog: $out"; fi
+  case "$out" in *"composer state is 'unknown', not proven empty"*) ;; *) fail "opencode ($VERSION): model dialog exit refused for an unrelated reason: $out" ;; esac
+  after_screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+  printf '%s\n' "$after_screen" > "$D/models-${query:-unfiltered}-after-refusal.ansi"
+  after=$(printf '%s\n' "$after_screen" | fm_composer_strip_ansi | sed -n '/Select model/,/Connect provider/p')
+  [ "$after" = "$dialog" ] || fail "opencode ($VERSION): refused exit changed the native model query/dialog"
+  lab pane send-keys "$PANE" escape >/dev/null
+  seen=0
+  for _ in $(seq 1 30); do
+    screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
+    printf '%s\n' "$screen" > "$D/session-after-model-close.ansi"
+    plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+    if ! printf '%s\n' "$plain" | grep -q 'Select model' \
+       && [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ]; then seen=1;break;fi
+    sleep 0.1
+  done
+  [ "$seen" = 1 ] || fail "opencode ($VERSION): model overlay did not close to a proven composer"
 done
-[ "$(fm_backend_herdr_composer_content "$TARGET")" = /models ] || fail "opencode ($VERSION): /models did not reach the actual composer"
-lab pane send-keys "$PANE" enter >/dev/null
-seen=0
-for _ in $(seq 1 30); do
-  screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
-  printf '%s\n' "$screen" > "$D/models.ansi"
-  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
-  if printf '%s\n' "$plain" | grep -q 'Select model'; then seen=1;break;fi
-  sleep 0.1
-done
-[ "$seen" = 1 ] || { printf '%s\n' "$plain" | tail -20 >&2; fail "opencode ($VERSION): native model overlay was not observed"; }
-# Removing only the dialog rows must expose the still-provable composer. This
-# rejects vacuous refusals caused by an obscured floor or wrapped shortcuts.
-underlying=$(printf '%s\n' "$screen" | sed -n '/┃/,$p' | tail -n 8)
-[ "$(fm_composer_classify_screen styled=1 "$underlying")" = empty ] \
-  || fail "opencode ($VERSION): model dialog did not leave the underlying composer/status intact"
-[ "$(fm_backend_herdr_composer_state "$TARGET")" != empty ] || fail "opencode ($VERSION): observed model overlay became injectable"
-if out=$(control exit); then fail "opencode ($VERSION): exit accepted the active session model dialog: $out"; fi
-case "$out" in *"composer state is 'unknown', not proven empty"*) ;; *) fail "opencode ($VERSION): model dialog exit refused for an unrelated reason: $out" ;; esac
-fm_backend_herdr_visible_capture "$TARGET" | grep -q 'Select model' || fail "refused exit changed the active model dialog"
-pass "opencode ($VERSION): observed native session model overlay above intact composer/status refuses injection"
-lab pane send-keys "$PANE" escape >/dev/null
-seen=0
-for _ in $(seq 1 30); do
-  screen=$(fm_backend_herdr_visible_capture_ansi "$TARGET")
-  printf '%s\n' "$screen" > "$D/session-after-model-close.ansi"
-  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
-  if ! printf '%s\n' "$plain" | grep -q 'Select model' \
-     && [ "$(fm_backend_herdr_composer_state "$TARGET")" = empty ]; then seen=1;break;fi
-  sleep 0.1
-done
-[ "$seen" = 1 ] || { printf '%s\n' "$plain" | tail -12 >&2; fail "opencode ($VERSION): model overlay did not close to a proven composer"; }
+pass "opencode ($VERSION): native unfiltered, filtered and zero-result model dialogs preserve queries and refuse control"
 out=$(control exit) || fail "opencode ($VERSION): normal exit failed: $out"
 [ "$(fm_backend_agent_state herdr "$TARGET")" = dead ] || fail "opencode ($VERSION): exit did not stop its actual process"
 lab pane get "$PANE" >/dev/null
