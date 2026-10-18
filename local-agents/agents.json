@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "poll_seconds": 180,
+  "allowed_authors": ["adibirzu"],
+  "repos": ["adibirzu/firstmate", "adibirzu/mini-tools", "Pentforge-io/cyber-bot.ro", "adibirzu/localvideoediting", "adibirzu/aetherops"],
+  "hosts": {
+    "mini": {"ssh": null, "max_jobs": 2},
+    "adi1": {"ssh": "adi1", "max_jobs": 2, "dev_guard": true},
+    "adi2": {"ssh": "adi2-ts", "max_jobs": 2, "dev_guard": true}
+  },
+  "windows": {
+    "adi1-media": {
+      "host": "adi1",
+      "agents": ["studio-media"],
+      "not_before": "2026-10-19T00:00:00+03:00",
+      "reason": "adi1 runs the textbook OCR until Mon 2026-10-19 00:00 Bucharest (Adi, 2026-10-18 12:04)"
+    }
+  },
+  "agents": {
+    "studio-media": {
+      "hosts": ["adi2", "adi1"],
+      "runner": "studio-media.sh",
+      "llm": "per-task",
+      "tasks": ["probe", "qa", "subtitle-lint", "plan", "assemble", "subtitle", "voiceover-mix", "broll", "lipsync"],
+      "wall_default": "2h"
+    },
+    "release-watch": {
+      "hosts": ["mini"],
+      "runner": "release-watch.sh",
+      "llm": "none",
+      "tasks": ["poll", "digest"],
+      "wall_default": "10m"
+    },
+    "review-first-pass": {
+      "hosts": ["adi2"],
+      "runner": "review-first-pass.sh",
+      "llm": "agy",
+      "tasks": ["review"],
+      "wall_default": "30m"
+    },
+    "research": {
+      "hosts": ["adi2"],
+      "runner": "research.sh",
+      "llm": "claude",
+      "tasks": ["research"],
+      "wall_default": "45m"
+    },
+    "ocr-runner": {
+      "hosts": ["adi1", "adi2"],
+      "runner": "ocr-runner.sh",
+      "llm": "none",
+      "tasks": ["status", "report"],
+      "wall_default": "10m"
+    },
+    "fleet-monitor": {
+      "hosts": ["mini"],
+      "runner": "fleet-monitor.sh",
+      "llm": "none",
+      "tasks": ["check"],
+      "wall_default": "10m"
+    },
+    "issue-mapper": {
+      "hosts": ["adi2"],
+      "runner": "issue-mapper.sh",
+      "llm": "agy",
+      "tasks": ["map", "from-findings"],
+      "wall_default": "20m"
+    }
+  }
+}
