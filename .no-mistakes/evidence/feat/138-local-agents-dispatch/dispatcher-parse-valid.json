@@ -1,0 +1,9 @@
+{
+  "job": "release-watch/v1",
+  "id": "live-release-01",
+  "task": "poll",
+  "host_pref": [
+    "mini"
+  ],
+  "agent": "release-watch"
+}

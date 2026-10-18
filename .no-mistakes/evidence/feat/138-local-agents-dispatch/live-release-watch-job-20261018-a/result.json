@@ -1,0 +1,10 @@
+{
+  "status": "blocked",
+  "summary": "blocked: 4 open pull request(s) targeting main or prelive have a failing check",
+  "artifacts": [
+    "report.md"
+  ],
+  "pr": null,
+  "cost": {},
+  "details": ""
+}
