@@ -11,7 +11,7 @@ Answers meant for Adi are written in Romanian.
 The job id is `research/v1`.
 `task` is `research`.
 The question is the issue title and body, staged as `brief.md`.
-`budget.wall_max` overrides the 45 minute default and is capped at 6 hours by the dispatcher.
+`budget.wall_max` overrides the 45 minute default, and a value above 6 hours is rejected.
 
 ## Host
 

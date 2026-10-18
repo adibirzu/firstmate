@@ -11,9 +11,14 @@ home_dir=${HOME:?HOME is required}
 summary_file=$job_dir/summary.txt
 details_file=$job_dir/details.txt
 id=$(job_get id)
+catalogue=$job_dir/candidates.yaml
+if [ ! -f "$catalogue" ]; then
+  runner_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 1
+  catalogue=$runner_dir/../studio-media/candidates.yaml
+fi
 
 set +e
-decision=$(python3 - "$job_dir" "$home_dir" "$summary_file" "$details_file" <<'PY'
+decision=$(python3 - "$job_dir" "$home_dir" "$summary_file" "$details_file" "$catalogue" <<'PY'
 import json
 import re
 import subprocess
@@ -25,6 +30,7 @@ job_dir = Path(sys.argv[1])
 home = Path(sys.argv[2]).resolve()
 summary_path = Path(sys.argv[3])
 details_path = Path(sys.argv[4])
+catalogue = Path(sys.argv[5])
 
 def finish(status, summary, details=""):
     summary_path.write_text(summary.strip() + "\n", encoding="utf-8")
@@ -42,9 +48,6 @@ allowed = {
 if task not in allowed:
     finish("failed", "task not allowed")
 
-catalogue = job_dir / "candidates.yaml"
-if not catalogue.is_file():
-    catalogue = Path(__file__).resolve().parents[1] / "studio-media" / "candidates.yaml"
 excluded = []
 current_id = None
 current_check = None

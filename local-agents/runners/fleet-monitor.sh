@@ -62,7 +62,7 @@ if [ -d "$HOME/dev/firstmate/.git" ]; then
   fi
 fi
 
-remote_script="uptime; systemctl --user is-active ollama litellm comfyui || true; docker ps -a --filter status=exited --format '{{.Names}} {{.Status}}' || true"
+remote_script="uptime; systemctl --user is-active litellm.service langfuse.service comfyui.service || true; docker ps -a --filter status=exited --format '{{.Names}} {{.Status}}' || true"
 set +e
 adi1_out=$(ssh -o BatchMode=yes -o ConnectTimeout=8 adi1 "$remote_script" 2>&1)
 adi1_rc=$?

@@ -46,6 +46,7 @@ Acceptance for web audio is -16 LUFS within 1 LU and true peak at or below -1 dB
 `subtitle-lint` reports cedilla errors, a leading BOM, lines over 42 characters, and leaves comma-below Romanian letters in place.
 `plan` writes `report.md`.
 Generative tasks write the planned ledger line and return `blocked`.
+The blocked summary is `v1: generative pipeline not wired to LVS/GPU window yet (#139)`.
 
 ## QA gate
 

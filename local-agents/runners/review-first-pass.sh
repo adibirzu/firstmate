@@ -25,6 +25,7 @@ if [ -z "$reviewer" ]; then
   reviewer=agy/gemini-3.8-flash-high
 fi
 
+set +e
 python3 - "$author_family" "$reviewer" <<'PY'
 import sys
 
@@ -45,6 +46,7 @@ if author in families:
 raise SystemExit(0)
 PY
 family_rc=$?
+set -e
 if [ "$family_rc" -eq 2 ]; then
   printf '%s\n' "refused: reviewer family matches author_family ($author_family vs $reviewer)" >"$summary_file"
   write_result failed "$summary_file" ""
@@ -85,10 +87,7 @@ if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
 fi
 
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/fm-review.XXXXXX")
-cleanup() {
-  rm -rf "$workdir"
-}
-trap cleanup EXIT
+trap 'rm -rf "$workdir"' EXIT
 
 set +e
 gh pr diff -R "$repo" "$number" >"$job_dir/pr.diff" 2>"$job_dir/gh-diff.err"

@@ -25,6 +25,7 @@ No LLM call is made.
 ## Outputs
 
 `summary` states free disk on `/`, ahead/behind counts for `~/dev/firstmate` against `origin/main`, and whether adi1 and adi2-ts answered.
+User units checked read-only are `litellm.service`, `langfuse.service`, and `comfyui.service`.
 `details` lists exited containers and the version lines that were available.
 `status` is `blocked` when available disk is under 8 GiB or when either SSH host is unreachable.
 Missing version commands are reported and do not by themselves block the job.

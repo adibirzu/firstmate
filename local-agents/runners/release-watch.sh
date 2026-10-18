@@ -21,13 +21,11 @@ fi
 if [ -z "$repo" ]; then
   repo=Pentforge-io/cyber-bot.ro
 fi
-case "$repo" in
-  *[!A-Za-z0-9._-]*/[!A-Za-z0-9._-]*|*[!A-Za-z0-9._/-]*)
-    printf '%s\n' "bad repo input" >"$summary_file"
-    write_result failed "$summary_file" ""
-    exit 0
-    ;;
-esac
+if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  printf '%s\n' "bad repo input" >"$summary_file"
+  write_result failed "$summary_file" ""
+  exit 0
+fi
 
 since=$(python3 - <<'PY'
 from datetime import datetime, timedelta

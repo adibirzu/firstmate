@@ -125,7 +125,7 @@ def parse_duration(value):
     if seconds <= 0:
         raise ValueError("bad wall_max")
     if seconds > MAX_WALL:
-        seconds = MAX_WALL
+        raise ValueError("wall_max exceeds 6h")
     return seconds
 
 
@@ -542,8 +542,8 @@ def validate_job(config, data, labels):
         if budget.get("wall_max") is not None:
             try:
                 wall_seconds = parse_duration(budget.get("wall_max"))
-            except ValueError:
-                return None, "bad wall_max"
+            except ValueError as exc:
+                return None, str(exc)
     normalized = dict(data)
     normalized["agent"] = agent
     if wall_seconds is not None:

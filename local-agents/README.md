@@ -17,7 +17,7 @@ The job is the first fenced `yaml` block whose document has a top-level `job` ke
 `id` is a short token.
 `task` is one of that agent's tasks.
 `host_pref` is an optional list of host names from the registry.
-`budget.wall_max` is an optional duration such as `30m` or `2h`, capped at 6 hours.
+`budget.wall_max` is an optional duration such as `30m` or `2h`, and a value above 6 hours is rejected.
 
 The dispatcher posts one result comment.
 A succeeded job is labeled `state:done`.

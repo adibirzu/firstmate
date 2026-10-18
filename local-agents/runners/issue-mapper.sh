@@ -99,6 +99,7 @@ if [ "$llm_rc" -ne 0 ] || [ ! -s "$report" ]; then
   exit 0
 fi
 
+set +e
 python3 - "$repo" "$report" "$summary_file" "$create_flag" "$job_dir" <<'PY'
 import json
 import subprocess
@@ -147,6 +148,7 @@ details = Path(job_dir) / "create-details.txt"
 details.write_text("\n".join(created), encoding="utf-8")
 PY
 map_rc=$?
+set -e
 if [ "$map_rc" -ne 0 ]; then
   write_result failed "$summary_file" ""
   exit 0
