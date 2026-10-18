@@ -2061,12 +2061,14 @@ apply_model_fallback_for_status() {  # <status-file>
   [ -f "$STATE/$task.meta" ] && [ ! -L "$STATE/$task.meta" ] || return 0
   fallback_bin=${FM_MODEL_FALLBACK_BIN:-$SCRIPT_DIR/fm-model-fallback.sh}
   [ -x "$fallback_bin" ] || { triage_log "model fallback helper is unavailable: $fallback_bin"; return 0; }
-  if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$fallback_bin" "$task" apply >/dev/null 2>&1; then
-    triage_log "applied automatic model fallback for $task"
-    return 0
-  fi
+  # Capture the helper's own exit code directly. It must NOT be read after an
+  # `if ...; then return; fi` compound: a compound that completes without
+  # taking its branch still returns 0, so the refused-apply codes (1 no
+  # evidence, 3 exhausted) and any other failure all logged as "(exit 0)".
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$fallback_bin" "$task" apply >/dev/null 2>&1
   rc=$?
   case "$rc" in
+    0) triage_log "applied automatic model fallback for $task" ;;
     1) return 0 ;;
     3) triage_log "automatic model fallback exhausted for $task" ;;
     *) triage_log "automatic model fallback failed for $task (exit $rc)" ;;

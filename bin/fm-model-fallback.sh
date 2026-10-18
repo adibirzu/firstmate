@@ -17,21 +17,31 @@
 #   1. Reads state/<id>.meta for kind=ship|scout, harness=, model=, and the
 #      fallback cursor (the byte offset of the last evidence this script
 #      consumed).
-#   2. Drops every status line whose leading verb is the paused verb
-#      (bin/fm-classify-lib.sh's status_is_paused, the single owner of that
-#      vocabulary) before classifying anything. `paused:` is the declared
-#      external-wait verb a crew OR firstmate itself appends - including
-#      firstmate's own bookkeeping prose after a deliberate `fm-control exit`
-#      - and it means "leave this pane alone", never "act now". Depletion
-#      words inside that prose (a worker's own balance, a rate limit it is
-#      waiting out) must never be read as live evidence, so an endpoint
-#      fm-control deliberately stopped is never relaunched from its own
-#      after-the-fact status note. Only what remains is classified through
-#      `llm-router-axi classify-evidence` plus this script's hosted-region
-#      opt-in refusal signature below: the router owns the
-#      subscription-exhaustion vocabulary, this script owns the refusal
-#      anchors, and either firing means depletion. No evidence, no fallback -
-#      a healthy or ambiguous worker is never relaunched by this script.
+#   2. Keeps only the status lines that report the worker's OWN failure before
+#      classifying anything: a line is candidate evidence only when its leading
+#      verb is the failure verb `failed` (the charter cannot be carried out) or
+#      the obstacle verb `blocked` (stuck, needs help) - the two verbs the crew
+#      brief routes a worker's own "the runtime could not serve" report to. The
+#      verb is the structural signal that separates the worker's own
+#      harness/model output from third-party prose: a genuine exhaustion message
+#      is reported under one of those verbs, while ordinary narrative - including
+#      a PR-review summary that merely mentions "usage limit" or "quota limit" -
+#      is written under working:/done:/needs-decision:. Feeding every narrative
+#      line to the shared classifier let Cursor Bugbot/Copilot review text
+#      phrase-match as if it were the worker's own depletion and killed a healthy
+#      worker mid-tool-call. The declared external-wait verb `paused:` (owned by
+#      bin/fm-classify-lib.sh's status_is_paused) is a different verb and stays
+#      excluded too, so depletion words inside that after-the-fact note never
+#      relaunch an endpoint deliberately stopped. Known limit: detection is
+#      narrowed to those two verbs, so an exhaustion message a worker wrote under
+#      another verb (working:, needs-decision:) or as a bare non-verb error line
+#      is not treated as evidence - the deliberate cost of keeping third-party
+#      narrative out of the classifier. Only what remains is classified through
+#      `llm-router-axi classify-evidence` plus this script's hosted-region opt-in
+#      refusal signature below: the router owns the subscription-exhaustion
+#      vocabulary, this script owns the refusal anchors, and either firing means
+#      depletion. No evidence, no fallback - a healthy or ambiguous worker is
+#      never relaunched by this script.
 #   3. Asks `llm-router-axi route chain --harness <h> --model <m> --json` for
 #      the next move: the entry after the recorded model is next; a model
 #      absent from its chain steps to the chain head; the chain's last entry
@@ -58,7 +68,12 @@
 #      default instead of inheriting an axis tuned for the depleted model.
 #   8. Appends one `working:` status line recording the switch, then advances
 #      the fallback cursor past the consumed evidence under the task's meta
-#      lock, so the same evidence can never trigger a second step-down.
+#      lock, so the same evidence can never trigger a second step-down. A
+#      negative classification is a completed outcome too: it consumes the
+#      candidate evidence it evaluated so the same text is not rescanned on
+#      every later status event. Only an inconclusive classification (the
+#      router unavailable) and a failed relaunch leave the cursor untouched,
+#      because neither is a completed response to the evidence.
 #
 # Auto-step-down semantics (standing rule 2026-08-24): availability beats
 # escalation. When the depleted model IS the strongest available class, the
@@ -157,6 +172,39 @@ native_provider_of() {  # <harness>
   esac
 }
 
+# advance_fallback_cursor <byte-offset>: record the evidence cursor under the
+# task's meta lock. Defined before classification because both the negative
+# outcome below and the applied step-down at the end consume evidence through
+# it.
+advance_fallback_cursor() {
+  local cursor_end=$1 new_cursor_line lock update_ok
+  new_cursor_line="fallback_cursor=$cursor_end"
+  lock=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
+  fm_lock_acquire_wait "$lock" || die "could not acquire the meta lock for $META"
+  update_ok=1
+  # Insert the cursor immediately before the canonical pr= identity block
+  # rather than appending it. Appending after pr=/pr_head= pushed a
+  # non-identity key past the identity block, which bin/fm-pr-lib.sh's
+  # fm_pr_metadata_identity_parse used to read as a corrupt record and
+  # silently disarm the task's merge poll. When no pr= line exists the cursor
+  # still lands at the end; the identity block, once present, stays trailing.
+  {
+    awk -v cursor_line="$new_cursor_line" '
+      /^fallback_cursor=/ { next }
+      /^pr=/ && !placed { print cursor_line; placed=1 }
+      { print }
+      END { if (!placed) print cursor_line }
+    ' "$META"
+  } > "$META.locked-update" || update_ok=0
+  if [ "$update_ok" = 1 ]; then
+    mv "$META.locked-update" "$META" || update_ok=0
+  fi
+  rm -f "$META.locked-update"
+  fm_lock_release "$lock" || true
+  [ "$update_ok" = 1 ] || die "the fallback cursor could not be recorded; investigate duplicate-evidence handling for $ID"
+  FALLBACK_CURSOR=$cursor_end
+}
+
 # --- router resolution ------------------------------------------------------
 
 command -v jq >/dev/null 2>&1 || die "jq is not installed; refusing to parse the router's step-down decision without it"
@@ -176,28 +224,43 @@ STATUS_SIZE=$(wc -c < "$STATUS" | tr -d ' ')
 EVIDENCE_END=$STATUS_SIZE
 EVIDENCE_BYTES=$((EVIDENCE_END - CURSOR))
 
+# Drop this script's own exhaustion line before scoping. It is written under the
+# `blocked:` verb, which the verb scope below keeps, and it describes a fallback
+# this script already acted on, so without this it would be re-read as the
+# worker's own fresh failure report if the cursor ever resets (a truncated status
+# log). The step-down `working:` note this script also appends needs no such
+# filter: the verb scope below already drops every `working:` line. Both events
+# are still retained in the log itself.
 if [ "$EVIDENCE_BYTES" -gt 0 ]; then
   EVIDENCE_RAW=$(tail -c +"$((CURSOR + 1))" "$STATUS" 2>/dev/null \
     | head -c "$EVIDENCE_BYTES" \
-    | sed '/^working: automatic model fallback .*; auto-step-down logged per standing quota rule$/d' \
+    | sed -e '/^blocked: model fallback exhausted for .*needs a routing decision/d' \
     || true)
 else
   EVIDENCE_RAW=
 fi
-# Drop declared-external-wait bookkeeping (paused: <reason>) before
-# classification. status_is_paused (bin/fm-classify-lib.sh) is the single
-# owner of that verb: a crew OR firstmate itself appends it - including
-# firstmate's own prose after a deliberate `fm-control exit` - and its whole
-# point is "leave this pane alone", never "act now". Depletion words inside
-# that after-the-fact note must never read as live worker/harness evidence,
-# so an endpoint fm-control deliberately stopped is never relaunched from its
-# own status-log bookkeeping.
+# Scope the evidence to the worker's OWN failure report. A status line's
+# leading verb is the structural signal that separates the worker's own
+# harness/model output from third-party prose: a genuine exhaustion message is
+# the worker reporting its own runtime could not serve, which the crew brief
+# routes to `failed:` (the charter cannot be carried out) or `blocked:`
+# (stuck, needs help) - the two verbs kept here. Ordinary narrative - including
+# a PR-review summary that merely mentions "usage limit" or "quota limit" - is
+# written under working:/done:/needs-decision:. Feeding every narrative line to
+# the shared classifier let Cursor Bugbot/Copilot review text phrase-match as if
+# it were the worker's own depletion and killed a healthy worker mid-tool-call,
+# so the narrative verbs are dropped. `paused:`, the declared external-wait verb
+# owned by bin/fm-classify-lib.sh, is a different verb and stays excluded too.
+evidence_verb_is_failure() {  # <verb>
+  case "$1" in
+    failed|blocked) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 EVIDENCE_TEXT=
 if [ -n "$EVIDENCE_RAW" ]; then
   while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
-    if status_is_paused "$evidence_line"; then
-      continue
-    fi
+    evidence_verb_is_failure "$(status_line_verb "$evidence_line")" || continue
     EVIDENCE_TEXT="${EVIDENCE_TEXT}${evidence_line}
 "
   done <<EOF_EVIDENCE
@@ -210,7 +273,8 @@ fi
 # China-hosted inference (e.g. `latest version only available hosted in China,
 # requires explicit opt in`) is unavailable, not up against a working ceiling,
 # so it triggers the same in-lane fallback without provider-wide cooldown. The
-# match requires the complete failure wording in one failed status event,
+# evidence here is already scoped to the worker's own failure/obstacle verbs, so
+# the match only needs the complete refusal wording in one status event,
 # case-insensitive, so task content cannot combine partial anchors into a false
 # refusal.
 REFUSAL_SIGNATURE='hosted-region opt-in refusal'
@@ -220,7 +284,7 @@ evidence_has_refusal() {  # reads $EVIDENCE_TEXT
   while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
     lowered=$(printf '%s' "$evidence_line" | tr '[:upper:]' '[:lower:]')
     case "$lowered" in
-      failed:*'latest version only available hosted in china,'*'requires explicit opt in'*|failed:*'latest version only available hosted in china,'*'requires explicit opt-in'*)
+      *'latest version only available hosted in china,'*'requires explicit opt in'*|*'latest version only available hosted in china,'*'requires explicit opt-in'*)
         return 0
         ;;
     esac
@@ -230,23 +294,48 @@ EOF_REFUSAL
   return 1
 }
 
-CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" \
-  | "$ROUTER" classify-evidence 2>/dev/null \
-  || printf 'classification=none\n')
+# Classify through the router, then branch on whether it actually answered. The
+# script runs under `set -e`, so the substitution must not be a bare assignment:
+# a failing command substitution would abort the whole script before the status
+# could be read (regressing plan's documented quiet `action=none` and losing the
+# apply diagnostic). An `if` condition is exempt from errexit, so this captures
+# the exit status safely. A router that cannot answer - nonzero exit, or no
+# output at all - is inconclusive, never a negative verdict, so it must not let
+# the evidence be consumed below as if it had been classified.
+CLASSIFY_INCONCLUSIVE=0
+if CLASSIFICATION=$(printf '%s' "$EVIDENCE_TEXT" | "$ROUTER" classify-evidence 2>/dev/null); then
+  if [ -z "$CLASSIFICATION" ]; then
+    CLASSIFY_INCONCLUSIVE=1
+    CLASSIFICATION='classification=none'
+  fi
+else
+  CLASSIFY_INCONCLUSIVE=1
+  CLASSIFICATION='classification=none'
+fi
 case "$CLASSIFICATION" in
   classification=depleted*) ;;
   *)
     if evidence_has_refusal; then
       CLASSIFICATION=$(printf 'classification=depleted\nsignature="%s"\n' "$REFUSAL_SIGNATURE")
       REFUSAL_CLASSIFIED=1
-    else
-      if [ "$VERB" = plan ]; then
-        echo "action=none"
-        echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
+    elif [ "$VERB" = plan ]; then
+      echo "action=none"
+      if [ "$CLASSIFY_INCONCLUSIVE" -eq 1 ]; then
+        echo "reason=the depletion classifier could not answer; no verdict was reached and nothing was consumed"
       else
-        die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
+        echo "reason=no depletion evidence after the consumed cursor at byte $CURSOR"
       fi
       exit 0
+    else
+      # A negative classification is still a completed outcome: consume the
+      # candidate evidence it evaluated so the same text cannot be rescanned and
+      # re-classified on every later status event. Evidence with no candidate
+      # failure line, and an inconclusive router answer, are left alone because
+      # nothing was actually classified.
+      if [ "$CLASSIFY_INCONCLUSIVE" -eq 0 ] && [ -n "$EVIDENCE_TEXT" ]; then
+        advance_fallback_cursor "$EVIDENCE_END"
+      fi
+      die "no depletion evidence in $STATUS after byte $CURSOR; a healthy or already-consumed signal is never a fallback trigger"
     fi
     ;;
 esac
@@ -283,35 +372,6 @@ if [ "$VERB" = apply ] && [ -n "$EVIDENCE_TEXT" ]; then
   fi
   [ -n "$TRIAGE_TOKEN" ] || log "advisory triage unavailable for $ID; falling through on the router's classification alone"
 fi
-
-advance_fallback_cursor() {
-  local cursor_end=$1 new_cursor_line lock update_ok
-  new_cursor_line="fallback_cursor=$cursor_end"
-  lock=$(fm_meta_lock_path "$META") || die "cannot derive the meta lock for $META"
-  fm_lock_acquire_wait "$lock" || die "could not acquire the meta lock for $META"
-  update_ok=1
-  # Insert the cursor immediately before the canonical pr= identity block
-  # rather than appending it. Appending after pr=/pr_head= pushed a
-  # non-identity key past the identity block, which bin/fm-pr-lib.sh's
-  # fm_pr_metadata_identity_parse used to read as a corrupt record and
-  # silently disarm the task's merge poll. When no pr= line exists the cursor
-  # still lands at the end; the identity block, once present, stays trailing.
-  {
-    awk -v cursor_line="$new_cursor_line" '
-      /^fallback_cursor=/ { next }
-      /^pr=/ && !placed { print cursor_line; placed=1 }
-      { print }
-      END { if (!placed) print cursor_line }
-    ' "$META"
-  } > "$META.locked-update" || update_ok=0
-  if [ "$update_ok" = 1 ]; then
-    mv "$META.locked-update" "$META" || update_ok=0
-  fi
-  rm -f "$META.locked-update"
-  fm_lock_release "$lock" || true
-  [ "$update_ok" = 1 ] || die "the fallback cursor could not be recorded; investigate duplicate-evidence handling for $ID"
-  FALLBACK_CURSOR=$cursor_end
-}
 
 if [ "$VERB" = apply ] && [ "$REFUSAL_CLASSIFIED" -eq 0 ]; then
   PROVIDER=$(fm_meta_get "$META" provider)
