@@ -2,7 +2,7 @@
 # Behavior tests for the local-agent dispatcher and its runners.
 set -u
 
-# shellcheck source=tests/lib.sh
+# shellcheck disable=SC1091 source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 set -euo pipefail
@@ -2185,6 +2185,14 @@ PY
     SCP_LOG="$scp_log" \
     FM_AGENT_STATE="$state" \
     python3 "$DISPATCH" loop --once --config "$CFG"
+  local waited=0
+  while [ "$waited" -lt 40 ]; do
+    if grep -F "agents.json" "$scp_log" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.25
+    waited=$((waited + 1))
+  done
   stop_job_pid "$record"
   assert_grep "agents.json" "$scp_log" "remote review did not stage the reviewer registry"
   assert_grep "fake-ssh" "$ssh_mark" "remote review invoked ssh outside the test double"

@@ -3,7 +3,7 @@
 # The reviewer is refused before any model call when author_family matches.
 set -euo pipefail
 
-# shellcheck source=lib.sh
+# shellcheck disable=SC1091 source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 job_dir=${FM_AGENT_JOB_DIR:?FM_AGENT_JOB_DIR is required}
