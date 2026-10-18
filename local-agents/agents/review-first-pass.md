@@ -24,7 +24,7 @@ Its wall clock default is 30 minutes.
 
 ## LLM and harness
 
-Static checks run first: `semgrep` with `p/owasp-top-ten` on a temp tree of the changed files, then `gitleaks detect --no-git --redact`.
+When installed, static checks run first: the configured `semgrep` with `p/owasp-top-ten` on a temp tree of the changed files, then `gitleaks detect --no-git --redact`.
 The model call is `llm-run <harness> --task <job-id> --agent local-review-first-pass --role scout`.
 The default harness is agy and the default model is `gemini-3.8-flash-high`.
 More than 200 changed files skips the per-file fetch and says so in the summary.
@@ -36,7 +36,7 @@ More than 200 changed files skips the per-file fetch and says so in the summary.
 A completed review uses `succeeded`.
 `pr` is the pull request URL when GitHub returns one, otherwise null.
 `details` carries the short finding list.
-`cost` stays empty unless the model wrapper reports a cost, which v1 does not parse.
+`cost` stays empty in v1.
 
 ## Never
 

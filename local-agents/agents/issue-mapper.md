@@ -32,9 +32,9 @@ The default model is `gemini-3.8-flash-high`.
 ## Outputs
 
 `map` writes `report.md` as a table of pull requests and `(Closes|Fixes|Resolves) #N` references.
-Its `summary` counts pull requests, closing references, and pull requests with no closing reference.
+Its `summary` counts scanned pull requests and closing references.
 `from-findings` returns a JSON list of `{title, body}` proposals in `details` of the result block.
-`status` is `succeeded` when the report is non-empty.
+Both tasks use `succeeded` after their report or draft result is written.
 `pr` stays null.
 `cost` stays empty.
 
