@@ -12,6 +12,7 @@ An eligible issue has exactly one `agent:<name>` label.
 It has no `state:running`, `state:done`, `state:failed`, or `state:needs-adi` label, or it has `state:queued`.
 The issue author must be listed in [agents.json](agents.json).
 Any other author is ignored and the issue is left unchanged.
+Grok Bot submits dispatch issues through Adi's GitHub identity, `adibirzu`; that is why the shipped allow-list contains `adibirzu` rather than a separate bot login.
 The job is the first fenced `yaml` block whose document has a top-level `job` key.
 `job` is `<agent>/v1`.
 `id` is a short token.
@@ -93,6 +94,18 @@ The session runs `python3 bin/fm-agent-dispatch.py loop` and appends to the stat
 State lives in `$FM_AGENT_STATE` or `$HOME/dev/mini-state/local-agents`.
 `loop --dry-run` logs the claim and the result comment it would write.
 It does not edit the issue, post a comment, or start the runner.
+
+## Data flow
+
+Only issues whose author is listed in `allowed_authors` are processed. Dispatch issue title, URL, body, and YAML job block are staged for the selected runner; PR content is fetched only for a validated review job from a registry repository. Never put secrets in a dispatch issue or its job block.
+
+- `research` sends the staged dispatch brief to Claude, with Gemini/agy as its fallback.
+- `issue-mapper` sends the staged dispatch brief to Gemini/agy for `from-findings`; `map` is deterministic and sends no model prompt.
+- `studio-media` sends the staged dispatch brief to Claude for `plan`, with Gemini/agy as its fallback; its other tasks do not send a model prompt.
+- `review-first-pass` sends the requested PR diff and its local scan report to the selected Gemini/agy, Claude, or Codex reviewer; fetched PR files are scanned locally.
+- `release-watch`, `fleet-monitor`, and `ocr-runner` do not send content to a model. Grok is reachable through `llm-run` but is not selected by a shipped runner.
+
+Adi approved these allow-listed issue and PR flows to the listed model families on 2026-10-18 at 12:04; compliance review is deferred until after the MVP under the 2026-10-18 12:16 decision. Before a result is posted back to GitHub, the dispatcher redacts secrets from the result payload.
 
 ## Safety
 
