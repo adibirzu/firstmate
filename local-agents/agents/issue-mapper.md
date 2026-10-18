@@ -11,9 +11,11 @@ Answers meant for Adi are written in Romanian.
 
 The job id is `issue-mapper/v1`.
 `task` is `map` or `from-findings`.
-An `inputs` entry `repo:<owner/name>` selects the repository.
+An `inputs` entry `repo:<owner/name>` selects the repository and must name one in `agents.json`.
 When that entry is absent, the runner uses the repository of the dispatching issue.
 `create` defaults to false.
+`create: true` is accepted only when the target repository is listed in `allowed_create_repos` for this agent.
+When that list is absent, the only allowed target is the repository of the dispatching issue.
 Created issues receive the label `agent-draft`.
 
 ## Host

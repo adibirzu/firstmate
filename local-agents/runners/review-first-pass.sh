@@ -22,7 +22,37 @@ if [ "$task" != "review" ]; then
 fi
 
 if [ -z "$reviewer" ]; then
-  reviewer=agy/gemini-3.8-flash-high
+  reviewer=agy:gemini-3.8-flash-high
+fi
+case "$reviewer" in
+  */*) reviewer="${reviewer%%/*}:${reviewer#*/}" ;;
+esac
+
+registry="$(dirname "${BASH_SOURCE[0]}")/../agents.json"
+set +e
+python3 - "$registry" "$reviewer" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+registry, reviewer = sys.argv[1], sys.argv[2].strip()
+try:
+    data = json.loads(Path(registry).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(3)
+agents = data.get("agents") if isinstance(data, dict) else None
+block = agents.get("review-first-pass") if isinstance(agents, dict) else None
+allowed = block.get("reviewers") if isinstance(block, dict) else None
+if not isinstance(allowed, list) or reviewer not in allowed:
+    raise SystemExit(3)
+raise SystemExit(0)
+PY
+allow_rc=$?
+set -e
+if [ "$allow_rc" -ne 0 ]; then
+  printf '%s\n' "reviewer is not allowed" >"$summary_file"
+  write_result failed "$summary_file" ""
+  exit 0
 fi
 
 set +e
@@ -33,7 +63,10 @@ author = sys.argv[1].strip().lower()
 spec = sys.argv[2].strip().lower()
 if not author:
     raise SystemExit(0)
-harness, sep, model = spec.partition("/")
+if ":" in spec:
+    harness, sep, model = spec.partition(":")
+else:
+    harness, sep, model = spec.partition("/")
 families = set()
 if harness:
     families.add(harness)
@@ -244,10 +277,17 @@ prompt=$job_dir/prompt.md
   printf '\n%s\n' "$(cat "$job_dir/pr.diff")"
 } >"$prompt"
 
-harness=${reviewer%%/*}
+harness=$reviewer
 model=""
 case "$reviewer" in
-  */*) model=${reviewer#*/} ;;
+  *:*)
+    harness=${reviewer%%:*}
+    model=${reviewer#*:}
+    ;;
+  */*)
+    harness=${reviewer%%/*}
+    model=${reviewer#*/}
+    ;;
 esac
 
 run_review() {

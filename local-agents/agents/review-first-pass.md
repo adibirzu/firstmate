@@ -12,7 +12,9 @@ The job id is `review-first-pass/v1`.
 `task` is `review`.
 `inputs` must include `pr:<owner/repo>#N`.
 `author_family` is the author's model family when the submitter knows it.
-`reviewer` overrides the reviewer and defaults to `agy/gemini-3.8-flash-high`.
+`reviewer` must be one of the `reviewers` pairs in `agents.json`, written as `harness:model`.
+The default is `agy:gemini-3.8-flash-high`.
+Any other reviewer fails before a model call.
 The runner refuses the job when `author_family` equals the reviewer family.
 
 ## Host

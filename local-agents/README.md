@@ -89,8 +89,8 @@ local-agents/fm-agent-dispatch.tmux.sh stop
 The session runs `python3 bin/fm-agent-dispatch.py loop` and appends to the state log.
 `stop` sends SIGTERM to that session's process only.
 State lives in `$FM_AGENT_STATE` or `$HOME/dev/mini-state/local-agents`.
-`loop --dry-run` still posts the claim comment and adds `state:running`.
-It does not start the runner.
+`loop --dry-run` logs the claim and the result comment it would write.
+It does not edit the issue, post a comment, or start the runner.
 
 ## Safety
 
@@ -102,4 +102,5 @@ They do not print secrets.
 They do not force-push.
 Job text is passed to a runner as a file.
 A host that is full is left for the next poll.
-A job that is still marked running after a dispatcher restart is collected, not started again.
+A live job is tracked again after a dispatcher restart and stopped when its saved deadline passes.
+A job whose process is already gone is finished from its saved result.

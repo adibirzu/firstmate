@@ -37,10 +37,8 @@ id: res-test-01
 task: research
 host_pref: [ "adi2", "adi1" ]
 budget: { wall_max: "45m" }
-note: |
-  hello
-  world
-create: false
+inputs:
+  - repo:adibirzu/firstmate
 ```
 EOF
 )"
@@ -53,8 +51,7 @@ assert data["task"] == "research"
 assert data["host_pref"] == ["adi2", "adi1"]
 assert data["budget"]["wall_max"] == "45m"
 assert data["wall_seconds"] == 2700
-assert "world" in data["note"]
-assert data["create"] is False
+assert data["inputs"] == ["repo:adibirzu/firstmate"]
 ' "$out"
   pass "parse-job fallback parser"
 }
@@ -67,9 +64,8 @@ test_parse_job_with_pyyaml_loader() {
 import json, sys
 data = json.load(sys.stdin)
 assert data["id"] == "res-test-01"
-assert data["create"] is False
+assert data["inputs"] == ["repo:adibirzu/firstmate"]
 assert data["wall_seconds"] == 2700
-assert "world" in data["note"]
 ' "$out"
   pass "parse-job default loader"
 }
@@ -352,14 +348,14 @@ test_dry_run_claims_without_runner() {
     FM_AGENT_STATE="$state" \
     python3 "$DISPATCH" loop --once --dry-run --config "$CFG"
   PATH=$saved
-  assert_grep "issue edit" "$log" "claim edit missing"
-  assert_grep "state:running" "$log" "running label missing"
-  assert_grep "dispatcher: claimed rel-watch-01" "$log" "claim comment missing"
+  assert_no_grep "issue edit" "$log" "dry-run edited the issue"
+  assert_no_grep "issue comment" "$log" "dry-run commented on the issue"
+  assert_grep "dry-run: would claim rel-watch-01" "$state/dispatch.log" "dry-run did not log the claim"
   assert_grep "dry-run: not starting rel-watch-01" "$state/dispatch.log" "dry-run did not skip the runner"
-  if find "$state/running" -type f | grep -q .; then
+  if find "$state/running" -type f -name '*.json' | grep -q .; then
     fail "dry-run wrote a running record"
   fi
-  pass "dry-run claims and does not start a runner"
+  pass "dry-run does not mutate and does not start a runner"
 }
 
 prepare_job() {

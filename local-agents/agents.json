@@ -36,7 +36,12 @@
       "runner": "review-first-pass.sh",
       "llm": "agy",
       "tasks": ["review"],
-      "wall_default": "30m"
+      "wall_default": "30m",
+      "reviewers": [
+        "agy:gemini-3.8-flash-high",
+        "claude:sonnet",
+        "codex:gpt-5.6-terra"
+      ]
     },
     "research": {
       "hosts": ["adi2"],

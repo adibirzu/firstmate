@@ -8,6 +8,25 @@
 #
 # shellcheck shell=bash
 
+# A dev-guard host has no ledger writer until HOME and LLM_RUN_FM_HOME are set.
+if [ -z "${HOME:-}" ]; then
+  if command -v getent >/dev/null 2>&1; then
+    _fm_resolved_home=$(getent passwd "$(id -u)" 2>/dev/null | awk -F: 'NR == 1 { print $6 }' || true)
+    if [ -n "${_fm_resolved_home:-}" ]; then
+      HOME=$_fm_resolved_home
+    fi
+    unset _fm_resolved_home
+  fi
+fi
+if [ -z "${HOME:-}" ]; then
+  HOME=~
+fi
+export HOME
+if [ -z "${LLM_RUN_FM_HOME:-}" ] && [ -f "$HOME/dev/llm-ledger/bin/fm-fleet-ledger.sh" ]; then
+  LLM_RUN_FM_HOME=$HOME/dev/llm-ledger
+  export LLM_RUN_FM_HOME
+fi
+
 # job_get <dotted-key>
 # Strings are written raw. Other JSON values are written with json.dumps.
 # A missing key prints nothing and returns 0.

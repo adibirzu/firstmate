@@ -4,7 +4,8 @@
 Commands:
   loop [--config PATH] [--once] [--dry-run]
       Poll every poll_seconds. --once polls a single round.
-      --dry-run still records the claim on the issue and does not start a runner.
+      --dry-run logs the claim and the result comment it would write.
+      It does not edit labels, post comments, or start a runner.
   parse-job FILE [--config PATH] [--label LABEL ...] [--author LOGIN]
       Print the parsed and validated job as JSON.
       A non-zero exit prints {"error": "..."}.
@@ -16,6 +17,10 @@ Commands:
 
 State directory: ${FM_AGENT_STATE:-$HOME/dev/mini-state/local-agents}
   running/ outbox/ artifacts/<job-id>/ events.jsonl dispatch.log lock/
+
+running/<slug>#<n>.json is the claim and result transaction for one issue.
+phase moves claiming -> claimed -> running -> result_posting -> result_posted -> labelled.
+The record is written before the GitHub call it describes, and a later poll resumes that phase.
 
 Job text is written to a file for the runner. It is never interpolated into a
 shell command. The remote command may contain only the validated job id, the
@@ -43,7 +48,22 @@ DURATION_RE = re.compile(r"^(\d+)([smh])$")
 RUNNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sh$")
 SSH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 FENCE_RE = re.compile(r"```(?:yaml|yml)[^\n]*\n(.*?)```", re.IGNORECASE | re.DOTALL)
-SECRET_RE = re.compile(r"(ghp_|github_pat_|AKIA)[A-Za-z0-9_\-]+")
+SECRET_PATTERNS = (
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{8,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{8,}"),
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"xai-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]{8,}={0,2}"),
+    re.compile(
+        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"(?i)\b((?:key|token|secret|password)=)"
+        r"([A-Za-z0-9+/]{20,}={0,2}|[0-9a-fA-F]{16,})"
+    ),
+)
 TERMINAL_STATES = {"state:running", "state:done", "state:failed", "state:needs-adi"}
 STATUS_LABEL = {
     "succeeded": "state:done",
@@ -51,8 +71,20 @@ STATUS_LABEL = {
     "blocked": "state:needs-adi",
 }
 MAX_WALL = 6 * 3600
+GH_TIMEOUT_CAP = 60.0
+LOCK_PID_STALE_S = 60.0
+LOCK_FRESH_RETRIES = 8
+LOCK_FRESH_PAUSE = 0.05
+BASE_JOB_KEYS = {"job", "id", "task", "host_pref", "budget", "inputs"}
+EXTRA_JOB_KEYS = {
+    "issue-mapper": {"create"},
+    "review-first-pass": {"reviewer", "author_family"},
+}
+ACTIVE_PHASES = ("claiming", "claimed", "running", "result_posting", "result_posted")
 STATE = None
 STOP = {"flag": False}
+DRY_RUN = False
+ACTIVE = []
 
 REMOTE_SCRIPT = """#!/bin/bash
 set -euo pipefail
@@ -86,8 +118,58 @@ exit "$rc"
 """
 
 
+def redact_text(text):
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else "", 0
+    count = 0
+
+    def bump(repl):
+        def apply(match):
+            nonlocal count
+            count += 1
+            if callable(repl):
+                return repl(match)
+            return repl
+        return apply
+
+    updated = text
+    for pattern in SECRET_PATTERNS[:-1]:
+        updated = pattern.sub(bump("[REDACTED]"), updated)
+
+    def keep_label(match):
+        return match.group(1) + "[REDACTED]"
+
+    updated = SECRET_PATTERNS[-1].sub(bump(keep_label), updated)
+    return updated, count
+
+
 def redact(text):
-    return SECRET_RE.sub("[redacted]", text or "")
+    cleaned, _count = redact_text(text or "")
+    return cleaned
+
+
+def redact_result(result):
+    result = dict(result)
+    total = 0
+    summary, count = redact_text(result.get("summary") if isinstance(result.get("summary"), str) else "")
+    result["summary"] = summary
+    total += count
+    details, count = redact_text(result.get("details") if isinstance(result.get("details"), str) else "")
+    result["details"] = details
+    total += count
+    artifacts = result.get("artifacts")
+    cleaned = []
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if isinstance(item, str):
+                text, count = redact_text(item)
+                cleaned.append(text)
+                total += count
+            else:
+                cleaned.append(item)
+    result["artifacts"] = cleaned
+    result["redactions"] = total
+    return result
 
 
 def iso(moment):
@@ -158,23 +240,61 @@ def ensure_state():
     return path
 
 
+def read_lock_pid(lock):
+    try:
+        return int((lock / "pid").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def lock_age(lock):
+    try:
+        return time.time() - lock.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def publish_lock_pid(state, lock):
+    tmp = state / (".lock-pid.%s.%s" % (os.getpid(), time.time_ns()))
+    try:
+        tmp.write_text("%s\n" % os.getpid(), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, lock / "pid")
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
+    return read_lock_pid(lock) == os.getpid()
+
+
 def acquire_lock(state):
     lock = state / "lock"
-    for _ in range(3):
+    fresh_waits = 0
+    for _ in range(50):
         try:
             lock.mkdir()
         except FileExistsError:
-            pid = 0
-            try:
-                pid = int((lock / "pid").read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                pid = 0
-            if pid_alive(pid):
+            pid = read_lock_pid(lock)
+            if pid is not None and pid_alive(pid):
                 raise SystemExit("dispatcher already running (pid %s)" % pid)
+            if pid is None and lock_age(lock) < LOCK_PID_STALE_S:
+                fresh_waits += 1
+                if fresh_waits > LOCK_FRESH_RETRIES:
+                    raise SystemExit("could not acquire dispatcher lock")
+                time.sleep(LOCK_FRESH_PAUSE)
+                continue
             shutil.rmtree(lock, ignore_errors=True)
             continue
-        (lock / "pid").write_text(str(os.getpid()) + "\n", encoding="utf-8")
-        return lock
+        pause = os.environ.get("FM_AGENT_LOCK_PAUSE", "")
+        if pause:
+            try:
+                time.sleep(float(pause))
+            except ValueError:
+                pass
+        if publish_lock_pid(state, lock):
+            return lock
     raise SystemExit("could not acquire dispatcher lock")
 
 
@@ -504,7 +624,25 @@ def validate_host_pref(config, host_pref):
     return None
 
 
-def validate_job(config, data, labels):
+def input_items(data):
+    raw = data.get("inputs")
+    if raw is None:
+        return [], None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        return None, "bad inputs"
+    return raw, None
+
+
+def repo_input(items):
+    for item in items:
+        if item.startswith("repo:"):
+            return item[5:]
+    return None
+
+
+def validate_job(config, data, labels, issue_repo=None):
     if not isinstance(data, dict):
         return None, "job block must be a mapping"
     job_name = data.get("job")
@@ -527,6 +665,10 @@ def validate_job(config, data, labels):
     task = data.get("task")
     if task not in (agents[agent].get("tasks") or []):
         return None, "task not allowed"
+    allowed_keys = set(BASE_JOB_KEYS) | set(EXTRA_JOB_KEYS.get(agent) or ())
+    unknown = sorted(key for key in data if key not in allowed_keys)
+    if unknown:
+        return None, "unknown job field: %s" % unknown[0]
     host_pref = data.get("host_pref")
     if host_pref is not None:
         error = validate_host_pref(config, host_pref)
@@ -544,6 +686,29 @@ def validate_job(config, data, labels):
                 wall_seconds = parse_duration(budget.get("wall_max"))
             except ValueError as exc:
                 return None, str(exc)
+    items, error = input_items(data)
+    if error:
+        return None, error
+    known_repos = set(config.get("repos") or [])
+    for item in items:
+        if item.startswith("repo:"):
+            target = item[5:]
+            if target not in known_repos:
+                return None, "repo is not allowed: %s" % target
+    if "create" in data:
+        if not isinstance(data.get("create"), bool):
+            return None, "bad create"
+        if data.get("create") is True:
+            target = repo_input(items) or issue_repo
+            configured = agents[agent].get("allowed_create_repos")
+            if isinstance(configured, list) and configured:
+                allowed_targets = [item for item in configured if isinstance(item, str)]
+            elif issue_repo:
+                allowed_targets = [issue_repo]
+            else:
+                allowed_targets = []
+            if not target or target not in allowed_targets:
+                return None, "create target is not allowed"
     normalized = dict(data)
     normalized["agent"] = agent
     if wall_seconds is not None:
@@ -642,6 +807,7 @@ def render_result_markdown(result):
         ("cost", result.get("cost") if isinstance(result.get("cost"), dict) else {}),
         ("artifacts", result.get("artifacts") if isinstance(result.get("artifacts"), list) else []),
         ("details", result.get("details") or ""),
+        ("redactions", result.get("redactions") if isinstance(result.get("redactions"), int) else 0),
     ]
     body = ["result:"]
     for key, value in fields:
@@ -651,12 +817,40 @@ def render_result_markdown(result):
     return "**Local agent result** \u2014 %s@%s\n```yaml\n%s\n```\n" % (agent, host, "\n".join(body))
 
 
-def gh(args, timeout=None):
-    if timeout is None:
+def seconds_until_deadline(active):
+    if not active:
+        return None
+    now = time.time()
+    deltas = []
+    for item in active:
+        epoch = item.get("deadline_epoch")
+        if isinstance(epoch, (int, float)):
+            deltas.append(epoch - now)
+    if not deltas:
+        return None
+    return min(deltas)
+
+
+def resolve_timeout(explicit):
+    if explicit is None:
+        raw = os.environ.get("FM_AGENT_GH_TIMEOUT", "60")
         try:
-            timeout = int(os.environ.get("FM_AGENT_GH_TIMEOUT", "60"))
+            explicit = float(raw)
         except ValueError:
-            timeout = 60
+            explicit = GH_TIMEOUT_CAP
+    else:
+        explicit = float(explicit)
+    if explicit <= 0:
+        explicit = GH_TIMEOUT_CAP
+    timeout = min(GH_TIMEOUT_CAP, explicit)
+    remain = seconds_until_deadline(ACTIVE)
+    if remain is not None:
+        timeout = min(timeout, max(0.2, remain))
+    return timeout
+
+
+def gh(args, timeout=None):
+    timeout = resolve_timeout(timeout)
     log("gh " + " ".join(shlex.quote(str(part)) for part in args))
     command = ["gh", *[str(part) for part in args]]
     try:
@@ -698,17 +892,58 @@ def running_path(state, repo, number):
     return state / "running" / ("%s#%s.json" % (slug, number))
 
 
+def atomic_write(path, record):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".%s.%s.tmp" % (path.name, os.getpid()))
+    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_record(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def pid_matches(record):
+    pid = record.get("pid")
+    pgid = record.get("pgid")
+    if not pid_alive(pid):
+        return False
+    if isinstance(pgid, bool) or not isinstance(pgid, int) or pgid <= 0:
+        return False
+    try:
+        return os.getpgid(pid) == pgid
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def record_occupies_slot(record):
+    phase = record.get("phase") or "running"
+    if phase in ("claiming", "claimed"):
+        return True
+    if phase != "running":
+        return False
+    if pid_matches(record):
+        return True
+    pgid = record.get("pgid")
+    if isinstance(pgid, bool) or not isinstance(pgid, int) or pgid <= 0:
+        return pid_alive(record.get("pid"))
+    return False
+
+
 def live_counts(state):
     counts = {}
     running = state / "running"
     if not running.is_dir():
         return counts
     for path in running.glob("*.json"):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(record, dict) or not pid_alive(record.get("pid")):
+        record = load_record(path)
+        if not isinstance(record, dict) or not record_occupies_slot(record):
             continue
         host = record.get("host")
         if isinstance(host, str):
@@ -789,46 +1024,148 @@ def read_runner_result(stage, record, return_code):
     return result
 
 
-def post_result(state, result, had_running, had_queued):
+def claim_marker(job_id, agent, host):
+    return "dispatcher: claimed %s \u2192 %s@%s" % (job_id, agent, host)
+
+
+def fetch_issue_comments(repo, number):
+    proc = gh(["issue", "view", "-R", repo, str(number), "--json", "comments"])
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    comments = data.get("comments")
+    if comments is None:
+        return []
+    if not isinstance(comments, list):
+        return None
+    bodies = []
+    for item in comments:
+        if isinstance(item, dict):
+            bodies.append(str(item.get("body") or ""))
+        elif isinstance(item, str):
+            bodies.append(item)
+    return bodies
+
+
+def comment_has(bodies, needle):
+    return any(needle in body for body in bodies)
+
+
+def write_outbox(state, result):
     job_id = str(result.get("job") or "unknown")
     if not ID_RE.fullmatch(job_id):
         job_id = "unknown"
-        result = dict(result)
-        result["job"] = job_id
     outbox = state / "outbox" / ("%s.json" % job_id)
     outbox.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     stage = state / "artifacts" / job_id
     stage.mkdir(parents=True, exist_ok=True)
     body_path = stage / "comment.md"
     body_path.write_text(render_result_markdown(result), encoding="utf-8")
+    return body_path
+
+
+def post_result(state, result, had_running, had_queued):
+    result = dict(result)
+    job_id = str(result.get("job") or "unknown")
+    if not ID_RE.fullmatch(job_id):
+        job_id = "unknown"
+        result["job"] = job_id
     repo = result.get("repo") or ""
     number = result.get("issue")
-    comment = gh(["issue", "comment", "-R", repo, str(number), "--body-file", str(body_path)])
-    label = STATUS_LABEL[result["status"]]
-    command = ["issue", "edit", "-R", repo, str(number), "--add-label", label]
-    if had_running:
-        command.extend(["--remove-label", "state:running"])
-    if had_queued:
-        command.extend(["--remove-label", "state:queued"])
-    edit = gh(command)
-    append_event(state, result)
-    if comment.returncode == 0 and edit.returncode == 0 and had_running:
-        path = running_path(state, repo, number)
-        if path.exists():
+    path = running_path(state, repo, number) if repo and number is not None else None
+    record = load_record(path) if path is not None else None
+    if not isinstance(record, dict):
+        record = {
+            "job_id": job_id,
+            "agent": result.get("agent") or "unknown",
+            "host": result.get("host") or "none",
+            "repo": repo,
+            "issue": number,
+        }
+    phase = record.get("phase")
+    if phase in ("result_posting", "result_posted", "labelled") and isinstance(record.get("result"), dict):
+        result = record["result"]
+    else:
+        result = redact_result(result)
+        record["result"] = result
+        record["phase"] = "result_posting"
+        record["had_running"] = bool(had_running)
+        record["had_queued"] = bool(had_queued)
+        record["job_id"] = job_id
+    had_running = bool(record.get("had_running"))
+    had_queued = bool(record.get("had_queued"))
+    if path is not None:
+        atomic_write(path, record)
+    if DRY_RUN:
+        log("dry-run: would comment result for %s on %s#%s" % (job_id, repo, number))
+        log("dry-run: would label %s" % STATUS_LABEL.get(result.get("status"), "state:failed"))
+        return False
+    body_path = write_outbox(state, result)
+    if not repo or number is None:
+        return False
+    if record.get("phase") == "labelled":
+        if path is not None and path.exists():
             path.unlink()
-    return comment.returncode == 0 and edit.returncode == 0
+        return True
+    if record.get("phase") == "result_posting":
+        bodies = fetch_issue_comments(repo, number)
+        if bodies is None:
+            return False
+        if not (comment_has(bodies, "Local agent result") and comment_has(bodies, job_id)):
+            comment = gh(["issue", "comment", "-R", repo, str(number), "--body-file", str(body_path)])
+            if comment.returncode != 0:
+                return False
+        record["phase"] = "result_posted"
+        if path is not None:
+            atomic_write(path, record)
+    if record.get("phase") == "result_posted":
+        label = STATUS_LABEL[result["status"]]
+        command = ["issue", "edit", "-R", repo, str(number), "--add-label", label]
+        if had_running:
+            command.extend(["--remove-label", "state:running"])
+        if had_queued:
+            command.extend(["--remove-label", "state:queued"])
+        edit = gh(command)
+        if edit.returncode != 0:
+            return False
+        if not record.get("event_written"):
+            append_event(state, result)
+            record["event_written"] = True
+        record["phase"] = "labelled"
+        if path is not None:
+            atomic_write(path, record)
+            path.unlink()
+        return True
+    return False
 
 
-def claim_issue(repo, number, names, job_id, agent, host):
+def ensure_claim(record):
+    repo = record.get("repo") or ""
+    number = record.get("issue")
+    job_id = str(record.get("job_id") or "")
+    agent = record.get("agent") or "unknown"
+    host = record.get("host") or "none"
+    if not repo or number is None:
+        return False
+    bodies = fetch_issue_comments(repo, number)
+    if bodies is None:
+        return False
     command = ["issue", "edit", "-R", repo, str(number), "--add-label", "state:running"]
-    if "state:queued" in names:
+    if record.get("had_queued"):
         command.extend(["--remove-label", "state:queued"])
     edit = gh(command)
-    comment = gh([
-        "issue", "comment", "-R", repo, str(number), "--body",
-        "dispatcher: claimed %s \u2192 %s@%s" % (job_id, agent, host),
-    ])
-    return edit.returncode == 0 and comment.returncode == 0
+    if edit.returncode != 0:
+        return False
+    marker = claim_marker(job_id, agent, host)
+    if comment_has(bodies, "dispatcher: claimed %s" % job_id):
+        return True
+    comment = gh(["issue", "comment", "-R", repo, str(number), "--body", marker])
+    return comment.returncode == 0
 
 
 def runner_file(agent_cfg):
@@ -923,32 +1260,80 @@ def load_agent_cfg(job):
     return {"runner": job.get("_runner")}
 
 
-def kill_group(proc):
-    if proc.poll() is not None:
-        return
+class TrackedProc:
+    """A process resumed from a record, not a live Popen in this interpreter."""
+
+    def __init__(self, record):
+        self.pid = record.get("pid")
+        self.returncode = None
+        self.record = record
+
+    def poll(self):
+        if self.returncode is not None:
+            return self.returncode
+        if pid_matches(self.record):
+            return None
+        self.returncode = 0
+        return self.returncode
+
+
+def signal_recorded_group(record):
+    if not pid_matches(record):
+        return False
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        os.killpg(record["pgid"], signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
-            proc.kill()
-        except (ProcessLookupError, OSError):
-            return
+        return False
+    return True
+
+
+def deadline_epoch_of(record):
+    raw = record.get("deadline")
+    if not isinstance(raw, str) or not raw:
+        return None
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
+        moment = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return moment.timestamp()
 
 
-def job_id_in_use(state, job_id):
+def track_job(active, record, path, proc=None):
+    for item in active:
+        if item.get("path") == path:
+            item["record"] = record
+            item["deadline_epoch"] = deadline_epoch_of(record)
+            return item
+    if proc is None:
+        proc = TrackedProc(record)
+    item = {
+        "proc": proc,
+        "record": record,
+        "path": path,
+        "deadline_epoch": deadline_epoch_of(record),
+    }
+    active.append(item)
+    return item
+
+
+def job_id_in_use(state, job_id, except_path=None):
     running = state / "running"
     if not running.is_dir():
         return False
     for path in running.glob("*.json"):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        if except_path is not None and path.resolve() == Path(except_path).resolve():
             continue
-        if isinstance(record, dict) and record.get("job_id") == job_id and pid_alive(record.get("pid")):
+        record = load_record(path)
+        if not isinstance(record, dict) or record.get("job_id") != job_id:
+            continue
+        phase = record.get("phase") or "running"
+        if phase == "labelled":
+            continue
+        if phase == "running" and pid_alive(record.get("pid")):
+            return True
+        if phase in ("claiming", "claimed", "result_posting", "result_posted"):
             return True
     return False
 
@@ -965,82 +1350,212 @@ def failure_record(issue, agent, job_id, host, summary):
     }, summary
 
 
-def launch_job(state, config, job, issue, names, host, dry_run, active):
-    agent_cfg = config["agents"][job["agent"]]
-    host_cfg = config["hosts"][host]
-    job = dict(job)
-    job["_runner"] = agent_cfg["runner"]
-    if job_id_in_use(state, job["id"]):
-        record, summary = failure_record(issue, job["agent"], job["id"], host, "job id already in use")
-        post_result(state, base_result(record, "failed", summary), False, "state:queued" in names)
-        return
-    claimed = claim_issue(issue["repo"], issue["number"], names, job["id"], job["agent"], host)
-    if not claimed:
-        log("claim failed for %s#%s" % (issue["repo"], issue["number"]))
-        return
-    if dry_run:
-        log("dry-run: not starting %s on %s" % (job["id"], host))
-        return
-    stage = prepare_stage(state, job, issue, host)
+def wall_seconds_for(job, agent_cfg):
     seconds = job.get("wall_seconds")
-    if not isinstance(seconds, int):
-        seconds = parse_duration(agent_cfg.get("wall_default") or "10m")
-    started = datetime.now().astimezone()
-    deadline = started + timedelta(seconds=seconds)
-    record = {
-        "job_id": job["id"],
-        "host": host,
-        "pid": None,
-        "started_at": iso(started),
-        "deadline": iso(deadline),
-        "repo": issue["repo"],
-        "issue": issue["number"],
-        "agent": job["agent"],
-        "stage": str(stage),
-        "ssh": host_cfg.get("ssh"),
-        "dev_guard": bool(host_cfg.get("dev_guard")),
-    }
-    path = running_path(state, issue["repo"], issue["number"])
-    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        proc = start_process(state, job, host_cfg, stage)
-    except (OSError, ValueError) as exc:
-        post_result(state, base_result(record, "failed", "runner did not start: %s" % exc), True, False)
-        return
-    record["pid"] = proc.pid
-    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    item = {"proc": proc, "record": record, "path": path, "deadline_epoch": deadline.timestamp()}
-    if proc.poll() is not None:
-        finish_item(state, item, False)
-    else:
-        active.append(item)
+    if isinstance(seconds, int):
+        return seconds
+    return parse_duration((agent_cfg or {}).get("wall_default") or "10m")
+
+
+def runner_or_orphan_result(state, record):
+    stage = Path(record.get("stage") or (state / "artifacts" / str(record.get("job_id") or "unknown")))
+    if record.get("ssh"):
+        try:
+            fetch_remote_result(record, stage)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log("orphan fetch failed: %s" % exc)
+    if (stage / "result.json").is_file():
+        return read_runner_result(stage, record, None)
+    return base_result(
+        record,
+        "failed",
+        "orphaned after dispatcher restart; remove state:failed (and re-add state:queued) to retry",
+    )
 
 
 def finish_item(state, item, timed_out):
-    proc = item["proc"]
+    if item.get("finishing"):
+        return
+    item["finishing"] = True
     record = item["record"]
-    stage = Path(record["stage"])
+    proc = item["proc"]
+    stage_raw = record.get("stage")
+    stage = Path(stage_raw) if stage_raw else state / "artifacts" / str(record.get("job_id") or "unknown")
     if timed_out:
-        kill_group(proc)
+        signal_recorded_group(record)
+        if isinstance(proc, subprocess.Popen):
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         result = base_result(record, "failed", "timeout")
     else:
-        result = read_runner_result(stage, record, proc.returncode if proc.returncode is not None else proc.poll())
-    post_result(state, result, True, False)
+        if record.get("ssh"):
+            try:
+                fetch_remote_result(record, stage)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log("orphan fetch failed: %s" % exc)
+        code = None
+        if isinstance(proc, subprocess.Popen):
+            code = proc.returncode if proc.returncode is not None else proc.poll()
+        result = read_runner_result(stage, record, code)
+    post_result(state, result, True, bool(record.get("had_queued")))
 
 
 def reap_active(state, active):
     still = []
     now = time.time()
-    for item in active:
+    for item in list(active):
         proc = item["proc"]
-        if proc.poll() is None and now >= item["deadline_epoch"]:
+        deadline = item.get("deadline_epoch")
+        running = proc.poll() is None
+        if running and isinstance(deadline, (int, float)) and now >= deadline:
             finish_item(state, item, True)
             continue
-        if proc.poll() is not None:
+        if not running:
             finish_item(state, item, False)
             continue
         still.append(item)
     active[:] = still
+
+
+def start_recorded(state, config, record, path, active):
+    job = record.get("job")
+    agent_name = job.get("agent") if isinstance(job, dict) else None
+    host = record.get("host")
+    agents = config.get("agents") or {}
+    hosts = config.get("hosts") or {}
+    if not isinstance(job, dict) or agent_name not in agents or host not in hosts:
+        post_result(state, base_result(record, "failed", "cannot resume job"), True, bool(record.get("had_queued")))
+        return
+    agent_cfg = agents[agent_name]
+    host_cfg = hosts[host]
+    job = dict(job)
+    job["_runner"] = agent_cfg["runner"]
+    record["job"] = job
+    issue = {
+        "repo": record.get("repo"),
+        "number": record.get("issue"),
+        "title": record.get("title") or "",
+        "body": record.get("body") or "",
+        "url": record.get("url") or "",
+    }
+    try:
+        stage = prepare_stage(state, job, issue, host)
+    except (OSError, ValueError) as exc:
+        post_result(state, base_result(record, "failed", "runner did not start: %s" % exc), True, bool(record.get("had_queued")))
+        return
+    record["stage"] = str(stage)
+    atomic_write(path, record)
+    try:
+        proc = start_process(state, job, host_cfg, stage)
+    except (OSError, ValueError) as exc:
+        post_result(state, base_result(record, "failed", "runner did not start: %s" % exc), True, bool(record.get("had_queued")))
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = proc.pid
+    started = datetime.now().astimezone()
+    seconds = record.get("wall_seconds")
+    if not isinstance(seconds, int):
+        seconds = wall_seconds_for(job, agent_cfg)
+    deadline = started + timedelta(seconds=seconds)
+    record["pid"] = proc.pid
+    record["pgid"] = pgid
+    record["phase"] = "running"
+    record["started_at"] = iso(started)
+    record["deadline"] = iso(deadline)
+    record["had_running"] = True
+    atomic_write(path, record)
+    item = track_job(active, record, path, proc)
+    if proc.poll() is not None:
+        finish_item(state, item, False)
+
+
+def continue_job(state, config, record, path, active):
+    phase = record.get("phase") or ("running" if record.get("pid") else "claiming")
+    record["phase"] = phase
+    if phase in ("result_posting", "result_posted", "labelled"):
+        result = record.get("result")
+        if not isinstance(result, dict):
+            result = runner_or_orphan_result(state, record)
+        post_result(state, result, bool(record.get("had_running")), bool(record.get("had_queued")))
+        return
+    if phase == "running":
+        if pid_matches(record):
+            track_job(active, record, path)
+            return
+        if pid_alive(record.get("pid")):
+            log("not signaling unverified pid %s for %s" % (record.get("pid"), record.get("job_id")))
+            return
+        result = runner_or_orphan_result(state, record)
+        post_result(state, result, True, bool(record.get("had_queued")))
+        return
+    if phase == "claiming":
+        if not ensure_claim(record):
+            log("claim failed for %s#%s" % (record.get("repo"), record.get("issue")))
+            atomic_write(path, record)
+            return
+        record["phase"] = "claimed"
+        atomic_write(path, record)
+        phase = "claimed"
+    if phase == "claimed":
+        if pid_matches(record):
+            record["phase"] = "running"
+            atomic_write(path, record)
+            track_job(active, record, path)
+            return
+        start_recorded(state, config, record, path, active)
+
+
+def launch_job(state, config, job, issue, names, host, dry_run, active):
+    agent_cfg = config["agents"][job["agent"]]
+    host_cfg = config["hosts"][host]
+    job = dict(job)
+    job["_runner"] = agent_cfg["runner"]
+    path = running_path(state, issue["repo"], issue["number"])
+    existing = load_record(path)
+    if isinstance(existing, dict) and (existing.get("phase") or "claiming") in ACTIVE_PHASES:
+        if dry_run or DRY_RUN:
+            log("dry-run: would resume %s for %s" % (existing.get("phase") or "claiming", existing.get("job_id")))
+            log("dry-run: not starting %s on %s" % (job["id"], host))
+            return
+        continue_job(state, config, existing, path, active)
+        return
+    if dry_run or DRY_RUN:
+        log("dry-run: would claim %s on %s#%s -> %s@%s" % (job["id"], issue["repo"], issue["number"], job["agent"], host))
+        log("dry-run: would comment %s" % claim_marker(job["id"], job["agent"], host))
+        log("dry-run: not starting %s on %s" % (job["id"], host))
+        return
+    if job_id_in_use(state, job["id"], path):
+        record, summary = failure_record(issue, job["agent"], job["id"], host, "job id already in use")
+        post_result(state, base_result(record, "failed", summary), False, "state:queued" in names)
+        return
+    record = {
+        "phase": "claiming",
+        "job_id": job["id"],
+        "job": job,
+        "host": host,
+        "pid": None,
+        "pgid": None,
+        "started_at": None,
+        "deadline": None,
+        "repo": issue["repo"],
+        "issue": issue["number"],
+        "agent": job["agent"],
+        "title": issue.get("title") or "",
+        "body": issue.get("body") or "",
+        "url": issue.get("url") or "",
+        "stage": None,
+        "ssh": host_cfg.get("ssh"),
+        "dev_guard": bool(host_cfg.get("dev_guard")),
+        "had_queued": "state:queued" in names,
+        "had_running": False,
+        "wall_seconds": wall_seconds_for(job, agent_cfg),
+    }
+    atomic_write(path, record)
+    continue_job(state, config, record, path, active)
 
 
 def fetch_remote_result(record, stage):
@@ -1060,35 +1575,19 @@ def fetch_remote_result(record, stage):
     )
 
 
-def collect_orphans(state):
+def rehydrate(state, config, active):
     running = state / "running"
     if not running.is_dir():
         return
-    for path in list(running.glob("*.json")):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+    for path in sorted(running.glob("*.json")):
+        record = load_record(path)
+        if not isinstance(record, dict):
             continue
-        if not isinstance(record, dict) or pid_alive(record.get("pid")):
+        phase = record.get("phase") or ("running" if record.get("pid") else "claiming")
+        if DRY_RUN and not (phase == "running" and pid_matches(record)):
+            log("dry-run: would resume %s for %s" % (phase, record.get("job_id")))
             continue
-        stage = Path(record.get("stage") or (state / "artifacts" / str(record.get("job_id") or "unknown")))
-        if record.get("ssh"):
-            try:
-                fetch_remote_result(record, stage)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                log("orphan fetch failed: %s" % exc)
-        result_path = stage / "result.json"
-        if result_path.is_file():
-            result = read_runner_result(stage, record, None)
-        else:
-            result = base_result(
-                record,
-                "failed",
-                "orphaned after dispatcher restart; remove state:failed (and re-add state:queued) to retry",
-            )
-        posted = post_result(state, result, True, False)
-        if posted and path.exists():
-            path.unlink()
+        continue_job(state, config, record, path, active)
 
 
 def eligible(names):
@@ -1141,11 +1640,17 @@ def poll_repo(state, config, repo, dry_run, active):
             document = extract_job_document(wrapped["body"])
             data = load_yaml(document)
         except Exception as exc:
+            if dry_run or DRY_RUN:
+                log("dry-run: would comment failure on %s#%s" % (repo, number))
+                continue
             record, _summary = failure_record(wrapped, "unknown", "unknown", "none", str(exc))
             post_result(state, base_result(record, "failed", "job block is not valid yaml: %s" % exc), False, "state:queued" in names)
             continue
-        job, error = validate_job(config, data, names)
+        job, error = validate_job(config, data, names, wrapped["repo"])
         if error:
+            if dry_run or DRY_RUN:
+                log("dry-run: would comment failure on %s#%s" % (repo, number))
+                continue
             raw_id = data.get("id") if isinstance(data, dict) else "unknown"
             raw_agent = ""
             if isinstance(data, dict) and isinstance(data.get("job"), str) and "/" in data["job"]:
@@ -1164,6 +1669,9 @@ def poll_repo(state, config, repo, dry_run, active):
             log("retry %s#%s %s" % (repo, number, job["id"]))
             continue
         if decision["action"] == "blocked":
+            if dry_run or DRY_RUN:
+                log("dry-run: would comment blocked on %s#%s" % (repo, number))
+                continue
             record, _summary = failure_record(wrapped, job["agent"], job["id"], "none", decision["reason"])
             post_result(state, base_result(record, "blocked", decision["reason"]), False, "state:queued" in names)
             continue
@@ -1188,20 +1696,23 @@ def handle_stop(signum, _frame):
 
 
 def cmd_loop(args):
-    global STATE
+    global STATE, DRY_RUN, ACTIVE
+    DRY_RUN = bool(args.dry_run)
     config = load_config(args.config)
     STATE = ensure_state()
     lock = acquire_lock(STATE)
     signal.signal(signal.SIGTERM, handle_stop)
     signal.signal(signal.SIGINT, handle_stop)
     active = []
+    ACTIVE = active
     try:
-        collect_orphans(STATE)
+        rehydrate(STATE, config, active)
+        reap_active(STATE, active)
         while not STOP["flag"]:
-            reap_active(STATE, active)
-            if STOP["flag"]:
-                break
             for repo in config.get("repos") or []:
+                if STOP["flag"]:
+                    break
+                reap_active(STATE, active)
                 if STOP["flag"]:
                     break
                 try:
@@ -1216,8 +1727,10 @@ def cmd_loop(args):
             except (TypeError, ValueError):
                 delay = 180
             sleep_poll(delay, STOP)
+            reap_active(STATE, active)
     finally:
         release_lock(lock)
+        DRY_RUN = False
     return 0
 
 
@@ -1235,7 +1748,7 @@ def cmd_parse_job(args):
         if args.author not in allowed:
             print(json.dumps({"ignored": True, "author": args.author}, ensure_ascii=False))
             return 0
-    job, error = validate_job(config, data, args.label or [])
+    job, error = validate_job(config, data, args.label or [], issue_repo=args.repo or None)
     if error:
         print(json.dumps({"error": error}, ensure_ascii=False))
         return 1
@@ -1297,6 +1810,7 @@ def main(argv):
     parse.add_argument("--config", default=None)
     parse.add_argument("--label", action="append", default=[])
     parse.add_argument("--author", default="")
+    parse.add_argument("--repo", default="")
     parse.set_defaults(func=cmd_parse_job)
 
     render = sub.add_parser("render-result", help="render a result comment")
