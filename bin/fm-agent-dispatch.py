@@ -4,8 +4,8 @@
 Commands:
   loop [--config PATH] [--once] [--dry-run]
       Poll every poll_seconds. --once polls a single round.
-      --dry-run logs the claim and the result comment it would write.
-      It does not edit labels, post comments, or start a runner.
+      --dry-run logs the claim, the result comment, and any reap it would perform.
+      It does not edit labels, post comments, start a runner, kill a job, or write a result.
   parse-job FILE [--config PATH] [--label LABEL ...] [--author LOGIN]
       Print the parsed and validated job as JSON.
       A non-zero exit prints {"error": "..."}.
@@ -51,6 +51,8 @@ DURATION_RE = re.compile(r"^(\d+)([smh])$")
 RUNNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sh$")
 SSH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 FENCE_RE = re.compile(r"```(?:yaml|yml)[^\n]*\n(.*?)```", re.IGNORECASE | re.DOTALL)
+PR_INPUT_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
+CLAIM_TOKEN_RE = re.compile(r"token:([A-Za-z0-9][A-Za-z0-9._-]*)")
 SECRET_PATTERNS = (
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{8,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{8,}"),
@@ -88,6 +90,7 @@ STATE = None
 STOP = {"flag": False}
 DRY_RUN = False
 ACTIVE = []
+CLOCK_OFFSET = {"seconds": 0.0}
 
 REMOTE_SCRIPT = """#!/bin/bash
 set -euo pipefail
@@ -102,6 +105,7 @@ fi
 scp_args+=(
   "$FM_AGENT_RUNNER_SRC"
   "$FM_AGENT_LIB_SRC"
+  "$FM_AGENT_REGISTRY_SRC"
   "${FM_AGENT_SSH_HOST}:.local-agents/jobs/${FM_AGENT_JOB_ID}/"
 )
 "${scp_args[@]}"
@@ -151,28 +155,37 @@ def redact(text):
     return cleaned
 
 
+def redact_obj(value):
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        total = 0
+        cleaned = []
+        for item in value:
+            new_item, count = redact_obj(item)
+            cleaned.append(new_item)
+            total += count
+        return cleaned, total
+    if isinstance(value, dict):
+        total = 0
+        cleaned = {}
+        for key, item in value.items():
+            new_key, key_count = redact_text(key) if isinstance(key, str) else (str(key), 0)
+            new_item, item_count = redact_obj(item)
+            cleaned[new_key] = new_item
+            total += key_count + item_count
+        return cleaned, total
+    return value, 0
+
+
 def redact_result(result):
-    result = dict(result)
-    total = 0
-    summary, count = redact_text(result.get("summary") if isinstance(result.get("summary"), str) else "")
-    result["summary"] = summary
-    total += count
-    details, count = redact_text(result.get("details") if isinstance(result.get("details"), str) else "")
-    result["details"] = details
-    total += count
-    artifacts = result.get("artifacts")
-    cleaned = []
-    if isinstance(artifacts, list):
-        for item in artifacts:
-            if isinstance(item, str):
-                text, count = redact_text(item)
-                cleaned.append(text)
-                total += count
-            else:
-                cleaned.append(item)
-    result["artifacts"] = cleaned
-    result["redactions"] = total
-    return result
+    if not isinstance(result, dict):
+        return {"redactions": 0}
+    cleaned, total = redact_obj(result)
+    if not isinstance(cleaned, dict):
+        cleaned = {}
+    cleaned["redactions"] = total
+    return cleaned
 
 
 def iso(moment):
@@ -196,6 +209,12 @@ def current_now():
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=datetime.now().astimezone().tzinfo)
     return moment
+
+
+def clock_now():
+    if os.environ.get("FM_AGENT_NOW"):
+        return current_now().timestamp() + CLOCK_OFFSET["seconds"]
+    return time.time()
 
 
 def parse_duration(value):
@@ -245,8 +264,15 @@ def ensure_state():
 
 def read_lock_pid(lock):
     try:
-        return int((lock / "pid").read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+        text = (lock / "pid").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines:
+        return None
+    try:
+        return int(lines[0].strip())
+    except ValueError:
         return None
 
 
@@ -257,19 +283,119 @@ def lock_age(lock):
         return 0.0
 
 
+def lock_gap_is_fresh(lock):
+    if read_lock_pid(lock) is not None:
+        return False
+    return lock_age(lock) < LOCK_PID_STALE_S
+
+
+def lock_snapshot(lock):
+    text = ""
+    try:
+        text = (lock / "pid").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    try:
+        st = lock.stat()
+        ino = st.st_ino
+        mtime_ns = st.st_mtime_ns
+    except OSError:
+        ino = None
+        mtime_ns = None
+    return {"text": text, "ino": ino, "mtime_ns": mtime_ns, "pid": read_lock_pid(lock)}
+
+
+def snapshot_age(snap):
+    if snap.get("mtime_ns") is None:
+        return 0.0
+    return time.time() - (snap["mtime_ns"] / 1e9)
+
+
+def snapshot_is_stale(snap):
+    pid = snap.get("pid")
+    if pid is not None and pid_alive(pid):
+        return False
+    if pid is not None:
+        return True
+    return snapshot_age(snap) >= LOCK_PID_STALE_S
+
+
+def unlink_quiet(path):
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def publish_lock_pid(state, lock):
+    payload = "%s\n%s\n" % (os.getpid(), "%.3f" % time.time())
     tmp = state / (".lock-pid.%s.%s" % (os.getpid(), time.time_ns()))
     try:
-        tmp.write_text("%s\n" % os.getpid(), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, lock / "pid")
+        fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except OSError:
+        return False
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, payload.encode("utf-8"))
+    except OSError:
+        os.close(fd)
+        unlink_quiet(tmp)
+        return False
+    os.close(fd)
+    dest = lock / "pid"
+    try:
+        os.link(str(tmp), str(dest))
+    except OSError:
+        unlink_quiet(tmp)
+        return False
+    unlink_quiet(tmp)
+    return read_lock_pid(lock) == os.getpid()
+
+
+def hold_stolen_lock():
+    raw = os.environ.get("FM_AGENT_LOCK_STEAL_HOLD", "")
+    if not raw:
+        return
+    path = Path(raw)
+    try:
+        path.write_text("held\n", encoding="utf-8")
+    except OSError:
+        return
+    limit = time.time() + 15
+    while path.exists() and time.time() < limit:
+        time.sleep(0.05)
+
+
+def steal_stale_lock(state, lock):
+    before = lock_snapshot(lock)
+    if not snapshot_is_stale(before):
+        if before.get("pid") is not None and pid_alive(before.get("pid")):
+            return "live"
+        return "fresh"
+    stolen = state / (".lock-stale.%s.%s" % (os.getpid(), time.time_ns()))
+    try:
+        os.rename(str(lock), str(stolen))
+    except OSError:
+        return "lost"
+    after = lock_snapshot(stolen)
+    same = after["text"] == before["text"] and after["ino"] == before["ino"]
+    if not same or not snapshot_is_stale(after):
         try:
-            tmp.unlink()
+            os.rename(str(stolen), str(lock))
         except OSError:
             pass
-        return False
-    return read_lock_pid(lock) == os.getpid()
+        return "lost"
+    hold_stolen_lock()
+    shutil.rmtree(stolen, ignore_errors=True)
+    return "stolen"
+
+
+def wait_for_fresh_lock(fresh_waits):
+    fresh_waits += 1
+    if fresh_waits > LOCK_FRESH_RETRIES:
+        raise SystemExit("could not acquire dispatcher lock")
+    time.sleep(LOCK_FRESH_PAUSE)
+    return fresh_waits
 
 
 def acquire_lock(state):
@@ -282,13 +408,16 @@ def acquire_lock(state):
             pid = read_lock_pid(lock)
             if pid is not None and pid_alive(pid):
                 raise SystemExit("dispatcher already running (pid %s)" % pid)
-            if pid is None and lock_age(lock) < LOCK_PID_STALE_S:
-                fresh_waits += 1
-                if fresh_waits > LOCK_FRESH_RETRIES:
-                    raise SystemExit("could not acquire dispatcher lock")
-                time.sleep(LOCK_FRESH_PAUSE)
+            if lock_gap_is_fresh(lock):
+                fresh_waits = wait_for_fresh_lock(fresh_waits)
                 continue
-            shutil.rmtree(lock, ignore_errors=True)
+            outcome = steal_stale_lock(state, lock)
+            if outcome == "live":
+                pid = read_lock_pid(lock)
+                raise SystemExit("dispatcher already running (pid %s)" % pid)
+            if outcome != "stolen":
+                fresh_waits = wait_for_fresh_lock(fresh_waits)
+                continue
             continue
         pause = os.environ.get("FM_AGENT_LOCK_PAUSE", "")
         if pause:
@@ -304,11 +433,7 @@ def acquire_lock(state):
 def release_lock(lock):
     if lock is None or not lock.is_dir():
         return
-    try:
-        current = int((lock / "pid").read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return
-    if current == os.getpid():
+    if read_lock_pid(lock) == os.getpid():
         shutil.rmtree(lock, ignore_errors=True)
 
 
@@ -728,6 +853,12 @@ def validate_job(config, data, labels, issue_repo=None):
             target = item[5:]
             if target not in known_repos:
                 return None, "repo is not allowed: %s" % target
+        if item.startswith("pr:"):
+            match = PR_INPUT_RE.fullmatch(item[3:])
+            if not match:
+                return None, "bad pr input"
+            if match.group(1) not in known_repos:
+                return None, "pr repo is not allowed: %s" % match.group(1)
     if "create" in data:
         if not isinstance(data.get("create"), bool):
             return None, "bad create"
@@ -866,7 +997,7 @@ def render_result_markdown(result):
 def seconds_until_deadline(active):
     if not active:
         return None
-    now = time.time()
+    now = clock_now()
     deltas = []
     for item in active:
         epoch = item.get("deadline_epoch")
@@ -875,6 +1006,19 @@ def seconds_until_deadline(active):
     if not deltas:
         return None
     return min(deltas)
+
+
+def poll_delay(active, configured):
+    try:
+        delay = float(configured)
+    except (TypeError, ValueError):
+        delay = 180.0
+    if delay < 0:
+        delay = 180.0
+    remain = seconds_until_deadline(active)
+    if remain is None:
+        return delay
+    return min(delay, max(0.0, remain))
 
 
 def resolve_timeout(explicit):
@@ -1070,8 +1214,30 @@ def read_runner_result(stage, record, return_code):
     return result
 
 
-def claim_marker(job_id, agent, host):
-    return "dispatcher: claimed %s \u2192 %s@%s" % (job_id, agent, host)
+def claim_marker(job_id, agent, host, token):
+    return "dispatcher: claimed %s \u2192 %s@%s token:%s" % (job_id, agent, host, token)
+
+
+def claim_mentions(body, job_id):
+    needle = "dispatcher: claimed %s" % job_id
+    index = body.find(needle)
+    if index < 0:
+        return False
+    end = index + len(needle)
+    if end < len(body) and (body[end].isalnum() or body[end] in "._-"):
+        return False
+    return True
+
+
+def earliest_claim_token(bodies, job_id):
+    for body in bodies:
+        if not claim_mentions(body, job_id):
+            continue
+        match = CLAIM_TOKEN_RE.search(body)
+        if not match:
+            return ""
+        return match.group(1)
+    return None
 
 
 def fetch_issue_comments(repo, number):
@@ -1130,6 +1296,10 @@ def post_result(state, result, had_running, had_queued):
         result["job"] = job_id
     repo = result.get("repo") or ""
     number = result.get("issue")
+    if DRY_RUN:
+        log("dry-run: would comment result for %s on %s#%s" % (job_id, repo, number))
+        log("dry-run: would label %s" % STATUS_LABEL.get(result.get("status"), "state:failed"))
+        return False
     path = running_path(state, repo, number) if repo and number is not None else None
     record = load_record(path) if path is not None else None
     if not isinstance(record, dict):
@@ -1154,10 +1324,6 @@ def post_result(state, result, had_running, had_queued):
     had_queued = bool(record.get("had_queued"))
     if path is not None:
         atomic_write(path, record)
-    if DRY_RUN:
-        log("dry-run: would comment result for %s on %s#%s" % (job_id, repo, number))
-        log("dry-run: would label %s" % STATUS_LABEL.get(result.get("status"), "state:failed"))
-        return False
     body_path = write_outbox(state, result)
     if not repo or number is None:
         return False
@@ -1197,14 +1363,21 @@ def post_result(state, result, had_running, had_queued):
     return False
 
 
-def ensure_claim(record):
+def ensure_claim(record, path):
     repo = record.get("repo") or ""
     number = record.get("issue")
     job_id = str(record.get("job_id") or "")
     agent = record.get("agent") or "unknown"
     host = record.get("host") or "none"
-    if not repo or number is None:
+    if not repo or number is None or not job_id:
         return False
+    token = record.get("claim_token")
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", token):
+        token = "%s-%s" % (os.getpid(), time.time_ns())
+        record["claim_token"] = token
+        if path is not None:
+            atomic_write(path, record)
+    marker = claim_marker(job_id, agent, host, token)
     bodies = fetch_issue_comments(repo, number)
     if bodies is None:
         return False
@@ -1214,11 +1387,17 @@ def ensure_claim(record):
     edit = gh(command)
     if edit.returncode != 0:
         return False
-    marker = claim_marker(job_id, agent, host)
-    if comment_has(bodies, "dispatcher: claimed %s" % job_id):
-        return True
-    comment = gh(["issue", "comment", "-R", repo, str(number), "--body", marker])
-    return comment.returncode == 0
+    if not comment_has(bodies, marker) and not record.get("claim_posted"):
+        comment = gh(["issue", "comment", "-R", repo, str(number), "--body", marker])
+        if comment.returncode != 0:
+            return False
+        record["claim_posted"] = True
+        if path is not None:
+            atomic_write(path, record)
+    bodies = fetch_issue_comments(repo, number)
+    if bodies is None:
+        return False
+    return earliest_claim_token(bodies, job_id) == token
 
 
 def runner_file(agent_cfg):
@@ -1290,6 +1469,7 @@ def start_process(state, job, host_cfg, stage):
             env["FM_AGENT_STAGE"] = str(stage)
             env["FM_AGENT_RUNNER_SRC"] = str(runner)
             env["FM_AGENT_LIB_SRC"] = str(lib)
+            env["FM_AGENT_REGISTRY_SRC"] = str(ROOT / "local-agents" / "agents.json")
             env["FM_AGENT_DEV_GUARD"] = "1" if host_cfg.get("dev_guard") else "0"
             proc = subprocess.Popen(
                 ["bash", str(script)],
@@ -1351,6 +1531,13 @@ def deadline_epoch_of(record):
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=datetime.now().astimezone().tzinfo)
     return moment.timestamp()
+
+
+def deadline_reached(record):
+    epoch = deadline_epoch_of(record)
+    if epoch is None:
+        return False
+    return clock_now() >= epoch
 
 
 def track_job(active, record, path, proc=None):
@@ -1427,6 +1614,13 @@ def runner_or_orphan_result(state, record):
 
 
 def finish_item(state, item, timed_out):
+    if DRY_RUN:
+        job_id = item["record"].get("job_id")
+        if timed_out:
+            log("dry-run: would reap %s at deadline" % job_id)
+        else:
+            log("dry-run: would finish %s" % job_id)
+        return
     if item.get("finishing"):
         return
     item["finishing"] = True
@@ -1456,8 +1650,10 @@ def finish_item(state, item, timed_out):
 
 
 def reap_active(state, active):
+    if DRY_RUN:
+        return
     still = []
-    now = time.time()
+    now = clock_now()
     for item in list(active):
         proc = item["proc"]
         deadline = item.get("deadline_epoch")
@@ -1546,8 +1742,8 @@ def continue_job(state, config, record, path, active):
         post_result(state, result, True, bool(record.get("had_queued")))
         return
     if phase == "claiming":
-        if not ensure_claim(record):
-            log("claim failed for %s#%s" % (record.get("repo"), record.get("issue")))
+        if not ensure_claim(record, path):
+            log("claim incomplete for %s; not starting" % record.get("job_id"))
             atomic_write(path, record)
             return
         record["phase"] = "claimed"
@@ -1578,7 +1774,7 @@ def launch_job(state, config, job, issue, names, host, dry_run, active):
         return
     if dry_run or DRY_RUN:
         log("dry-run: would claim %s on %s#%s -> %s@%s" % (job["id"], issue["repo"], issue["number"], job["agent"], host))
-        log("dry-run: would comment %s" % claim_marker(job["id"], job["agent"], host))
+        log("dry-run: would comment %s" % claim_marker(job["id"], job["agent"], host, "dry-run"))
         log("dry-run: not starting %s on %s" % (job["id"], host))
         return
     if job_id_in_use(state, job["id"], path):
@@ -1637,8 +1833,11 @@ def rehydrate(state, config, active):
         if not isinstance(record, dict):
             continue
         phase = record.get("phase") or ("running" if record.get("pid") else "claiming")
-        if DRY_RUN and not (phase == "running" and pid_matches(record)):
-            log("dry-run: would resume %s for %s" % (phase, record.get("job_id")))
+        if DRY_RUN:
+            if phase == "running" and pid_matches(record) and deadline_reached(record):
+                log("dry-run: would reap %s at deadline" % record.get("job_id"))
+            else:
+                log("dry-run: would resume %s for %s" % (phase, record.get("job_id")))
             continue
         continue_job(state, config, record, path, active)
 
@@ -1733,7 +1932,12 @@ def poll_repo(state, config, repo, dry_run, active):
 
 
 def sleep_poll(seconds, stop):
-    end = time.time() + max(0, seconds)
+    delay = max(0.0, float(seconds))
+    log("poll sleep %.3f" % delay)
+    if os.environ.get("FM_AGENT_NOW"):
+        CLOCK_OFFSET["seconds"] += delay
+        return
+    end = time.time() + delay
     while time.time() < end:
         if stop["flag"]:
             return
@@ -1752,6 +1956,7 @@ def handle_stop(signum, _frame):
 def cmd_loop(args):
     global STATE, DRY_RUN, ACTIVE
     DRY_RUN = bool(args.dry_run)
+    CLOCK_OFFSET["seconds"] = 0.0
     config = load_config(args.config)
     STATE = ensure_state()
     lock = acquire_lock(STATE)
@@ -1776,11 +1981,10 @@ def cmd_loop(args):
                 reap_active(STATE, active)
             if args.once or STOP["flag"]:
                 break
-            try:
-                delay = int(config.get("poll_seconds") or 180)
-            except (TypeError, ValueError):
-                delay = 180
-            sleep_poll(delay, STOP)
+            configured = config.get("poll_seconds")
+            if configured is None:
+                configured = 180
+            sleep_poll(poll_delay(active, configured), STOP)
             reap_active(STATE, active)
     finally:
         release_lock(lock)
