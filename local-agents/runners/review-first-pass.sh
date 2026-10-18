@@ -28,7 +28,11 @@ case "$reviewer" in
   */*) reviewer="${reviewer%%/*}:${reviewer#*/}" ;;
 esac
 
-registry="$(dirname "${BASH_SOURCE[0]}")/../agents.json"
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+registry="$script_dir/../agents.json"
+if [ -f "$script_dir/agents.json" ]; then
+  registry="$script_dir/agents.json"
+fi
 set +e
 python3 - "$registry" "$reviewer" <<'PY'
 import json
@@ -115,6 +119,30 @@ esac
 
 if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   printf '%s\n' "bad pull request repo" >"$summary_file"
+  write_result failed "$summary_file" ""
+  exit 0
+fi
+
+set +e
+python3 - "$registry" "$repo" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+registry, repo = sys.argv[1], sys.argv[2]
+try:
+    data = json.loads(Path(registry).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(3)
+repos = data.get("repos") if isinstance(data, dict) else None
+if not isinstance(repos, list) or repo not in repos:
+    raise SystemExit(3)
+raise SystemExit(0)
+PY
+repo_rc=$?
+set -e
+if [ "$repo_rc" -ne 0 ]; then
+  printf '%s\n' "pr repo is not allowed: $repo" >"$summary_file"
   write_result failed "$summary_file" ""
   exit 0
 fi

@@ -429,6 +429,46 @@ if [ "$cmd" = "issue" ] && [ "$sub" = "comment" ]; then
   if [ -n "${GH_COMMENT_LOG:-}" ]; then
     printf '%s\n' "$*" >>"$GH_COMMENT_LOG"
   fi
+  if [ "${GH_COMMENT_MIRROR:-}" = "1" ] && [ -n "${GH_COMMENTS_FILE:-}" ]; then
+    mirror_body=""
+    mirror_file=""
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--body" ]; then
+        mirror_body=$arg
+      elif [ "$prev" = "--body-file" ]; then
+        mirror_file=$arg
+      fi
+      prev=$arg
+    done
+    python3 - "$GH_COMMENTS_FILE" "$mirror_body" "$mirror_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, body, body_file = sys.argv[1:4]
+text = body
+if body_file:
+    text = Path(body_file).read_text(encoding="utf-8")
+if text == "" and body_file == "":
+    raise SystemExit(0)
+file = Path(path)
+payload = {"comments": []}
+if file.is_file():
+    try:
+        loaded = json.loads(file.read_text(encoding="utf-8") or "{}")
+    except json.JSONDecodeError:
+        loaded = {}
+    if isinstance(loaded, dict) and isinstance(loaded.get("comments"), list):
+        payload = loaded
+comments = payload.get("comments")
+if not isinstance(comments, list):
+    comments = []
+    payload["comments"] = comments
+comments.append({"body": text})
+file.write_text(json.dumps(payload), encoding="utf-8")
+PY
+  fi
   exit 0
 fi
 if [ "$cmd" = "issue" ] && [ "$sub" = "edit" ]; then
@@ -875,7 +915,60 @@ PY
   set -e
   [ "$PARSE_RC" -eq 1 ] || fail "allowed_create_repos should reject the issue repo"
   assert_contains "$out" "create target is not allowed" "allowed list did not bind create"
-  pass "job schema rejects unknown fields and foreign repos"
+
+  local bad_pr=$TMP_ROOT/schema-bad-pr.md
+  local foreign_pr=$TMP_ROOT/schema-foreign-pr.md
+  local allowed_pr=$TMP_ROOT/schema-allowed-pr.md
+  write_job_file "$bad_pr" "$(cat <<'EOF'
+```yaml
+job: review-first-pass/v1
+id: rev-schema-01
+task: review
+inputs:
+  - pr:not-a-pr
+```
+EOF
+)"
+  run_parse "$bad_pr" --label agent:review-first-pass
+  [ "$PARSE_RC" -eq 1 ] || fail "bad pr input should exit 1"
+  assert_contains "$PARSE_OUT" "bad pr input" "bad pr input was accepted"
+
+  write_job_file "$foreign_pr" "$(cat <<'EOF'
+```yaml
+job: review-first-pass/v1
+id: rev-schema-02
+task: review
+reviewer: claude:sonnet
+author_family: gemini
+inputs:
+  - pr:evil/foreign#4
+```
+EOF
+)"
+  run_parse "$foreign_pr" --label agent:review-first-pass
+  [ "$PARSE_RC" -eq 1 ] || fail "foreign pr repo should exit 1"
+  assert_contains "$PARSE_OUT" "pr repo is not allowed: evil/foreign" "foreign pr repo was accepted"
+
+  write_job_file "$allowed_pr" "$(cat <<'EOF'
+```yaml
+job: review-first-pass/v1
+id: rev-schema-03
+task: review
+reviewer: claude:sonnet
+author_family: gemini
+inputs:
+  - pr:adibirzu/firstmate#12
+```
+EOF
+)"
+  run_parse "$allowed_pr" --label agent:review-first-pass
+  [ "$PARSE_RC" -eq 0 ] || fail "allowed pr repo was rejected: $PARSE_OUT"
+  assert_py "allowed pr input" '
+import json, sys
+data = json.load(sys.stdin)
+assert data["inputs"] == ["pr:adibirzu/firstmate#12"], data
+' "$PARSE_OUT"
+  pass "job schema rejects unknown fields, foreign repos, and foreign pull requests"
 }
 
 test_dry_run_recovery() {
@@ -1061,15 +1154,21 @@ details = "\n".join([
     "AAAA",
     pem_end,
 ])
+pr_field = parts("gh", "p_", "PrFieldSecretToken99")
+cost_field = parts("s", "k-", "CostFieldSecretToken")
+artifact_field = parts("xa", "i-", "ArtifactSecretToken")
 payload = {
     "status": "succeeded",
     "summary": "saw %s and %s" % (hub, pw),
     "details": details,
+    "pr": pr_field,
+    "cost": {"note": cost_field, "usd": 1, "tags": [cost_field]},
     "artifacts": [
         model,
         fine,
         vendor,
         kv,
+        {"token": artifact_field, "nested": [artifact_field]},
     ],
 }
 Path(result_path).write_text(json.dumps(payload), encoding="utf-8")
@@ -1130,6 +1229,9 @@ forbidden = [
     parts("-----BEGIN ", "OPENSSH PRIVATE KEY-----"),
     parts("pass", "word=", "abcdefghijklmnopqrstuvwxyz"),
     parts("to", "ken=", "0123456789abcdef"),
+    parts("gh", "p_", "PrFieldSecretToken99"),
+    parts("s", "k-", "CostFieldSecretToken"),
+    parts("xa", "i-", "ArtifactSecretToken"),
 ]
 for blob, path in zip(blobs, paths):
     for secret in forbidden:
@@ -1596,6 +1698,500 @@ SH
   pass "runner home reaches the local ledger"
 }
 
+seed_claim_record() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, job_id, number = sys.argv[1:4]
+record = {
+    "phase": "claiming",
+    "job_id": job_id,
+    "job": {
+        "id": job_id,
+        "job": "release-watch/v1",
+        "task": "poll",
+        "agent": "release-watch",
+    },
+    "host": "mini",
+    "pid": None,
+    "pgid": None,
+    "started_at": None,
+    "deadline": None,
+    "repo": "adibirzu/firstmate",
+    "issue": int(number),
+    "agent": "release-watch",
+    "title": "Watch",
+    "body": "",
+    "url": "",
+    "had_queued": True,
+    "had_running": False,
+    "wall_seconds": 600,
+}
+dest = Path(path)
+dest.parent.mkdir(parents=True, exist_ok=True)
+dest.write_text(json.dumps(record), encoding="utf-8")
+PY
+}
+
+stop_job_pid() {
+  local record=$1
+  local pid
+  [ -f "$record" ] || return 0
+  pid=$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("pid"); print("" if value is None else value)' "$record")
+  if [ -n "$pid" ]; then
+    track_pid "$pid"
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+}
+
+test_lock_steal_preserves_new_lock() {
+  local state=$TMP_ROOT/lock-steal-state
+  local bin=$TMP_ROOT/lock-steal-bin
+  local log=$TMP_ROOT/lock-steal-gh.log
+  local crit=$TMP_ROOT/lock-steal-crit
+  local overlap=$TMP_ROOT/lock-steal-overlap
+  local hold=$TMP_ROOT/lock-steal-hold
+  local a_err=$TMP_ROOT/lock-steal-a.err
+  local b_err=$TMP_ROOT/lock-steal-b.err
+  local saved=$PATH
+  local a_pid b_pid a_rc b_rc waited count
+  mkdir -p "$state/lock"
+  install_stateful_gh "$bin"
+  printf '%s\n' "not-a-pid" >"$state/lock/pid"
+  python3 - "$state/lock" "$state/lock/pid" <<'PY'
+import os
+import sys
+import time
+
+old = time.time() - 120
+os.utime(sys.argv[1], (old, old))
+os.utime(sys.argv[2], (old, old))
+PY
+  : >"$log"
+  rm -f "$hold"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_CRIT="$crit" \
+    GH_OVERLAP="$overlap" \
+    FM_AGENT_LOCK_STEAL_HOLD="$hold" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG" >"$TMP_ROOT/lock-steal-a.out" 2>"$a_err" &
+  a_pid=$!
+  track_pid "$a_pid"
+  waited=0
+  while [ "$waited" -lt 50 ]; do
+    if [ -f "$hold" ] && [ ! -d "$state/lock" ]; then
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -f "$hold" ] || fail "stale lock was not held aside"
+  [ ! -d "$state/lock" ] || fail "stale lock stayed in place during the hold"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_CRIT="$crit" \
+    GH_OVERLAP="$overlap" \
+    FM_AGENT_LOCK_PAUSE=5 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG" >"$TMP_ROOT/lock-steal-b.out" 2>"$b_err" &
+  b_pid=$!
+  track_pid "$b_pid"
+  waited=0
+  while [ "$waited" -lt 30 ]; do
+    if [ -d "$state/lock" ]; then
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -d "$state/lock" ] || fail "second dispatcher did not create a lock"
+  rm -f "$hold"
+  set +e
+  wait "$a_pid"
+  a_rc=$?
+  set -e
+  [ "$a_rc" -ne 0 ] || fail "stealer acquired the replacement lock"
+  assert_contains "$(cat "$a_err")" "could not acquire dispatcher lock" "stealer did not back off"
+  [ -d "$state/lock" ] || fail "stealer removed the replacement lock"
+  [ ! -e "$state/lock/pid" ] || fail "stealer replaced the new lock before its pid was published"
+  set +e
+  wait "$b_pid"
+  b_rc=$?
+  set -e
+  [ "$b_rc" -eq 0 ] || fail "replacement lock holder failed"
+  count=$(grep -c "issue list" "$log" || true)
+  [ "$count" -eq 5 ] || fail "expected one poll pass, saw $count issue lists"
+  [ ! -e "$overlap" ] || fail "two dispatchers polled at once"
+  pass "a stolen stale lock cannot delete the next dispatcher lock"
+}
+
+test_claim_compare_and_set() {
+  local saved=$PATH
+  local state bin log comments record
+
+  state=$TMP_ROOT/cas-lose-state
+  bin=$TMP_ROOT/cas-lose-bin
+  log=$TMP_ROOT/cas-lose-gh.log
+  comments=$TMP_ROOT/cas-lose-comments.json
+  record=$state/running/adibirzu-firstmate#82.json
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  seed_claim_record "$record" "cas-lose-01" 82
+  python3 - "$comments" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {"comments": [{
+    "body": "dispatcher: claimed cas-lose-01 token:earlier-owner",
+}]}
+Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  [ "$(record_phase "$record")" = "claiming" ] || fail "lost claim advanced the phase"
+  python3 - "$record" "$comments" "$state/artifacts/cas-lose-01/runner.stdout" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+comments = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["comments"]
+stdout = Path(sys.argv[3])
+if record.get("pid") is not None:
+    raise SystemExit("lost claim stored a pid")
+if stdout.exists():
+    raise SystemExit("lost claim started a runner")
+if len(comments) < 2:
+    raise SystemExit("lost claim did not post its own comment")
+if "token:earlier-owner" not in comments[0]["body"]:
+    raise SystemExit("earliest claim was replaced")
+if "token:earlier-owner" in comments[1]["body"]:
+    raise SystemExit("second comment reused the earlier token")
+PY
+  assert_grep "not starting" "$state/dispatch.log" "lost claim still started"
+
+  state=$TMP_ROOT/cas-win-state
+  bin=$TMP_ROOT/cas-win-bin
+  log=$TMP_ROOT/cas-win-gh.log
+  comments=$TMP_ROOT/cas-win-comments.json
+  record=$state/running/adibirzu-firstmate#83.json
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  seed_claim_record "$record" "cas-win-01" 83
+  printf '%s\n' '{"comments":[]}' >"$comments"
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  stop_job_pid "$record"
+  [ -f "$state/artifacts/cas-win-01/runner.stdout" ] || fail "winning claim did not start"
+  assert_no_grep "not starting" "$state/dispatch.log" "winning claim refused to start"
+  pass "the earliest claim token owns the job"
+}
+
+test_dry_run_skips_deadline_reap() {
+  local state=$TMP_ROOT/dry-reap-state
+  local bin=$TMP_ROOT/dry-reap-bin
+  local log=$TMP_ROOT/dry-reap-gh.log
+  local saved=$PATH
+  local info pid pgid
+  local record=$state/running/adibirzu-firstmate#85.json
+  mkdir -p "$state/running" "$state/artifacts/dry-reap-01"
+  install_stateful_gh "$bin"
+  info=$(start_recorded_sleep)
+  pid=${info%% *}
+  pgid=${info##* }
+  track_pid "$pid"
+  python3 - "$record" "$pid" "$pgid" "$state/artifacts/dry-reap-01" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, pid, pgid, stage = sys.argv[1:5]
+record = {
+    "phase": "running",
+    "job_id": "dry-reap-01",
+    "pid": int(pid),
+    "pgid": int(pgid),
+    "deadline": "2020-01-01T00:00:00+00:00",
+    "repo": "adibirzu/firstmate",
+    "issue": 85,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": stage,
+    "job": {
+        "id": "dry-reap-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(path).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --dry-run --config "$CFG"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "dry-run killed the expired job"
+  fi
+  [ ! -e "$state/outbox/dry-reap-01.json" ] || fail "dry-run wrote a result"
+  [ ! -e "$state/artifacts/dry-reap-01/comment.md" ] || fail "dry-run wrote a result comment"
+  assert_no_grep "issue edit" "$log" "dry-run edited a label"
+  assert_no_grep "issue comment" "$log" "dry-run posted a result"
+  assert_grep "dry-run: would reap dry-reap-01 at deadline" "$state/dispatch.log" "dry-run did not report the reap"
+  [ "$(record_phase "$record")" = "running" ] || fail "dry-run changed the running job"
+  pass "dry-run reports a deadline reap without killing or posting"
+}
+
+test_poll_wakes_for_deadline() {
+  local state=$TMP_ROOT/sleep-bound-state
+  local bin=$TMP_ROOT/sleep-bound-bin
+  local log=$TMP_ROOT/sleep-bound-gh.log
+  local saved=$PATH
+  local info pid pgid d_pid start now elapsed waited
+  local record=$state/running/adibirzu-firstmate#86.json
+  mkdir -p "$state/running" "$state/artifacts/sleep-bound-01"
+  install_stateful_gh "$bin"
+  info=$(start_recorded_sleep)
+  pid=${info%% *}
+  pgid=${info##* }
+  track_pid "$pid"
+  python3 - "$record" "$pid" "$pgid" "$state/artifacts/sleep-bound-01" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, pid, pgid, stage = sys.argv[1:5]
+record = {
+    "phase": "running",
+    "job_id": "sleep-bound-01",
+    "pid": int(pid),
+    "pgid": int(pgid),
+    "deadline": "2026-01-01T00:00:04+00:00",
+    "repo": "adibirzu/firstmate",
+    "issue": 86,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": False,
+    "stage": stage,
+    "job": {
+        "id": "sleep-bound-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(path).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  start=$(date +%s)
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    FM_AGENT_NOW="2026-01-01T00:00:00+00:00" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --config "$CFG" >"$TMP_ROOT/sleep-bound.out" 2>"$TMP_ROOT/sleep-bound.err" &
+  d_pid=$!
+  track_pid "$d_pid"
+  waited=0
+  while [ "$waited" -lt 40 ]; do
+    if [ -f "$state/outbox/sleep-bound-01.json" ]; then
+      break
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  now=$(date +%s)
+  elapsed=$((now - start))
+  kill -TERM "$d_pid" 2>/dev/null || true
+  sleep 0.2
+  kill -KILL "$d_pid" 2>/dev/null || true
+  set +e
+  wait "$d_pid"
+  set -e
+  [ -f "$state/outbox/sleep-bound-01.json" ] || fail "deadline did not reap during the short sleep"
+  [ "$elapsed" -lt 8 ] || fail "deadline sleep took ${elapsed}s"
+  python3 - "$state/dispatch.log" "$state/outbox/sleep-bound-01.json" <<'PY'
+import json
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+found = re.findall(r"poll sleep ([0-9]+(?:\.[0-9]+)?)", text)
+if not found:
+    raise SystemExit("no poll sleep")
+first = float(found[0])
+if not 0 < first < 10:
+    raise SystemExit("first poll sleep was %s" % first)
+data = json.load(open(sys.argv[2], encoding="utf-8"))
+if data.get("summary") != "timeout":
+    raise SystemExit(data.get("summary"))
+PY
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "bounded sleep left the expired job running"
+  fi
+  pass "the poll loop wakes for the nearest deadline"
+}
+
+test_review_pr_repo_and_remote_registry() {
+  local saved=$PATH
+  local home=$TMP_ROOT/review-remote-home
+  local stage=$TMP_ROOT/review-stage
+  local bin=$TMP_ROOT/review-remote-bin
+  local job
+  mkdir -p "$home" "$stage" "$bin"
+  cp "$ROOT/local-agents/runners/review-first-pass.sh" "$stage/review-first-pass.sh"
+  cp "$ROOT/local-agents/runners/lib.sh" "$stage/lib.sh"
+  cat >"$bin/gh" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  cat >"$bin/llm-run" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${LLM_LOG:?}"
+exit 1
+SH
+  chmod +x "$bin/gh" "$bin/llm-run"
+  : >"$TMP_ROOT/review-remote-llm.log"
+
+  job=$TMP_ROOT/review-unlisted
+  prepare_job "$job" '{"id":"rev-stage-01","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"claude:sonnet","inputs":["pr:adibirzu/firstmate#12"]}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$TMP_ROOT/review-remote-llm.log" \
+    bash "$stage/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("summary") != "reviewer is not allowed":
+    raise SystemExit(data.get("summary"))
+PY
+
+  cp "$CFG" "$stage/agents.json"
+  job=$TMP_ROOT/review-foreign-pr
+  prepare_job "$job" '{"id":"rev-stage-02","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"claude:sonnet","inputs":["pr:evil/foreign#4"]}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$TMP_ROOT/review-remote-llm.log" \
+    bash "$stage/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+summary = data.get("summary") or ""
+if summary != "pr repo is not allowed: evil/foreign":
+    raise SystemExit(summary)
+if "reviewer is not allowed" in summary:
+    raise SystemExit(summary)
+PY
+
+  job=$TMP_ROOT/review-allowed-pr
+  prepare_job "$job" '{"id":"rev-stage-03","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"claude:sonnet","inputs":["pr:adibirzu/firstmate#12"]}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$TMP_ROOT/review-remote-llm.log" \
+    bash "$stage/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+summary = data.get("summary") or ""
+if "gh pr diff or view failed" not in summary:
+    raise SystemExit(summary)
+if "reviewer is not allowed" in summary or "pr repo is not allowed" in summary:
+    raise SystemExit(summary)
+PY
+  [ ! -s "$TMP_ROOT/review-remote-llm.log" ] || fail "registry checks called a model"
+
+  local state=$TMP_ROOT/review-dispatch-state
+  local disp=$TMP_ROOT/review-dispatch-bin
+  local issues=$TMP_ROOT/review-dispatch-issues.json
+  local comments=$TMP_ROOT/review-dispatch-comments.json
+  local gh_log=$TMP_ROOT/review-dispatch-gh.log
+  local ssh_log=$TMP_ROOT/review-dispatch-ssh.log
+  local scp_log=$TMP_ROOT/review-dispatch-scp.log
+  local ssh_mark=$TMP_ROOT/review-dispatch-ssh.mark
+  local record=$state/running/adibirzu-firstmate#84.json
+  mkdir -p "$state" "$disp"
+  install_stateful_gh "$disp"
+  cat >"$disp/ssh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${SSH_LOG:?}"
+printf '%s\n' "fake-ssh" >> "${SSH_MARK:?}"
+exit 0
+SH
+  cat >"$disp/scp" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${SCP_LOG:?}"
+exit 0
+SH
+  chmod +x "$disp/ssh" "$disp/scp"
+  python3 - "$issues" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+body = "\n".join([
+    "```yaml",
+    "job: review-first-pass/v1",
+    "id: rev-remote-01",
+    "task: review",
+    "reviewer: claude:sonnet",
+    "author_family: gemini",
+    "inputs:",
+    "  - pr:adibirzu/firstmate#12",
+    "```",
+    "",
+])
+issue = [{
+    "number": 84,
+    "title": "Review",
+    "body": body,
+    "labels": [{"name": "agent:review-first-pass"}, {"name": "state:queued"}],
+    "author": {"login": "adibirzu"},
+    "url": "https://github.com/adibirzu/firstmate/issues/84",
+}]
+Path(sys.argv[1]).write_text(json.dumps(issue), encoding="utf-8")
+PY
+  printf '%s\n' '{"comments":[]}' >"$comments"
+  : >"$gh_log"
+  : >"$ssh_log"
+  : >"$scp_log"
+  : >"$ssh_mark"
+  PATH="$disp:$saved" \
+    GH_LOG="$gh_log" \
+    GH_ISSUE_FILE="$issues" \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    SSH_LOG="$ssh_log" \
+    SSH_MARK="$ssh_mark" \
+    SCP_LOG="$scp_log" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  stop_job_pid "$record"
+  assert_grep "agents.json" "$scp_log" "remote review did not stage the reviewer registry"
+  assert_grep "fake-ssh" "$ssh_mark" "remote review invoked ssh outside the test double"
+  assert_grep "BatchMode" "$ssh_log" "remote review did not call ssh"
+  pass "review repos stay on the registry and remote runs stage it"
+}
+
 test_parse_job_without_pyyaml
 test_parse_job_with_pyyaml_loader
 test_validation_failures
@@ -1607,14 +2203,19 @@ test_dry_run_claims_without_runner
 test_dry_run_recovery
 test_dry_run_open_claim
 test_claim_transaction
+test_claim_compare_and_set
 test_result_transaction_and_redaction
 test_job_schema
 test_lock_protocol
 test_lock_race
+test_lock_steal_preserves_new_lock
 test_max_jobs_blocks_launch
 test_restart_enforces_deadline
 test_slow_poll_respects_deadline
+test_poll_wakes_for_deadline
+test_dry_run_skips_deadline_reap
 test_reviewer_allow_list
+test_review_pr_repo_and_remote_registry
 test_ledger_home
 test_runner_smokes
 test_shell_syntax
