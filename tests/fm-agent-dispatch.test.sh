@@ -163,15 +163,35 @@ test_window_and_capacity() {
   local state out
   state=$TMP_ROOT/window-state
   mkdir -p "$state"
-  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-18T23:59:59+03:00 \
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T17:59:59+03:00 \
     python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media --host-pref adi1)
-  assert_py "adi1 closed" '
+  assert_py "adi1 closed before not_before" '
 import json, sys
 data = json.load(sys.stdin)
 assert data["action"] == "blocked", data
 assert "textbook OCR" in data["reason"], data
 ' "$out"
-  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-18T23:59:59+03:00 \
+  mkdir -p "$state/windows"
+  : >"$state/windows/adi1-media.open"
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T17:59:59+03:00 \
+    python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media --host-pref adi1)
+  assert_py "adi1 stays closed before not_before when the file exists" '
+import json, sys
+data = json.load(sys.stdin)
+assert data["action"] == "blocked", data
+assert "textbook OCR" in data["reason"], data
+' "$out"
+  rm -f "$state/windows/adi1-media.open"
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T18:00:00+03:00 \
+    python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media --host-pref adi1)
+  assert_py "adi1 closed when open file is missing" '
+import json, sys
+data = json.load(sys.stdin)
+assert data["action"] == "blocked", data
+assert "windows/adi1-media.open" in data["reason"], data
+assert "textbook OCR" in data["reason"], data
+' "$out"
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T18:00:00+03:00 \
     python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media)
   assert_py "adi2 while adi1 closed" '
 import json, sys
@@ -179,7 +199,8 @@ data = json.load(sys.stdin)
 assert data["action"] == "run", data
 assert data["host"] == "adi2", data
 ' "$out"
-  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T00:00:00+03:00 \
+  : >"$state/windows/adi1-media.open"
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T18:00:00+03:00 \
     python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media --host-pref adi1)
   assert_py "adi1 open at window" '
 import json, sys
@@ -189,7 +210,8 @@ assert data["host"] == "adi1", data
 ' "$out"
 
   state=$TMP_ROOT/capacity-state
-  mkdir -p "$state/running"
+  mkdir -p "$state/running" "$state/windows"
+  : >"$state/windows/adi1-media.open"
   python3 - "$state/running" "$$" <<'PY'
 import json
 import sys
@@ -200,7 +222,7 @@ pid = int(sys.argv[2])
 for name, host in (("one.json", "adi2"), ("two.json", "adi2")):
     (root / name).write_text(json.dumps({"job_id": name, "host": host, "pid": pid}), encoding="utf-8")
 PY
-  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T01:00:00+03:00 \
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T19:00:00+03:00 \
     python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media)
   assert_py "adi2 full chooses adi1" '
 import json, sys
@@ -218,7 +240,7 @@ pid = int(sys.argv[2])
 for name, host in (("three.json", "adi1"), ("four.json", "adi1")):
     (root / name).write_text(json.dumps({"job_id": name, "host": host, "pid": pid}), encoding="utf-8")
 PY
-  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T01:00:00+03:00 \
+  out=$(FM_AGENT_STATE="$state" FM_AGENT_NOW=2026-10-19T19:00:00+03:00 \
     python3 "$DISPATCH" select-host --config "$CFG" --agent studio-media)
   assert_py "both hosts full retries" '
 import json, sys
@@ -226,6 +248,44 @@ data = json.load(sys.stdin)
 assert data["action"] == "retry", data
 ' "$out"
   pass "window and max_jobs"
+}
+
+test_open_file_path_rejected() {
+  local bad out rc
+  bad=$TMP_ROOT/bad-open-file.json
+  python3 - "$CFG" "$bad" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source, dest = sys.argv[1:]
+data = json.loads(Path(source).read_text(encoding="utf-8"))
+data["windows"]["adi1-media"]["open_file"] = "windows/../../etc/adi1-media.open"
+Path(dest).write_text(json.dumps(data), encoding="utf-8")
+PY
+  set +e
+  out=$(python3 "$DISPATCH" select-host --config "$bad" --agent studio-media 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "open_file with .. should be rejected"
+  assert_contains "$out" "open_file" "dotdot open_file error"
+  python3 - "$CFG" "$bad" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source, dest = sys.argv[1:]
+data = json.loads(Path(source).read_text(encoding="utf-8"))
+data["windows"]["adi1-media"]["open_file"] = "/var/tmp/adi1-media.open"
+Path(dest).write_text(json.dumps(data), encoding="utf-8")
+PY
+  set +e
+  out=$(python3 "$DISPATCH" select-host --config "$bad" --agent studio-media 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "absolute open_file should be rejected"
+  assert_contains "$out" "open_file" "absolute open_file error"
+  pass "open_file traversal rejected"
 }
 
 test_render_result_neutralises() {
@@ -1540,6 +1600,7 @@ test_parse_job_without_pyyaml
 test_parse_job_with_pyyaml_loader
 test_validation_failures
 test_window_and_capacity
+test_open_file_path_rejected
 test_render_result_neutralises
 test_unknown_author_is_ignored
 test_dry_run_claims_without_runner

@@ -14,6 +14,9 @@ Commands:
   select-host --agent NAME [--host-pref a,b] [--config PATH]
       Print the host decision as JSON. FM_AGENT_NOW overrides the clock.
       FM_AGENT_STATE/<running> supplies live job counts.
+      A window open_file is relative to FM_AGENT_STATE. The window is open
+      only when now >= not_before and that file exists. Absolute paths and
+      any '..' segment are rejected when the config is loaded.
 
 State directory: ${FM_AGENT_STATE:-$HOME/dev/mini-state/local-agents}
   running/ outbox/ artifacts/<job-id>/ events.jsonl dispatch.log lock/
@@ -309,6 +312,35 @@ def release_lock(lock):
         shutil.rmtree(lock, ignore_errors=True)
 
 
+def open_file_error(value):
+    if not isinstance(value, str) or value == "" or value != value.strip():
+        return "bad open_file"
+    if any(ord(char) < 32 for char in value):
+        return "bad open_file"
+    if value.startswith("/") or value.startswith("\\") or re.match(r"^[A-Za-z]:", value):
+        return "bad open_file: %s" % value
+    if any(part == ".." for part in re.split(r"[/\\]", value)):
+        return "bad open_file: %s" % value
+    if Path(value).is_absolute():
+        return "bad open_file: %s" % value
+    return None
+
+
+def validate_window_open_files(data):
+    windows = data.get("windows") or {}
+    if not isinstance(windows, dict):
+        return
+    for window in windows.values():
+        if not isinstance(window, dict) or "open_file" not in window:
+            continue
+        value = window.get("open_file")
+        if value is None:
+            continue
+        error = open_file_error(value)
+        if error:
+            raise SystemExit(error)
+
+
 def load_config(path):
     config_path = Path(path) if path else DEFAULT_CONFIG
     try:
@@ -317,6 +349,7 @@ def load_config(path):
         raise SystemExit("cannot read config: %s" % exc)
     if not isinstance(data, dict) or data.get("version") != 1:
         raise SystemExit("config version must be 1")
+    validate_window_open_files(data)
     return data
 
 
@@ -716,7 +749,14 @@ def validate_job(config, data, labels, issue_repo=None):
     return normalized, None
 
 
-def window_block(config, host, agent, now):
+def window_reason(window, host):
+    reason = window.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        return reason
+    return "%s is closed until %s" % (host, window.get("not_before"))
+
+
+def window_block(config, host, agent, now, state):
     for window in (config.get("windows") or {}).values():
         if not isinstance(window, dict):
             continue
@@ -731,11 +771,17 @@ def window_block(config, host, agent, now):
         if not_before.tzinfo is None:
             not_before = not_before.replace(tzinfo=now.tzinfo)
         if now < not_before:
-            return window.get("reason") or "%s is closed until %s" % (host, window.get("not_before"))
+            return window_reason(window, host)
+        open_file = window.get("open_file")
+        if not isinstance(open_file, str) or open_file == "":
+            continue
+        marker = Path(state) / open_file
+        if not marker.is_file():
+            return "%s; open file %s is missing" % (window_reason(window, host), open_file)
     return None
 
 
-def choose_host(config, agent_name, host_pref, now, live_counts):
+def choose_host(config, agent_name, host_pref, now, live_counts, state):
     agent_hosts = list((config.get("agents") or {})[agent_name].get("hosts") or [])
     order = list(host_pref) if host_pref else list(agent_hosts)
     allowed = set(agent_hosts)
@@ -743,7 +789,7 @@ def choose_host(config, agent_name, host_pref, now, live_counts):
     closed = {}
     runnable = []
     for host in candidates:
-        reason = window_block(config, host, agent_name, now)
+        reason = window_block(config, host, agent_name, now, state)
         if reason:
             closed[host] = reason
             continue
@@ -757,7 +803,7 @@ def choose_host(config, agent_name, host_pref, now, live_counts):
         pref_reason = None
         pref_closed = True
         for host in host_pref:
-            reason = window_block(config, host, agent_name, now)
+            reason = window_block(config, host, agent_name, now, state)
             if not reason:
                 pref_closed = False
                 break
@@ -1671,6 +1717,7 @@ def poll_repo(state, config, repo, dry_run, active):
             job.get("host_pref"),
             current_now(),
             live_counts(state),
+            state,
         )
         if decision["action"] == "retry":
             log("retry %s#%s %s" % (repo, number, job["id"]))
@@ -1793,7 +1840,7 @@ def cmd_select_host(args):
         if error:
             print(json.dumps({"error": error}))
             return 1
-    decision = choose_host(config, agent, host_pref, current_now(), live_counts(STATE))
+    decision = choose_host(config, agent, host_pref, current_now(), live_counts(STATE), STATE)
     print(json.dumps(decision, ensure_ascii=False))
     return 0 if decision.get("action") != "error" else 1
 

@@ -12,8 +12,9 @@
     "adi1-media": {
       "host": "adi1",
       "agents": ["studio-media"],
-      "not_before": "2026-10-19T00:00:00+03:00",
-      "reason": "adi1 runs the textbook OCR until Mon 2026-10-19 00:00 Bucharest (Adi, 2026-10-18 12:04)"
+      "not_before": "2026-10-19T18:00:00+03:00",
+      "open_file": "windows/adi1-media.open",
+      "reason": "adi1 runs the textbook OCR (ETA Mon 2026-10-19 evening to Tue 2026-10-20); Firstmate touches windows/adi1-media.open when OCR is finished (Adi, 2026-10-18 12:04)"
     }
   },
   "agents": {

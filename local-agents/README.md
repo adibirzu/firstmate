@@ -45,7 +45,9 @@ result:
 | adi2 | adi2-ts | 2 | dev-guard; default host for studio, review, research, and mapping |
 
 The `adi1-media` window is in [agents.json](agents.json).
-Until that timestamp, studio-media is not placed on adi1.
+studio-media is placed on adi1 only when the clock is at or after `not_before` and `windows/adi1-media.open` exists in the dispatcher state directory (`$FM_AGENT_STATE`, or `$HOME/dev/mini-state/local-agents`).
+Touch that file after the textbook OCR finishes.
+Nothing removes it automatically.
 A job that asks only for a closed host is marked blocked with the window reason.
 
 ## Agents

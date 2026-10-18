@@ -19,7 +19,9 @@ Generative tasks are accepted and then stopped with a blocked result until the L
 ## Host
 
 The registry order is adi2, then adi1.
-adi1 is not eligible for this agent before the `adi1-media` window in `local-agents/agents.json`.
+adi1 is not eligible for this agent until the `adi1-media` window in `local-agents/agents.json` is open.
+Touch `windows/adi1-media.open` in the dispatcher state directory after the textbook OCR finishes.
+Nothing removes that file automatically.
 GPU work runs only on a host that window says is eligible.
 
 ## LLM and harness
