@@ -3,10 +3,9 @@
 #
 # bin/fm-lint.sh is the single owner invoked by CI
 # (.github/workflows/ci.yml) and by the pre-push gate (.no-mistakes.yaml
-# commands.lint). CI runs its two full-rigor canonical partitions; the local
-# gate uses its context-selected default. Their selection differs deliberately,
-# while this owner keeps analysis flags, configuration, and tool versions from
-# drifting.
+# commands.lint). CI and the local gate deliberately select different roots;
+# bin/fm-lint.sh owns their analysis modes, memory fallback, configuration,
+# and tool versions.
 # Regression origin: with no commands.lint configured, the local no-mistakes
 # lint step never ran the deterministic shell lint, so PRs passed local
 # validation yet failed CI on info/warning findings such as SC2015, SC1007, and
@@ -162,7 +161,6 @@ test_help_reports_the_complete_interface() {
   assert_contains "$help" "SC1091" "fm-lint.sh --help omitted the local SC1091 exclusion"
   assert_contains "$help" "SC2034" "fm-lint.sh --help omitted the local SC2034 exclusion"
   assert_contains "$help" "SC2153" "fm-lint.sh --help omitted the local SC2153 exclusion"
-  assert_contains "$help" "SC2154" "fm-lint.sh --help omitted the local SC2154 exclusion"
   assert_contains "$help" "SC2329" "fm-lint.sh --help omitted the local SC2329 exclusion"
   pass "fm-lint.sh --help reports the complete executable interface"
 }
@@ -273,39 +271,12 @@ case "$*" in
     fi
     exit 0
     ;;
-  "ls-files -z")
-    [ "${FM_TEST_GIT_LS_FILES_OK:-1}" = 1 ] || exit 128
-    if [ -n "${FM_TEST_GIT_LS_FILES:-}" ] && [ -f "$FM_TEST_GIT_LS_FILES" ]; then
-      cat "$FM_TEST_GIT_LS_FILES"
-    fi
-    exit 0
-    ;;
   *)
     exit 1
     ;;
 esac
 SH
   chmod +x "$fakebin/git"
-}
-
-# fm_lint_stub_actionlint <fakebin>: pinned-version actionlint that accepts
-# every workflow, so key-guard tests never depend on a host actionlint install.
-fm_lint_stub_actionlint() {
-  local fakebin=$1
-  cat > "$fakebin/actionlint" <<'SH'
-#!/usr/bin/env bash
-[ "${1:-}" != -version ] || { printf '1.7.12\n'; exit 0; }
-exit 0
-SH
-  chmod +x "$fakebin/actionlint"
-}
-
-# fm_lint_fake_openrouter_key echoes a literal shaped like a real OpenRouter key
-# (sk-or-v1- plus 64 hex characters) assembled at run time from a repeating
-# digit pattern, so no contiguous key-shaped literal ever sits in this tracked
-# test source and no real key material is involved.
-fm_lint_fake_openrouter_key() {
-  printf 'sk-or-v1-%s%s%s%s\n' 0123456789abcdef 0123456789abcdef 0123456789abcdef 0123456789abcdef
 }
 
 # fm_lint_write_diff_file <file> <path>...: writes NUL-separated changed paths
@@ -677,7 +648,7 @@ test_changed_mode_drops_external_sources_and_excludes_cross_file_codes() {
     || fail "changed-mode lint did not run ShellCheck on exactly the changed file"$'\n'"logged: $(cat "$log")"
   [ "$(cat "$mode_log")" = on ] \
     || fail "changed-mode local lint disabled dataflow analysis"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
   assert_contains "$out" "source following disabled" \
     "changed-mode local lint did not disclose dropped source following"
   assert_grep $'analysis_mode\tlocal' "$telemetry" \
@@ -711,41 +682,8 @@ test_changed_mode_invokes_shellcheck_once_per_root() {
   invocation_count=$(grep -c '^external-sources=' "$flag_log" || true)
   [ "$invocation_count" -eq 2 ] \
     || fail "changed-mode lint used $invocation_count ShellCheck calls for two roots"
-  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2154,SC2329"
+  fm_lint_assert_flag_log "$flag_log" no "SC1091,SC2034,SC2153,SC2329"
   pass "fm-lint.sh changed mode invokes ShellCheck once per root"
-}
-
-test_key_guard_does_not_leak_descriptors_per_tracked_file() {
-  local tmp fakebin log diff_file ls_file fixture out rc i
-  tmp=$(fm_test_tmproot fm-lint-key-guard-fds)
-  fakebin=$(fm_fakebin "$tmp")
-  fm_lint_stub_git "$fakebin"
-  fm_lint_stub_actionlint "$fakebin"
-  log="$tmp/shellcheck.log"
-  fm_lint_stub_shellcheck "$fakebin" "$log"
-  diff_file="$tmp/diff.nul"
-  : > "$diff_file"
-  ls_file="$tmp/ls-files.nul"
-  fixture="$ROOT/tests/lib.sh"
-  i=0
-  while [ "$i" -lt 128 ]; do
-    printf '%s\0' "$fixture" >> "$ls_file"
-    i=$((i + 1))
-  done
-
-  rc=0
-  out=$( (
-    ulimit -n 64
-    PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
-      FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT"
-  ) 2>&1 ) || rc=$?
-  [ "$rc" -eq 0 ] \
-    || fail "key guard failed under bounded descriptors (exit $rc)"$'\n'"$out"
-  assert_not_contains "$out" "redirection error" \
-    "key guard leaked descriptors while scanning tracked files"
-  assert_contains "$out" "no OpenRouter key literal in tracked files" \
-    "key guard did not complete its tracked-file scan"
-  pass "fm-lint.sh key guard keeps descriptor use bounded per tracked file"
 }
 
 test_ci_keeps_external_sources_without_local_exclusions() {
@@ -947,7 +885,7 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
   while IFS= read -r code; do
     [ -n "$code" ] || continue
     case "$code" in
-      SC1091|SC2034|SC2153|SC2154|SC2329) ;;
+      SC1091|SC2034|SC2153|SC2329) ;;
       *) unexpected="${unexpected}${unexpected:+ }$code" ;;
     esac
   done < <(printf '%s\n' "$out" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\].*/\1/p' | LC_ALL=C sort -u)
@@ -1593,6 +1531,172 @@ test_root_memory_limit_reports_a_named_death() {
   pass "a root refused by its enforced memory limit fails by name with a memory reason"
 }
 
+test_memory_failure_retries_without_external_sources() {
+  local tmp fakebin fixture out rc log rss_kib require_bounds=0 mode
+  local -a modes=(0)
+  if fm_lint_bounds_supported; then
+    require_bounds=1
+    modes=(1 0)
+  fi
+  tmp=$(fm_test_tmproot fm-lint-memory-fallback)
+  fakebin=$(fm_fakebin "$tmp")
+  fixture="$tmp/teardown.sh"
+  log="$tmp/flags.log"
+  printf '#!/usr/bin/env bash\n# shellcheck source=lib.sh\nexit 0\n' > "$fixture"
+  cat > "$fakebin/shellcheck" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+  exit 0
+fi
+follow=no
+exclude=none
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+  case "$1" in
+    --external-sources) follow=yes ;;
+    --exclude=*) exclude=${1#--exclude=} ;;
+  esac
+  shift
+done
+shift
+printf '%s\t%s\n' "$follow" "$exclude" >> "$FM_TEST_FALLBACK_LOG"
+if [ "$follow" = yes ]; then
+  printf 'shellcheck: Heap exhausted;\n' >&2
+  exit 251
+fi
+exit 0
+SH
+  chmod +x "$fakebin/shellcheck"
+
+  for mode in "${modes[@]}"; do
+    : > "$log"
+    rc=0
+    out=$(PATH="$fakebin:$PATH" FM_LINT_JOBS=1 FM_LINT_REQUIRE_BOUNDS="$mode" \
+      FM_TEST_FALLBACK_LOG="$log" "$LINT" --telemetry "$tmp/pass.$mode.tsv" "$fixture" 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] || fail "a clean no-source fallback did not pass (bounded=$mode)"$'\n'"$out"
+    assert_grep $'source_directives\t1' "$tmp/pass.$mode.tsv" "telemetry lost the root's source directive"
+    assert_grep $'source_followed_directives\t0' "$tmp/pass.$mode.tsv" \
+      "telemetry counted a source directive that the passing fallback did not follow"
+    [ "$(cat "$log")" = "$(printf 'yes\tnone\nno\tSC1091,SC2034,SC2153,SC2329')" ] \
+      || fail "the memory failure did not retry without external sources and exclude only cross-file codes"$'\n'"$(cat "$log")"
+    assert_contains "$out" "hit the memory ceiling with --external-sources (reason=memory rc=251)" \
+      "the fallback was not identified in the output"
+    assert_contains "$out" "fallback passed with cross-file codes excluded (SC1091,SC2034,SC2153,SC2329)" \
+      "the narrower fallback result was not disclosed"
+    awk -F '\t' '$1 == "end" && $3 ~ /teardown\.sh$/ && $9 == 0 && $10 == "memory-fallback" { found=1 } END { exit !found }' \
+      "$tmp/pass.$mode.roots.tsv" || fail "the clean fallback was not recorded distinctly"
+    rss_kib=$(awk -F '\t' '$1 == "end" && $3 ~ /teardown\.sh$/ { print $11 }' "$tmp/pass.$mode.roots.tsv")
+    if [ "$mode" -eq 1 ]; then
+      assert_grep $'meta\tbounds_enforced\t1' "$tmp/pass.$mode.roots.tsv" \
+        "the bounded fallback did not enforce bounds"
+      case "$rss_kib" in ''|*[!0-9]*) fail "the fallback attempts lost per-root RSS reporting: $rss_kib" ;; esac
+    else
+      assert_grep $'meta\tbounds_enforced\t0' "$tmp/pass.$mode.roots.tsv" \
+        "the unbounded fallback unexpectedly enforced bounds"
+      [ "$rss_kib" = unavailable ] || fail "the unbounded fallback unexpectedly reported RSS: $rss_kib"
+    fi
+  done
+
+  if ! pinned_ready; then
+    pass "SKIP (ShellCheck $REQUIRED not resolved): real fallback finding check"
+    return
+  fi
+  local real_shellcheck
+  real_shellcheck=$(command -v shellcheck)
+  cat > "$fakebin/shellcheck" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  exec "$FM_REAL_SHELLCHECK" "$@"
+fi
+for arg in "$@"; do
+  if [ "$arg" = --external-sources ]; then
+    printf 'shellcheck: Heap exhausted;\n' >&2
+    exit 251
+  fi
+done
+exec "$FM_REAL_SHELLCHECK" "$@"
+SH
+  chmod +x "$fakebin/shellcheck"
+  # shellcheck disable=SC2016 # The fixture intentionally contains an unexpanded parameter.
+  printf '#!/usr/bin/env bash\nx=$1\nprintf "%%s\\n" $x\n' > "$fixture"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_REAL_SHELLCHECK="$real_shellcheck" \
+    FM_LINT_JOBS=1 FM_LINT_REQUIRE_BOUNDS="$require_bounds" \
+    "$LINT" --telemetry "$tmp/finding.tsv" "$fixture" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a real ShellCheck finding in the fallback did not fail lint (exit $rc)"$'\n'"$out"
+  assert_contains "$out" "fallback reason=findings rc=1" \
+    "the fallback finding was not identified"
+  assert_contains "$out" "SC2086" "the real fallback finding was not reported"
+  awk -F '\t' '$1 == "end" && $3 ~ /teardown\.sh$/ && $9 == 1 && $10 == "findings" { found=1 } END { exit !found }' \
+    "$tmp/finding.roots.tsv" || fail "the fallback finding was not recorded as a failure"
+  pass "memory failures retry without source following, exclude cross-file codes, and preserve a real fallback finding"
+}
+
+test_memory_fallback_spends_only_the_remaining_root_deadline() {
+  if ! fm_lint_bounds_supported; then
+    pass "SKIP (host cannot enforce the bounded envelope): fallback deadline check"
+    return
+  fi
+  local tmp fakebin fixture log out rc duration_ms
+  tmp=$(fm_test_tmproot fm-lint-fallback-deadline)
+  fakebin=$(fm_fakebin "$tmp")
+  fixture="$tmp/teardown.sh"
+  log="$tmp/attempts.log"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture"
+  cat > "$fakebin/shellcheck" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+  exit 0
+fi
+for arg in "$@"; do
+  if [ "$arg" = --external-sources ]; then
+    printf 'follow\n' >> "$FM_TEST_ATTEMPT_LOG"
+    sleep "$FM_TEST_FIRST_SECS"
+    printf 'shellcheck: Heap exhausted;\n' >&2
+    exit 251
+  fi
+done
+printf 'fallback\n' >> "$FM_TEST_ATTEMPT_LOG"
+sleep 60
+exit 0
+SH
+  chmod +x "$fakebin/shellcheck"
+
+  # A 3s first attempt leaves about 3s of the 6s deadline, so the retry is
+  # killed there; a fresh deadline would let the root run for about 9s.
+  : > "$log"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_LINT_JOBS=1 FM_LINT_REQUIRE_BOUNDS=1 \
+    FM_LINT_ROOT_SECONDS=6 FM_LINT_ROOT_GRACE=1 \
+    FM_TEST_ATTEMPT_LOG="$log" FM_TEST_FIRST_SECS=3 \
+    "$LINT" --telemetry "$tmp/partial.tsv" "$fixture" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a fallback cut off by the root deadline unexpectedly passed"
+  [ "$(cat "$log")" = "$(printf 'follow\nfallback')" ] \
+    || fail "the root did not retry once with its remaining time"$'\n'"$(cat "$log")"
+  assert_contains "$out" "fallback reason=timeout" \
+    "the fallback was not stopped by the root's remaining deadline"$'\n'"$out"
+  duration_ms=$(awk -F '\t' '$1 == "end" && $3 ~ /teardown\.sh$/ { print $8 }' "$tmp/partial.roots.tsv")
+  [ "$duration_ms" -lt 7000 ] \
+    || fail "the first attempt and fallback together exceeded the root deadline plus grace: ${duration_ms}ms"
+
+  # With under a second of the deadline left, no retry starts.
+  : > "$log"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_LINT_JOBS=1 FM_LINT_REQUIRE_BOUNDS=1 \
+    FM_LINT_ROOT_SECONDS=6 FM_LINT_ROOT_GRACE=1 \
+    FM_TEST_ATTEMPT_LOG="$log" FM_TEST_FIRST_SECS=5.2 \
+    "$LINT" --telemetry "$tmp/spent.tsv" "$fixture" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a memory failure with no deadline left unexpectedly passed"
+  [ "$(cat "$log")" = follow ] \
+    || fail "a fallback started with no time left in the root deadline"$'\n'"$(cat "$log")"
+  assert_contains "$out" "no time left in its 6s deadline to retry without it" \
+    "the skipped fallback was not explained"$'\n'"$out"
+  awk -F '\t' '$1 == "end" && $3 ~ /teardown\.sh$/ && $10 == "memory" && $12 == 1 { found=1 } END { exit !found }' \
+    "$tmp/spent.roots.tsv" || fail "the unretried memory failure was not recorded as a source-following memory failure"
+  pass "a memory fallback runs only within the time left in its root's original deadline"
+}
+
 test_memory_evidence_outranks_findings_and_signal_reasons() {
   local tmp fakebin roots_log out rc name reason bounded
   local -a roots modes
@@ -1861,13 +1965,8 @@ test_seeded_module_boundary_parity() {
     pass "SKIP (ShellCheck $REQUIRED not resolved): seeded source-boundary parity check"
     return
   fi
-  local tmp rel adapter dispatcher dep owner test_root out rc
-  tmp=$(mktemp -d "$ROOT/.fm-lint-parity.XXXXXX")
-  if [ "${#FM_TEST_CLEANUP_DIRS[@]}" -eq 0 ]; then
-    trap fm_test_cleanup EXIT
-  fi
-  FM_TEST_CLEANUP_DIRS+=("$tmp")
-  rel=${tmp#"$ROOT/"}
+  local tmp adapter dispatcher dep owner test_root out rc
+  tmp=$(fm_test_tmproot fm-lint-parity)
   adapter="$tmp/adapter.sh"
   dispatcher="$tmp/dispatcher.sh"
   dep="$tmp/owner-dep.sh"
@@ -1895,7 +1994,7 @@ owner_dependency_value=ok
 SH
   cat > "$owner" <<SH
 #!/usr/bin/env bash
-# shellcheck source=$rel/owner-dep.sh
+# shellcheck source=$dep
 . "$dep"
 owner_bad() {
   printf '%s\n' "\$owner_dependency_value"
@@ -1927,82 +2026,6 @@ SH
   pass "seeded dispatcher, adapter, production-owner, and test-local diagnostics preserve parity"
 }
 
-test_key_guard_fails_on_tracked_openrouter_key_literal() {
-  local tmp fakebin log diff_file ls_file leak key out rc lane
-  tmp=$(fm_test_tmproot fm-lint-key-guard-fail)
-  fakebin=$(fm_fakebin "$tmp")
-  fm_lint_stub_git "$fakebin"
-  fm_lint_stub_actionlint "$fakebin"
-  log="$tmp/shellcheck.log"
-  fm_lint_stub_shellcheck "$fakebin" "$log"
-  diff_file="$tmp/diff.nul"
-  : > "$diff_file"
-  key=$(fm_lint_fake_openrouter_key)
-  leak="$tmp/notes.md"
-  printf '# notes\n\nexport OPENROUTER_API_KEY_TOKENS=%s\n' "$key" > "$leak"
-  ls_file="$tmp/ls-files.nul"
-  printf '%s\0' "$leak" "tests/fm-openrouter-quota.test.sh" > "$ls_file"
-
-  # Both default lanes must refuse: the zero-changed early exit and the full
-  # CI lint. Explicit paths stay a ShellCheck-only override and are not gated.
-  for lane in changed ci; do
-    rc=0
-    if [ "$lane" = changed ]; then
-      out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
-        FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
-    else
-      out=$(PATH="$fakebin:$PATH" CI=true FM_LINT_JOBS=1 \
-        FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
-    fi
-    [ "$rc" -ne 0 ] || fail "$lane lane passed with an OpenRouter key literal in a tracked file"$'\n'"$out"
-    assert_contains "$out" "OpenRouter key literal" "$lane lane did not name the key-literal finding"
-    assert_contains "$out" "$leak:3" "$lane lane did not report the leaking path and line"
-    assert_not_contains "$out" "$key" "$lane lane printed the key material"
-    assert_not_contains "$out" "${key#sk-or-v1-}" "$lane lane printed key material without its prefix"
-  done
-
-  rc=0
-  out=$(PATH="$fakebin:$PATH" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" "$ROOT/bin/fm-lint.sh" 2>&1) || rc=$?
-  [ "$rc" -eq 0 ] || fail "explicit-path lint must stay a ShellCheck-only override"$'\n'"$out"
-  assert_not_contains "$out" "OpenRouter key literal" "explicit-path lint ran the key guard"
-
-  rc=0
-  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
-    FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES_OK=0 "$LINT" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "the key guard passed without being able to enumerate tracked files"
-  assert_contains "$out" "could not enumerate tracked files" \
-    "the key guard did not explain why it could not run"
-  pass "fm-lint.sh fails closed on a tracked OpenRouter key literal without printing it"
-}
-
-test_key_guard_ignores_the_fake_test_fixture_prefix() {
-  local tmp fakebin log diff_file ls_file fixture out rc
-  tmp=$(fm_test_tmproot fm-lint-key-guard-pass)
-  fakebin=$(fm_fakebin "$tmp")
-  fm_lint_stub_git "$fakebin"
-  fm_lint_stub_actionlint "$fakebin"
-  log="$tmp/shellcheck.log"
-  fm_lint_stub_shellcheck "$fakebin" "$log"
-  diff_file="$tmp/diff.nul"
-  : > "$diff_file"
-  fixture="$tmp/fixture.sh"
-  printf "SECRET='sk-or-test-secret-do-not-print'\nPREFIX_ONLY='sk-or-v1-'\n" > "$fixture"
-  ls_file="$tmp/ls-files.nul"
-  # The real quota test fixture is tracked and carries the deliberately fake
-  # sk-or-test- prefix; it must never trip the guard.
-  printf '%s\0' "tests/fm-openrouter-quota.test.sh" "$fixture" "$tmp/deleted-but-tracked.sh" > "$ls_file"
-
-  rc=0
-  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_TEST_GIT_BRANCH=feature \
-    FM_TEST_GIT_DIFF_FILE="$diff_file" FM_TEST_GIT_LS_FILES="$ls_file" "$LINT" 2>&1) || rc=$?
-  [ "$rc" -eq 0 ] || fail "the key guard false-positived on the fake sk-or-test- fixture (exit $rc)"$'\n'"$out"
-  assert_contains "$out" "no OpenRouter key literal in tracked files" \
-    "the clean run did not report that the key guard ran"
-  assert_not_contains "$out" "OpenRouter key literal (sk-or-v1-) in tracked file" \
-    "the clean run reported a key-literal finding"
-  pass "fm-lint.sh key guard ignores the fake sk-or-test- fixture and a bare prefix"
-}
-
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
@@ -2011,8 +2034,6 @@ test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode
 test_fast_mode_catches_a_real_lint_defect
 test_pins_an_explicit_version
-test_key_guard_fails_on_tracked_openrouter_key_literal
-test_key_guard_ignores_the_fake_test_fixture_prefix
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
@@ -2030,6 +2051,8 @@ test_jobs_are_deterministic_and_complete
 test_worker_trees_stop_on_signal
 test_root_deadline_names_the_root_and_reaps_the_tree
 test_root_memory_limit_reports_a_named_death
+test_memory_failure_retries_without_external_sources
+test_memory_fallback_spends_only_the_remaining_root_deadline
 test_memory_evidence_outranks_findings_and_signal_reasons
 test_source_excerpt_with_oom_text_stays_findings
 test_require_bounds_refuses_when_enforcement_is_missing
@@ -2045,7 +2068,6 @@ test_zero_changed_files_exits_clean
 test_list_files_respects_changed_mode
 test_changed_mode_drops_external_sources_and_excludes_cross_file_codes
 test_changed_mode_invokes_shellcheck_once_per_root
-test_key_guard_does_not_leak_descriptors_per_tracked_file
 test_ci_keeps_external_sources_without_local_exclusions
 test_main_branch_keeps_external_sources
 test_merge_base_less_keeps_external_sources

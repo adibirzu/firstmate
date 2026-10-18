@@ -115,6 +115,33 @@ for arg in "$@"; do
   esac
 done
 
+# A Claude secondmate's home carries .fm-busy-stop (bin/fm-spawn.sh), and this
+# guard is then the only Stop writer of the parent home's busy record for that
+# gen: every exit records the Stop's outcome, busy when exit 2 blocks it into a
+# continuation and idle otherwise. Claude runs Stop hooks in parallel, so a
+# second Stop writer could land after this one and flip the verdict.
+# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+record_parent_stop_state() {
+  local status=$? pointer="$FM_ROOT/.fm-busy-stop" key value writer='' state='' id='' gen='' verdict=idle event=stop
+  [ "$CLAUDE_MODE" -eq 1 ] || return 0
+  [ -f "$pointer" ] && [ ! -L "$pointer" ] || return 0
+  while IFS='=' read -r key value; do
+    case "$key" in
+      writer) writer=$value ;;
+      state) state=$value ;;
+      id) id=$value ;;
+      gen) gen=$value ;;
+    esac
+  done < "$pointer"
+  [ -n "$state" ] && [ -n "$id" ] && [ -n "$gen" ] && [ -x "$writer" ] || return 0
+  if [ "$status" -eq 2 ]; then
+    verdict=busy
+    event=stop-blocked
+  fi
+  "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" >/dev/null 2>&1 || true
+}
+trap record_parent_stop_state EXIT
+
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
@@ -171,28 +198,9 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-session-lock-lib.sh
-. "$SCRIPT_DIR/fm-session-lock-lib.sh"
-
-# Lock-refused (read-only) session detection: another live session holds this
-# home's session lock, so this session never owns it. The Stop-owned auto-arm
-# in such a session stays inert (bin/fm-claude-stop-autoarm.sh) and its epoch
-# ledger never advances, which is exactly what would make the re-block budget
-# below re-block every turn end forever. Computed once, before any branch that
-# mutates shared episode state. A missing, malformed, or dead-owner lock is NOT
-# lock-refused: that is uncertainty or a recoverable stale owner, and the guard
-# keeps its normal backstop there.
-LOCK_REFUSED=0
-if ! fm_session_lock_owned_by_current_session "$STATE"; then
-  _fm_guard_lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$_fm_guard_lock_pid" in
-    ''|*[!0-9]*) ;;
-    *)
-      if fm_harness_pid_alive "$_fm_guard_lock_pid"; then
-        LOCK_REFUSED=1
-      fi
-      ;;
-  esac
+if [ "$CLAUDE_MODE" -eq 1 ]; then
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 fi
 
 BUDGET_FILE="$STATE/.turnend-claude-blocks"
@@ -210,20 +218,13 @@ budget_reset() {
 
 fm_supervision_status "$STATE" "$GRACE"
 if [ "$FM_SUP_NEEDED" = false ]; then
-  if [ "$LOCK_REFUSED" -eq 0 ]; then
-    [ -e "$FAILURE_NOTICE" ] || budget_reset
-  fi
+  [ -e "$FAILURE_NOTICE" ] || budget_reset
   exit 0
 fi
 # One owner of the "supervision is on, let this turn end" exit contract, shared
-# by every proof of supervision below. A lock-refused session takes it silently:
-# supervision is healthy, so there is no lapse to report, and a read-only
-# session must not mutate the shared failure-episode state.
+# by every proof of supervision below.
 allow_supervised_stop() {
   [ "$CLAUDE_MODE" -eq 1 ] || exit 0
-  if [ "$LOCK_REFUSED" -eq 1 ]; then
-    exit 0
-  fi
   fm_failure_episode_reset "$STATE" && exit 0
   exit 2
 }
@@ -248,46 +249,6 @@ AFK_GRACE=${FM_GUARD_GRACE:-$(fm_poll_derived_grace)}
 if [ "$(fm_path_age "$STATE/.last-watcher-beat")" -lt "$AFK_GRACE" ] \
   && fm_afk_daemon_owns_supervision "$STATE"; then
   allow_supervised_stop
-fi
-
-# Another verified live session owns the home lock under the shared
-# ancestry-or-trusted-id verdict. This session is read-only and cannot arm or
-# repair supervision without stealing ownership, so blocking its Stop would
-# create an impossible loop. Report the ownership conflict as a diagnostic and
-# let this turn end safely; the owning session remains responsible for restoring
-# the watcher. A recorded session id is required so a pid-only live lock still
-# takes the lock-refused advisory below instead of this JSON.
-if [ "$CLAUDE_MODE" -eq 1 ] && fm_session_lock_foreign_owner_live "$STATE" \
-  && fm_session_lock_recorded_session_id "$STATE" >/dev/null; then
-  printf '{"systemMessage":"FIRSTMATE SUPERVISION IS OWNED BY ANOTHER LIVE SESSION: this read-only session cannot and should not arm or repair the watcher (lock owner pid %s). Allowing this turn to end safely; the owning session must restore supervision."}\n' \
-    "$FM_SESSION_LOCK_FOREIGN_OWNER_PID"
-  exit 0
-fi
-
-# Lock-refused (read-only) session: supervision is still needed above, but this
-# session holds no verified lock ownership while a live other session does. The
-# auto-arm epoch this session could advance never moves here, so the bounded
-# re-block budget below would consume nothing and block every turn end forever;
-# and a read-only session must not repair supervision it does not own. Report
-# the lapse as advisory wording only - no block, no budget write, no episode or
-# lock mutation - and let the turn end. The lock-owning session's own guard and
-# auto-arm own recovery.
-if [ "$LOCK_REFUSED" -eq 1 ]; then
-  {
-    printf '●  SUPERVISION LAPSE - READ-ONLY SESSION WITHOUT LOCK OWNERSHIP\n'
-    if [ "$FM_SUP_IN_FLIGHT" -gt 0 ]; then
-      printf '●  %s task(s) in flight, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC"
-    elif [ "$FM_SUP_SOURCES" -gt 0 ]; then
-      printf '●  %s process-event source(s) registered, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_SOURCES" "$FM_SUP_BEACON_DESC"
-    elif [ "$FM_SUP_CHECKS" -gt 0 ]; then
-      printf '●  %s registered custom check(s), but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_CHECKS" "$FM_SUP_BEACON_DESC"
-    else
-      printf '●  X-mode relay polling needs supervision, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_BEACON_DESC"
-    fi
-    printf '●  This session does not hold the home session lock (held by live pid %s), so it must report this lapse, not repair it.\n' "$_fm_guard_lock_pid"
-    printf '●  The lock-owning session owns recovery; this turn ends without a supervision continuation.\n'
-  } >&2
-  exit 0
 fi
 
 block_stop() {
@@ -319,6 +280,18 @@ block_stop() {
   } >&2
   exit 2
 }
+
+# Another verified live session owns the home lock under the shared
+# ancestry-or-trusted-id verdict. This session is read-only and cannot arm or
+# repair supervision without
+# stealing ownership, so blocking its Stop would create an impossible loop.
+# Report the ownership conflict as a diagnostic and let this turn end safely;
+# the owning session remains responsible for restoring the watcher.
+if [ "$CLAUDE_MODE" -eq 1 ] && fm_session_lock_foreign_owner_live "$STATE"; then
+  printf '{"systemMessage":"FIRSTMATE SUPERVISION IS OWNED BY ANOTHER LIVE SESSION: this read-only session cannot and should not arm or repair the watcher (lock owner pid %s). Allowing this turn to end safely; the owning session must restore supervision."}\n' \
+    "$FM_SESSION_LOCK_FOREIGN_OWNER_PID"
+  exit 0
+fi
 
 if [ "$CLAUDE_MODE" -eq 0 ]; then
   block_stop
@@ -405,14 +378,10 @@ budget_account_current_epoch() {  # [observe|block]
 autoarm_owns_recovery() {
   local pid role outcome age
   fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && return 0
-  # A live OPEN generation claim owns recovery: the ledger names a live,
-  # identity-matched owner still arming that is not stuck (fm_autoarm_claim_open
-  # in bin/fm-wake-lib.sh owns that predicate). A finished, dead,
-  # identity-mismatched, or stuck claim deliberately fails it and falls
-  # through, because treating such a claim as ownership is what let a dead
-  # watcher go unnoticed for turn after turn; the outcome cases below still
-  # cover a claim that finished moments ago, so a genuine handoff is not
-  # duplicated, while a stale one now reaches the block.
+  # An open generation claim owns recovery; fm_autoarm_claim_open in
+  # bin/fm-wake-lib.sh owns the full predicate, including session reachability.
+  # The outcome cases below still cover a claim that finished moments ago, so
+  # a genuine handoff is not duplicated while a stale claim reaches the block.
   if fm_autoarm_claim_open "$STATE" "$GRACE"; then
     [ ! -e "$FAILURE_NOTICE" ] || budget_account_current_epoch || true
     return 0

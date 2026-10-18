@@ -35,14 +35,27 @@ set -u
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
+window_file="$(dirname "$0")/.spawn-window"
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows)
     [ -z "${FM_FAKE_DUPLICATE_WINDOW:-}" ] || printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
+    [ ! -s "$window_file" ] || cat "$window_file"
     exit 0
     ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  new-window)
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
+    exit 0 ;;
+  kill-window) : > "$window_file"; exit 0 ;;
+  has-session|new-session) exit 0 ;;
   send-keys)
+    case " $* " in *' -l '*) : > "$window_file.launch-pending" ;; esac
     if [ "${FM_FAKE_TRACEPARENT_SEND_FAIL:-0}" = 1 ]; then
       for a in "$@"; do
         case "$a" in
@@ -87,25 +100,21 @@ case "${1:-}" in
         esac
       done
     fi
+    case " $* " in
+      *' Enter '*|*' C-m '*)
+        if [ -e "$window_file.launch-pending" ]; then
+          : > "$window_file"
+          rm -f "$window_file.launch-pending"
+        fi
+        ;;
+    esac
     exit 0
     ;;
 esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  # `get --lease` prints the leased worktree path on stdout, exactly as the real
-  # treehouse does. Firstmate reads that path rather than the pane's cwd, so a
-  # silent stub reports "no usable worktree" and refuses the spawn for a reason
-  # that has nothing to do with trace context.
-  cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "${1:-}" in
-  get) printf '%s\n' "${FM_FAKE_TREEHOUSE_WT:-}" ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/treehouse"
+  fm_fake_exit0 "$fakebin" treehouse
   printf '%s\n' "$fakebin"
 }
 
@@ -144,8 +153,7 @@ run_spawn() {
     FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_TREEHOUSE_WT="$wt" \
-    TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_TRACEPARENT_SEND_FAIL="${FM_FAKE_TRACEPARENT_SEND_FAIL:-0}" \
     FM_FAKE_TRACEPARENT_SEND_UNSAFE="${FM_FAKE_TRACEPARENT_SEND_UNSAFE:-0}" \
     FM_FAKE_TRACE_METADATA_APPEND_FAIL="${FM_FAKE_TRACE_METADATA_APPEND_FAIL:-0}" \
@@ -167,8 +175,7 @@ run_spawn_tc() {
     FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_TREEHOUSE_WT="$wt" \
-    TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$launchlog" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" --mode no-mistakes --yolo off 2>&1
 }
@@ -269,8 +276,7 @@ run_two_level() {
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$sm" HOME="$sm/user-home" CLAUDE_CONFIG_DIR='' \
     FM_STATE_OVERRIDE="$sm/state" FM_DATA_OVERRIDE="$sm/data" \
     FM_PROJECTS_OVERRIDE="$sm/projects" FM_CONFIG_OVERRIDE="$sm/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wwt" FM_FAKE_TREEHOUSE_WT="$wwt" \
-    TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wwt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$wlog" PATH="$wfake:$PATH" \
     "$SPAWN" "$worker_id" "$wproj" --mode no-mistakes --yolo off >/dev/null 2>&1 || true
 

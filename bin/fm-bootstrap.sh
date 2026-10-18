@@ -138,7 +138,9 @@
 #          remote convergence workers run concurrently, because convergence
 #          consumes respawned ids. Worker output is captured separately and
 #          replayed in spawn order; failure to create that private capture
-#          directory selects the sequential fallback.
+#          directory selects the sequential fallback. Remote tracked-file sync
+#          and inheritance share a per-mate FM_SECONDMATE_CONVERGENCE_TIMEOUT
+#          budget (secondmate_sync_remote_one owns it).
 #          A relaunch that the liveness sweep performs during an `only` run is
 #          always reported, because a digest composed before that run already
 #          printed the superseded endpoint record.
@@ -201,6 +203,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # Shared secondmate endpoint probe + guarded relaunch; the watcher's poll tick
 # drives the same library so session start and ordinary supervision recover
 # from identical evidence through an identical path.
@@ -235,7 +239,7 @@ network_sweep_authorized() {
   if network_mutation_authorized; then
     return 0
   fi
-  echo "NETWORK_CHECKS: fleet lock ownership changed before $label, so this stale worker skipped that sweep"
+  echo "NETWORK_CHECKS: the recorded fleet lock holder changed before $label, so this stale worker skipped that sweep"
   return 1
 }
 
@@ -410,12 +414,12 @@ secondmate_sync() {
   }
 
   secondmate_write_nudge_marker() {
-    local id=$1 home=$2 commit=$3 instr=$4 message=${5:-$SECOND_MATE_NUDGE_MESSAGE} remote=${6:-0}
-    fm_secondmate_nudge_write "$STATE" "$id" "$home" "$commit" "$instr" "$message" "$remote"
+    local id=$1 home=$2 commit=$3 instr=$4 message=${5:-$SECOND_MATE_NUDGE_MESSAGE} remote=${6:-0} owed=${7:-1}
+    fm_secondmate_nudge_write "$STATE" "$id" "$home" "$commit" "$instr" "$message" "$remote" "$owed"
   }
 
   secondmate_send_nudge() {
-    local id=$1 home=$2 commit=$3 instr=$4 selector marker out delivery_id
+    local id=$1 home=$2 commit=$3 instr=$4 selector marker out
     selector="fm-$id"
     marker=$(secondmate_nudge_marker_path "$id") || {
       echo "NUDGE_SECONDMATES: secondmate $id: send failed: unsafe id"
@@ -425,11 +429,7 @@ secondmate_sync() {
       echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot record retry marker"
       return 0
     fi
-    if ! delivery_id=$(fm_secondmate_nudge_delivery_id "$id" "$commit"); then
-      echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot derive a delivery id"
-      return 0
-    fi
-    if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" --fire-and-forget "$delivery_id" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+    if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
       rm -f "$marker"
       echo "BOOTSTRAP_INFO: nudged $selector with '$SECOND_MATE_NUDGE_MESSAGE'"
     else
@@ -443,7 +443,7 @@ secondmate_sync() {
   }
 
   secondmate_retry_pending_nudges() {
-    local marker id selector home commit message remote expected_marker meta meta_home home_real head out delivery_id
+    local marker id selector home commit message remote expected_marker meta meta_home home_real head out
     [ -d "$SECOND_MATE_NUDGE_PENDING_DIR" ] || return 0
     for marker in "$SECOND_MATE_NUDGE_PENDING_DIR"/*.pending; do
       [ -f "$marker" ] || continue
@@ -502,11 +502,7 @@ secondmate_sync() {
         echo "NUDGE_SECONDMATES: secondmate $id: send failed: retry target is not at recorded instruction commit"
         continue
       }
-      if ! delivery_id=$(fm_secondmate_nudge_delivery_id "$id" "$commit"); then
-        echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot derive a delivery id"
-        continue
-      fi
-      if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" --fire-and-forget "$delivery_id" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+      if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$selector" "$SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
         rm -f "$marker"
         echo "BOOTSTRAP_INFO: nudged $selector with '$SECOND_MATE_NUDGE_MESSAGE'"
       else
@@ -605,9 +601,27 @@ secondmate_sync() {
   # One remote secondmate's convergence, split out of the loop so each host is
   # individually timed; every `return` here was a `continue` and still means
   # "move on to the next secondmate".
+  # Each mate has its own budget, FM_SECONDMATE_CONVERGENCE_TIMEOUT seconds
+  # (default 75), measured from entry to secondmate_sync_remote_one. Only the
+  # tracked-file sync and inheritance push are timed against that deadline;
+  # lock acquisition, reply-source arming, and nudge delivery are not wrapped
+  # by this budget. The deferred network stage retains its aggregate bound. A
+  # step that hits it, or finds nothing left, fails like any other failed step,
+  # which leaves the mate unconverged with its retry marker kept. A step cut off
+  # by the budget may already have changed the home without reporting it, so it
+  # also keeps the re-read owed under bin/fm-secondmate-nudge-lib.sh's contract.
+  remote_convergence_budget() {
+    local budget=${FM_SECONDMATE_CONVERGENCE_TIMEOUT:-75}
+    case "$budget" in ''|*[!0-9]*|0) budget=75 ;; esac
+    printf '%s' "$budget"
+  }
+
   secondmate_sync_remote_one() {  # <id> <home> <remote-host>
     local id=$1 _home=$2 remote_host=$3
-    local sync_out sync_rc inherit_out nudge_needed remote_marker remote_pending converged out remote_lock remote_generation delivery_id
+    local sync_out='' sync_rc inherit_out='' inherit_rc nudge_needed remote_marker remote_pending converged out remote_lock remote_generation
+    local budget deadline left
+    budget=$(remote_convergence_budget)
+    deadline=$(( $(date +%s) + budget ))
     remote_lock=$(fm_remote_inherit_transaction_lock_path "$STATE" "$id" 2>/dev/null || true)
     if [ -z "$remote_lock" ] || ! fm_lock_acquire_wait "$remote_lock"; then
       echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot lock remote inheritance transaction"
@@ -623,42 +637,62 @@ secondmate_sync() {
       return 0
     fi
     remote_marker=$(secondmate_nudge_marker_path "$id" 2>/dev/null || true)
+    # Only a reread a previous attempt left owed carries over. The record is
+    # written owed before any step can change the home (write-ahead), so a kill
+    # at any point leaves it owed; an attempt whose outcome proves nothing
+    # changed writes it back below (bin/fm-secondmate-nudge-lib.sh).
     remote_pending=0
-    if [ -f "$remote_marker" ] && [ "$(fm_meta_get "$remote_marker" remote)" = 1 ]; then remote_pending=1; fi
+    if fm_secondmate_remote_nudge_owed "$STATE" "$id"; then remote_pending=1; fi
     if ! secondmate_write_nudge_marker "$id" "$_home" "" remote \
-      "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1; then
+      "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1 1; then
       echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot record remote retry marker"
       fm_lock_release "$remote_lock" || true
       return 0
     fi
-    nudge_needed=0
+    nudge_needed=$remote_pending
     converged=1
-    if sync_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh sync "$id" \
+    sync_rc=0
+    left=$(( deadline - $(date +%s) ))
+    if [ "$left" -lt 1 ]; then
+      sync_rc=124
+    elif sync_out=$(fm_run_timed "$left" "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh sync "$id" \
       "$primary_head" < /dev/null 2>&1); then
-      case "$sync_out" in synced:*) nudge_needed=1 ;; esac
+      :
     else
       sync_rc=$?
+    fi
+    if fm_secondmate_remote_sync_changed "$sync_out" || [ "$sync_rc" -eq 255 ]; then nudge_needed=1; fi
+    if fm_timed_out "$sync_rc"; then
+      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync failed on $remote_host: no answer within the ${budget}s per-mate convergence budget"
+      converged=0
+      nudge_needed=1
+    elif [ "$sync_rc" -ne 0 ]; then
       echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync failed on $remote_host: $(remote_sync_failure_reason "$sync_rc" "$sync_out")"
       converged=0
     fi
-    if inherit_out=$(FM_CONFIG_INHERIT_LIVE=1 \
-      "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
-      if printf '%s\n' "$inherit_out" | grep -Eq '^(pushed|removed):'; then nudge_needed=1; fi
+    inherit_rc=0
+    left=$(( deadline - $(date +%s) ))
+    if [ "$left" -lt 1 ]; then
+      inherit_rc=124
+    elif inherit_out=$(FM_CONFIG_INHERIT_LIVE=1 \
+      fm_run_timed "$left" "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
+      :
     else
+      inherit_rc=$?
+    fi
+    # Items a failed push applied before it stopped changed the home too.
+    if [ "$inherit_rc" -eq 255 ] || printf '%s\n' "${inherit_out:-}" | grep -Eq '^(pushed|removed):'; then nudge_needed=1; fi
+    if fm_timed_out "$inherit_rc"; then
+      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: no answer within the ${budget}s per-mate convergence budget"
+      converged=0
+      nudge_needed=1
+    elif [ "$inherit_rc" -ne 0 ]; then
       echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: $(remote_inherit_failure_reason "$inherit_out")"
       converged=0
     fi
-    [ "$remote_pending" -eq 0 ] || nudge_needed=1
     if [ "$converged" -eq 1 ] && [ "$nudge_needed" -eq 1 ]; then
-      if ! delivery_id=$(fm_secondmate_nudge_delivery_id "$id" "$remote_generation"); then
-        echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot derive a delivery id"
-        fm_lock_release "$remote_lock" || true
-        return 0
-      fi
       if out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
-        "$SCRIPT_DIR/fm-send.sh" "fm-$id" \
-        --fire-and-forget "$delivery_id" \
-        "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
+        "$SCRIPT_DIR/fm-send.sh" "fm-$id" "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
         rm -f "$remote_marker"
         [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" != 1 ] || echo "BOOTSTRAP_INFO: nudged remote fm-$id after convergence"
       else
@@ -666,6 +700,9 @@ secondmate_sync() {
       fi
     elif [ "$converged" -eq 1 ]; then
       rm -f "$remote_marker"
+    elif [ "$nudge_needed" -eq 0 ] && ! secondmate_write_nudge_marker "$id" "$_home" "" remote \
+      "$REMOTE_SECOND_MATE_NUDGE_MESSAGE" 1 0; then
+      echo "NUDGE_SECONDMATES: secondmate $id: send failed: cannot record remote retry marker"
     fi
     fm_lock_release "$remote_lock" || true
     return 0
@@ -846,7 +883,7 @@ missing_tool_diagnostic() {
 # fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux home is
 # never told tmux is missing, and only orca drops treehouse. A backend value with
 # no verified dependency set is reported before the universal checks continue.
-COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi"
+COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
 BACKEND=$(fm_backend_name)
 BACKEND_VALID=1
 if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
@@ -1079,7 +1116,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin","cline","copilot"]'
+    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin","commandcode","polytoken"]'
   fi
   err=$(jq -r --argjson typed "$typed_active" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
     def verified($h): $verified_harnesses | index($h);
@@ -1094,8 +1131,6 @@ crew_dispatch_validate() {
       elif $h == "agy" then (["low","medium","high"] | index($e))
       elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
-      elif $h == "cline" then (["low","medium","high","xhigh"] | index($e))
-      elif $h == "copilot" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "rovo" then (["low","medium","high","max"] | index($e))
       elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
       else true
@@ -1112,8 +1147,6 @@ crew_dispatch_validate() {
       ($items | any(has("model") and (((.model | type) != "string") or (.model | length) == 0)))
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)))
       or ($typed and ($items | any(has("provider") and (provider_id(.provider) | not))));
-    def malformed_quota_window($items):
-      ($items | any(has("quotaWindow") and (((.quotaWindow | type) != "string") or (.quotaWindow | length) == 0)));
     # A quota floor, on a rule or a profile: bin/fm-dispatch-resolve.sh applies
     # it in code against one quota-axi row, so scope and min_percent must be
     # concrete; a rule floor also names the provider whose row it reads.
@@ -1135,52 +1168,6 @@ crew_dispatch_validate() {
       | map(select(. as $p | effort_ok($p.h; $p.m; $p.e) | not))
       | map("\(.h):\(.e)")
       | unique;
-    def fallback_error:
-      (.modelFallback // ._model_fallback // null) as $fb
-      | [
-        if (has("modelFallback") and has("_model_fallback")) then
-          "modelFallback and its legacy alias _model_fallback cannot both be declared"
-        else empty end,
-        if ((has("modelFallback") or has("_model_fallback")) and (($fb | type) != "object")) then
-          "modelFallback must be an object mapping a harness to its ordered model chain"
-        else empty end,
-        if ($fb != null and ($fb | type) == "object") then
-          ($fb | to_entries[]
-            | .key as $h | .value as $chain
-            | if (verified($h) | not) then
-                "modelFallback has an unverified harness: \($h)"
-              elif ((($chain | type) != "array") or (($chain | length) == 0)) then
-                "modelFallback chain must be a non-empty array of non-empty model ids: \($h)"
-              elif ($chain | any((type != "string") or (length == 0))) then
-                "modelFallback chain must be a non-empty array of non-empty model ids: \($h)"
-              elif (($chain | unique | length) != ($chain | length)) then
-                "modelFallback chain has duplicate model ids, which would make the step-down order ambiguous: \($h)"
-              else empty end)
-        else empty end,
-        if has("modelFallbackCycles") then
-          (if ((.modelFallbackCycles | type) != "array") or ((.modelFallbackCycles | length) == 0) then
-             "modelFallbackCycles must be a non-empty array of verified harness names"
-           elif ([.modelFallbackCycles[] | select((type != "string") or (verified(.) | not))] | length) > 0 then
-             "modelFallbackCycles has a non-string or unverified harness entry: " + ([.modelFallbackCycles[] | select((type != "string") or (verified(.) | not))] | unique | join(", "))
-           elif ((.modelFallbackCycles | unique | length) != (.modelFallbackCycles | length)) then
-             "modelFallbackCycles has duplicate entries; a cyclic lane must be named once"
-           else
-             ([.modelFallbackCycles[] | . as $h
-               | (($fb // {})[$h] // []) as $chain
-               | select((($chain | type) != "array") or (($chain | length) < 2))
-               | "modelFallbackCycles requires a modelFallback chain with at least two model ids: \($h)"] | .[0] // empty)
-           end)
-        else empty end,
-        if has("fallbackLanes") then
-          (if ((.fallbackLanes | type) != "array") or ((.fallbackLanes | length) == 0) then
-             "fallbackLanes must be a non-empty array of verified harness names"
-           elif ([.fallbackLanes[] | select((type != "string") or (verified(.) | not))] | length) > 0 then
-             "fallbackLanes has a non-string or unverified harness entry: " + ([.fallbackLanes[] | select((type != "string") or (verified(.) | not))] | unique | join(", "))
-           elif ((.fallbackLanes | unique | length) != (.fallbackLanes | length)) then
-             "fallbackLanes has duplicate entries; a lane order must name each runtime once"
-           else empty end)
-        else empty end
-      ] | .[0] // null;
     if type != "object" then "top-level value must be an object"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
@@ -1189,7 +1176,6 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
-    elif malformed_quota_window([(.rules // [])[]? | profiles(.use?)[]?]) then "use profile model, effort, and quotaWindow must be non-empty strings when present"
     elif malformed_optional_fields([(.rules // [])[]? | profiles(.use?)[]?]) then
       if $typed then "use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
       else "use profile model and effort must be non-empty strings when present"
@@ -1205,26 +1191,18 @@ crew_dispatch_validate() {
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"
     elif has("default") and ([profiles(.default)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length) > 0 then "each default profile needs harness"
-    elif has("default") and malformed_quota_window([profiles(.default)[]?]) then "default profile model, effort, and quotaWindow must be non-empty strings when present"
     elif has("default") and malformed_optional_fields([profiles(.default)[]?]) then
       if $typed then "default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
       else "default profile model and effort must be non-empty strings when present"
       end
     elif $typed and has("default") and malformed_profile_floors([profiles(.default)[]?]) then "default profile floor needs scope and min_percent 0..100"
-    elif (fallback_error) != null then (fallback_error)
     else
       (configured_profiles
         | map(.harness)
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
-      | (configured_profiles | map(.provider? // empty) | map(. as $provider | select((["claude","codex","opencode","grok","cursor","agy","kimi","google"] | index($provider)) == null)) | unique) as $bad_providers
-      | (configured_profiles | map(select(.harness == "kimi")) | length) as $bad_kimi_routes
-      | (configured_profiles | map(select((.harness == "claude" or .harness == "codex" or .harness == "opencode" or .harness == "grok" or .harness == "cursor" or .harness == "agy") and .provider? != null and .provider != .harness) | "\(.harness):\(.provider)") | unique) as $mismatched_native_providers
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
-        elif $bad_kimi_routes > 0 then "Kimi is unsupported for subscription dispatch"
-        elif $typed and ($mismatched_native_providers | length) > 0 then "native harness/provider mismatch: " + ($mismatched_native_providers | join(", "))
-        elif $typed and ($bad_providers | length) > 0 then "unsupported subscription provider: " + ($bad_providers | join(", "))
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
         else empty
         end
@@ -1486,9 +1464,6 @@ detect_local_tools() {
       || missing_tool_diagnostic "$t"
   done
   for t in $COMMON_TOOLS; do
-    # lavish-axi is optional presentation: a missing or stale copy reports
-    # PRESENTATION_UNAVAILABLE below so nonvisual work can still proceed.
-    [ "$t" = lavish-axi ] && continue
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
   # The treehouse lease-support upgrade check is only relevant when the resolved

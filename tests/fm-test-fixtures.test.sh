@@ -5,8 +5,6 @@
 # them as a test would. Assertions are on observable output, exit status, and
 # filesystem effects - never on helper source text. Migrated spawn suites cover
 # fm_test_run_spawn through the real fm-spawn.sh; this file pins the shared
-# primitives and stubs those suites use. It also pins the ambient-home
-# isolation that tests/lib.sh, which fixtures.sh builds on, gives every suite.
 # primitives and stubs those suites use.
 #
 # It is also the fixture Git-config isolation regression, with host signing
@@ -154,6 +152,7 @@ SH
 
   pass "runner and shared helpers isolate host Git config and preserve explicit config and outside commits"
 )
+
 test_touch_epoch_preserves_repeated_dst_hour() {
   local TZ=Europe/Paris epoch path actual
   export TZ
@@ -280,64 +279,120 @@ test_spawn_home_layout() {
   pass "spawn-home layout writes harness pin, beat, and brief"
 }
 
-# A fixture secondmate home bound to a local parent, plus one task record in a
-# separate state dir: the shape a live secondmate session exports while a test
-# redirects only FM_STATE_OVERRIDE.
-make_bound_secondmate() {  # <dir>
-  local dir=$1
-  mkdir -p "$dir/parent/state" "$dir/home" "$dir/state" "$dir/fakebin"
-  printf 'mate-x\n' > "$dir/home/.fm-secondmate-home"
-  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
-    "$dir/parent" > "$dir/home/.fm-secondmate-parent"
-  # Upstream named-head gate needs a pushed copy; keep this fixture offline.
-  fm_git_init_commit "$dir/wt"
-  git -C "$dir/wt" update-ref refs/remotes/origin/main "$(git -C "$dir/wt" rev-parse HEAD)"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/fakebin/gh"
-  chmod +x "$dir/fakebin/gh"
-  fm_write_meta "$dir/state/task-x1.meta" "window=firstmate:fm-task-x1" \
-    "kind=ship" "mode=no-mistakes" "project=x" "worktree=$dir/wt"
-}
+# A host whose `sleep` is a multicall coreutils (uutils on Ubuntu 26.04) refuses
+# to run under a foreign name, so a harness-named symlink to it never becomes a
+# live process. The fake `sleep` below models that refusal on any host, which
+# keeps this case meaningful where CI's own `sleep` is single-purpose.
+test_agent_standin_survives_a_multicall_sleep() (
+  local dir="$TMP_ROOT/standin" fakebin real_sleep standin pid
+  real_sleep=$(command -v sleep) || fail "sleep not found"
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/sleep" <<SH
+#!/usr/bin/env bash
+case "\${0##*/}" in
+  sleep) exec "$real_sleep" "\$@" ;;
+  *) echo "Requested utility \${0##*/} does not match executable name" >&2; exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/sleep"
+  ln -s "$fakebin/sleep" "$dir/pi"
+  "$fakebin/sleep" 0 || fail "the fake multicall sleep must run under its own name"
+  if "$dir/pi" 0 2>/dev/null; then
+    fail "the fake multicall sleep must refuse a harness name, or this case proves nothing"
+  fi
 
-# The PR-ready publisher run with only its state redirected, as the suites do.
-pr_check_with_state_only() {  # <dir>
-  PATH="$1/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$1/state" \
-    "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
-}
+  if standin=$(PATH="$fakebin:$(fm_test_base_path_sans "$PATH" cc gcc)" fm_agent_standin "$dir/nocc"); then
+    fail "without a compiler, a multicall sleep must not be offered as a stand-in, got '$standin'"
+  fi
+  assert_absent "$dir/nocc/standin" "a refused stand-in must not be left behind"
 
-test_lib_clears_ambient_live_home() {
-  local dir leaked
-  dir="$TMP_ROOT/live-home"
-  leaked="$dir/parent/state/mate-x.status"
+  if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    echo "skip: no C compiler, so the compiled stand-in half of the multicall case cannot run"
+    pass "agent stand-in: a multicall sleep is refused rather than offered as a stand-in"
+    exit 0
+  fi
+  standin=$(PATH="$fakebin:$PATH" fm_agent_standin "$dir/cc") \
+    || fail "with a compiler, a multicall host sleep must still yield a stand-in"
+  ln -s "$standin" "$dir/cc/pi"
+  "$dir/cc/pi" 60 &
+  pid=$!
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "the stand-in must stay alive under a harness name"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pass "agent stand-in: a multicall sleep is refused, and the compiled stand-in survives a harness name"
+)
 
-  # Control: an ambient secondmate FM_HOME really does route the fixture's
-  # ready line into the parent's status log, so the isolation case below
-  # cannot pass vacuously.
-  make_bound_secondmate "$dir"
-  ( export FM_HOME="$dir/home"; pr_check_with_state_only "$dir" ) \
-    || fail "control: fm-pr-check failed under an ambient secondmate home"
-  assert_grep 'child task-x1 PR ready' "$leaked" \
-    "control: an ambient secondmate home did not reach its parent channel"
+# An inherited absolute GIT_DIR (a linked-worktree hook exports one) overrides
+# `git -C`, so fixture setup would commit, move refs, and register worktrees in
+# the caller's repository; GIT_INDEX_FILE and GIT_COMMON_DIR redirect the index
+# and refs the same way, and GIT_WORK_TREE breaks the setup outright. Each entry
+# point runs fm-teardown.test.sh's Git setup with each variable aimed in turn at
+# a disposable ambient clone, which must come through unchanged.
+test_inherited_git_location_isolation() (
+  local dir="$TMP_ROOT/git-location" before after var value helper rc
+  mkdir -p "$dir/runner/bin" "$dir/runner/tests"
+  fm_git_init_commit "$dir/ambient"
+  git -C "$dir/ambient" worktree add -q --detach "$dir/linked" main
+  cp "$ROOT/bin/fm-test-run.sh" "$ROOT/bin/fm-timeout-lib.sh" "$dir/runner/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$dir/runner/tests/"
+  cat > "$dir/setup.sh" <<'SH'
+case_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-git-location.XXXXXX")
+git init -q --bare "$case_dir/origin.git"
+git -C "$case_dir/origin.git" symbolic-ref HEAD refs/heads/main
+git clone -q "$case_dir/origin.git" "$case_dir/_seed" 2>/dev/null
+echo seed > "$case_dir/_seed/seed.txt"
+git -C "$case_dir/_seed" add seed.txt
+git -C "$case_dir/_seed" -c user.email=t@t -c user.name=t commit -q -m "origin baseline"
+git -C "$case_dir/_seed" push -q origin main
+git clone -q "$case_dir/origin.git" "$case_dir/project"
+git -C "$case_dir/project" worktree add -q -b fm/task-x1 "$case_dir/wt" main
+[ "$(git -C "$case_dir/wt" log -1 --format=%s)" = "origin baseline" ]
+SH
+  { printf '#!/usr/bin/env bash\nset -eu\n'; cat "$dir/setup.sh"; } > "$dir/runner/tests/fm-test-run.test.sh"
+  chmod +x "$dir/runner/tests/fm-test-run.test.sh"
 
-  rm -rf "$dir"
-  make_bound_secondmate "$dir"
-  FM_HOME="$dir/home" FM_PUBLIC_FOLLOWUP_PRIMARY_HOME="$dir/parent" \
-    FM_STATE_OVERRIDE="$dir/parent/state" FM_ROOT_OVERRIDE="$dir/parent" \
-    bash -c '
-      set -u
-      . "$1/tests/lib.sh"
-      for v in FM_HOME FM_PUBLIC_FOLLOWUP_PRIMARY_HOME FM_STATE_OVERRIDE FM_ROOT_OVERRIDE; do
-        [ -z "${!v+set}" ] || echo "$v survived: ${!v}"
-      done
-      PATH="$2/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$2/state" \
-        "$ROOT/bin/fm-pr-check.sh" task-x1 https://github.com/example/repo/pull/7 >/dev/null 2>&1
-    ' _ "$ROOT" "$dir" > "$dir/child.out" 2>&1 \
-    || fail "fm-pr-check failed in a test that sourced lib.sh: $(cat "$dir/child.out")"
-  assert_absent "$leaked" "a test sourcing lib.sh wrote into the ambient home's parent channel"
-  assert_no_grep survived "$dir/child.out" "lib.sh kept a live home variable: $(cat "$dir/child.out")"
-  grep -qxF 'pr=https://github.com/example/repo/pull/7' "$dir/state/task-x1.meta" \
-    || fail "the isolated run did not register the PR in its own state"
-  pass "lib.sh clears an ambient live home so fixture reports stay in the sandbox"
-}
+  ambient_state() {
+    git -C "$dir/ambient" for-each-ref --format='%(refname) %(objectname)'
+    git -C "$dir/ambient" worktree list --porcelain
+    git -C "$dir/ambient" ls-files --stage
+    git -C "$dir/linked" ls-files --stage
+  }
+
+  before=$(ambient_state)
+  for var in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
+    case $var in
+      GIT_DIR) value=$(git -C "$dir/linked" rev-parse --absolute-git-dir) ;;
+      GIT_WORK_TREE) value="$dir/linked" ;;
+      GIT_INDEX_FILE) value=$(git -C "$dir/linked" rev-parse --path-format=absolute --git-path index) ;;
+      GIT_COMMON_DIR) value=$(git -C "$dir/linked" rev-parse --path-format=absolute --git-common-dir) ;;
+    esac
+    for helper in lib herdr-test-safety runner-1 runner-2; do
+      rc=0
+      case $helper in
+        runner-*)
+          env "$var=$value" TMPDIR="$dir" "$dir/runner/bin/fm-test-run.sh" --jobs "${helper#runner-}" \
+            tests/fm-test-run.test.sh > "$dir/out.log" 2>&1 || rc=$?
+          [ "$rc" != 0 ] || assert_grep 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0' "$dir/out.log" \
+            "$helper did not execute the Git fixture under $var" ;;
+        *)
+          # shellcheck disable=SC2016 # expanded by the child bash
+          env "$var=$value" TMPDIR="$dir" bash -eu -c '. "$1"; . "$2"' _ "$ROOT/tests/$helper.sh" "$dir/setup.sh" \
+            > "$dir/out.log" 2>&1 || rc=$? ;;
+      esac
+      # The ambient check comes first: it is the escape this case exists to catch.
+      after=$(ambient_state)
+      [ "$before" = "$after" ] \
+        || fail "$helper fixture setup under $var changed the ambient repository: $(diff <(echo "$before") <(echo "$after"))"
+      [ "$rc" = 0 ] || fail "$helper fixture setup failed under $var: $(cat "$dir/out.log")"
+    done
+  done
+  pass "shared helpers and runner keep fixture Git off an inherited repository location"
+)
+
+test_git_config_isolation || fail "Git fixture config isolation"
+test_inherited_git_location_isolation || fail "Git fixture location isolation"
+test_agent_standin_survives_a_multicall_sleep || fail "agent stand-in multicall case"
 test_touch_epoch_preserves_repeated_dst_hour
 test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers
@@ -345,4 +400,3 @@ test_fake_gh_and_gh_axi
 test_spawn_tmux_and_fakebin
 test_send_stubs_and_ssh
 test_spawn_home_layout
-test_lib_clears_ambient_live_home

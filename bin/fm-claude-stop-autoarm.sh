@@ -204,7 +204,7 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # idle or away home remains byte-for-byte inert. Missing or malformed locks are
 # uncertainty rather than stale-owner evidence and remain inert.
 RECOVER_SESSION_LOCK=0
-if ! fm_session_lock_owned_by_current_session "$STATE"; then
+if ! fm_session_lock_owned_by_self "$STATE"; then
   LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
   case "$LOCK_PID" in
     ''|*[!0-9]*) exit 0 ;;
@@ -228,7 +228,7 @@ need_supervision || exit 0
 # before touching any auto-arm state.
 if [ "$RECOVER_SESSION_LOCK" -eq 1 ]; then
   "$SCRIPT_DIR/fm-lock.sh" >/dev/null 2>&1 || exit 0
-  fm_session_lock_owned_by_current_session "$STATE" || exit 0
+  fm_session_lock_owned_by_self "$STATE" || exit 0
 fi
 
 # --- single-flight generation claim --------------------------------------------
@@ -266,7 +266,7 @@ MY_GEN=$FM_AUTOARM_MY_GEN
 autoarm_commit() {  # <outcome> [marker-file]
   local outcome=$1 marker=${2:-} session_pid recovery
   if [ "$outcome" = rewake ]; then
-    fm_session_lock_owned_by_current_session "$STATE" || return 2
+    fm_session_lock_owned_by_self "$STATE" || return 2
     session_pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null || true)
     fm_recovery_marker_snapshot "$STATE/.watcher-down" || return 2
     case "$FM_RECOVERY_MARKER_TOKEN" in
@@ -536,6 +536,22 @@ if [ "$ACTIONABLE" -eq 1 ]; then
   if autoarm_commit rewake; then
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 2
+  fi
+  if [ "$HOST_MODE" -eq 1 ] && fm_autoarm_still_owner "$STATE" "$MY_GEN" \
+    && fm_recovery_marker_snapshot "$STATE/.watcher-down" \
+    && [[ "$FM_RECOVERY_MARKER_TOKEN" == pending:handling:* || "$FM_RECOVERY_MARKER_TOKEN" == announced:handling:* ]] \
+    && ! fm_watcher_healthy "$STATE" "$SCRIPT_DIR/fm-watch.sh" "$GRACE" "$FM_HOME"; then
+    LOST_HANDBACK_COMMITTED=0
+    if [ ! -e "$FAILURE_NOTICE" ]; then
+      printf 'firstmate watcher auto-arm FAILED - the supervision host returned an actionable wake, but its rewake could not be committed.\n' >&2
+      autoarm_commit failed "$FAILURE_NOTICE" && LOST_HANDBACK_COMMITTED=1
+    else
+      autoarm_commit failed-suppressed && LOST_HANDBACK_COMMITTED=1
+    fi
+    if [ "$LOST_HANDBACK_COMMITTED" -eq 1 ]; then
+      [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+      exit 2
+    fi
   fi
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   exit 0

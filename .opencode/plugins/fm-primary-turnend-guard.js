@@ -22,6 +22,9 @@ function runProcess(command, args, input = "") {
     });
     child.on("error", () => resolve({ code: 0, stdout: "", stderr: "" }));
     child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    // A child that exits before reading stdin makes this write fail with
+    // EPIPE; an unhandled stdin error would crash the host process.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }
@@ -49,12 +52,9 @@ function runGuard(root) {
 
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
-  if (!coordinator?.ensureArmed) return "guard";
-  // Retrying, pending silent re-arms, and empty or healthy cycles need no guard turn.
-  const outcome = await coordinator.ensureArmed(sessionID, client);
-  return ["retrying", "pending-silent-rearm", "not-needed", "healthy"].includes(outcome)
-    ? "silent"
-    : "guard";
+  if (!coordinator?.ensureArmed) return false;
+  const status = await coordinator.ensureArmed(sessionID, client);
+  return status === "armed" || status === "wake" || status === "failed";
 }
 
 export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => {
@@ -72,8 +72,7 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
 
-      const watchArmDecision = await letWatchArmRun(sessionID, client);
-      if (watchArmDecision !== "guard") return;
+      if (await letWatchArmRun(sessionID, client)) return;
 
       const result = await runGuard(root);
       if (result.code !== 2) return;

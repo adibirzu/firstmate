@@ -25,14 +25,6 @@
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-agent-process-lib.sh"
 
-# Compatibility alias: bin/fm-agent-process-lib.sh owns the classifier. Callers
-# and tests that still use the tmux-prefixed name stay on that same owner so a
-# cline install path cannot classify as an agent on one backend and other on
-# another.
-fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
-  fm_agent_process_classify_name "$@"
-}
-
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the
@@ -58,11 +50,10 @@ fm_backend_tmux_visible_capture() {  # <target>
   tmux capture-pane -p -t "$1" -S -0
 }
 
-# fm_backend_tmux_send_key: one named key. Mirrors fm-send.sh's --key path:
-# `tmux display-message -p -t "$T" '#{pane_id}' >/dev/null`, then
-# `tmux send-keys -t "$T" "$2"`.
+# fm_backend_tmux_send_key: one named key. Tmux can prefix-match a gone target
+# to a live neighbor, so require exact membership before sending the key.
 fm_backend_tmux_send_key() {  # <target> <key>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null
+  fm_backend_tmux_target_exists "$1" || return 1
   tmux send-keys -t "$1" "$2"
 }
 
@@ -70,7 +61,7 @@ fm_backend_tmux_send_key() {  # <target> <key>
 # submit with Enter, retried (Enter only, never retyped) until the composer
 # clears. Re-exports fm_tmux_submit_core (bin/fm-tmux-lib.sh) verbatim; see
 # that file for the composer-verification contract and echoed verdicts.
-fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [confirmation-callback]
+fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
   fm_tmux_submit_core "$@"
 }
 
@@ -114,62 +105,11 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
   printf '%s\n' "$wid"
 }
 
-fm_backend_tmux_target_pane_snapshot() {  # <target>
-  local target=$1 row_session row_window row_window_id row_pane_id row_active row_path row_tty
-  [ -n "$target" ] || return 1
-  while IFS=$'\t' read -r row_session row_window row_window_id row_pane_id row_active row_path row_tty; do
-    case "$target" in
-      %*) [ "$row_pane_id" = "$target" ] || continue ;;
-      @*) [ "$row_window_id" = "$target" ] && [ "$row_active" = 1 ] || continue ;;
-      *:*)
-        [ "$row_session" = "${target%%:*}" ] \
-          && [ "$row_window" = "${target#*:}" ] \
-          && [ "$row_active" = 1 ] || continue
-        ;;
-      *) return 1 ;;
-    esac
-    printf '%s\037%s\037%s\n' "$row_pane_id" "$row_path" "$row_tty"
-    return 0
-  done < <(tmux list-panes -a -F '#{session_name}\t#{window_name}\t#{window_id}\t#{pane_id}\t#{pane_active}\t#{pane_current_path}\t#{pane_tty}' 2>/dev/null)
-  return 1
-}
-
 # fm_backend_tmux_current_path: the live pane's current working directory, or
 # empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
 # `tmux display-message -p -t "$T" '#{pane_current_path}'`.
-#
-# This stays the cheap direct read because fm-spawn.sh polls it up to 60 times
-# while waiting for a pane it JUST created to enter its leased worktree. tmux's
-# active-pane fallback is not a hazard there: the target is a stable window id
-# the spawn just captured, and the spawn independently proves the worktree with
-# validate_spawn_worktree before launching. Supervision has the opposite threat
-# model - it observes panes that may already be gone - so it uses the bound
-# reader below instead.
 fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
-}
-
-# fm_backend_tmux_bound_current_path: the same value, but read out of the target
-# inventory snapshot so it is bound to the pane that actually matches <target>.
-#
-# Supervision needs this stronger contract: `display-message -t` silently falls
-# back to the ACTIVE pane when its target no longer exists, so a torn-down task
-# would return firstmate's own pane path. If that pane sits in the project
-# checkout, the launch-drift detector would report a severe primary-checkout
-# landing for a worker that is simply gone - the worst false positive the
-# feature can produce. Returning failure here maps to a silent `unknown`.
-fm_backend_tmux_bound_current_path() {  # <target>
-  local snapshot pane_id path tty
-  snapshot=$(fm_backend_tmux_target_pane_snapshot "$1") || return 1
-  IFS=$'\037' read -r pane_id path tty <<EOF
-$snapshot
-EOF
-  [ -n "$pane_id" ] || return 1
-  printf '%s\n' "$path"
-}
-
-fm_backend_tmux_pane_argv() {  # <target> <harness>
-  return 1
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
@@ -186,33 +126,6 @@ fm_backend_tmux_send_text_line() {  # <target> <text>
 # Mirrors `tmux send-keys -t "$T" -l "<text>"`.
 fm_backend_tmux_send_literal() {  # <target> <text>
   tmux send-keys -t "$1" -l "$2"
-}
-
-# fm_backend_tmux_reset_shell: clear a bare tmux pane's shell input state and
-# PROVE it. C-c (the shell's interrupt) aborts any continuation prompt or
-# half-typed line, and C-u drops a remaining line. The shell must then execute a
-# plain `cd <reset-dir>`, which is observable as the pane's cwd: a shell still
-# stuck in a continuation swallows the cd and the cwd never moves, so this
-# returns nonzero rather than letting a launch command be swallowed the same
-# way. The dead-shell reasoning that says a `dead` pane is a bare shell lives in
-# bin/fm-composer-lib.sh and bin/fm-backend.sh; this primitive does not
-# re-derive it.
-fm_backend_tmux_reset_shell() {  # <target> <reset-dir>
-  local target=$1 dir=$2 expected raw observed i=0
-  tmux send-keys -t "$target" C-c 2>/dev/null || return 1
-  tmux send-keys -t "$target" C-u 2>/dev/null || return 1
-  tmux send-keys -t "$target" "cd $(fm_backend_shell_quote "$dir")" Enter 2>/dev/null || return 1
-  expected=$(cd "$dir" 2>/dev/null && pwd -P) || expected=$dir
-  while [ "$i" -lt 40 ]; do
-    raw=$(fm_backend_tmux_current_path "$target" 2>/dev/null || true)
-    if [ -n "$raw" ]; then
-      observed=$(cd "$raw" 2>/dev/null && pwd -P) || observed=$raw
-      [ "$observed" = "$expected" ] && return 0
-    fi
-    sleep 0.25
-    i=$((i + 1))
-  done
-  return 1
 }
 
 # fm_backend_tmux_window_inventory: <session-target>'s window names, one per
@@ -243,7 +156,85 @@ fm_backend_tmux_window_inventory() {  # <session-target>
   return 1
 }
 
-# fm_backend_tmux_kill: remove one explicitly named task window, best-effort.
+# Resolve one exact window selector in one exact session to its stable id.
+# The shared dispatcher header owns the accepted target grammar.
+fm_backend_tmux_window_id() {  # <session-name> <window-name|index|@id>
+  local session=$1 selector=$2 rows window_id window_index window_name
+  rows=$(LC_ALL=C tmux list-windows -t "=$session" \
+    -F '#{window_id}|#{window_index}|#{window_name}' 2>/dev/null) || return 1
+  while IFS='|' read -r window_id window_index window_name; do
+    case "$selector" in
+      @*) [ "$window_id" = "$selector" ] || continue ;;
+      *[!0-9]*) [ "$window_name" = "$selector" ] || continue ;;
+      *) [ "$window_index" = "$selector" ] || continue ;;
+    esac
+    printf '%s\n' "$window_id"
+    return 0
+  done <<EOF
+$rows
+EOF
+  return 1
+}
+
+# Adapter-owned tmux endpoint membership. Every comparison is literal and
+# session-scoped where the target names a session, so tmux never gets a chance
+# to satisfy the predicate through its prefix, pattern, or active-window
+# fallbacks.
+fm_backend_tmux_target_exists() {  # <target>
+  local target=${1:-} session selector windows base pane_index window_id
+  [ -n "$target" ] || return 1
+  case "$target" in
+    %*)
+      tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fqx -- "$target"
+      ;;
+    @*)
+      tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -Fqx -- "$target"
+      ;;
+    *:*:*)
+      return 1
+      ;;
+    *:*)
+      session=${target%%:*}
+      selector=${target#*:}
+      case "$session" in =*) session=${session#=} ;; esac
+      case "$selector" in =*) selector=${selector#=} ;; esac
+      [ -n "$session" ] && [ -n "$selector" ] || return 1
+
+      case "$selector" in
+        @*) fm_backend_tmux_window_id "$session" "$selector" >/dev/null ; return ;;
+        *[!0-9]*) ;;
+        *) fm_backend_tmux_window_id "$session" "$selector" >/dev/null ; return ;;
+      esac
+
+      windows=$(fm_backend_tmux_window_inventory "=$session") || return 1
+      if printf '%s\n' "$windows" | grep -Fqx -- "$selector"; then
+        return 0
+      fi
+
+      case "$selector" in
+        *.*)
+          base=${selector%.*}
+          pane_index=${selector##*.}
+          [ -n "$base" ] && [ -n "$pane_index" ] || return 1
+          case "$base" in *[!0-9]*) return 1 ;; esac
+          case "$pane_index" in *[!0-9]*) return 1 ;; esac
+          window_id=$(fm_backend_tmux_window_id "$session" "$base") || return 1
+          tmux list-panes -t "$window_id" -F '#{pane_index}' 2>/dev/null \
+            | grep -Fqx -- "$pane_index"
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *)
+      session=$target
+      case "$session" in =*) session=${session#=} ;; esac
+      [ -n "$session" ] || return 1
+      tmux has-session -t "=$session" 2>/dev/null
+      ;;
+  esac
+}
+
+# fm_backend_tmux_kill: remove one explicitly named task window.
 # Empty, omitted, and malformed targets return nonzero before invoking tmux so
 # tmux can never interpret an empty target as the caller's current window.
 #
@@ -332,9 +323,9 @@ fm_backend_tmux_current_command() {  # <target>
 # absent target from the client's active window rather than failing, so callers
 # must confirm exact window membership first, exactly as the classifier below
 # does, or they will describe some other pane entirely.
-fm_backend_tmux_foreground_comms() {  # <target> [tty]
-  local target=$1 tty=${2:-} pid pgid tpgid comm
-  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_comms() {  # <target>
+  local target=$1 tty pid pgid tpgid comm
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -347,9 +338,9 @@ fm_backend_tmux_foreground_comms() {  # <target> [tty]
 # The foreground group's full command lines. Needed because a node-bundle
 # harness carries its identity in argv[1] rather than in its command name or
 # argv[0]; bin/fm-gemini-lib.sh owns what counts as evidence inside one.
-fm_backend_tmux_foreground_args() {  # <target> [tty]
-  local target=$1 tty=${2:-} pid pgid tpgid comm args
-  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_args() {  # <target>
+  local target=$1 tty pid pgid tpgid comm args
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -360,9 +351,9 @@ fm_backend_tmux_foreground_args() {  # <target> [tty]
       done
 }
 
-fm_backend_tmux_foreground_pids() {  # <target> [tty]
-  local target=$1 tty=${2:-} pid pgid tpgid comm
-  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_pids() {  # <target>
+  local target=$1 tty pid pgid tpgid comm
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -372,35 +363,9 @@ fm_backend_tmux_foreground_pids() {  # <target> [tty]
       done
 }
 
-# fm_backend_tmux_task_process_root: the pid of <target>'s pane shell - the
-# root of the task's whole process tree - or a nonzero return when the exact
-# recorded window cannot be confirmed live. Tmux answers an absent target from
-# the client's ACTIVE window rather than failing, so the session's window
-# inventory must name this exact window before its pane pid is trusted;
-# without that check a vanished task window would resolve to whichever window
-# is active now. bin/fm-teardown.sh walks descendants from this root so a
-# harness child that called setsid (an MCP server, a detached poll shell) is
-# still reached even after it left the pane's process group and cwd.
-fm_backend_tmux_task_process_root() {  # <target>
-  local target=$1 session window windows pid
-  case "$target" in
-    *:*:*|'':*|*:'') return 1 ;;
-    *:*) ;;
-    *) return 1 ;;
-  esac
-  session=${target%%:*}
-  window=${target#*:}
-  windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null) || return 1
-  printf '%s\n' "$windows" | grep -Fxq -- "$window" || return 1
-  pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || return 1
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$pid" -gt 1 ] || return 1
-  printf '%s\n' "$pid"
-}
-
-fm_backend_tmux_foreground_argv0s() {  # <target> [tty]
-  local target=$1 tty=${2:-} pid pgid tpgid comm args argv0
-  [ -n "$tty" ] || tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+fm_backend_tmux_foreground_argv0s() {  # <target>
+  local target=$1 tty pid pgid tpgid comm args argv0
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do

@@ -168,15 +168,6 @@ build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry p
   root="$TMP_ROOT/$name"
   archive="$root/bin.tar"
   mkdir -p "$root"
-  # Materialize the complete bin/ tree in one operation, exactly as the
-  # note above describes. The hand-maintained per-file lists this used to walk
-  # (OLD_BIN_UNCHANGED_SIBLINGS and friends) are gone: they rotted every time a
-  # script gained a dependency, and an incomplete shim makes the historical
-  # process abort on a missing `source` before it ever reaches the behavior
-  # under test - which reads as a behavior difference rather than a broken
-  # fixture. git archive preserves the executable bits, so entrypoints stay
-  # runnable without a chmod sweep. backend_base_ref is the lazy owner of the
-  # historical revision, so this does not depend on an earlier top-level call.
   base_ref=$(backend_base_ref)
   git -C "$ROOT" archive --format=tar "$base_ref" bin > "$archive" \
     || fail "old-bin shim: could not archive bin/ from $base_ref"
@@ -511,17 +502,32 @@ test_backend_validate_refuses_unknown() {
 }
 
 test_backend_source_shell_portable() {
-  local out status
+  local out status stub probe
   # zsh does not word-split unquoted expansions; sourcing fm-backend.sh from
   # an interactive zsh session must still recognize known backend names.
+  # The claim is name matching and the sibling precheck only: the adapters
+  # find their own siblings through BASH_SOURCE, so zsh is not a full load.
   if command -v zsh >/dev/null 2>&1; then
-    zsh -c "cd '$ROOT' && source bin/fm-backend.sh && fm_backend_source herdr && whence -w fm_backend_herdr_capture >/dev/null" 2>/dev/null \
-      || fail "zsh: fm_backend_source herdr should load the adapter when sourced"
+    zsh -c "cd '$ROOT' && source bin/fm-backend.sh && fm_backend_source herdr" >/dev/null 2>&1 \
+      || fail "zsh: fm_backend_source herdr should accept the known backend name and find its sibling libraries"
     out=$(zsh -c "cd '$ROOT' && source bin/fm-backend.sh && fm_backend_source bogus" 2>&1) \
       && fail "zsh: fm_backend_source bogus should fail"
     assert_contains "$out" "unknown backend 'bogus'" \
       "zsh: fm_backend_source did not reject bogus with the expected error"
     pass "zsh: fm_backend_source recognizes known backends and rejects unknown ones"
+
+    # zsh ties the lowercase `path` array to PATH; a backend loaded while
+    # fm_backend_source clobbers PATH cannot resolve external commands.
+    stub="$TMP_ROOT/zsh-source-path"
+    probe="$stub/probe"
+    mkdir -p "$stub/backends"
+    printf 'command -v dirname > "%s"\n' "$probe" > "$stub/backends/orca.sh"
+    : > "$stub/fm-composer-lib.sh"
+    zsh -c "cd '$ROOT' && source bin/fm-backend.sh && FM_BACKEND_LIB_DIR='$stub' && fm_backend_source orca" >/dev/null 2>&1 \
+      || fail "zsh: fm_backend_source orca should load a stub adapter"
+    [ -s "$probe" ] \
+      || fail "zsh: fm_backend_source clobbered PATH while loading a backend adapter"
+    pass "zsh: fm_backend_source keeps PATH intact while loading a backend adapter"
   else
     pass "zsh: shell-portable backend matching skipped (zsh not found)"
   fi
@@ -602,49 +608,6 @@ test_meta_get_and_backend_of_meta() {
     || fail "fm_meta_get did not preserve last-value or no-final-newline semantics"
 
   pass "fm_meta_get / fm_backend_of_meta: read last key=value and default backend to tmux"
-}
-
-# fm_backend_target_of_meta must never return nonzero merely because an endpoint
-# field is absent. Callers assign it through command substitution under `set -e`
-# (e.g. bin/fm-spawn.sh's reuse and herdr-recovery paths), so a function tail of
-# `[ -n "$window" ] && printf ...` made the whole caller exit with no diagnostic
-# when a meta carried no window=. This drives the public function through a real
-# `set -e` child, the caller-visible shape, rather than asserting source bytes.
-test_backend_target_of_meta_set_e_safe() {
-  local dir driver out
-
-  dir="$TMP_ROOT/target-meta-set-e"; mkdir -p "$dir"
-  fm_write_meta "$dir/nofield.meta" "backend=tmux" "harness=claude"
-  fm_write_meta "$dir/noterminal.meta" "backend=orca" "harness=claude"
-  fm_write_meta "$dir/withfield.meta" "backend=tmux" "window=firstmate:fm-x1"
-  fm_write_meta "$dir/orca-terminal.meta" "backend=orca" "terminal=term-orca-x" "window=ignored"
-
-  driver="$dir/caller.sh"
-  cat > "$driver" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$1/bin/fm-backend.sh"
-target=$(fm_backend_target_of_meta "$2")
-printf 'window=%s' "$target"
-SH
-
-  out=$(bash "$driver" "$ROOT" "$dir/nofield.meta") \
-    || fail "fm_backend_target_of_meta must not kill a set -e caller when window= is absent"
-  [ "$out" = "window=" ] || fail "an absent window= must yield an empty target, got '$out'"
-
-  out=$(bash "$driver" "$ROOT" "$dir/noterminal.meta") \
-    || fail "fm_backend_target_of_meta must not kill a set -e caller when an Orca meta has neither terminal= nor window="
-  [ "$out" = "window=" ] || fail "an Orca meta with no terminal= or window= must yield an empty target, got '$out'"
-
-  out=$(bash "$driver" "$ROOT" "$dir/withfield.meta") \
-    || fail "fm_backend_target_of_meta must keep succeeding under set -e for a present window="
-  [ "$out" = "window=firstmate:fm-x1" ] || fail "a present window= must be printed unchanged, got '$out'"
-
-  out=$(bash "$driver" "$ROOT" "$dir/orca-terminal.meta") \
-    || fail "fm_backend_target_of_meta must keep succeeding for an Orca meta with terminal="
-  [ "$out" = "window=term-orca-x" ] || fail "an Orca terminal= must be reported ahead of window=, got '$out'"
-
-  pass "fm_backend_target_of_meta: absent window=/terminal= returns empty success (set -e safe); present fields unchanged"
 }
 
 test_resolve_selector_three_forms() {
@@ -764,7 +727,7 @@ case "${1:-}" in
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0 ;;
-  list-windows) exit 0 ;;
+  list-windows) printf 'win\n'; exit 0 ;;
 esac
 exit 0
 SH
@@ -783,7 +746,7 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
 
 strip_send_preflight() {  # <log>
   local preflight
-  preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
+  preflight=$'tmux\x1flist-windows\x1f-t\x1f=sess\x1f-F\x1f#{window_name}'
   awk -v preflight="$preflight" '$0 != preflight { print }' "$1"
 }
 
@@ -804,7 +767,7 @@ test_send_tmux_contract() {
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" --key Escape
   rc=$?
   expect_code 0 "$rc" "fm-send --key should succeed against a live fake pane"
-  assert_contains "$(cat "$log")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
+  assert_contains "$(cat "$log")" $'\x1f''list-windows'$'\x1f''-t'$'\x1f''=sess'$'\x1f''-F'$'\x1f''#{window_name}' \
     "fm-send --key did not verify the explicit tmux target before sending"
   assert_contains "$(cat "$log")" $'\x1f''Escape' "fm-send --key did not send the named key"
   assert_not_contains "$(cat "$log")" $'\x1f''-l'$'\x1f' "fm-send --key must not type literal text"
@@ -885,7 +848,7 @@ test_peek_conformance_old_vs_new() {
 # --- old vs new: fm-spawn.sh --------------------------------------------------
 
 make_spawn_fakebin() {  # <dir> <fake-worktree-path> -> echoes fakebin dir
-  local dir=$1 wt=$2 fb="$1/fakebin"
+  local dir=$1 wt=$2 fb="$1/fakebin" window_file="$1/window-name"
   mkdir -p "$fb"
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
@@ -895,12 +858,28 @@ case "\${1:-}" in
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
-  list-windows) exit 0 ;;
+  new-window)
+    _name=
+    _previous=
+    for _arg in "\$@"; do
+      [ "\$_previous" = -n ] && _name=\$_arg
+      _previous=\$_arg
+    done
+    printf '%s\\n' "\$_name" > "$window_file"
+    printf '@1\\n'
+    exit 0 ;;
+  list-windows)
+    [ -s "$window_file" ] || exit 0
+    case "\$*" in
+      *'#{window_id}'*) printf '@1\\n' ;;
+      *) cat "$window_file" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_treehouse "$fb" "$wt"
+  fm_fake_exit0 "$fb" treehouse
   printf '%s\n' "$fb"
 }
 
@@ -947,8 +926,8 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 # first pane_current_path poll, then the real worktree path from the second poll
 # onward, so this test fails loudly if the PROJ_ABS/PROJ_ABS_REAL
 # canonicalization in bin/fm-spawn.sh ever regresses.
-make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -> echoes fakebin dir
-  local dir=$1 initial_path=$2 wt=$3 fb="$1/fakebin" counter="$1/poll-count"
+make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> <window-name> -> echoes fakebin dir
+  local dir=$1 initial_path=$2 wt=$3 window_name=$4 fb="$1/fakebin" counter="$1/poll-count"
   mkdir -p "$fb"
   : > "$counter"
   cat > "$fb/tmux" <<SH
@@ -967,12 +946,22 @@ case "\${1:-}" in
       exit 0
     ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
-  list-windows) exit 0 ;;
+  new-window)
+    : > "$counter.window-created"
+    printf '@1\\n'
+    exit 0 ;;
+  list-windows)
+    [ -e "$counter.window-created" ] || exit 0
+    case "\$*" in
+      *'#{window_id}'*) printf '@1\\n' ;;
+      *) printf '%s\\n' "$window_name" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_treehouse "$fb" "$wt"
+  fm_fake_exit0 "$fb" treehouse
   printf '%s\n' "$fb"
 }
 
@@ -996,7 +985,7 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
     logical) initial_path=$proj ;;
     *) fail "unknown symlink first-reply mode: $first_reply" ;;
   esac
-  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path" "$wt")
+  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path" "$wt" "fm-$id")
   data="$TMP_ROOT/symlink-data-$label"
   mkdir -p "$data/$id"
   write_spawn_brief "$data/$id/brief.md" "$id"
@@ -1010,7 +999,7 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
   assert_contains "$out" "worktree=$wt" \
     "fm-spawn.sh did not resolve a symlinked-prefix project to its real worktree when the backend reports $first_reply cwd"
 
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
 }
 
 test_spawn_symlinked_project_prefix_avoids_false_refusal() {
@@ -1183,7 +1172,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux (the default) must not write backend= to meta (P1 compatibility contract)"
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: an explicit --backend tmux resolves silently and writes no backend= (missing means tmux)"
 }
 
@@ -1207,7 +1196,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   expect_code 0 $? "explicit --backend tmux should spawn successfully even with HERDR_ENV=1 set"$'\n'"$out"
   assert_no_grep 'backend=' "$state/$id.meta" \
     "an explicit --backend tmux must win over an ambient HERDR_ENV=1 auto-detect marker"
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: explicit --backend tmux wins over an ambient HERDR_ENV=1 auto-detect marker"
 }
 
@@ -1237,7 +1226,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   case "$out" in
     *NOTICE*) fail "auto-detecting tmux (even nested inside herdr) must stay silent, no NOTICE expected"$'\n'"$out" ;;
   esac
-  rm -rf "/tmp/fm-$(id -u)-$id"
+  rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
@@ -1264,7 +1253,6 @@ test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
-test_backend_target_of_meta_set_e_safe
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract

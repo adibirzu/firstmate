@@ -34,8 +34,8 @@
 # agents' project instructions on the no-mistakes side).
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 LABHOME="$ROOT/bin/fm-lab-home.sh"
@@ -58,13 +58,6 @@ PATH_MSG='no-mistakes gate worktree'
 # (<NM_HOME>/repos/<id>.git + <NM_HOME>/worktrees/<id>/<run>).
 make_gate_worktree() {
   local root=$1 id=016d88035d58 run=01KXC3SD5NZYMERGDS68Z1C8ER seed
-  # This helper RETURNS its path on stdout, so nothing else may write there.
-  # The `git push` below runs the caller's pre-push hook, and a hook that logs
-  # informationally to stdout instead of stderr lands its banner INSIDE the
-  # `GATE_WT=$(make_gate_worktree ...)` capture. Every later `cd "$GATE_WT"`
-  # then fails, which surfaced as the guard "exiting 111" - run_guard_lib's own
-  # `cd ... || exit 111` - rather than the expected refusal code 3.
-  {
   mkdir -p "$root/.no-mistakes/repos"
   git init -q --bare "$root/origin.git"
   seed=$(mktemp -d "$TMP/gate-seed.XXXXXX")
@@ -75,7 +68,6 @@ make_gate_worktree() {
   git clone -q --bare "$root/origin.git" "$root/.no-mistakes/repos/$id.git"
   git -C "$root/.no-mistakes/repos/$id.git" worktree add --detach \
     "$root/.no-mistakes/worktrees/$id/$run" main >/dev/null 2>&1
-  } >/dev/null
   printf '%s\n' "$root/.no-mistakes/worktrees/$id/$run"
 }
 
@@ -83,11 +75,8 @@ make_gate_worktree() {
 # normal primary/crew checkout: its git-common-dir is <dir>/.git, never a gate.
 make_normal_repo() {
   local dir=$1
-  # Same stdout contract as make_gate_worktree above.
-  {
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
-  } >/dev/null
   printf '%s\n' "$dir"
 }
 
@@ -169,7 +158,7 @@ run_guard_lib_home() {
 }
 
 test_helper_lab_home_admits() {
-  local lab plain out rc
+  local lab plain out rc value name dir
   lab=$("$LABHOME" create "$TMP/lab-home") || fail "lab-home create failed"
   plain="$TMP/plain-home"; mkdir -p "$plain"
 
@@ -184,16 +173,48 @@ test_helper_lab_home_admits() {
   expect_code 3 "$rc" "helper: gate + unmarked home must still refuse"
   assert_contains "$out" "$ENV_MSG" "helper: unmarked-home refusal message"
 
-  # gate + marked lab + an FM_*_OVERRIDE -> refused: the allowance requires
-  # the stock layout so an override cannot split state onto the real fleet.
-  out=$(run_guard_lib_home "$NORMAL_CWD" "$lab" NO_MISTAKES_GATE=1 FM_STATE_OVERRIDE="$lab/state"); rc=$?
-  expect_code 3 "$rc" "helper: lab home driven through FM_STATE_OVERRIDE must refuse"
-  assert_contains "$out" "$ENV_MSG" "helper: override refusal message"
+  # Production Pi supplies the tracked root and the stock state/config paths.
+  out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1 \
+    FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$lab/state" FM_CONFIG_OVERRIDE="$lab/config"); rc=$?
+  expect_code 0 "$rc" "helper: production branch paths in a marked lab must be permitted"
+
+  for name in FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE; do
+    for value in "$plain" "$lab/../plain-home" "$lab/state/.."; do
+      out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1 "$name=$value"); rc=$?
+      expect_code 3 "$rc" "helper: relocated or noncanonical $name must refuse"
+    done
+  done
+  for name in FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_UNKNOWN_OVERRIDE; do
+    out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1 "$name=$lab/data"); rc=$?
+    expect_code 3 "$rc" "helper: unsupported $name must refuse"
+  done
+  ln -s "$lab" "$TMP/lab-alias"
+  for value in "$TMP/lab-alias" "$lab/."; do
+    out=$(run_guard_lib_home "$GATE_WT" "$value" NO_MISTAKES_GATE=1 FM_ROOT_OVERRIDE="$ROOT"); rc=$?
+    expect_code 3 "$rc" "helper: noncanonical home must refuse"
+  done
+  for dir in state config data projects; do
+    mv "$lab/$dir" "$lab/$dir.saved"
+    ln -s "$plain" "$lab/$dir"
+    out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1 FM_ROOT_OVERRIDE="$ROOT"); rc=$?
+    expect_code 3 "$rc" "helper: symlinked stock $dir must refuse"
+    rm "$lab/$dir"
+    mv "$lab/$dir.saved" "$lab/$dir"
+  done
+  mv "$lab/.fm-lab-home" "$lab/marker.saved"
+  ln -s "$lab/marker.saved" "$lab/.fm-lab-home"
+  out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1); rc=$?
+  expect_code 3 "$rc" "helper: symlinked lab identity must refuse"
+  rm "$lab/.fm-lab-home"
+  printf 'invalid lab identity\n' > "$lab/.fm-lab-home"
+  out=$(run_guard_lib_home "$GATE_WT" "$lab" NO_MISTAKES_GATE=1); rc=$?
+  expect_code 3 "$rc" "helper: invalid lab identity must refuse"
+  mv "$lab/marker.saved" "$lab/.fm-lab-home"
 
   # no gate signal + lab home -> still a normal no-op.
   out=$(run_guard_lib_home "$NORMAL_CWD" "$lab"); rc=$?
   expect_code 0 "$rc" "helper: lab home outside a gate must not refuse"
-  pass "fm-gate-refuse-lib: marked lab home permitted in a gate; unmarked home or an override stay refused"
+  pass "fm-gate-refuse-lib: production lab paths permitted; relocated paths and invalid identities refused"
 }
 
 test_lab_home_private_tmux_socket_survives_deep_paths() {
@@ -288,51 +309,18 @@ test_lab_home_helper() {
 
 # --- fm-spawn ---------------------------------------------------------------
 
-# A fake tmux/treehouse so fm-spawn resolves the crew worktree from a controlled
-# pane path and completes without a live terminal (mirrors tests/fm-tangle-guard).
-make_spawn_fakebin() {
-  local dir=$1 fakebin
-  fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|send-keys|set-window-option) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_treehouse "$fakebin"
-  fm_fake_exit0 "$fakebin" codex
-  printf '%s\n' "$fakebin"
-}
-
 # run_spawn <cwd> <home> <id> <proj> <pane> <fakebin> [ASSIGN...] -> combined output
+# Gate-refuse cases must cd into a controlled cwd and drop both refusal signals
+# so the suite stays hermetic when it itself runs inside a real gate worktree.
 run_spawn() {
   local cwd=$1 home=$2 id=$3 proj=$4 pane=$5 fakebin=$6; shift 6
-  mkdir -p "$home/data/$id"
-  cat > "$home/data/$id/brief.md" <<'EOF'
-# Task
-
-## Captain's intent
-
-Exercise the normal spawn path.
-
-## Firstmate spec
-
-Verify the isolated launch outcome.
-EOF
+  fm_test_spawn_brief "$home" "$id" brief
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
-      "FM_ROOT_OVERRIDE=" "FM_HOME=$home" \
-      "FM_STATE_OVERRIDE=$home/state" "FM_DATA_OVERRIDE=$home/data" \
-      "FM_PROJECTS_OVERRIDE=$home/projects" "FM_CONFIG_OVERRIDE=$home/config" \
-      "FM_SPAWN_NO_GUARD=1" "FM_FAKE_PANE_PATH=$pane" "TMUX=fake,1,0" \
-      "PATH=$fakebin:$PATH" "$@" \
+      FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX=fake,1,0 \
+      PATH="$fakebin:$PATH" "$@" \
       "$SPAWN" "$id" "$proj" codex --mode no-mistakes --yolo off ) 2>&1
 }
 
@@ -456,13 +444,6 @@ test_send_refuses_and_admits() {
 # task (HEAD reachable from origin), so a normal teardown genuinely succeeds and a
 # refused one leaves the task untouched (mirrors tests/fm-teardown make_case).
 make_teardown_case() {
-  # This helper RETURNS its path on stdout, so nothing else may write there.
-  # `git push` runs the caller's pre-push hook, and a hook that logs
-  # informationally to stdout instead of stderr lands its banner INSIDE the
-  # caller's `$(...)` capture, prefixing every derived path and collapsing the
-  # fixture with "No such file or directory". `-q` silences git, never the hook.
-  # Grouping the setup makes the stdout contract explicit for ANY hook.
-  {
   local name=$1 case_dir fakebin t
   case_dir="$TMP/$name"; fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
@@ -501,9 +482,8 @@ SH
   fm_write_meta "$case_dir/state/task-x1.meta" \
     "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
     "worktree=$case_dir/wt" "project=$case_dir/project" \
-    "kind=ship" "mode=no-mistakes"
+    "kind=ship" "mode=no-mistakes" "spawn_gen=spawn-gate-refuse-task-x1"
   touch "$case_dir/state/.last-watcher-beat"
-  } >/dev/null
   printf '%s\n' "$case_dir"
 }
 
@@ -512,8 +492,8 @@ run_teardown() {
   local cwd=$1 case_dir=$2; shift 2
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
       "FM_ROOT_OVERRIDE=$ROOT" "FM_STATE_OVERRIDE=$case_dir/state" \
-      "FM_DATA_OVERRIDE=$case_dir/data" \
-      "FM_CONFIG_OVERRIDE=$case_dir/config" "PATH=$case_dir/fakebin:$PATH" "$@" \
+      "FM_DATA_OVERRIDE=$case_dir/data" "FM_CONFIG_OVERRIDE=$case_dir/config" \
+      "PATH=$case_dir/fakebin:$PATH" "$@" \
       "$TEARDOWN" task-x1 ) 2>&1
 }
 
