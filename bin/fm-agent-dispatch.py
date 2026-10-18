@@ -24,6 +24,11 @@ State directory: ${FM_AGENT_STATE:-$HOME/dev/mini-state/local-agents}
 running/<slug>#<n>.json is the claim and result transaction for one issue.
 phase moves claiming -> claimed -> running -> result_posting -> result_posted -> labelled.
 The record is written before the GitHub call it describes, and a later poll resumes that phase.
+Claim and result comments count only when author.login is this dispatcher's
+GitHub login and the body carries the nonce stored on that record before the
+post. The login is `gh api user --jq .login`, cached as self-login in the state
+directory, unless FM_AGENT_SELF_LOGIN is set. secrets.token_hex creates the
+nonce. A comment from another author, or with a different nonce, is ignored.
 
 Job text is written to a file for the runner. It is never interpolated into a
 shell command. The remote command may contain only the validated job id, the
@@ -34,6 +39,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -52,7 +58,8 @@ RUNNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sh$")
 SSH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 FENCE_RE = re.compile(r"```(?:yaml|yml)[^\n]*\n(.*?)```", re.IGNORECASE | re.DOTALL)
 PR_INPUT_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
-CLAIM_TOKEN_RE = re.compile(r"token:([A-Za-z0-9][A-Za-z0-9._-]*)")
+NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
+LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 SECRET_PATTERNS = (
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{8,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{8,}"),
@@ -1229,15 +1236,53 @@ def claim_mentions(body, job_id):
     return True
 
 
-def earliest_claim_token(bodies, job_id):
-    for body in bodies:
-        if not claim_mentions(body, job_id):
-            continue
-        match = CLAIM_TOKEN_RE.search(body)
-        if not match:
-            return ""
-        return match.group(1)
-    return None
+def marker_bounded(body, marker):
+    if not marker:
+        return False
+    start = 0
+    while True:
+        index = body.find(marker, start)
+        if index < 0:
+            return False
+        end = index + len(marker)
+        if end >= len(body) or not (body[end].isalnum() or body[end] in "._-"):
+            return True
+        start = end
+
+
+def text_bounded(body, needle):
+    if not needle:
+        return False
+    start = 0
+    while True:
+        index = body.find(needle, start)
+        if index < 0:
+            return False
+        end = index + len(needle)
+        before_ok = index == 0 or not (body[index - 1].isalnum() or body[index - 1] in "._-")
+        after_ok = end >= len(body) or not (body[end].isalnum() or body[end] in "._-")
+        if before_ok and after_ok:
+            return True
+        start = index + 1
+
+
+def comment_author(item):
+    if not isinstance(item, dict):
+        return ""
+    author = item.get("author")
+    if isinstance(author, dict):
+        return str(author.get("login") or "")
+    if isinstance(author, str):
+        return author
+    return str(item.get("login") or "")
+
+
+def normalize_comment(item):
+    if isinstance(item, str):
+        return {"body": item, "login": ""}
+    if not isinstance(item, dict):
+        return None
+    return {"body": str(item.get("body") or ""), "login": comment_author(item)}
 
 
 def fetch_issue_comments(repo, number):
@@ -1255,27 +1300,116 @@ def fetch_issue_comments(repo, number):
         return []
     if not isinstance(comments, list):
         return None
-    bodies = []
+    parsed = []
     for item in comments:
-        if isinstance(item, dict):
-            bodies.append(str(item.get("body") or ""))
-        elif isinstance(item, str):
-            bodies.append(item)
-    return bodies
+        normalized = normalize_comment(item)
+        if normalized is not None:
+            parsed.append(normalized)
+    return parsed
 
 
-def comment_has(bodies, needle):
-    return any(needle in body for body in bodies)
+def persist_nonce(record, key):
+    current = record.get(key)
+    if isinstance(current, str) and NONCE_RE.fullmatch(current):
+        return current
+    nonce = secrets.token_hex(16)
+    record[key] = nonce
+    return nonce
 
 
-def comment_has_all(bodies, needles):
-    for body in bodies:
-        if all(needle in body for needle in needles):
+def login_cache_path(state):
+    if state is None:
+        return None
+    return Path(state) / "self-login"
+
+
+def read_login_cache(state):
+    path = login_cache_path(state)
+    if path is None:
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if LOGIN_RE.fullmatch(text):
+        return text
+    return ""
+
+
+def write_login_cache(state, login):
+    path = login_cache_path(state)
+    if path is None or not LOGIN_RE.fullmatch(login):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".%s.%s.tmp" % (path.name, os.getpid()))
+    tmp.write_text(login + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def self_login(state):
+    override = os.environ.get("FM_AGENT_SELF_LOGIN", "").strip()
+    if override:
+        if LOGIN_RE.fullmatch(override):
+            return override
+        return ""
+    cached = read_login_cache(state)
+    if cached:
+        return cached
+    proc = gh(["api", "user", "--jq", ".login"])
+    if proc.returncode != 0:
+        return ""
+    login = (proc.stdout or "").strip()
+    if not login:
+        return ""
+    login = login.splitlines()[0].strip()
+    if not LOGIN_RE.fullmatch(login):
+        return ""
+    write_login_cache(state, login)
+    return login
+
+
+def record_state(path):
+    if STATE is not None:
+        return STATE
+    if path is None:
+        return None
+    parent = Path(path).parent
+    if parent.name == "running":
+        return parent.parent
+    return parent
+
+
+def owned_claim(comments, login, job_id, token):
+    if not login or not token:
+        return False
+    marker = "token:%s" % token
+    for item in comments:
+        if item.get("login") != login:
+            continue
+        body = item.get("body") or ""
+        if claim_mentions(body, job_id) and marker_bounded(body, marker):
             return True
     return False
 
 
-def write_outbox(state, result):
+def owned_result(comments, login, job_id, nonce):
+    if not login or not nonce or not job_id:
+        return False
+    marker = "result-nonce:%s" % nonce
+    for item in comments:
+        if item.get("login") != login:
+            continue
+        body = item.get("body") or ""
+        if (
+            "Local agent result" in body
+            and text_bounded(body, job_id)
+            and marker_bounded(body, marker)
+        ):
+            return True
+    return False
+
+
+def write_outbox(state, result, nonce=""):
     job_id = str(result.get("job") or "unknown")
     if not ID_RE.fullmatch(job_id):
         job_id = "unknown"
@@ -1284,7 +1418,10 @@ def write_outbox(state, result):
     stage = state / "artifacts" / job_id
     stage.mkdir(parents=True, exist_ok=True)
     body_path = stage / "comment.md"
-    body_path.write_text(render_result_markdown(result), encoding="utf-8")
+    text = render_result_markdown(result)
+    if isinstance(nonce, str) and nonce:
+        text += "result-nonce:%s\n" % nonce
+    body_path.write_text(text, encoding="utf-8")
     return body_path
 
 
@@ -1320,11 +1457,12 @@ def post_result(state, result, had_running, had_queued):
         record["had_running"] = bool(had_running)
         record["had_queued"] = bool(had_queued)
         record["job_id"] = job_id
+    nonce = persist_nonce(record, "result_nonce")
     had_running = bool(record.get("had_running"))
     had_queued = bool(record.get("had_queued"))
     if path is not None:
         atomic_write(path, record)
-    body_path = write_outbox(state, result)
+    body_path = write_outbox(state, result, nonce)
     if not repo or number is None:
         return False
     if record.get("phase") == "labelled":
@@ -1332,10 +1470,10 @@ def post_result(state, result, had_running, had_queued):
             path.unlink()
         return True
     if record.get("phase") == "result_posting":
-        bodies = fetch_issue_comments(repo, number)
-        if bodies is None:
+        comments = fetch_issue_comments(repo, number)
+        if comments is None:
             return False
-        if not comment_has_all(bodies, ("Local agent result", job_id)):
+        if not owned_result(comments, self_login(state), job_id, nonce):
             comment = gh(["issue", "comment", "-R", repo, str(number), "--body-file", str(body_path)])
             if comment.returncode != 0:
                 return False
@@ -1371,15 +1509,15 @@ def ensure_claim(record, path):
     host = record.get("host") or "none"
     if not repo or number is None or not job_id:
         return False
-    token = record.get("claim_token")
-    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", token):
-        token = "%s-%s" % (os.getpid(), time.time_ns())
-        record["claim_token"] = token
-        if path is not None:
-            atomic_write(path, record)
+    token = persist_nonce(record, "claim_token")
+    if path is not None:
+        atomic_write(path, record)
+    login = self_login(record_state(path))
+    if not login:
+        return False
     marker = claim_marker(job_id, agent, host, token)
-    bodies = fetch_issue_comments(repo, number)
-    if bodies is None:
+    comments = fetch_issue_comments(repo, number)
+    if comments is None:
         return False
     command = ["issue", "edit", "-R", repo, str(number), "--add-label", "state:running"]
     if record.get("had_queued"):
@@ -1387,17 +1525,17 @@ def ensure_claim(record, path):
     edit = gh(command)
     if edit.returncode != 0:
         return False
-    if not comment_has(bodies, marker) and not record.get("claim_posted"):
+    if not owned_claim(comments, login, job_id, token) and not record.get("claim_posted"):
         comment = gh(["issue", "comment", "-R", repo, str(number), "--body", marker])
         if comment.returncode != 0:
             return False
         record["claim_posted"] = True
         if path is not None:
             atomic_write(path, record)
-    bodies = fetch_issue_comments(repo, number)
-    if bodies is None:
+    comments = fetch_issue_comments(repo, number)
+    if comments is None:
         return False
-    return earliest_claim_token(bodies, job_id) == token
+    return owned_claim(comments, login, job_id, token)
 
 
 def runner_file(agent_cfg):
@@ -2025,6 +2163,7 @@ def cmd_render_result(args):
     if not isinstance(data, dict):
         print(json.dumps({"error": "result json must be an object"}))
         return 1
+    data = redact_result(data)
     sys.stdout.write(render_result_markdown(data))
     return 0
 

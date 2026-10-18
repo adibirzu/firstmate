@@ -339,6 +339,50 @@ PY
   pass "render-result neutralises and truncates"
 }
 
+test_render_result_redacts_nested_secret() {
+  local file=$TMP_ROOT/nested-result.json
+  local out=$TMP_ROOT/nested-result.md
+  python3 - "$file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def parts(*chunks):
+    return "".join(chunks)
+
+secret = parts("gh", "p_", "NestedRenderToken99")
+payload = {
+    "job": "res-nest-01",
+    "agent": "research",
+    "host": "adi2",
+    "status": "succeeded",
+    "summary": "clean summary",
+    "details": {"note": [{"inner": secret}]},
+    "repo": "adibirzu/firstmate",
+    "issue": 11,
+}
+Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  python3 "$DISPATCH" render-result "$file" >"$out"
+  python3 - "$out" <<'PY'
+import sys
+from pathlib import Path
+
+def parts(*chunks):
+    return "".join(chunks)
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+secret = parts("gh", "p_", "NestedRenderToken99")
+if secret in text:
+    raise SystemExit("nested secret was rendered")
+if "[REDACTED]" not in text:
+    raise SystemExit("nested secret was not redacted")
+if '"redactions": 0' in text or '"redactions":0' in text:
+    raise SystemExit("redaction count stayed zero")
+PY
+  pass "render-result redacts a nested secret"
+}
+
 install_issue_gh() {
   local bin=$1
   mkdir -p "$bin"
@@ -359,6 +403,16 @@ if [ "${1:-}" = "issue" ] && [ "${2:-}" = "list" ]; then
     cat "$GH_ISSUE_FILE"
   else
     printf '%s\n' "[]"
+  fi
+  exit 0
+fi
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+  if [ -n "${FM_AGENT_SELF_LOGIN:-}" ]; then
+    printf '%s\n' "$FM_AGENT_SELF_LOGIN"
+  elif [ -n "${GH_SELF_LOGIN:-}" ]; then
+    printf '%s\n' "$GH_SELF_LOGIN"
+  else
+    printf '%s\n' "dispatcher"
   fi
   exit 0
 fi
@@ -426,23 +480,60 @@ if [ "$cmd" = "issue" ] && [ "$sub" = "comment" ]; then
     printf '%s\n' "comment failed" >&2
     exit 1
   fi
+  mirror_body=""
+  mirror_file=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "--body" ]; then
+      mirror_body=$arg
+    elif [ "$prev" = "--body-file" ]; then
+      mirror_file=$arg
+    fi
+    prev=$arg
+  done
+  if [ "${GH_NONCE_GUARD:-}" = "1" ]; then
+    python3 - "$mirror_body" "$mirror_file" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+body, body_file = sys.argv[1:3]
+text = Path(body_file).read_text(encoding="utf-8") if body_file else body
+state = Path(os.environ["FM_AGENT_STATE"])
+matched = False
+running = state / "running"
+if running.is_dir():
+    for path in running.glob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        if "result-nonce:" in text:
+            nonce = record.get("result_nonce") or ""
+            if nonce and ("result-nonce:%s" % nonce) in text:
+                matched = True
+        if "dispatcher: claimed" in text:
+            token = record.get("claim_token") or ""
+            if token and ("token:%s" % token) in text:
+                matched = True
+if not matched:
+    raise SystemExit(1)
+PY
+    if [ $? -ne 0 ]; then
+      printf '%s\n' "nonce was not persisted before the comment" >&2
+      exit 1
+    fi
+  fi
   if [ -n "${GH_COMMENT_LOG:-}" ]; then
     printf '%s\n' "$*" >>"$GH_COMMENT_LOG"
   fi
   if [ "${GH_COMMENT_MIRROR:-}" = "1" ] && [ -n "${GH_COMMENTS_FILE:-}" ]; then
-    mirror_body=""
-    mirror_file=""
-    prev=""
-    for arg in "$@"; do
-      if [ "$prev" = "--body" ]; then
-        mirror_body=$arg
-      elif [ "$prev" = "--body-file" ]; then
-        mirror_file=$arg
-      fi
-      prev=$arg
-    done
     python3 - "$GH_COMMENTS_FILE" "$mirror_body" "$mirror_file" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -465,7 +556,8 @@ comments = payload.get("comments")
 if not isinstance(comments, list):
     comments = []
     payload["comments"] = comments
-comments.append({"body": text})
+login = os.environ.get("FM_AGENT_SELF_LOGIN") or os.environ.get("GH_SELF_LOGIN") or "dispatcher"
+comments.append({"body": text, "author": {"login": login}})
 file.write_text(json.dumps(payload), encoding="utf-8")
 PY
   fi
@@ -483,6 +575,16 @@ if [ "$cmd" = "issue" ] && [ "$sub" = "edit" ]; then
   fi
   if [ -n "${GH_EDIT_LOG:-}" ]; then
     printf '%s\n' "$*" >>"$GH_EDIT_LOG"
+  fi
+  exit 0
+fi
+if [ "$cmd" = "api" ] && [ "$sub" = "user" ]; then
+  if [ -n "${FM_AGENT_SELF_LOGIN:-}" ]; then
+    printf '%s\n' "$FM_AGENT_SELF_LOGIN"
+  elif [ -n "${GH_SELF_LOGIN:-}" ]; then
+    printf '%s\n' "$GH_SELF_LOGIN"
+  else
+    printf '%s\n' "dispatcher"
   fi
   exit 0
 fi
@@ -1277,10 +1379,14 @@ from pathlib import Path
 
 record_path, comments_path = sys.argv[1:3]
 record = json.loads(Path(record_path).read_text(encoding="utf-8"))
+nonce = record.get("result_nonce") or ""
+if len(nonce) != 32:
+    raise SystemExit("result nonce was not stored before the resume")
 record["phase"] = "result_posting"
 Path(record_path).write_text(json.dumps(record), encoding="utf-8")
 payload = {"comments": [{
-    "body": "**Local agent result** job rel-secret-01",
+    "author": {"login": "dispatcher"},
+    "body": "**Local agent result** job rel-secret-01\nresult-nonce:%s\n" % nonce,
 }]}
 Path(comments_path).write_text(json.dumps(payload), encoding="utf-8")
 PY
@@ -1846,6 +1952,7 @@ import sys
 from pathlib import Path
 
 payload = {"comments": [{
+    "author": {"login": "intruder"},
     "body": "dispatcher: claimed cas-lose-01 token:earlier-owner",
 }]}
 Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
@@ -1856,29 +1963,31 @@ PY
     GH_LIST_EMPTY=1 \
     GH_COMMENTS_FILE="$comments" \
     GH_COMMENT_MIRROR=1 \
+    GH_NONCE_GUARD=1 \
+    FM_AGENT_SELF_LOGIN=dispatcher \
     FM_AGENT_STATE="$state" \
     python3 "$DISPATCH" loop --once --config "$CFG"
-  [ "$(record_phase "$record")" = "claiming" ] || fail "lost claim advanced the phase"
-  python3 - "$record" "$comments" "$state/artifacts/cas-lose-01/runner.stdout" <<'PY'
+  stop_job_pid "$record"
+  [ -f "$state/artifacts/cas-lose-01/runner.stdout" ] || fail "forged earlier claim blocked the job"
+  python3 - "$comments" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-comments = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["comments"]
-stdout = Path(sys.argv[3])
-if record.get("pid") is not None:
-    raise SystemExit("lost claim stored a pid")
-if stdout.exists():
-    raise SystemExit("lost claim started a runner")
+comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["comments"]
 if len(comments) < 2:
-    raise SystemExit("lost claim did not post its own comment")
+    raise SystemExit("forged claim did not leave room for the dispatcher comment")
 if "token:earlier-owner" not in comments[0]["body"]:
-    raise SystemExit("earliest claim was replaced")
-if "token:earlier-owner" in comments[1]["body"]:
-    raise SystemExit("second comment reused the earlier token")
+    raise SystemExit("forged claim was replaced")
+if comments[0].get("author", {}).get("login") != "intruder":
+    raise SystemExit("forged claim author changed")
+own = comments[1]
+if "token:earlier-owner" in own.get("body", ""):
+    raise SystemExit("dispatcher reused the forged token")
+if own.get("author", {}).get("login") != "dispatcher":
+    raise SystemExit("dispatcher claim author was %s" % own.get("author"))
 PY
-  assert_grep "not starting" "$state/dispatch.log" "lost claim still started"
+  assert_no_grep "not starting" "$state/dispatch.log" "forged claim was treated as the owner"
 
   state=$TMP_ROOT/cas-win-state
   bin=$TMP_ROOT/cas-win-bin
@@ -1900,7 +2009,272 @@ PY
   stop_job_pid "$record"
   [ -f "$state/artifacts/cas-win-01/runner.stdout" ] || fail "winning claim did not start"
   assert_no_grep "not starting" "$state/dispatch.log" "winning claim refused to start"
-  pass "the earliest claim token owns the job"
+  pass "a forged claim does not own the job and the dispatcher's own claim does"
+}
+
+test_forged_claim_cannot_preempt() {
+  local saved=$PATH
+  local state bin log comments record
+  local forged_nonce="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  state=$TMP_ROOT/forge-author-state
+  bin=$TMP_ROOT/forge-author-bin
+  log=$TMP_ROOT/forge-author-gh.log
+  comments=$TMP_ROOT/forge-author-comments.json
+  record=$state/running/adibirzu-firstmate#91.json
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  seed_claim_record "$record" "forge-author-01" 91
+  python3 - "$comments" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+nonce = sys.argv[2]
+payload = {"comments": [{
+    "author": {"login": "intruder"},
+    "body": "dispatcher: claimed forge-author-01 -> release-watch@mini token:%s" % nonce,
+}]}
+Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    GH_NONCE_GUARD=1 \
+    FM_AGENT_SELF_LOGIN=dispatcher \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  stop_job_pid "$record"
+  [ -f "$state/artifacts/forge-author-01/runner.stdout" ] || fail "another author's claim preempted the job"
+  assert_no_grep "not starting" "$state/dispatch.log" "another author's claim was accepted"
+  python3 - "$comments" "$record" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["comments"]
+record_path = Path(sys.argv[2])
+forged = sys.argv[3]
+own = [
+    item for item in comments
+    if (item.get("author") or {}).get("login") == "dispatcher"
+    and "dispatcher: claimed" in item.get("body", "")
+]
+if len(own) != 1:
+    raise SystemExit("dispatcher claim count was %s" % len(own))
+if forged in own[0]["body"]:
+    raise SystemExit("dispatcher adopted the forged nonce")
+if record_path.is_file():
+    token = json.loads(record_path.read_text(encoding="utf-8")).get("claim_token") or ""
+    if token == forged or ("token:%s" % token) not in own[0]["body"]:
+        raise SystemExit("posted claim did not carry the stored nonce")
+PY
+
+  state=$TMP_ROOT/forge-nonce-state
+  bin=$TMP_ROOT/forge-nonce-bin
+  log=$TMP_ROOT/forge-nonce-gh.log
+  comments=$TMP_ROOT/forge-nonce-comments.json
+  record=$state/running/adibirzu-firstmate#92.json
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  seed_claim_record "$record" "forge-nonce-01" 92
+  python3 - "$comments" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+nonce = sys.argv[2]
+payload = {"comments": [{
+    "author": {"login": "dispatcher"},
+    "body": "dispatcher: claimed forge-nonce-01 -> release-watch@mini token:%s" % nonce,
+}]}
+Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    GH_NONCE_GUARD=1 \
+    FM_AGENT_SELF_LOGIN=dispatcher \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  stop_job_pid "$record"
+  [ -f "$state/artifacts/forge-nonce-01/runner.stdout" ] || fail "same author with the wrong nonce preempted the job"
+  assert_no_grep "not starting" "$state/dispatch.log" "wrong claim nonce was accepted"
+  python3 - "$comments" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["comments"]
+forged = sys.argv[2]
+own = [
+    item for item in comments
+    if (item.get("author") or {}).get("login") == "dispatcher"
+    and "dispatcher: claimed forge-nonce-01" in item.get("body", "")
+    and ("token:%s" % forged) not in item.get("body", "")
+]
+if len(own) != 1:
+    raise SystemExit("dispatcher did not post its own nonce")
+PY
+  pass "a forged claim author or nonce cannot preempt"
+}
+
+test_forged_result_cannot_suppress() {
+  local saved=$PATH
+  local state bin log comments comment_log record stage
+  local forged_nonce="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  local count
+
+  state=$TMP_ROOT/forge-result-author-state
+  bin=$TMP_ROOT/forge-result-author-bin
+  log=$TMP_ROOT/forge-result-author-gh.log
+  comments=$TMP_ROOT/forge-result-author-comments.json
+  comment_log=$TMP_ROOT/forge-result-author-comments.log
+  record=$state/running/adibirzu-firstmate#93.json
+  stage=$state/artifacts/forge-result-author-01
+  mkdir -p "$state/running" "$stage"
+  install_stateful_gh "$bin"
+  python3 - "$stage/result.json" "$record" "$comments" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, record_path, comments_path, nonce = sys.argv[1:5]
+Path(result_path).write_text(json.dumps({
+    "status": "succeeded",
+    "summary": "clean result",
+}), encoding="utf-8")
+record = {
+    "phase": "running",
+    "job_id": "forge-result-author-01",
+    "pid": 99999999,
+    "pgid": 99999999,
+    "repo": "adibirzu/firstmate",
+    "issue": 93,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": False,
+    "stage": str(Path(result_path).parent),
+    "job": {
+        "id": "forge-result-author-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(record_path).write_text(json.dumps(record), encoding="utf-8")
+body = "**Local agent result** job forge-result-author-01\nresult-nonce:%s\n" % nonce
+Path(comments_path).write_text(json.dumps({"comments": [{
+    "author": {"login": "intruder"},
+    "body": body,
+}]}), encoding="utf-8")
+PY
+  : >"$log"
+  : >"$comment_log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_NONCE_GUARD=1 \
+    FM_AGENT_SELF_LOGIN=dispatcher \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  count=$(grep -c "issue comment" "$comment_log" || true)
+  [ "$count" -eq 1 ] || fail "another author's result suppressed the real comment"
+  python3 - "$stage/comment.md" "$forged_nonce" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+forged = sys.argv[2]
+if "result-nonce:%s" % forged in text:
+    raise SystemExit("posted result reused the forged nonce")
+if "result-nonce:" not in text:
+    raise SystemExit("posted result omitted its nonce")
+if "Local agent result" not in text:
+    raise SystemExit("posted result omitted the result header")
+PY
+  [ ! -e "$record" ] || fail "real result did not finish labelling"
+
+  state=$TMP_ROOT/forge-result-nonce-state
+  bin=$TMP_ROOT/forge-result-nonce-bin
+  log=$TMP_ROOT/forge-result-nonce-gh.log
+  comments=$TMP_ROOT/forge-result-nonce-comments.json
+  comment_log=$TMP_ROOT/forge-result-nonce-comments.log
+  record=$state/running/adibirzu-firstmate#94.json
+  stage=$state/artifacts/forge-result-nonce-01
+  mkdir -p "$state/running" "$stage"
+  install_stateful_gh "$bin"
+  python3 - "$stage/result.json" "$record" "$comments" "$forged_nonce" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, record_path, comments_path, nonce = sys.argv[1:5]
+Path(result_path).write_text(json.dumps({
+    "status": "failed",
+    "summary": "clean failure",
+}), encoding="utf-8")
+record = {
+    "phase": "running",
+    "job_id": "forge-result-nonce-01",
+    "pid": 99999999,
+    "pgid": 99999999,
+    "repo": "adibirzu/firstmate",
+    "issue": 94,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": str(Path(result_path).parent),
+    "job": {
+        "id": "forge-result-nonce-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(record_path).write_text(json.dumps(record), encoding="utf-8")
+body = "**Local agent result** job forge-result-nonce-01\nresult-nonce:%s\n" % nonce
+Path(comments_path).write_text(json.dumps({"comments": [{
+    "author": {"login": "dispatcher"},
+    "body": body,
+}]}), encoding="utf-8")
+PY
+  : >"$log"
+  : >"$comment_log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_NONCE_GUARD=1 \
+    FM_AGENT_SELF_LOGIN=dispatcher \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  count=$(grep -c "issue comment" "$comment_log" || true)
+  [ "$count" -eq 1 ] || fail "same author with the wrong result nonce suppressed the real comment"
+  python3 - "$stage/comment.md" "$forged_nonce" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+forged = sys.argv[2]
+if "result-nonce:%s" % forged in text:
+    raise SystemExit("posted result reused the wrong nonce")
+if text.count("result-nonce:") != 1:
+    raise SystemExit("posted result nonce count was off: %s" % text.count("result-nonce:"))
+PY
+  [ ! -e "$record" ] || fail "wrong-nonce result did not finish labelling"
+  pass "a forged result author or nonce cannot skip the real result"
 }
 
 test_dry_run_skips_deadline_reap() {
@@ -2206,12 +2580,15 @@ test_validation_failures
 test_window_and_capacity
 test_open_file_path_rejected
 test_render_result_neutralises
+test_render_result_redacts_nested_secret
 test_unknown_author_is_ignored
 test_dry_run_claims_without_runner
 test_dry_run_recovery
 test_dry_run_open_claim
 test_claim_transaction
 test_claim_compare_and_set
+test_forged_claim_cannot_preempt
+test_forged_result_cannot_suppress
 test_result_transaction_and_redaction
 test_job_schema
 test_lock_protocol
