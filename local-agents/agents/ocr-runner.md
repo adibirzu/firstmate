@@ -2,7 +2,7 @@
 
 ## Role
 
-ocr-runner reports whether an OCR container or GPU process is running and, when asked, how many files are in a progress directory.
+ocr-runner reports whether the OCR service is running and, when asked, how many files are in a configured progress directory.
 It never restarts OCR, Docker, or the GPU job it is watching.
 Answers meant for Adi are written in Romanian.
 
@@ -11,24 +11,26 @@ Answers meant for Adi are written in Romanian.
 The job id is `ocr-runner/v1`.
 `task` is `status` or `report`.
 Both tasks run the same read-only check.
-An optional `inputs` entry `path:<dir>` is a progress directory whose files are counted.
+An optional `inputs` entry `path:<dir>` is a progress directory whose files are counted without crossing mounts.
+The path must resolve under the current host's configured root: `/Users/adrianb/dev/manuale-ocr` on mini or `/home/adi/ocr-vlm` on adi1.
 
 ## Host
 
-The registry order is adi1, then adi2.
+The registry order is mini, then adi1.
 Its wall clock default is 10 minutes.
 No LLM call is made.
 
 ## LLM and harness
 
 `llm` in the registry is `none`.
-The runner uses `docker ps` and `nvidia-smi --query-compute-apps` only.
+The runner uses the exact `ocr-vlm` Docker container, with `ocr-vlm.service` as its fallback.
+GPU process data is informational only.
 
 ## Outputs
 
-`summary` says whether an OCR container is up and whether a compute app is visible.
-`details` lists matching container lines and the file count when a progress path was given.
-`status` is `blocked` when no OCR container is running and no compute app is listed.
+`summary` says whether the OCR service is up.
+`details` lists the exact service evidence, GPU process data, and the file count when a progress path was given.
+`status` is `blocked` when neither the exact container nor its systemd fallback is active.
 Otherwise `status` is `succeeded`.
 `pr` stays null.
 `cost` stays empty.

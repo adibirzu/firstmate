@@ -52,10 +52,14 @@
       "wall_default": "45m"
     },
     "ocr-runner": {
-      "hosts": ["adi1", "adi2"],
+      "hosts": ["mini", "adi1"],
       "runner": "ocr-runner.sh",
       "llm": "none",
       "tasks": ["status", "report"],
+      "allowed_roots": {
+        "mini": ["/Users/adrianb/dev/manuale-ocr"],
+        "adi1": ["/home/adi/ocr-vlm"]
+      },
       "wall_default": "10m"
     },
     "fleet-monitor": {

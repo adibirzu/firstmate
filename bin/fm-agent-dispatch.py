@@ -254,6 +254,30 @@ def pid_alive(pid):
     return True
 
 
+def process_start_time(pid):
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return ""
+    try:
+        raw = Path("/proc") / str(pid) / "stat"
+        tail = raw.read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        if len(tail) > 19:
+            return "proc:" + tail[19]
+    except (OSError, IndexError):
+        pass
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2, check=False, shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        proc = None
+    if proc is not None and proc.returncode == 0:
+        value = " ".join((proc.stdout or "").split())
+        if value:
+            return "ps:" + value
+    return ""
+
+
 def ensure_state():
     raw = os.environ.get("FM_AGENT_STATE")
     if not raw:
@@ -807,6 +831,35 @@ def repo_input(items):
     return None
 
 
+def ocr_path_allowed_on_host(agent_cfg, host, value):
+    if not isinstance(value, str) or not value or ".." in Path(value).parts:
+        return False
+    candidate = Path(os.path.realpath(os.path.expanduser(value)))
+    if not candidate.is_absolute():
+        return False
+    roots = agent_cfg.get("allowed_roots") or {}
+    configured = roots.get(host) if isinstance(roots, dict) else None
+    if not isinstance(configured, list):
+        return False
+    for raw_root in configured:
+        if not isinstance(raw_root, str) or not raw_root:
+            continue
+        root = Path(os.path.realpath(os.path.expanduser(raw_root)))
+        if not root.is_absolute():
+            continue
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def ocr_paths_allowed_on_host(agent_cfg, host, items):
+    paths = [item[5:] for item in items if item.startswith("path:")]
+    return all(ocr_path_allowed_on_host(agent_cfg, host, value) for value in paths)
+
+
 def validate_job(config, data, labels, issue_repo=None):
     if not isinstance(data, dict):
         return None, "job block must be a mapping"
@@ -866,6 +919,12 @@ def validate_job(config, data, labels, issue_repo=None):
                 return None, "bad pr input"
             if match.group(1) not in known_repos:
                 return None, "pr repo is not allowed: %s" % match.group(1)
+    if agent == "ocr-runner":
+        allowed_hosts = agents[agent].get("hosts") or []
+        if host_pref:
+            allowed_hosts = [host for host in host_pref if host in allowed_hosts]
+        if not any(ocr_paths_allowed_on_host(agents[agent], host, items) for host in allowed_hosts):
+            return None, "ocr progress path is not allowed"
     if "create" in data:
         if not isinstance(data.get("create"), bool):
             return None, "bad create"
@@ -917,11 +976,16 @@ def window_block(config, host, agent, now, state):
     return None
 
 
-def choose_host(config, agent_name, host_pref, now, live_counts, state):
+def choose_host(config, agent_name, host_pref, now, live_counts, state, job=None):
     agent_hosts = list((config.get("agents") or {})[agent_name].get("hosts") or [])
     order = list(host_pref) if host_pref else list(agent_hosts)
     allowed = set(agent_hosts)
     candidates = [host for host in order if host in allowed]
+    if agent_name == "ocr-runner" and isinstance(job, dict):
+        inputs, error = input_items(job)
+        if error:
+            return {"action": "error", "host": None, "reason": error}
+        candidates = [host for host in candidates if ocr_paths_allowed_on_host(config["agents"][agent_name], host, inputs)]
     closed = {}
     runnable = []
     for host in candidates:
@@ -1107,9 +1171,12 @@ def load_record(path):
 def pid_matches(record):
     pid = record.get("pid")
     pgid = record.get("pgid")
+    started = record.get("process_started")
     if not pid_alive(pid):
         return False
     if isinstance(pgid, bool) or not isinstance(pgid, int) or pgid <= 0:
+        return False
+    if not isinstance(started, str) or not started or process_start_time(pid) != started:
         return False
     try:
         return os.getpgid(pid) == pgid
@@ -1563,6 +1630,8 @@ def prepare_stage(state, job, issue, host):
     (stage / "brief.md").write_text(brief, encoding="utf-8")
     agent_md = ROOT / "local-agents" / "agents" / ("%s.md" % job["agent"])
     (stage / "agent.md").write_text(agent_md.read_text(encoding="utf-8"), encoding="utf-8")
+    registry = ROOT / "local-agents" / "agents.json"
+    (stage / "agents.json").write_text(registry.read_text(encoding="utf-8"), encoding="utf-8")
     if job["agent"] == "studio-media":
         source = ROOT / "local-agents" / "studio-media" / "candidates.yaml"
         (stage / "candidates.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -1848,6 +1917,15 @@ def start_recorded(state, config, record, path, active):
     deadline = started + timedelta(seconds=seconds)
     record["pid"] = proc.pid
     record["pgid"] = pgid
+    record["process_started"] = process_start_time(proc.pid)
+    if not record["process_started"]:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        post_result(state, base_result(record, "failed", "runner did not start: process identity unavailable"), True, bool(record.get("had_queued")))
+        return
     record["phase"] = "running"
     record["started_at"] = iso(started)
     record["deadline"] = iso(deadline)
@@ -2054,6 +2132,7 @@ def poll_repo(state, config, repo, dry_run, active):
             current_now(),
             live_counts(state),
             state,
+            job,
         )
         if decision["action"] == "retry":
             log("retry %s#%s %s" % (repo, number, job["id"]))

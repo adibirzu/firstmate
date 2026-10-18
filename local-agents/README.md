@@ -109,7 +109,8 @@ Adi approved these allow-listed issue and PR flows to the listed model families 
 
 ## Safety
 
-Runners do not publish or send anything externally, except that issue-mapper can create issues only for repositories Adi explicitly lists in `allowed_create_repos`.
+Runners never publish or post to third parties, except that issue-mapper can create issues only for repositories Adi explicitly lists in `allowed_create_repos`.
+Approved model submission through `llm-run` is described in [Data flow](#data-flow).
 That list is empty in the shipped [agents.json](agents.json), so creation is disabled; `from-findings` returns proposed titles and bodies in the result instead.
 They do not comment on pull requests in this version.
 They do not restart LiteLLM, Langfuse, ComfyUI, containers, or other services.

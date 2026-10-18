@@ -732,13 +732,41 @@ exit 1
 SH
   cat >"$bin/docker" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "${DOCKER_OUTPUT:-}"
 exit 0
+SH
+  cat >"$bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+if [ "${SYSTEMD_ACTIVE:-0}" = "1" ]; then
+  printf '%s\n' active
+  exit 0
+fi
+printf '%s\n' inactive
+exit 3
+SH
+  cat >"$bin/find" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FIND_LOG:?}"
+printf '%s\n' fake-file
 SH
   cat >"$bin/nvidia-smi" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "${NVIDIA_OUTPUT:-}"
 exit 0
 SH
-  chmod +x "$bin/llm-run" "$bin/gh" "$bin/df" "$bin/ssh" "$bin/docker" "$bin/nvidia-smi"
+  chmod +x "$bin/llm-run" "$bin/gh" "$bin/df" "$bin/ssh" "$bin/docker" "$bin/systemctl" "$bin/find" "$bin/nvidia-smi"
+
+  stage_ocr_registry() {
+    python3 - "$CFG" "$1/agents.json" "$home/ocr-vlm" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+data["agents"]["ocr-runner"]["allowed_roots"]["adi1"] = [sys.argv[3]]
+Path(sys.argv[2]).write_text(json.dumps(data), encoding="utf-8")
+PY
+  }
 
   job=$TMP_ROOT/research-job
   prepare_job "$job" '{"id":"res-test-01","task":"research","job":"research/v1"}'
@@ -868,6 +896,18 @@ if not rows or rows[-1]["status"] != "planned" or rows[-1]["task"] != "assemble"
     raise SystemExit(rows)
 PY
 
+  job=$TMP_ROOT/plan-job
+  prepare_job "$job" '{"id":"media-test-04","task":"plan","job":"studio-media/v1"}'
+  cp "$ROOT/local-agents/studio-media/candidates.yaml" "$job/candidates.yaml"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$TMP_ROOT/llm.log" \
+    bash "$ROOT/local-agents/runners/studio-media.sh"
+  python3 - "$job/result.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "succeeded" or "no path input" in data.get("summary", ""):
+    raise SystemExit(data)
+PY
+
   job=$TMP_ROOT/fleet-job
   prepare_job "$job" '{"id":"fleet-test-01","task":"check","job":"fleet-monitor/v1"}'
   PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" \
@@ -881,7 +921,7 @@ PY
 
   job=$TMP_ROOT/ocr-job
   prepare_job "$job" '{"id":"ocr-test-01","task":"status","job":"ocr-runner/v1"}'
-  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" \
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" DOCKER_OUTPUT="other-service Up 1 hour" NVIDIA_OUTPUT="123, ComfyUI, 12 MiB" \
     bash "$ROOT/local-agents/runners/ocr-runner.sh"
   python3 - "$job/result.json" <<'PY'
 import json, sys
@@ -889,6 +929,72 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 if data["status"] != "blocked":
     raise SystemExit(data)
 PY
+
+  mkdir -p "$home/ocr-vlm/batch"
+  : >"$home/ocr-vlm/batch/page.txt"
+  job=$TMP_ROOT/ocr-allowed-job
+  prepare_job "$job" "$(python3 - "$home/ocr-vlm/batch" <<'PY'
+import json, sys
+print(json.dumps({
+    "id": "ocr-test-02",
+    "task": "status",
+    "job": "ocr-runner/v1",
+    "inputs": ["path:" + sys.argv[1]],
+    "_dispatch": {"host": "adi1"},
+}))
+PY
+)"
+  stage_ocr_registry "$job"
+  : >"$TMP_ROOT/ocr-find.log"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
+    bash "$ROOT/local-agents/runners/ocr-runner.sh"
+  python3 - "$job/result.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "succeeded":
+    raise SystemExit(data)
+PY
+  [ -s "$TMP_ROOT/ocr-find.log" ] || fail "allowed OCR path was not counted"
+
+  job=$TMP_ROOT/ocr-rejected-job
+  prepare_job "$job" '{"id":"ocr-test-03","task":"status","job":"ocr-runner/v1","inputs":["path:/"],"_dispatch":{"host":"adi1"}}'
+  stage_ocr_registry "$job"
+  : >"$TMP_ROOT/ocr-find.log"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
+    bash "$ROOT/local-agents/runners/ocr-runner.sh"
+  python3 - "$job/result.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "failed" or data.get("summary") != "progress path is not allowed":
+    raise SystemExit(data)
+PY
+  [ ! -s "$TMP_ROOT/ocr-find.log" ] || fail "rejected OCR path reached find"
+
+  mkdir -p "$TMP_ROOT/ocr-outside"
+  ln -s "$TMP_ROOT/ocr-outside" "$home/ocr-vlm/escape"
+  job=$TMP_ROOT/ocr-symlink-job
+  prepare_job "$job" "$(python3 - "$home/ocr-vlm/escape" <<'PY'
+import json, sys
+print(json.dumps({
+    "id": "ocr-test-04",
+    "task": "status",
+    "job": "ocr-runner/v1",
+    "inputs": ["path:" + sys.argv[1]],
+    "_dispatch": {"host": "adi1"},
+}))
+PY
+)"
+  stage_ocr_registry "$job"
+  : >"$TMP_ROOT/ocr-find.log"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
+    bash "$ROOT/local-agents/runners/ocr-runner.sh"
+  python3 - "$job/result.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "failed" or data.get("summary") != "progress path is not allowed":
+    raise SystemExit(data)
+PY
+  [ ! -s "$TMP_ROOT/ocr-find.log" ] || fail "OCR symlink escape reached find"
   PATH=$saved
   pass "runner smokes"
 }
@@ -935,6 +1041,10 @@ test_job_schema() {
   local same=$TMP_ROOT/schema-same-repo.md
   local implicit=$TMP_ROOT/schema-implicit.md
   local alt=$TMP_ROOT/schema-agents.json
+  local ocr_allowed=$TMP_ROOT/schema-ocr-allowed.md
+  local ocr_rejected=$TMP_ROOT/schema-ocr-rejected.md
+  local ocr_escaped=$TMP_ROOT/schema-ocr-escaped.md
+  local ocr_config=$TMP_ROOT/schema-ocr-agents.json
   local out
   write_job_file "$unknown" "$(cat <<'EOF'
 ```yaml
@@ -1029,6 +1139,66 @@ PY
   set -e
   [ "$PARSE_RC" -eq 1 ] || fail "allowed_create_repos should reject the issue repo"
   assert_contains "$out" "create target is not allowed" "allowed list did not bind create"
+
+  python3 - "$CFG" "$ocr_config" "$TMP_ROOT/ocr-root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+data["agents"]["ocr-runner"]["hosts"] = ["mini"]
+data["agents"]["ocr-runner"]["allowed_roots"] = {"mini": [sys.argv[3]]}
+Path(sys.argv[2]).write_text(json.dumps(data), encoding="utf-8")
+PY
+  write_job_file "$ocr_allowed" "$(cat <<EOF
+\`\`\`yaml
+job: ocr-runner/v1
+id: ocr-schema-01
+task: status
+inputs:
+  - path:$TMP_ROOT/ocr-root/batch
+\`\`\`
+EOF
+)"
+  set +e
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_allowed" --config "$ocr_config" --label agent:ocr-runner 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 0 ] || fail "allowed OCR path was rejected: $out"
+  write_job_file "$ocr_rejected" "$(cat <<'EOF'
+```yaml
+job: ocr-runner/v1
+id: ocr-schema-02
+task: status
+inputs:
+  - path:/
+```
+EOF
+)"
+  set +e
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_rejected" --config "$ocr_config" --label agent:ocr-runner 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 1 ] || fail "unbounded OCR path was accepted"
+  assert_contains "$out" "ocr progress path is not allowed" "unbounded OCR path had the wrong error"
+  mkdir -p "$TMP_ROOT/ocr-root" "$TMP_ROOT/ocr-outside"
+  ln -s "$TMP_ROOT/ocr-outside" "$TMP_ROOT/ocr-root/escape"
+  write_job_file "$ocr_escaped" "$(cat <<EOF
+\`\`\`yaml
+job: ocr-runner/v1
+id: ocr-schema-03
+task: status
+inputs:
+  - path:$TMP_ROOT/ocr-root/escape
+\`\`\`
+EOF
+)"
+  set +e
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_escaped" --config "$ocr_config" --label agent:ocr-runner 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 1 ] || fail "OCR symlink escape was accepted"
+  assert_contains "$out" "ocr progress path is not allowed" "OCR symlink escape had the wrong error"
 
   local bad_pr=$TMP_ROOT/schema-bad-pr.md
   local foreign_pr=$TMP_ROOT/schema-foreign-pr.md
@@ -1590,19 +1760,43 @@ print("%s %s" % (proc.pid, os.getpgid(proc.pid)))
 PY
 }
 
+record_process_started() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+path, pid = sys.argv[1:3]
+try:
+    tail = (Path("/proc") / pid / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+    value = "proc:" + tail[19]
+except (OSError, IndexError):
+    proc = subprocess.run(["ps", "-o", "lstart=", "-p", pid], capture_output=True, text=True, check=False)
+    started = " ".join((proc.stdout or "").split())
+    if proc.returncode != 0 or not started:
+        raise SystemExit("could not read process start time")
+    value = "ps:" + started
+record = json.loads(Path(path).read_text(encoding="utf-8"))
+record["process_started"] = value
+Path(path).write_text(json.dumps(record), encoding="utf-8")
+PY
+}
+
 test_restart_enforces_deadline() {
   local state=$TMP_ROOT/deadline-state
   local bin=$TMP_ROOT/deadline-bin
   local log=$TMP_ROOT/deadline-gh.log
   local saved=$PATH
-  local info pid pgid
+  local info pid pgid record
+  record=$state/running/adibirzu-firstmate#77.json
   mkdir -p "$state/running" "$state/artifacts/deadline-01"
   install_stateful_gh "$bin"
   info=$(start_recorded_sleep)
   pid=${info%% *}
   pgid=${info##* }
   track_pid "$pid"
-  python3 - "$state/running/adibirzu-firstmate#77.json" "$pid" "$pgid" "$state/artifacts/deadline-01" <<'PY'
+  python3 - "$record" "$pid" "$pgid" "$state/artifacts/deadline-01" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -1630,6 +1824,7 @@ record = {
 }
 Path(path).write_text(json.dumps(record), encoding="utf-8")
 PY
+  record_process_started "$record" "$pid"
   : >"$log"
   PATH="$bin:$saved" \
     GH_LOG="$log" \
@@ -1674,7 +1869,8 @@ record = {
     "phase": "running",
     "job_id": "reused-pid-01",
     "pid": int(pid),
-    "pgid": int(pgid) + 1,
+    "pgid": int(pgid),
+    "process_started": "ps:reused-process",
     "repo": "adibirzu/firstmate",
     "issue": 80,
     "agent": "release-watch",
@@ -1721,14 +1917,15 @@ test_slow_poll_respects_deadline() {
   local flag=$TMP_ROOT/slow-flag
   local end=$TMP_ROOT/slow-end
   local saved=$PATH
-  local info pid pgid start now elapsed
+  local info pid pgid start now elapsed record
+  record=$state/running/adibirzu-firstmate#78.json
   mkdir -p "$state/running"
   install_stateful_gh "$bin"
   info=$(start_recorded_sleep)
   pid=${info%% *}
   pgid=${info##* }
   track_pid "$pid"
-  python3 - "$state/running/adibirzu-firstmate#78.json" "$pid" "$pgid" <<'PY'
+  python3 - "$record" "$pid" "$pgid" <<'PY'
 import json
 import sys
 from datetime import datetime, timedelta
@@ -1759,6 +1956,7 @@ record = {
 }
 Path(sys.argv[1]).write_text(json.dumps(record), encoding="utf-8")
 PY
+  record_process_started "$record" "$pid"
   : >"$log"
   start=$(date +%s)
   PATH="$bin:$saved" \
@@ -2393,6 +2591,7 @@ record = {
 }
 Path(path).write_text(json.dumps(record), encoding="utf-8")
 PY
+  record_process_started "$record" "$pid"
   : >"$log"
   PATH="$bin:$saved" \
     GH_LOG="$log" \
@@ -2452,6 +2651,7 @@ record = {
 }
 Path(path).write_text(json.dumps(record), encoding="utf-8")
 PY
+  record_process_started "$record" "$pid"
   : >"$log"
   start=$(date +%s)
   PATH="$bin:$saved" \
