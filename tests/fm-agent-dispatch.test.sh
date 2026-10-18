@@ -589,6 +589,10 @@ if [ "$cmd" = "api" ] && [ "$sub" = "user" ]; then
   exit 0
 fi
 if [ "$cmd" = "pr" ]; then
+  if [ "${GH_RUNNER_BLOCK:-}" = "1" ]; then
+    printf '%s\n' "$$" >"${GH_RUNNER_PID_FILE:?}"
+    exec sleep 60
+  fi
   printf '%s\n' "[]"
   exit 0
 fi
@@ -919,31 +923,24 @@ if data["status"] != "blocked":
     raise SystemExit(data)
 PY
 
+  mkdir -p "$home/ocr-vlm/batch"
+  : >"$home/ocr-vlm/batch/page.txt"
   job=$TMP_ROOT/ocr-job
-  prepare_job "$job" '{"id":"ocr-test-01","task":"status","job":"ocr-runner/v1"}'
-  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" DOCKER_OUTPUT="other-service Up 1 hour" NVIDIA_OUTPUT="123, ComfyUI, 12 MiB" \
+  prepare_job "$job" '{"id":"ocr-test-01","task":"status","job":"ocr-runner/v1","_dispatch":{"host":"adi1"}}'
+  stage_ocr_registry "$job"
+  : >"$TMP_ROOT/ocr-find.log"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" DOCKER_OUTPUT="other-service Up 1 hour" NVIDIA_OUTPUT="123, ComfyUI, 12 MiB" FIND_LOG="$TMP_ROOT/ocr-find.log" \
     bash "$ROOT/local-agents/runners/ocr-runner.sh"
   python3 - "$job/result.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
-if data["status"] != "blocked":
+if data.get("status") != "blocked":
     raise SystemExit(data)
 PY
+  [ -s "$TMP_ROOT/ocr-find.log" ] || fail "configured OCR root was not counted"
 
-  mkdir -p "$home/ocr-vlm/batch"
-  : >"$home/ocr-vlm/batch/page.txt"
-  job=$TMP_ROOT/ocr-allowed-job
-  prepare_job "$job" "$(python3 - "$home/ocr-vlm/batch" <<'PY'
-import json, sys
-print(json.dumps({
-    "id": "ocr-test-02",
-    "task": "status",
-    "job": "ocr-runner/v1",
-    "inputs": ["path:" + sys.argv[1]],
-    "_dispatch": {"host": "adi1"},
-}))
-PY
-)"
+  job=$TMP_ROOT/ocr-input-job
+  prepare_job "$job" '{"id":"ocr-test-02","task":"status","job":"ocr-runner/v1","inputs":["path:/"],"_dispatch":{"host":"adi1"}}'
   stage_ocr_registry "$job"
   : >"$TMP_ROOT/ocr-find.log"
   PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
@@ -954,47 +951,7 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 if data.get("status") != "succeeded":
     raise SystemExit(data)
 PY
-  [ -s "$TMP_ROOT/ocr-find.log" ] || fail "allowed OCR path was not counted"
-
-  job=$TMP_ROOT/ocr-rejected-job
-  prepare_job "$job" '{"id":"ocr-test-03","task":"status","job":"ocr-runner/v1","inputs":["path:/"],"_dispatch":{"host":"adi1"}}'
-  stage_ocr_registry "$job"
-  : >"$TMP_ROOT/ocr-find.log"
-  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
-    bash "$ROOT/local-agents/runners/ocr-runner.sh"
-  python3 - "$job/result.json" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-if data.get("status") != "failed" or data.get("summary") != "progress path is not allowed":
-    raise SystemExit(data)
-PY
-  [ ! -s "$TMP_ROOT/ocr-find.log" ] || fail "rejected OCR path reached find"
-
-  mkdir -p "$TMP_ROOT/ocr-outside"
-  ln -s "$TMP_ROOT/ocr-outside" "$home/ocr-vlm/escape"
-  job=$TMP_ROOT/ocr-symlink-job
-  prepare_job "$job" "$(python3 - "$home/ocr-vlm/escape" <<'PY'
-import json, sys
-print(json.dumps({
-    "id": "ocr-test-04",
-    "task": "status",
-    "job": "ocr-runner/v1",
-    "inputs": ["path:" + sys.argv[1]],
-    "_dispatch": {"host": "adi1"},
-}))
-PY
-)"
-  stage_ocr_registry "$job"
-  : >"$TMP_ROOT/ocr-find.log"
-  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" SYSTEMD_ACTIVE=1 FIND_LOG="$TMP_ROOT/ocr-find.log" \
-    bash "$ROOT/local-agents/runners/ocr-runner.sh"
-  python3 - "$job/result.json" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-if data.get("status") != "failed" or data.get("summary") != "progress path is not allowed":
-    raise SystemExit(data)
-PY
-  [ ! -s "$TMP_ROOT/ocr-find.log" ] || fail "OCR symlink escape reached find"
+  assert_no_grep ' / ' "$TMP_ROOT/ocr-find.log" "runner scanned the rejected input path"
   PATH=$saved
   pass "runner smokes"
 }
@@ -1043,8 +1000,6 @@ test_job_schema() {
   local alt=$TMP_ROOT/schema-agents.json
   local ocr_allowed=$TMP_ROOT/schema-ocr-allowed.md
   local ocr_rejected=$TMP_ROOT/schema-ocr-rejected.md
-  local ocr_escaped=$TMP_ROOT/schema-ocr-escaped.md
-  local ocr_config=$TMP_ROOT/schema-ocr-agents.json
   local out
   write_job_file "$unknown" "$(cat <<'EOF'
 ```yaml
@@ -1140,31 +1095,19 @@ PY
   [ "$PARSE_RC" -eq 1 ] || fail "allowed_create_repos should reject the issue repo"
   assert_contains "$out" "create target is not allowed" "allowed list did not bind create"
 
-  python3 - "$CFG" "$ocr_config" "$TMP_ROOT/ocr-root" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-data["agents"]["ocr-runner"]["hosts"] = ["mini"]
-data["agents"]["ocr-runner"]["allowed_roots"] = {"mini": [sys.argv[3]]}
-Path(sys.argv[2]).write_text(json.dumps(data), encoding="utf-8")
-PY
-  write_job_file "$ocr_allowed" "$(cat <<EOF
-\`\`\`yaml
+  write_job_file "$ocr_allowed" "$(cat <<'EOF'
+```yaml
 job: ocr-runner/v1
 id: ocr-schema-01
 task: status
-inputs:
-  - path:$TMP_ROOT/ocr-root/batch
-\`\`\`
+```
 EOF
 )"
   set +e
-  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_allowed" --config "$ocr_config" --label agent:ocr-runner 2>&1)
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_allowed" --config "$CFG" --label agent:ocr-runner 2>&1)
   PARSE_RC=$?
   set -e
-  [ "$PARSE_RC" -eq 0 ] || fail "allowed OCR path was rejected: $out"
+  [ "$PARSE_RC" -eq 0 ] || fail "input-free OCR job was rejected: $out"
   write_job_file "$ocr_rejected" "$(cat <<'EOF'
 ```yaml
 job: ocr-runner/v1
@@ -1176,29 +1119,11 @@ inputs:
 EOF
 )"
   set +e
-  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_rejected" --config "$ocr_config" --label agent:ocr-runner 2>&1)
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_rejected" --config "$CFG" --label agent:ocr-runner 2>&1)
   PARSE_RC=$?
   set -e
-  [ "$PARSE_RC" -eq 1 ] || fail "unbounded OCR path was accepted"
-  assert_contains "$out" "ocr progress path is not allowed" "unbounded OCR path had the wrong error"
-  mkdir -p "$TMP_ROOT/ocr-root" "$TMP_ROOT/ocr-outside"
-  ln -s "$TMP_ROOT/ocr-outside" "$TMP_ROOT/ocr-root/escape"
-  write_job_file "$ocr_escaped" "$(cat <<EOF
-\`\`\`yaml
-job: ocr-runner/v1
-id: ocr-schema-03
-task: status
-inputs:
-  - path:$TMP_ROOT/ocr-root/escape
-\`\`\`
-EOF
-)"
-  set +e
-  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$ocr_escaped" --config "$ocr_config" --label agent:ocr-runner 2>&1)
-  PARSE_RC=$?
-  set -e
-  [ "$PARSE_RC" -eq 1 ] || fail "OCR symlink escape was accepted"
-  assert_contains "$out" "ocr progress path is not allowed" "OCR symlink escape had the wrong error"
+  [ "$PARSE_RC" -eq 1 ] || fail "OCR input was accepted"
+  assert_contains "$out" "ocr-runner does not accept inputs" "OCR input had the wrong error"
 
   local bad_pr=$TMP_ROOT/schema-bad-pr.md
   local foreign_pr=$TMP_ROOT/schema-foreign-pr.md
@@ -1783,7 +1708,7 @@ Path(path).write_text(json.dumps(record), encoding="utf-8")
 PY
 }
 
-test_restart_enforces_deadline() {
+test_restart_deadline_needs_adi_without_signal() {
   local state=$TMP_ROOT/deadline-state
   local bin=$TMP_ROOT/deadline-bin
   local log=$TMP_ROOT/deadline-gh.log
@@ -1831,19 +1756,81 @@ PY
     GH_LIST_EMPTY=1 \
     FM_AGENT_STATE="$state" \
     python3 "$DISPATCH" loop --once --config "$CFG"
-  if kill -0 "$pid" 2>/dev/null; then
-    fail "expired job was still running"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "restart signalled the unsupervised job"
   fi
   python3 - "$state/outbox/deadline-01.json" <<'PY'
 import json
 import sys
 
 data = json.load(open(sys.argv[1], encoding="utf-8"))
-if data.get("summary") != "timeout":
-    raise SystemExit(data.get("summary"))
+if data.get("status") != "blocked" or data.get("summary") != "runner not supervised after dispatcher restart; not signalled":
+    raise SystemExit(data)
 PY
-  assert_grep "timeout" "$state/artifacts/deadline-01/comment.md" "timeout comment missing"
-  pass "restart kills a live job at its saved deadline"
+  pass "restart deadline finishes unsupervised work without signalling"
+}
+
+test_live_child_deadline_is_killed() {
+  local state=$TMP_ROOT/live-deadline-state
+  local bin=$TMP_ROOT/live-deadline-bin
+  local issues=$TMP_ROOT/live-deadline-issues.json
+  local config=$TMP_ROOT/live-deadline-agents.json
+  local log=$TMP_ROOT/live-deadline-gh.log
+  local comments=$TMP_ROOT/live-deadline-comments.json
+  local runner_pid=$TMP_ROOT/live-deadline-runner.pid
+  local dispatcher_pid waited
+  local saved=$PATH
+  mkdir -p "$state"
+  install_stateful_gh "$bin"
+  write_issue "$issues" "adibirzu" 87 "live-deadline-01"
+  python3 - "$CFG" "$config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+data["poll_seconds"] = 0.1
+data["agents"]["release-watch"]["wall_default"] = "1s"
+Path(sys.argv[2]).write_text(json.dumps(data), encoding="utf-8")
+PY
+  : >"$log"
+  printf '%s\n' '{"comments":[]}' >"$comments"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_MIRROR=1 \
+    GH_RUNNER_BLOCK=1 \
+    GH_RUNNER_PID_FILE="$runner_pid" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --config "$config" >"$TMP_ROOT/live-deadline.out" 2>"$TMP_ROOT/live-deadline.err" &
+  dispatcher_pid=$!
+  track_pid "$dispatcher_pid"
+  waited=0
+  while [ "$waited" -lt 50 ]; do
+    if [ -f "$state/outbox/live-deadline-01.json" ] && [ -f "$runner_pid" ]; then
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -f "$state/outbox/live-deadline-01.json" ] || fail "live child deadline did not finish"
+  if kill -0 "$(cat "$runner_pid")" 2>/dev/null; then
+    fail "live child deadline did not kill the runner group"
+  fi
+  kill -TERM "$dispatcher_pid" 2>/dev/null || true
+  set +e
+  wait "$dispatcher_pid"
+  set -e
+  python3 - "$state/outbox/live-deadline-01.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "failed" or data.get("summary") != "timeout":
+    raise SystemExit(data)
+PY
+  pass "live child deadline kills the supervised runner"
 }
 
 test_restart_fails_reused_pid() {
@@ -1973,8 +1960,8 @@ PY
   [ "$elapsed" -lt 8 ] || fail "slow poll ran for ${elapsed}s"
   [ ! -e "$end" ] || fail "slow poll finished the long gh call"
   assert_grep "gh timed out" "$state/dispatch.log" "slow poll was not timed out"
-  if kill -0 "$pid" 2>/dev/null; then
-    fail "slow poll left the expired job running"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "slow poll signalled the unsupervised job"
   fi
   pass "polls are bounded by the nearest deadline"
 }
@@ -2605,9 +2592,9 @@ PY
   [ ! -e "$state/artifacts/dry-reap-01/comment.md" ] || fail "dry-run wrote a result comment"
   assert_no_grep "issue edit" "$log" "dry-run edited a label"
   assert_no_grep "issue comment" "$log" "dry-run posted a result"
-  assert_grep "dry-run: would reap dry-reap-01 at deadline" "$state/dispatch.log" "dry-run did not report the reap"
+  assert_grep "dry-run: would finish dry-reap-01 unsupervised at deadline" "$state/dispatch.log" "dry-run did not report the unsupervised finish"
   [ "$(record_phase "$record")" = "running" ] || fail "dry-run changed the running job"
-  pass "dry-run reports a deadline reap without killing or posting"
+  pass "dry-run reports an unsupervised deadline finish without posting"
 }
 
 test_poll_wakes_for_deadline() {
@@ -2693,11 +2680,11 @@ first = float(found[0])
 if not 0 < first < 10:
     raise SystemExit("first poll sleep was %s" % first)
 data = json.load(open(sys.argv[2], encoding="utf-8"))
-if data.get("summary") != "timeout":
-    raise SystemExit(data.get("summary"))
+if data.get("status") != "blocked" or data.get("summary") != "runner not supervised after dispatcher restart; not signalled":
+    raise SystemExit(data)
 PY
-  if kill -0 "$pid" 2>/dev/null; then
-    fail "bounded sleep left the expired job running"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "bounded sleep signalled the unsupervised job"
   fi
   pass "the poll loop wakes for the nearest deadline"
 }
@@ -2870,7 +2857,8 @@ test_lock_protocol
 test_lock_race
 test_lock_steal_preserves_new_lock
 test_max_jobs_blocks_launch
-test_restart_enforces_deadline
+test_restart_deadline_needs_adi_without_signal
+test_live_child_deadline_is_killed
 test_restart_fails_reused_pid
 test_slow_poll_respects_deadline
 test_poll_wakes_for_deadline

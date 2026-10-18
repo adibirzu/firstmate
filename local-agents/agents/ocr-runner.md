@@ -2,7 +2,7 @@
 
 ## Role
 
-ocr-runner reports whether the OCR service is running and, when asked, how many files are in a configured progress directory.
+ocr-runner reports whether the OCR service is running and how many files are in its configured progress directories.
 It never restarts OCR, Docker, or the GPU job it is watching.
 Answers meant for Adi are written in Romanian.
 
@@ -11,8 +11,9 @@ Answers meant for Adi are written in Romanian.
 The job id is `ocr-runner/v1`.
 `task` is `status` or `report`.
 Both tasks run the same read-only check.
-An optional `inputs` entry `path:<dir>` is a progress directory whose files are counted without crossing mounts.
-The path must resolve under the current host's configured root: `/Users/adrianb/dev/manuale-ocr` on mini or `/home/adi/ocr-vlm` on adi1.
+The job accepts no `inputs`.
+The runner resolves and scans only the current host's configured roots: `/Users/adrianb/dev/manuale-ocr` on mini or `/home/adi/ocr-vlm` on adi1.
+Each scan stays on its filesystem with `find -xdev`.
 
 ## Host
 
@@ -29,7 +30,7 @@ GPU process data is informational only.
 ## Outputs
 
 `summary` says whether the OCR service is up.
-`details` lists the exact service evidence, GPU process data, and the file count when a progress path was given.
+`details` lists the exact service evidence, GPU process data, and the configured-root file count.
 `status` is `blocked` when neither the exact container nor its systemd fallback is active.
 Otherwise `status` is `succeeded`.
 `pr` stays null.

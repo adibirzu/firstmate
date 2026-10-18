@@ -119,6 +119,6 @@ They do not print secrets.
 They do not force-push.
 Job text is passed to a runner as a file.
 A host that is full is left for the next poll.
-A live job is tracked again after a dispatcher restart and stopped when its saved deadline passes.
-A job whose process is already gone is finished from its saved result.
-A live PID whose recorded process-group identity no longer matches is treated as reused, never signalled, and finished as failed.
+A live job is tracked again after a dispatcher restart but is never signalled by the new dispatcher.
+When its saved deadline passes, it is finished as `state:needs-adi` with a not-supervised result.
+A live PID whose recorded identity no longer matches is treated as reused, never signalled, and finished as failed.

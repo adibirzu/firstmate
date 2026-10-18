@@ -9,7 +9,6 @@ job_dir=${FM_AGENT_JOB_DIR:?FM_AGENT_JOB_DIR is required}
 summary_file=$job_dir/summary.txt
 report=$job_dir/report.md
 task=$(job_get task)
-progress=$(job_input "path:")
 host=$(job_get _dispatch.host)
 
 if [ "$task" != "status" ] && [ "$task" != "report" ]; then
@@ -35,28 +34,14 @@ if [ "$systemd_rc" -eq 0 ] && [ "$(printf '%s' "$systemd_out" | tr -d '[:space:]
   running=1
 fi
 
-progress_note="progress path: not set"
-file_count=""
-if [ -n "$progress" ]; then
-  set +e
-  resolved=$(python3 - "$progress" "$host" "$job_dir/agents.json" <<'PY'
+set +e
+roots=$(python3 - "$host" "$job_dir/agents.json" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-value, host, registry = sys.argv[1:4]
-if ".." in Path(value).parts:
-    raise SystemExit(1)
-candidate = Path(os.path.expanduser(value))
-if not candidate.is_absolute():
-    raise SystemExit(1)
-try:
-    candidate = candidate.resolve(strict=True)
-except OSError:
-    raise SystemExit(1)
-if not candidate.is_dir():
-    raise SystemExit(1)
+host, registry = sys.argv[1:3]
 try:
     data = json.loads(Path(registry).read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError):
@@ -64,6 +49,7 @@ except (OSError, json.JSONDecodeError):
 roots = data.get("agents", {}).get("ocr-runner", {}).get("allowed_roots", {}).get(host, [])
 if not isinstance(roots, list):
     raise SystemExit(1)
+resolved = []
 for raw in roots:
     if not isinstance(raw, str):
         continue
@@ -74,22 +60,29 @@ for raw in roots:
         root = root.resolve(strict=True)
     except OSError:
         continue
-    if candidate == root or root in candidate.parents:
-        print(candidate)
-        raise SystemExit(0)
-raise SystemExit(1)
+    if root.is_dir():
+        resolved.append(str(root))
+if not resolved:
+    raise SystemExit(1)
+print("\n".join(resolved))
 PY
 )
-  path_rc=$?
-  set -e
-  if [ "$path_rc" -ne 0 ]; then
-    printf '%s\n' "progress path is not allowed" >"$summary_file"
-    write_result failed "$summary_file" "progress path is not allowed"
-    exit 0
-  fi
-  file_count=$(find "$resolved" -xdev -type f 2>/dev/null | wc -l | tr -d '[:space:]')
-  progress_note="progress files: $file_count under $resolved"
+roots_rc=$?
+set -e
+if [ "$roots_rc" -ne 0 ]; then
+  printf '%s\n' "configured OCR roots are unavailable" >"$summary_file"
+  write_result failed "$summary_file" "configured OCR roots are unavailable"
+  exit 0
 fi
+file_count=0
+while IFS= read -r root; do
+  [ -n "$root" ] || continue
+  count=$(find "$root" -xdev -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+  file_count=$((file_count + count))
+done <<EOF
+$roots
+EOF
+progress_note="progress files: $file_count under configured roots"
 
 {
   printf '%s\n' "# OCR status"

@@ -831,35 +831,6 @@ def repo_input(items):
     return None
 
 
-def ocr_path_allowed_on_host(agent_cfg, host, value):
-    if not isinstance(value, str) or not value or ".." in Path(value).parts:
-        return False
-    candidate = Path(os.path.realpath(os.path.expanduser(value)))
-    if not candidate.is_absolute():
-        return False
-    roots = agent_cfg.get("allowed_roots") or {}
-    configured = roots.get(host) if isinstance(roots, dict) else None
-    if not isinstance(configured, list):
-        return False
-    for raw_root in configured:
-        if not isinstance(raw_root, str) or not raw_root:
-            continue
-        root = Path(os.path.realpath(os.path.expanduser(raw_root)))
-        if not root.is_absolute():
-            continue
-        try:
-            candidate.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
-
-
-def ocr_paths_allowed_on_host(agent_cfg, host, items):
-    paths = [item[5:] for item in items if item.startswith("path:")]
-    return all(ocr_path_allowed_on_host(agent_cfg, host, value) for value in paths)
-
-
 def validate_job(config, data, labels, issue_repo=None):
     if not isinstance(data, dict):
         return None, "job block must be a mapping"
@@ -919,12 +890,8 @@ def validate_job(config, data, labels, issue_repo=None):
                 return None, "bad pr input"
             if match.group(1) not in known_repos:
                 return None, "pr repo is not allowed: %s" % match.group(1)
-    if agent == "ocr-runner":
-        allowed_hosts = agents[agent].get("hosts") or []
-        if host_pref:
-            allowed_hosts = [host for host in host_pref if host in allowed_hosts]
-        if not any(ocr_paths_allowed_on_host(agents[agent], host, items) for host in allowed_hosts):
-            return None, "ocr progress path is not allowed"
+    if agent == "ocr-runner" and items:
+        return None, "ocr-runner does not accept inputs"
     if "create" in data:
         if not isinstance(data.get("create"), bool):
             return None, "bad create"
@@ -976,16 +943,11 @@ def window_block(config, host, agent, now, state):
     return None
 
 
-def choose_host(config, agent_name, host_pref, now, live_counts, state, job=None):
+def choose_host(config, agent_name, host_pref, now, live_counts, state):
     agent_hosts = list((config.get("agents") or {})[agent_name].get("hosts") or [])
     order = list(host_pref) if host_pref else list(agent_hosts)
     allowed = set(agent_hosts)
     candidates = [host for host in order if host in allowed]
-    if agent_name == "ocr-runner" and isinstance(job, dict):
-        inputs, error = input_items(job)
-        if error:
-            return {"action": "error", "host": None, "reason": error}
-        candidates = [host for host in candidates if ocr_paths_allowed_on_host(config["agents"][agent_name], host, inputs)]
     closed = {}
     runnable = []
     for host in candidates:
@@ -1698,28 +1660,11 @@ def load_agent_cfg(job):
     return {"runner": job.get("_runner")}
 
 
-class TrackedProc:
-    """A process resumed from a record, not a live Popen in this interpreter."""
-
-    def __init__(self, record):
-        self.pid = record.get("pid")
-        self.returncode = None
-        self.record = record
-
-    def poll(self):
-        if self.returncode is not None:
-            return self.returncode
-        if pid_matches(self.record):
-            return None
-        self.returncode = 0
-        return self.returncode
-
-
-def signal_recorded_group(record):
-    if not pid_matches(record):
+def signal_child_group(proc):
+    if not isinstance(proc, subprocess.Popen) or proc.poll() is not None:
         return False
     try:
-        os.killpg(record["pgid"], signal.SIGKILL)
+        os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         return False
     return True
@@ -1751,10 +1696,9 @@ def track_job(active, record, path, proc=None):
             item["record"] = record
             item["deadline_epoch"] = deadline_epoch_of(record)
             return item
-    if proc is None:
-        proc = TrackedProc(record)
     item = {
         "proc": proc,
+        "supervised": isinstance(proc, subprocess.Popen),
         "record": record,
         "path": path,
         "deadline_epoch": deadline_epoch_of(record),
@@ -1834,13 +1778,15 @@ def finish_item(state, item, timed_out):
     stage_raw = record.get("stage")
     stage = Path(stage_raw) if stage_raw else state / "artifacts" / str(record.get("job_id") or "unknown")
     if timed_out:
-        signal_recorded_group(record)
-        if isinstance(proc, subprocess.Popen):
+        if item["supervised"]:
+            signal_child_group(proc)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        result = base_result(record, "failed", "timeout")
+            result = base_result(record, "failed", "timeout")
+        else:
+            result = base_result(record, "blocked", "runner not supervised after dispatcher restart; not signalled")
     else:
         if record.get("ssh"):
             try:
@@ -1862,6 +1808,16 @@ def reap_active(state, active):
     for item in list(active):
         proc = item["proc"]
         deadline = item.get("deadline_epoch")
+        if not item["supervised"]:
+            if not pid_matches(item["record"]):
+                result = base_result(item["record"], "failed", "runner lost: pid reused")
+                post_result(state, result, True, bool(item["record"].get("had_queued")))
+                continue
+            if isinstance(deadline, (int, float)) and now >= deadline:
+                finish_item(state, item, True)
+                continue
+            still.append(item)
+            continue
         running = proc.poll() is None
         if running and isinstance(deadline, (int, float)) and now >= deadline:
             finish_item(state, item, True)
@@ -1949,11 +1905,7 @@ def continue_job(state, config, record, path, active):
         if pid_matches(record):
             track_job(active, record, path)
             return
-        if pid_alive(record.get("pid")):
-            result = base_result(record, "failed", "runner lost: pid reused")
-            post_result(state, result, True, bool(record.get("had_queued")))
-            return
-        result = runner_or_orphan_result(state, record)
+        result = base_result(record, "failed", "runner lost: pid reused")
         post_result(state, result, True, bool(record.get("had_queued")))
         return
     if phase == "claiming":
@@ -1965,10 +1917,14 @@ def continue_job(state, config, record, path, active):
         atomic_write(path, record)
         phase = "claimed"
     if phase == "claimed":
-        if pid_matches(record):
-            record["phase"] = "running"
-            atomic_write(path, record)
-            track_job(active, record, path)
+        if record.get("pid"):
+            if pid_matches(record):
+                record["phase"] = "running"
+                atomic_write(path, record)
+                track_job(active, record, path)
+            else:
+                result = base_result(record, "failed", "runner lost: pid reused")
+                post_result(state, result, True, bool(record.get("had_queued")))
             return
         start_recorded(state, config, record, path, active)
 
@@ -2050,7 +2006,7 @@ def rehydrate(state, config, active):
         phase = record.get("phase") or ("running" if record.get("pid") else "claiming")
         if DRY_RUN:
             if phase == "running" and pid_matches(record) and deadline_reached(record):
-                log("dry-run: would reap %s at deadline" % record.get("job_id"))
+                log("dry-run: would finish %s unsupervised at deadline" % record.get("job_id"))
             else:
                 log("dry-run: would resume %s for %s" % (phase, record.get("job_id")))
             continue
@@ -2132,7 +2088,6 @@ def poll_repo(state, config, repo, dry_run, active):
             current_now(),
             live_counts(state),
             state,
-            job,
         )
         if decision["action"] == "retry":
             log("retry %s#%s %s" % (repo, number, job["id"]))
