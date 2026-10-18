@@ -874,8 +874,6 @@ def validate_job(config, data, labels, issue_repo=None):
             configured = agents[agent].get("allowed_create_repos")
             if isinstance(configured, list) and configured:
                 allowed_targets = [item for item in configured if isinstance(item, str)]
-            elif issue_repo:
-                allowed_targets = [issue_repo]
             else:
                 allowed_targets = []
             if not target or target not in allowed_targets:
@@ -1874,7 +1872,8 @@ def continue_job(state, config, record, path, active):
             track_job(active, record, path)
             return
         if pid_alive(record.get("pid")):
-            log("not signaling unverified pid %s for %s" % (record.get("pid"), record.get("job_id")))
+            result = base_result(record, "failed", "runner lost: pid reused")
+            post_result(state, result, True, bool(record.get("had_queued")))
             return
         result = runner_or_orphan_result(state, record)
         post_result(state, result, True, bool(record.get("had_queued")))

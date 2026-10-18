@@ -58,7 +58,7 @@ A job that asks only for a closed host is marked blocked with the window reason.
 - [review-first-pass](agents/review-first-pass.md) reviews a pull request with a different model family.
 - [research](agents/research.md) writes a sourced report.
 - [ocr-runner](agents/ocr-runner.md) reports OCR progress and never restarts it.
-- [issue-mapper](agents/issue-mapper.md) maps pull requests to issues, or drafts issues when asked.
+- [issue-mapper](agents/issue-mapper.md) maps pull requests to issues, or returns proposed issue drafts in its result.
 
 The studio model catalogue is [candidates.yaml](studio-media/candidates.yaml).
 
@@ -96,7 +96,8 @@ It does not edit the issue, post a comment, or start the runner.
 
 ## Safety
 
-Runners do not publish or send anything externally.
+Runners do not publish or send anything externally, except that issue-mapper can create issues only for repositories Adi explicitly lists in `allowed_create_repos`.
+That list is empty in the shipped [agents.json](agents.json), so creation is disabled; `from-findings` returns proposed titles and bodies in the result instead.
 They do not comment on pull requests in this version.
 They do not restart LiteLLM, Langfuse, ComfyUI, containers, or other services.
 They do not install packages.
@@ -106,3 +107,4 @@ Job text is passed to a runner as a file.
 A host that is full is left for the next poll.
 A live job is tracked again after a dispatcher restart and stopped when its saved deadline passes.
 A job whose process is already gone is finished from its saved result.
+A live PID whose recorded process-group identity no longer matches is treated as reused, never signalled, and finished as failed.

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # issue-mapper.sh - map closing references, or draft issues from findings.
-# gh issue create runs only when the job sets create: true.
 set -euo pipefail
 
 # shellcheck disable=SC1091 source=lib.sh
@@ -142,10 +141,12 @@ if create_flag == "true":
 if create_flag == "true":
     summary = "created %s draft issues" % len(created)
 else:
-    summary = "drafted %s issues; create is false" % len(drafts)
+    summary = "drafted %s issues" % len(drafts)
 Path(summary_path).write_text(summary + "\n", encoding="utf-8")
-details = Path(job_dir) / "create-details.txt"
-details.write_text("\n".join(created), encoding="utf-8")
+Path(job_dir, "draft-details.json").write_text(
+    json.dumps([{"title": title, "body": body} for title, body in drafts], ensure_ascii=False),
+    encoding="utf-8",
+)
 PY
 map_rc=$?
 set -e
@@ -153,9 +154,9 @@ if [ "$map_rc" -ne 0 ]; then
   write_result failed "$summary_file" ""
   exit 0
 fi
-details=""
-if [ -f "$job_dir/create-details.txt" ]; then
-  details=$(cat "$job_dir/create-details.txt")
+details="[]"
+if [ -f "$job_dir/draft-details.json" ]; then
+  details=$(cat "$job_dir/draft-details.json")
 fi
 write_result succeeded "$summary_file" "$details"
 exit 0

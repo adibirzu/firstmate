@@ -690,6 +690,10 @@ test_runner_smokes() {
 set -u
 printf '%s\n' "$*" >> "${LLM_LOG:?}"
 cat >/dev/null
+if [[ "$*" == *local-issue-mapper* ]]; then
+  printf '%s\n' '[{"title":"Follow up","body":"Check the deployment logs."}]'
+  exit 0
+fi
 if [[ "$*" == *claude* ]]; then
   printf '%s\n' "## Summary" "A short finding."
   exit 0
@@ -773,6 +777,23 @@ PY
   PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" GH_LOG="$TMP_ROOT/map-gh.log" \
     bash "$ROOT/local-agents/runners/issue-mapper.sh"
   assert_grep "#12" "$job/report.md" "closing reference missing"
+
+  job=$TMP_ROOT/from-findings-job
+  prepare_job "$job" '{"id":"map-test-02","task":"from-findings","job":"issue-mapper/v1","_dispatch":{"repo":"adibirzu/firstmate"}}'
+  : >"$TMP_ROOT/from-findings-gh.log"
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$TMP_ROOT/llm.log" GH_LOG="$TMP_ROOT/from-findings-gh.log" \
+    bash "$ROOT/local-agents/runners/issue-mapper.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "succeeded":
+    raise SystemExit(data)
+if json.loads(data.get("details") or "") != [{"title": "Follow up", "body": "Check the deployment logs."}]:
+    raise SystemExit(data)
+PY
+  assert_no_grep "issue create" "$TMP_ROOT/from-findings-gh.log" "issue-mapper created a proposal"
 
   job=$TMP_ROOT/review-job
   prepare_job "$job" '{"id":"rev-test-01","task":"review","job":"review-first-pass/v1","author_family":"gemini"}'
@@ -969,13 +990,8 @@ inputs:
 EOF
 )"
   run_parse "$same" --label agent:issue-mapper --repo adibirzu/firstmate
-  [ "$PARSE_RC" -eq 0 ] || fail "issue repo create was rejected: $PARSE_OUT"
-  assert_py "create on the issue repo" '
-import json, sys
-data = json.load(sys.stdin)
-assert data["create"] is True, data
-assert data["inputs"] == ["repo:adibirzu/firstmate"], data
-' "$PARSE_OUT"
+  [ "$PARSE_RC" -eq 1 ] || fail "issue repo create was accepted: $PARSE_OUT"
+  assert_contains "$PARSE_OUT" "create target is not allowed" "empty create list accepted the issue repo"
 
   write_job_file "$implicit" "$(cat <<'EOF'
 ```yaml
@@ -990,12 +1006,8 @@ EOF
   out=$(env -u FM_AGENT_NO_PYYAML python3 "$DISPATCH" parse-job "$implicit" --config "$CFG" --label agent:issue-mapper --repo adibirzu/firstmate 2>&1)
   PARSE_RC=$?
   set -e
-  [ "$PARSE_RC" -eq 0 ] || fail "implicit issue repo create was rejected: $out"
-  assert_py "create defaults to the issue repo" '
-import json, sys
-data = json.load(sys.stdin)
-assert data["create"] is True, data
-' "$out"
+  [ "$PARSE_RC" -eq 1 ] || fail "implicit issue repo create was accepted: $out"
+  assert_contains "$out" "create target is not allowed" "empty create list accepted the implicit issue repo"
 
   python3 - "$CFG" "$alt" <<'PY'
 import json
@@ -1637,6 +1649,69 @@ if data.get("summary") != "timeout":
 PY
   assert_grep "timeout" "$state/artifacts/deadline-01/comment.md" "timeout comment missing"
   pass "restart kills a live job at its saved deadline"
+}
+
+test_restart_fails_reused_pid() {
+  local state=$TMP_ROOT/reused-pid-state
+  local bin=$TMP_ROOT/reused-pid-bin
+  local log=$TMP_ROOT/reused-pid-gh.log
+  local saved=$PATH
+  local info pid pgid record
+  record=$state/running/adibirzu-firstmate#80.json
+  mkdir -p "$state/running" "$state/artifacts/reused-pid-01"
+  install_stateful_gh "$bin"
+  info=$(start_recorded_sleep)
+  pid=${info%% *}
+  pgid=${info##* }
+  track_pid "$pid"
+  python3 - "$record" "$pid" "$pgid" "$state/artifacts/reused-pid-01" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, pid, pgid, stage = sys.argv[1:5]
+record = {
+    "phase": "running",
+    "job_id": "reused-pid-01",
+    "pid": int(pid),
+    "pgid": int(pgid) + 1,
+    "repo": "adibirzu/firstmate",
+    "issue": 80,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": stage,
+    "job": {
+        "id": "reused-pid-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(path).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "reused PID was signalled"
+  fi
+  [ ! -e "$record" ] || fail "reused PID record was not completed"
+  python3 - "$state/outbox/reused-pid-01.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "failed" or data.get("summary") != "runner lost: pid reused":
+    raise SystemExit(data)
+PY
+  assert_grep "--add-label state:failed" "$log" "reused PID was not labelled failed"
+  assert_grep "--remove-label state:running" "$log" "reused PID did not release running state"
+  pass "restart fails a reused PID without signalling it"
 }
 
 test_slow_poll_respects_deadline() {
@@ -2596,6 +2671,7 @@ test_lock_race
 test_lock_steal_preserves_new_lock
 test_max_jobs_blocks_launch
 test_restart_enforces_deadline
+test_restart_fails_reused_pid
 test_slow_poll_respects_deadline
 test_poll_wakes_for_deadline
 test_dry_run_skips_deadline_reap

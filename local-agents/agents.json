@@ -70,6 +70,7 @@
       "runner": "issue-mapper.sh",
       "llm": "agy",
       "tasks": ["map", "from-findings"],
+      "allowed_create_repos": [],
       "wall_default": "20m"
     }
   }
