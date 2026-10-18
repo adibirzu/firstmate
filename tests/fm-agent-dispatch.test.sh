@@ -13,6 +13,28 @@ TMP_ROOT=$(fm_test_tmproot fm-agent-dispatch)
 unset FM_AGENT_NOW || true
 export FM_AGENT_STATE=$TMP_ROOT/state
 mkdir -p "$FM_AGENT_STATE"
+FM_AGENT_TEST_PIDS=$TMP_ROOT/live-pids
+: >"$FM_AGENT_TEST_PIDS"
+
+track_pid() {
+  printf '%s\n' "$1" >>"$FM_AGENT_TEST_PIDS"
+}
+
+agent_test_cleanup() {
+  local pid
+  if [ -f "${FM_AGENT_TEST_PIDS:-}" ]; then
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      kill -KILL "$pid" 2>/dev/null || true
+    done <"$FM_AGENT_TEST_PIDS"
+  fi
+  fm_test_cleanup
+}
+trap agent_test_cleanup EXIT
+trap 'agent_test_cleanup; exit 130' INT
+trap 'agent_test_cleanup; exit 143' TERM
+trap 'agent_test_cleanup; exit 129' HUP
+trap 'agent_test_cleanup; exit 131' QUIT
 
 assert_py() {
   local label=$1
@@ -278,6 +300,94 @@ if [ "${1:-}" = "issue" ] && [ "${2:-}" = "list" ]; then
   else
     printf '%s\n' "[]"
   fi
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$bin/gh"
+}
+
+install_stateful_gh() {
+  local bin=$1
+  mkdir -p "$bin"
+  cat >"$bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${GH_LOG:?}"
+cmd=${1:-}
+sub=${2:-}
+if [ "$cmd" = "issue" ] && [ "$sub" = "list" ]; then
+  if [ "${GH_SLOW_ONCE:-}" = "1" ] && [ ! -f "${GH_SLOW_FLAG:?}" ]; then
+    : >"$GH_SLOW_FLAG"
+    exec python3 -c 'import os, time; time.sleep(30); open(os.environ["GH_END"], "w", encoding="utf-8").write("end\n")'
+  fi
+  if [ -n "${GH_CRIT:-}" ]; then
+    if ! mkdir "$GH_CRIT" 2>/dev/null; then
+      printf '%s\n' "overlap" >>"${GH_OVERLAP:?}"
+    else
+      sleep 0.2
+      rmdir "$GH_CRIT" 2>/dev/null || true
+    fi
+  fi
+  if [ "${GH_LIST_EMPTY:-}" = "1" ] || [ -z "${GH_ISSUE_FILE:-}" ]; then
+    printf '%s\n' "[]"
+    exit 0
+  fi
+  repo=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "-R" ]; then
+      repo=$arg
+    fi
+    prev=$arg
+  done
+  if [ "$repo" = "adibirzu/firstmate" ]; then
+    cat "$GH_ISSUE_FILE"
+  else
+    printf '%s\n' "[]"
+  fi
+  exit 0
+fi
+if [ "$cmd" = "issue" ] && [ "$sub" = "view" ]; then
+  if [ -n "${GH_COMMENTS_FILE:-}" ] && [ -f "$GH_COMMENTS_FILE" ]; then
+    cat "$GH_COMMENTS_FILE"
+  else
+    printf '%s\n' '{"comments":[]}'
+  fi
+  exit 0
+fi
+if [ "$cmd" = "issue" ] && [ "$sub" = "comment" ]; then
+  fails=0
+  if [ -n "${GH_COMMENT_FAILS_FILE:-}" ] && [ -f "$GH_COMMENT_FAILS_FILE" ]; then
+    fails=$(tr -d '[:space:]' <"$GH_COMMENT_FAILS_FILE")
+  fi
+  if [ "${fails:-0}" -gt 0 ]; then
+    printf '%s\n' "$((fails - 1))" >"$GH_COMMENT_FAILS_FILE"
+    printf '%s\n' "comment failed" >&2
+    exit 1
+  fi
+  if [ -n "${GH_COMMENT_LOG:-}" ]; then
+    printf '%s\n' "$*" >>"$GH_COMMENT_LOG"
+  fi
+  exit 0
+fi
+if [ "$cmd" = "issue" ] && [ "$sub" = "edit" ]; then
+  fails=0
+  if [ -n "${GH_EDIT_FAILS_FILE:-}" ] && [ -f "$GH_EDIT_FAILS_FILE" ]; then
+    fails=$(tr -d '[:space:]' <"$GH_EDIT_FAILS_FILE")
+  fi
+  if [ "${fails:-0}" -gt 0 ]; then
+    printf '%s\n' "$((fails - 1))" >"$GH_EDIT_FAILS_FILE"
+    printf '%s\n' "edit failed" >&2
+    exit 1
+  fi
+  if [ -n "${GH_EDIT_LOG:-}" ]; then
+    printf '%s\n' "$*" >>"$GH_EDIT_LOG"
+  fi
+  exit 0
+fi
+if [ "$cmd" = "pr" ]; then
+  printf '%s\n' "[]"
   exit 0
 fi
 exit 0
@@ -582,6 +692,850 @@ test_shell_syntax() {
   pass "bash -n and shellcheck"
 }
 
+record_phase() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("phase", ""))' "$1"
+}
+
+run_parse() {
+  local file=$1
+  shift
+  set +e
+  PARSE_OUT=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$file" --config "$CFG" "$@" 2>&1)
+  PARSE_RC=$?
+  set -e
+}
+
+test_job_schema() {
+  local unknown=$TMP_ROOT/schema-unknown.md
+  local evil=$TMP_ROOT/schema-evil.md
+  local other=$TMP_ROOT/schema-other-repo.md
+  local same=$TMP_ROOT/schema-same-repo.md
+  local implicit=$TMP_ROOT/schema-implicit.md
+  local alt=$TMP_ROOT/schema-agents.json
+  local out
+  write_job_file "$unknown" "$(cat <<'EOF'
+```yaml
+job: research/v1
+id: res-test-01
+task: research
+create: true
+```
+EOF
+)"
+  run_parse "$unknown" --label agent:research
+  [ "$PARSE_RC" -eq 1 ] || fail "create on research should exit 1"
+  assert_contains "$PARSE_OUT" "unknown job field: create" "create is not a research field"
+
+  write_job_file "$evil" "$(cat <<'EOF'
+```yaml
+job: issue-mapper/v1
+id: map-test-01
+task: map
+inputs:
+  - repo:evil/x
+```
+EOF
+)"
+  run_parse "$evil" --label agent:issue-mapper --repo adibirzu/firstmate
+  [ "$PARSE_RC" -eq 1 ] || fail "evil repo should exit 1"
+  assert_contains "$PARSE_OUT" "repo is not allowed: evil/x" "evil repo was accepted"
+
+  write_job_file "$other" "$(cat <<'EOF'
+```yaml
+job: issue-mapper/v1
+id: map-test-01
+task: map
+create: true
+inputs:
+  - repo:adibirzu/mini-tools
+```
+EOF
+)"
+  run_parse "$other" --label agent:issue-mapper --repo adibirzu/firstmate
+  [ "$PARSE_RC" -eq 1 ] || fail "foreign create target should exit 1"
+  assert_contains "$PARSE_OUT" "create target is not allowed" "foreign create target was accepted"
+
+  write_job_file "$same" "$(cat <<'EOF'
+```yaml
+job: issue-mapper/v1
+id: map-test-01
+task: map
+create: true
+inputs:
+  - repo:adibirzu/firstmate
+```
+EOF
+)"
+  run_parse "$same" --label agent:issue-mapper --repo adibirzu/firstmate
+  [ "$PARSE_RC" -eq 0 ] || fail "issue repo create was rejected: $PARSE_OUT"
+  assert_py "create on the issue repo" '
+import json, sys
+data = json.load(sys.stdin)
+assert data["create"] is True, data
+assert data["inputs"] == ["repo:adibirzu/firstmate"], data
+' "$PARSE_OUT"
+
+  write_job_file "$implicit" "$(cat <<'EOF'
+```yaml
+job: issue-mapper/v1
+id: map-test-02
+task: map
+create: true
+```
+EOF
+)"
+  set +e
+  out=$(env -u FM_AGENT_NO_PYYAML python3 "$DISPATCH" parse-job "$implicit" --config "$CFG" --label agent:issue-mapper --repo adibirzu/firstmate 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 0 ] || fail "implicit issue repo create was rejected: $out"
+  assert_py "create defaults to the issue repo" '
+import json, sys
+data = json.load(sys.stdin)
+assert data["create"] is True, data
+' "$out"
+
+  python3 - "$CFG" "$alt" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+data["agents"]["issue-mapper"]["allowed_create_repos"] = ["adibirzu/mini-tools"]
+Path(sys.argv[2]).write_text(json.dumps(data), encoding="utf-8")
+PY
+  set +e
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$other" --config "$alt" --label agent:issue-mapper --repo adibirzu/firstmate 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 0 ] || fail "allowed_create_repos rejected its repo: $out"
+  set +e
+  out=$(FM_AGENT_NO_PYYAML=1 python3 "$DISPATCH" parse-job "$same" --config "$alt" --label agent:issue-mapper --repo adibirzu/firstmate 2>&1)
+  PARSE_RC=$?
+  set -e
+  [ "$PARSE_RC" -eq 1 ] || fail "allowed_create_repos should reject the issue repo"
+  assert_contains "$out" "create target is not allowed" "allowed list did not bind create"
+  pass "job schema rejects unknown fields and foreign repos"
+}
+
+test_dry_run_recovery() {
+  local state=$TMP_ROOT/dry-recover-state
+  local bin=$TMP_ROOT/dry-recover-bin
+  local issues=$TMP_ROOT/dry-recover-issues.json
+  local log=$TMP_ROOT/dry-recover-gh.log
+  local saved=$PATH
+  mkdir -p "$state/running"
+  install_issue_gh "$bin"
+  write_issue "$issues" "adibirzu" 43 "rel-recover-01"
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --dry-run --config "$CFG"
+  assert_no_grep "issue edit" "$log" "dry-run recovery edited the issue"
+  assert_no_grep "issue comment" "$log" "dry-run recovery commented"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  assert_grep "issue edit" "$log" "later loop did not claim"
+  assert_grep "dispatcher: claimed rel-recover-01" "$log" "later loop did not comment the claim"
+  pass "dry-run leaves the issue claimable"
+}
+
+test_dry_run_open_claim() {
+  local state=$TMP_ROOT/dry-open-state
+  local bin=$TMP_ROOT/dry-open-bin
+  local issues=$TMP_ROOT/dry-open-issues.json
+  local empty=$TMP_ROOT/dry-open-empty.json
+  local log=$TMP_ROOT/dry-open-gh.log
+  local saved=$PATH
+  local record=$state/running/adibirzu-firstmate#44.json
+  mkdir -p "$state/running"
+  install_issue_gh "$bin"
+  write_issue "$issues" "adibirzu" 44 "rel-claim-09"
+  printf '%s\n' "[]" >"$empty"
+  python3 - "$record" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = {
+    "phase": "claiming",
+    "job_id": "rel-claim-09",
+    "job": {
+        "id": "rel-claim-09",
+        "job": "release-watch/v1",
+        "task": "poll",
+        "agent": "release-watch",
+    },
+    "host": "mini",
+    "pid": None,
+    "pgid": None,
+    "repo": "adibirzu/firstmate",
+    "issue": 44,
+    "agent": "release-watch",
+    "had_queued": True,
+    "had_running": False,
+    "wall_seconds": 600,
+    "title": "Watch",
+    "body": "",
+    "url": "",
+}
+Path(sys.argv[1]).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --dry-run --config "$CFG"
+  assert_no_grep "issue edit" "$log" "dry-run resumed a claim with an edit"
+  assert_no_grep "issue comment" "$log" "dry-run resumed a claim with a comment"
+  assert_grep "dry-run: would resume claiming for rel-claim-09" "$state/dispatch.log" "dry-run did not describe the open claim"
+  [ "$(record_phase "$record")" = "claiming" ] || fail "dry-run changed the open claim"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$empty" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  assert_grep "issue edit" "$log" "resume did not edit the issue"
+  assert_grep "dispatcher: claimed rel-claim-09" "$log" "resume did not comment the claim"
+  pass "dry-run does not finish an open claim"
+}
+
+test_claim_transaction() {
+  local state=$TMP_ROOT/claim-tx-state
+  local bin=$TMP_ROOT/claim-tx-bin
+  local issues=$TMP_ROOT/claim-tx-issues.json
+  local log=$TMP_ROOT/claim-tx-gh.log
+  local comment_log=$TMP_ROOT/claim-tx-comments.log
+  local edit_fails=$TMP_ROOT/claim-tx-edit-fails
+  local comment_fails=$TMP_ROOT/claim-tx-comment-fails
+  local saved=$PATH
+  local record=$state/running/adibirzu-firstmate#45.json
+  local count
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  write_issue "$issues" "adibirzu" 45 "claim-tx-01"
+  : >"$log"
+  : >"$comment_log"
+  printf '%s\n' "1" >"$edit_fails"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  [ -f "$record" ] || fail "failed edit left no claim record"
+  [ "$(record_phase "$record")" = "claiming" ] || fail "failed edit advanced the claim"
+  [ ! -s "$comment_log" ] || fail "failed edit still posted a claim comment"
+
+  printf '%s\n' "1" >"$comment_fails"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_COMMENT_FAILS_FILE="$comment_fails" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  [ -f "$record" ] || fail "failed claim comment dropped the record"
+  [ "$(record_phase "$record")" = "claiming" ] || fail "failed claim comment advanced the phase"
+  [ ! -s "$comment_log" ] || fail "failed claim comment was recorded as posted"
+
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_COMMENT_FAILS_FILE="$comment_fails" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  count=$(grep -c "dispatcher: claimed claim-tx-01" "$comment_log" || true)
+  [ "$count" -eq 1 ] || fail "claim comment was posted $count times"
+  pass "claim transaction resumes after a partial failure"
+}
+
+test_result_transaction_and_redaction() {
+  local state=$TMP_ROOT/result-tx-state
+  local bin=$TMP_ROOT/result-tx-bin
+  local log=$TMP_ROOT/result-tx-gh.log
+  local comment_log=$TMP_ROOT/result-tx-comments.log
+  local comment_fails=$TMP_ROOT/result-tx-comment-fails
+  local edit_fails=$TMP_ROOT/result-tx-edit-fails
+  local comments=$TMP_ROOT/result-tx-view.json
+  local saved=$PATH
+  local record=$state/running/adibirzu-firstmate#79.json
+  local stage=$state/artifacts/rel-secret-01
+  local before after
+  mkdir -p "$state/running" "$stage"
+  install_stateful_gh "$bin"
+  python3 - "$stage/result.json" "$record" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, record_path = sys.argv[1:3]
+
+def parts(*chunks):
+    return "".join(chunks)
+
+bearer = parts("Bea", "rer ", "abcdefghijklmnop")
+akia = parts("AK", "IA", "IOSFODNN7EXAMPLE")
+pem_begin = parts("-----BEGIN ", "OPENSSH PRIVATE KEY-----")
+pem_end = parts("-----END ", "OPENSSH PRIVATE KEY-----")
+hub = parts("gh", "p_", "ThisIsASecretToken99")
+pw = parts("pass", "word=", "abcdefghijklmnopqrstuvwxyz")
+model = parts("s", "k-", "abcdefghijklmnopqrst")
+fine = parts("github_", "pat_", "abcdefghijklmnop")
+vendor = parts("xa", "i-", "abcdefghijklmnopqrst")
+kv = parts("to", "ken=", "0123456789abcdef")
+details = "\n".join([
+    bearer,
+    akia,
+    pem_begin,
+    "AAAA",
+    pem_end,
+])
+payload = {
+    "status": "succeeded",
+    "summary": "saw %s and %s" % (hub, pw),
+    "details": details,
+    "artifacts": [
+        model,
+        fine,
+        vendor,
+        kv,
+    ],
+}
+Path(result_path).write_text(json.dumps(payload), encoding="utf-8")
+record = {
+    "phase": "running",
+    "job_id": "rel-secret-01",
+    "pid": 99999999,
+    "pgid": 99999999,
+    "repo": "adibirzu/firstmate",
+    "issue": 79,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": str(Path(result_path).parent),
+    "job": {
+        "id": "rel-secret-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(record_path).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  : >"$comment_log"
+  printf '%s\n' "1" >"$comment_fails"
+  printf '%s\n' "0" >"$edit_fails"
+  printf '%s\n' '{"comments":[]}' >"$comments"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_COMMENT_FAILS_FILE="$comment_fails" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  [ "$(record_phase "$record")" = "result_posting" ] || fail "failed result comment did not stay in result_posting"
+  [ ! -s "$comment_log" ] || fail "failed result comment was recorded as posted"
+  python3 - "$state/outbox/rel-secret-01.json" "$stage/comment.md" "$state/dispatch.log" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+paths = [Path(item) for item in sys.argv[1:4]]
+blobs = [path.read_text(encoding="utf-8") for path in paths]
+def parts(*chunks):
+    return "".join(chunks)
+
+forbidden = [
+    parts("gh", "p_", "ThisIsASecretToken99"),
+    parts("github_", "pat_", "abcdefghijklmnop"),
+    parts("s", "k-", "abcdefghijklmnopqrst"),
+    parts("xa", "i-", "abcdefghijklmnopqrst"),
+    parts("AK", "IA", "IOSFODNN7EXAMPLE"),
+    parts("Bea", "rer ", "abcdefghijklmnop"),
+    parts("-----BEGIN ", "OPENSSH PRIVATE KEY-----"),
+    parts("pass", "word=", "abcdefghijklmnopqrstuvwxyz"),
+    parts("to", "ken=", "0123456789abcdef"),
+]
+for blob, path in zip(blobs, paths):
+    for secret in forbidden:
+        if secret in blob:
+            raise SystemExit("secret leaked in %s" % path.name)
+if "[REDACTED]" not in blobs[0] or "[REDACTED]" not in blobs[1]:
+    raise SystemExit("redaction marker missing from the posted result")
+data = json.loads(blobs[0])
+if not isinstance(data.get("redactions"), int) or data["redactions"] < 1:
+    raise SystemExit("redaction count missing: %s" % data.get("redactions"))
+PY
+
+  python3 - "$comments" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {"comments": [
+    {"body": "dispatcher: claimed rel-secret-01 -> release-watch@mini"},
+    {"body": "Local agent result for an older note"},
+]}
+Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  printf '%s\n' "0" >"$comment_fails"
+  printf '%s\n' "1" >"$edit_fails"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_COMMENT_FAILS_FILE="$comment_fails" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  [ "$(record_phase "$record")" = "result_posted" ] || fail "split comments skipped the result post"
+  before=$(grep -c "issue comment" "$comment_log" || true)
+  [ "$before" -eq 1 ] || fail "split comments did not post the result once"
+
+  python3 - "$record" "$comments" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record_path, comments_path = sys.argv[1:3]
+record = json.loads(Path(record_path).read_text(encoding="utf-8"))
+record["phase"] = "result_posting"
+Path(record_path).write_text(json.dumps(record), encoding="utf-8")
+payload = {"comments": [{
+    "body": "**Local agent result** job rel-secret-01",
+}]}
+Path(comments_path).write_text(json.dumps(payload), encoding="utf-8")
+PY
+  printf '%s\n' "0" >"$edit_fails"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_COMMENTS_FILE="$comments" \
+    GH_COMMENT_LOG="$comment_log" \
+    GH_COMMENT_FAILS_FILE="$comment_fails" \
+    GH_EDIT_FAILS_FILE="$edit_fails" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  after=$(grep -c "issue comment" "$comment_log" || true)
+  [ "$after" -eq "$before" ] || fail "existing result comment was posted again"
+  [ ! -e "$record" ] || fail "labelled result record was kept"
+  pass "result transaction redacts, resumes, and does not double-post"
+}
+
+test_lock_protocol() {
+  local state bin saved err rc pid_text
+  local log=$TMP_ROOT/lock-stale-gh.log
+  saved=$PATH
+  bin=$TMP_ROOT/lock-bin
+  install_issue_gh "$bin"
+
+  state=$TMP_ROOT/lock-fresh
+  mkdir -p "$state/lock"
+  printf '%s\n' "not-a-pid" >"$state/lock/pid"
+  set +e
+  err=$(PATH="$bin:$saved" FM_AGENT_STATE="$state" python3 "$DISPATCH" loop --once --config "$CFG" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "fresh unreadable lock was acquired"
+  assert_contains "$err" "could not acquire dispatcher lock" "fresh lock message"
+  pid_text=$(tr -d '[:space:]' <"$state/lock/pid")
+  assert_equals "not-a-pid" "$pid_text" "fresh lock pid was replaced"
+
+  state=$TMP_ROOT/lock-fresh-empty
+  mkdir -p "$state/lock"
+  set +e
+  err=$(PATH="$bin:$saved" FM_AGENT_STATE="$state" python3 "$DISPATCH" loop --once --config "$CFG" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "fresh empty lock was acquired"
+  assert_contains "$err" "could not acquire dispatcher lock" "empty fresh lock message"
+  [ -d "$state/lock" ] || fail "empty fresh lock was removed"
+  [ ! -e "$state/lock/pid" ] || fail "empty fresh lock gained a pid"
+
+  state=$TMP_ROOT/lock-stale
+  mkdir -p "$state/lock"
+  printf '%s\n' "not-a-pid" >"$state/lock/pid"
+  python3 - "$state/lock" "$state/lock/pid" <<'PY'
+import os
+import sys
+import time
+
+old = time.time() - 120
+os.utime(sys.argv[1], (old, old))
+os.utime(sys.argv[2], (old, old))
+PY
+  : >"$log"
+  set +e
+  err=$(PATH="$bin:$saved" GH_LOG="$log" FM_AGENT_STATE="$state" python3 "$DISPATCH" loop --once --config "$CFG" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "stale lock was not acquired: $err"
+  [ ! -d "$state/lock" ] || fail "stale lock was not released"
+
+  state=$TMP_ROOT/lock-live
+  mkdir -p "$state/lock"
+  printf '%s\n' "$$" >"$state/lock/pid"
+  set +e
+  err=$(PATH="$bin:$saved" FM_AGENT_STATE="$state" python3 "$DISPATCH" loop --once --config "$CFG" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "live lock was acquired"
+  assert_contains "$err" "dispatcher already running (pid $$)" "live lock message"
+  pid_text=$(tr -d '[:space:]' <"$state/lock/pid")
+  assert_equals "$$" "$pid_text" "live lock pid changed"
+  pass "lock ownership follows the pid and its age"
+}
+
+test_lock_race() {
+  local state=$TMP_ROOT/lock-race-state
+  local bin=$TMP_ROOT/lock-race-bin
+  local log=$TMP_ROOT/lock-race-gh.log
+  local crit=$TMP_ROOT/lock-race-crit
+  local overlap=$TMP_ROOT/lock-race-overlap
+  local a_err=$TMP_ROOT/lock-race-a.err
+  local b_err=$TMP_ROOT/lock-race-b.err
+  local saved=$PATH
+  local a_pid b_rc a_rc count waited
+  mkdir -p "$state"
+  install_stateful_gh "$bin"
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_CRIT="$crit" \
+    GH_OVERLAP="$overlap" \
+    FM_AGENT_LOCK_PAUSE=2 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG" >"$TMP_ROOT/lock-race-a.out" 2>"$a_err" &
+  a_pid=$!
+  track_pid "$a_pid"
+  waited=0
+  while [ "$waited" -lt 20 ]; do
+    if [ -d "$state/lock" ] && [ ! -f "$state/lock/pid" ]; then
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -d "$state/lock" ] || fail "holder did not create the lock"
+  [ ! -f "$state/lock/pid" ] || fail "holder published a pid before the race"
+  set +e
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_CRIT="$crit" \
+    GH_OVERLAP="$overlap" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG" >"$TMP_ROOT/lock-race-b.out" 2>"$b_err"
+  b_rc=$?
+  set -e
+  [ "$b_rc" -ne 0 ] || fail "second dispatcher acquired the fresh lock"
+  if ! grep -F -e "could not acquire dispatcher lock" -e "dispatcher already running" "$b_err" >/dev/null; then
+    fail "second dispatcher did not report the lock"
+  fi
+  [ -d "$state/lock" ] || fail "second dispatcher removed the fresh lock"
+  set +e
+  wait "$a_pid"
+  a_rc=$?
+  set -e
+  [ "$a_rc" -eq 0 ] || fail "lock holder failed"
+  count=$(grep -c "issue list" "$log" || true)
+  [ "$count" -eq 5 ] || fail "expected one poll pass, saw $count issue lists"
+  [ ! -e "$overlap" ] || fail "two dispatchers polled at once"
+  pass "a fresh lock is not stolen by a second dispatcher"
+}
+
+test_max_jobs_blocks_launch() {
+  local state=$TMP_ROOT/max-loop-state
+  local bin=$TMP_ROOT/max-loop-bin
+  local issues=$TMP_ROOT/max-loop-issues.json
+  local log=$TMP_ROOT/max-loop-gh.log
+  local saved=$PATH
+  mkdir -p "$state/running"
+  install_issue_gh "$bin"
+  write_issue "$issues" "adibirzu" 46 "rel-full-01"
+  python3 - "$state/running" "$$" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+pid = int(sys.argv[2])
+for name in ("slot-one.json", "slot-two.json"):
+    (root / name).write_text(json.dumps({
+        "job_id": name,
+        "host": "mini",
+        "pid": pid,
+    }), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_ISSUE_FILE="$issues" \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  assert_no_grep "issue edit" "$log" "full host edited an issue"
+  assert_no_grep "issue comment" "$log" "full host commented"
+  assert_grep "retry adibirzu/firstmate#46 rel-full-01" "$state/dispatch.log" "full host did not retry"
+  pass "max_jobs blocks another launch"
+}
+
+start_recorded_sleep() {
+  python3 - <<'PY'
+import os
+import subprocess
+
+proc = subprocess.Popen(
+    ["sleep", "60"],
+    start_new_session=True,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+print("%s %s" % (proc.pid, os.getpgid(proc.pid)))
+PY
+}
+
+test_restart_enforces_deadline() {
+  local state=$TMP_ROOT/deadline-state
+  local bin=$TMP_ROOT/deadline-bin
+  local log=$TMP_ROOT/deadline-gh.log
+  local saved=$PATH
+  local info pid pgid
+  mkdir -p "$state/running" "$state/artifacts/deadline-01"
+  install_stateful_gh "$bin"
+  info=$(start_recorded_sleep)
+  pid=${info%% *}
+  pgid=${info##* }
+  track_pid "$pid"
+  python3 - "$state/running/adibirzu-firstmate#77.json" "$pid" "$pgid" "$state/artifacts/deadline-01" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, pid, pgid, stage = sys.argv[1:5]
+record = {
+    "phase": "running",
+    "job_id": "deadline-01",
+    "pid": int(pid),
+    "pgid": int(pgid),
+    "deadline": "2020-01-01T00:00:00+00:00",
+    "repo": "adibirzu/firstmate",
+    "issue": 77,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": stage,
+    "job": {
+        "id": "deadline-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(path).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "expired job was still running"
+  fi
+  python3 - "$state/outbox/deadline-01.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("summary") != "timeout":
+    raise SystemExit(data.get("summary"))
+PY
+  assert_grep "timeout" "$state/artifacts/deadline-01/comment.md" "timeout comment missing"
+  pass "restart kills a live job at its saved deadline"
+}
+
+test_slow_poll_respects_deadline() {
+  local state=$TMP_ROOT/slow-state
+  local bin=$TMP_ROOT/slow-bin
+  local log=$TMP_ROOT/slow-gh.log
+  local flag=$TMP_ROOT/slow-flag
+  local end=$TMP_ROOT/slow-end
+  local saved=$PATH
+  local info pid pgid start now elapsed
+  mkdir -p "$state/running"
+  install_stateful_gh "$bin"
+  info=$(start_recorded_sleep)
+  pid=${info%% *}
+  pgid=${info##* }
+  track_pid "$pid"
+  python3 - "$state/running/adibirzu-firstmate#78.json" "$pid" "$pgid" <<'PY'
+import json
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+pid = int(sys.argv[2])
+pgid = int(sys.argv[3])
+deadline = (datetime.now().astimezone() + timedelta(seconds=3)).isoformat(timespec="seconds")
+record = {
+    "phase": "running",
+    "job_id": "slow-poll-01",
+    "pid": pid,
+    "pgid": pgid,
+    "deadline": deadline,
+    "repo": "adibirzu/firstmate",
+    "issue": 78,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": False,
+    "stage": "",
+    "job": {
+        "id": "slow-poll-01",
+        "agent": "release-watch",
+        "task": "poll",
+        "job": "release-watch/v1",
+    },
+}
+Path(sys.argv[1]).write_text(json.dumps(record), encoding="utf-8")
+PY
+  : >"$log"
+  start=$(date +%s)
+  PATH="$bin:$saved" \
+    GH_LOG="$log" \
+    GH_LIST_EMPTY=1 \
+    GH_SLOW_ONCE=1 \
+    GH_SLOW_FLAG="$flag" \
+    GH_END="$end" \
+    FM_AGENT_GH_TIMEOUT=120 \
+    FM_AGENT_STATE="$state" \
+    python3 "$DISPATCH" loop --once --config "$CFG"
+  now=$(date +%s)
+  elapsed=$((now - start))
+  [ "$elapsed" -lt 8 ] || fail "slow poll ran for ${elapsed}s"
+  [ ! -e "$end" ] || fail "slow poll finished the long gh call"
+  assert_grep "gh timed out" "$state/dispatch.log" "slow poll was not timed out"
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "slow poll left the expired job running"
+  fi
+  pass "polls are bounded by the nearest deadline"
+}
+
+test_reviewer_allow_list() {
+  local saved=$PATH
+  local home=$TMP_ROOT/reviewer-home
+  local bin=$TMP_ROOT/reviewer-bin
+  local log=$TMP_ROOT/reviewer-llm.log
+  local touch=$TMP_ROOT/reviewer-llm-touch
+  local job
+  mkdir -p "$home" "$bin"
+  cat >"$bin/llm-run" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${LLM_LOG:?}"
+printf '%s\n' "called" > "${LLM_TOUCH:?}"
+exit 1
+SH
+  chmod +x "$bin/llm-run"
+  : >"$log"
+  rm -f "$touch"
+
+  job=$TMP_ROOT/reviewer-evil
+  prepare_job "$job" '{"id":"rev-evil-01","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"openai:gpt-4"}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$log" LLM_TOUCH="$touch" \
+    bash "$ROOT/local-agents/runners/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data["status"] != "failed" or data["summary"] != "reviewer is not allowed":
+    raise SystemExit(data)
+PY
+
+  job=$TMP_ROOT/reviewer-slash
+  prepare_job "$job" '{"id":"rev-slash-01","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"agy/gemini-3.8-flash-high"}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$log" LLM_TOUCH="$touch" \
+    bash "$ROOT/local-agents/runners/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data["status"] != "failed" or "reviewer family" not in data["summary"]:
+    raise SystemExit(data)
+if "reviewer is not allowed" in data["summary"]:
+    raise SystemExit(data)
+PY
+
+  job=$TMP_ROOT/reviewer-claude
+  prepare_job "$job" '{"id":"rev-claude-01","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"claude:sonnet"}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" LLM_LOG="$log" LLM_TOUCH="$touch" \
+    bash "$ROOT/local-agents/runners/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data["status"] != "failed" or "missing pr:owner/repo#N" not in data["summary"]:
+    raise SystemExit(data)
+if "reviewer is not allowed" in data["summary"]:
+    raise SystemExit(data)
+PY
+  [ ! -e "$touch" ] || fail "reviewer selection called a model"
+  [ ! -s "$log" ] || fail "reviewer selection invoked llm-run"
+  pass "reviewer selection stays on the allow-list"
+}
+
+test_ledger_home() {
+  local lib=$ROOT/local-agents/runners/lib.sh
+  local home=$TMP_ROOT/ledger-home
+  local empty=$TMP_ROOT/ledger-empty
+  local bin=$TMP_ROOT/ledger-bin
+  local got home_line ledger_line
+  mkdir -p "$home/dev/llm-ledger/bin" "$empty" "$bin"
+  printf '%s\n' "#!/bin/bash" >"$home/dev/llm-ledger/bin/fm-fleet-ledger.sh"
+  # shellcheck disable=SC2016 # The child bash, not this test shell, expands HOME and LLM_RUN_FM_HOME.
+  got=$(env -u LLM_RUN_FM_HOME HOME="$home" bash -c 'source "$1"; printf "%s" "${LLM_RUN_FM_HOME-}"' _ "$lib")
+  assert_equals "$home/dev/llm-ledger" "$got" "ledger home was not exported"
+  # shellcheck disable=SC2016 # The child bash, not this test shell, expands HOME and LLM_RUN_FM_HOME.
+  got=$(env LLM_RUN_FM_HOME=/keep HOME="$home" bash -c 'source "$1"; printf "%s" "$LLM_RUN_FM_HOME"' _ "$lib")
+  assert_equals "/keep" "$got" "preset ledger home was replaced"
+  # shellcheck disable=SC2016 # The child bash, not this test shell, expands HOME and LLM_RUN_FM_HOME.
+  got=$(env -u LLM_RUN_FM_HOME HOME="$empty" bash -c 'source "$1"; if [ -n "${LLM_RUN_FM_HOME:-}" ]; then printf "%s" "$LLM_RUN_FM_HOME"; else printf "%s" "unset"; fi' _ "$lib")
+  assert_equals "unset" "$got" "missing ledger writer still set a home"
+  cat >"$bin/getent" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "user:x:$(id -u):$(id -g)::${home}:/bin/sh"
+SH
+  chmod +x "$bin/getent"
+  # shellcheck disable=SC2016 # The child bash, not this test shell, expands HOME and LLM_RUN_FM_HOME.
+  got=$(env -u HOME -u LLM_RUN_FM_HOME PATH="$bin:$PATH" bash -c 'source "$1"; printf "%s\n%s" "$HOME" "${LLM_RUN_FM_HOME-}"' _ "$lib")
+  home_line=${got%%$'\n'*}
+  ledger_line=${got#*$'\n'}
+  assert_equals "$home" "$home_line" "getent did not supply HOME"
+  assert_equals "$home/dev/llm-ledger" "$ledger_line" "getent home did not select the ledger"
+  # shellcheck disable=SC2016 # The child bash, not this test shell, expands HOME and LLM_RUN_FM_HOME.
+  got=$(env -u HOME -u LLM_RUN_FM_HOME PATH="/usr/bin:/bin" bash -c 'source "$1"; printf "%s" "$HOME"' _ "$lib")
+  [ -n "$got" ] || fail "HOME stayed empty"
+  [ -d "$got" ] || fail "HOME is not a directory"
+  pass "runner home reaches the local ledger"
+}
+
 test_parse_job_without_pyyaml
 test_parse_job_with_pyyaml_loader
 test_validation_failures
@@ -589,5 +1543,17 @@ test_window_and_capacity
 test_render_result_neutralises
 test_unknown_author_is_ignored
 test_dry_run_claims_without_runner
+test_dry_run_recovery
+test_dry_run_open_claim
+test_claim_transaction
+test_result_transaction_and_redaction
+test_job_schema
+test_lock_protocol
+test_lock_race
+test_max_jobs_blocks_launch
+test_restart_enforces_deadline
+test_slow_poll_respects_deadline
+test_reviewer_allow_list
+test_ledger_home
 test_runner_smokes
 test_shell_syntax

@@ -1056,6 +1056,13 @@ def comment_has(bodies, needle):
     return any(needle in body for body in bodies)
 
 
+def comment_has_all(bodies, needles):
+    for body in bodies:
+        if all(needle in body for needle in needles):
+            return True
+    return False
+
+
 def write_outbox(state, result):
     job_id = str(result.get("job") or "unknown")
     if not ID_RE.fullmatch(job_id):
@@ -1116,7 +1123,7 @@ def post_result(state, result, had_running, had_queued):
         bodies = fetch_issue_comments(repo, number)
         if bodies is None:
             return False
-        if not (comment_has(bodies, "Local agent result") and comment_has(bodies, job_id)):
+        if not comment_has_all(bodies, ("Local agent result", job_id)):
             comment = gh(["issue", "comment", "-R", repo, str(number), "--body-file", str(body_path)])
             if comment.returncode != 0:
                 return False
