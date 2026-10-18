@@ -77,20 +77,21 @@ for item in inputs:
 PY
 }
 
-# write_result <status> <summary-file> [details]
+# write_result <status> <summary-file> [details] [pr]
 # status is succeeded, failed, or blocked. The summary is kept to 10 lines.
 # A non-empty report.md in the job directory is added to artifacts.
 write_result() {
   local status=${1:?write_result: status required}
   local summary_file=${2:?write_result: summary file required}
   local details=${3-}
+  local pr=${4-}
   local job_dir=${FM_AGENT_JOB_DIR:?FM_AGENT_JOB_DIR is required}
-  python3 - "$job_dir/result.json" "$status" "$summary_file" "$details" "$job_dir/report.md" <<'PY'
+  python3 - "$job_dir/result.json" "$status" "$summary_file" "$details" "$pr" "$job_dir/report.md" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-out, status, summary_path, details, report = sys.argv[1:6]
+out, status, summary_path, details, pr, report = sys.argv[1:7]
 if status not in ("succeeded", "failed", "blocked"):
     raise SystemExit("write_result: bad status")
 text = Path(summary_path).read_text(encoding="utf-8")
@@ -105,7 +106,7 @@ payload = {
     "status": status,
     "summary": "\n".join(lines).strip(),
     "artifacts": artifacts,
-    "pr": None,
+    "pr": pr or None,
     "cost": {},
     "details": details,
 }

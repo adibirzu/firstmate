@@ -97,6 +97,7 @@ STATE = None
 STOP = {"flag": False}
 DRY_RUN = False
 ACTIVE = []
+DETAILS_REPOS = set()
 CLOCK_OFFSET = {"seconds": 0.0}
 
 REMOTE_SCRIPT = """#!/bin/bash
@@ -994,7 +995,7 @@ def truncate_summary(summary):
     return "\n".join(lines)
 
 
-def render_result_markdown(result):
+def render_result_markdown(result, include_details=True):
     agent = str(result.get("agent") or "unknown")
     host = str(result.get("host") or "none")
     summary_lines = neutralize(truncate_summary(result.get("summary") or "")).splitlines()
@@ -1005,24 +1006,31 @@ def render_result_markdown(result):
     fields = [
         ("job", result.get("job")),
         ("agent", result.get("agent")),
-        ("host", result.get("host")),
         ("status", result.get("status")),
-        ("repo", repo_ref),
-        ("started", result.get("started")),
-        ("finished", result.get("finished")),
-        ("wall_s", result.get("wall_s") if result.get("wall_s") is not None else 0),
         ("pr", result.get("pr")),
-        ("cost", result.get("cost") if isinstance(result.get("cost"), dict) else {}),
-        ("artifacts", result.get("artifacts") if isinstance(result.get("artifacts"), list) else []),
-        ("details", result.get("details") or ""),
         ("redactions", result.get("redactions") if isinstance(result.get("redactions"), int) else 0),
     ]
+    if include_details:
+        fields[2:2] = [
+            ("host", result.get("host")),
+            ("repo", repo_ref),
+            ("started", result.get("started")),
+            ("finished", result.get("finished")),
+            ("wall_s", result.get("wall_s") if result.get("wall_s") is not None else 0),
+            ("cost", result.get("cost") if isinstance(result.get("cost"), dict) else {}),
+            ("artifacts", result.get("artifacts") if isinstance(result.get("artifacts"), list) else []),
+            ("details", result.get("details") or ""),
+        ]
     body = ["result:"]
     for key, value in fields:
         body.append("  %s: %s" % (key, json.dumps(neutralize(value), ensure_ascii=False)))
     body.append("  summary: |")
     body.append(block)
-    return "**Local agent result** \u2014 %s@%s\n```yaml\n%s\n```\n" % (agent, host, "\n".join(body))
+    heading = "%s@%s" % (agent, host) if include_details else agent
+    text = "**Local agent result** \u2014 %s\n```yaml\n%s\n```\n" % (heading, "\n".join(body))
+    if not include_details:
+        text += "details: kept in the local outbox (%s)\n" % str(result.get("job") or "unknown")
+    return text
 
 
 def seconds_until_deadline(active):
@@ -1436,7 +1444,7 @@ def owned_result(comments, login, job_id, nonce):
     return False
 
 
-def write_outbox(state, result, nonce=""):
+def write_outbox(state, result, nonce="", include_details=True):
     job_id = str(result.get("job") or "unknown")
     if not ID_RE.fullmatch(job_id):
         job_id = "unknown"
@@ -1445,7 +1453,7 @@ def write_outbox(state, result, nonce=""):
     stage = state / "artifacts" / job_id
     stage.mkdir(parents=True, exist_ok=True)
     body_path = stage / "comment.md"
-    text = render_result_markdown(result)
+    text = render_result_markdown(result, include_details=include_details)
     if isinstance(nonce, str) and nonce:
         text += "result-nonce:%s\n" % nonce
     body_path.write_text(text, encoding="utf-8")
@@ -1489,7 +1497,7 @@ def post_result(state, result, had_running, had_queued):
     had_queued = bool(record.get("had_queued"))
     if path is not None:
         atomic_write(path, record)
-    body_path = write_outbox(state, result, nonce)
+    body_path = write_outbox(state, result, nonce, include_details=repo in DETAILS_REPOS)
     if not repo or number is None:
         return False
     if record.get("phase") == "labelled":
@@ -2125,10 +2133,14 @@ def handle_stop(signum, _frame):
 
 
 def cmd_loop(args):
-    global STATE, DRY_RUN, ACTIVE
+    global STATE, DRY_RUN, ACTIVE, DETAILS_REPOS
     DRY_RUN = bool(args.dry_run)
     CLOCK_OFFSET["seconds"] = 0.0
     config = load_config(args.config)
+    DETAILS_REPOS = {
+        repo for repo in config.get("details_repos") or []
+        if isinstance(repo, str) and repo in (config.get("repos") or [])
+    }
     STATE = ensure_state()
     lock = acquire_lock(STATE)
     signal.signal(signal.SIGTERM, handle_stop)

@@ -105,7 +105,7 @@ Only issues whose author is listed in `allowed_authors` are processed. Dispatch 
 - `review-first-pass` sends the requested PR diff and its local scan report to the selected Gemini/agy, Claude, or Codex reviewer; fetched PR files are scanned locally.
 - `release-watch`, `fleet-monitor`, and `ocr-runner` do not send content to a model. Grok is reachable through `llm-run` but is not selected by a shipped runner.
 
-Adi approved these allow-listed issue and PR flows to the listed model families on 2026-10-18 at 12:04; compliance review is deferred until after the MVP under the 2026-10-18 12:16 decision. Before a result is posted back to GitHub, the dispatcher redacts secrets from the result payload.
+Adi approved these allow-listed issue and PR flows to the listed model families on 2026-10-18 at 12:04; compliance review is deferred until after the MVP under the 2026-10-18 12:16 decision. Before a result is posted back to GitHub, the dispatcher redacts secrets from the result payload. Full redacted details and artifacts remain in the local outbox; only repositories listed in `details_repos` receive them in a GitHub result comment.
 
 ## Safety
 
@@ -117,6 +117,7 @@ They do not restart LiteLLM, Langfuse, ComfyUI, containers, or other services.
 They do not install packages.
 They do not print secrets.
 They do not force-push.
+For a repository outside `details_repos`, a result comment contains only the job, agent, status, truncated redacted summary, PR URL, redaction count, and a local-outbox pointer; it never includes details, artifacts, or host diagnostics.
 Job text is passed to a runner as a file.
 A host that is full is left for the next poll.
 A live job is tracked again after a dispatcher restart but is never signalled by the new dispatcher.

@@ -3,6 +3,7 @@
   "poll_seconds": 180,
   "allowed_authors": ["adibirzu"],
   "repos": ["adibirzu/firstmate", "adibirzu/mini-tools", "Pentforge-io/cyber-bot.ro", "adibirzu/localvideoediting", "adibirzu/aetherops"],
+  "details_repos": ["adibirzu/mini-tools", "Pentforge-io/cyber-bot.ro", "adibirzu/localvideoediting", "adibirzu/aetherops"],
   "hosts": {
     "mini": {"ssh": null, "max_jobs": 2},
     "adi1": {"ssh": "adi1", "max_jobs": 2, "dev_guard": true},

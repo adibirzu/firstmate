@@ -93,11 +93,11 @@ if [ "$adi2_rc" -eq 0 ]; then
 fi
 
 if [ "$disk_bad" -eq 1 ] || [ "$adi1_rc" -ne 0 ] || [ "$adi2_rc" -ne 0 ]; then
-  printf '%s\n' "blocked: disk below 8 GiB or a host is unreachable" >"$summary_file"
+  printf '%s\n' "blocked: disk below 8 GiB or a monitored host is unreachable" >"$summary_file"
   write_result blocked "$summary_file" "$details"
   exit 0
 fi
 
-printf '%s\n' "succeeded: mini disk is fine and adi1 plus adi2-ts answered" >"$summary_file"
+printf '%s\n' "succeeded: disk is fine and monitored hosts answered" >"$summary_file"
 write_result succeeded "$summary_file" "$details"
 exit 0

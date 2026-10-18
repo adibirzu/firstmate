@@ -98,13 +98,14 @@ progress_note="progress files: $file_count under configured roots"
   printf '\n%s\n' "## Progress"
   printf '%s\n' "$progress_note"
 } >"$report"
+details=$(<"$report")
 
 if [ "$running" -eq 0 ]; then
-  printf '%s\n' "blocked: ocr-vlm is not running" >"$summary_file"
-  write_result blocked "$summary_file" "$progress_note"
+  printf '%s\n' "blocked: OCR service is not running" >"$summary_file"
+  write_result blocked "$summary_file" "$details"
   exit 0
 fi
 
-printf '%s\n' "succeeded: ocr-vlm is running" >"$summary_file"
-write_result succeeded "$summary_file" "$progress_note"
+printf '%s\n' "succeeded: OCR service is running" >"$summary_file"
+write_result succeeded "$summary_file" "$details"
 exit 0

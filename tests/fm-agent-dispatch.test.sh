@@ -710,6 +710,12 @@ SH
 set -u
 printf '%s\n' "$*" >> "${GH_LOG:?}"
 case "$*" in
+  *"pr diff"*)
+    printf '%s\n' "diff --git a/sample.txt b/sample.txt"
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"files":[],"headRefOid":"abc123","url":"https://example.test/adibirzu/firstmate/pull/12"}'
+    ;;
   *"--state merged"*)
     printf '%s\n' "[]"
     ;;
@@ -840,6 +846,24 @@ if data["status"] != "failed" or "reviewer family" not in data["summary"]:
     raise SystemExit(data)
 PY
   [ ! -e "$TMP_ROOT/llm-touch" ] || fail "same-family review called a model"
+
+  job=$TMP_ROOT/review-success-job
+  prepare_job "$job" '{"id":"rev-success-01","task":"review","job":"review-first-pass/v1","author_family":"gemini","reviewer":"claude:sonnet","inputs":["pr:adibirzu/firstmate#12"]}'
+  PATH="$bin:$saved" HOME="$home" FM_AGENT_JOB_DIR="$job" \
+    GH_LOG="$TMP_ROOT/review-success-gh.log" LLM_LOG="$TMP_ROOT/review-success-llm.log" LLM_TOUCH="$TMP_ROOT/llm-touch" \
+    bash "$ROOT/local-agents/runners/review-first-pass.sh"
+  python3 - "$job/result.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+if data.get("status") != "succeeded":
+    raise SystemExit(data)
+if data.get("pr") != "https://example.test/adibirzu/firstmate/pull/12":
+    raise SystemExit(data)
+if data.get("details") != "No high-signal findings.":
+    raise SystemExit(data)
+PY
 
   job=$TMP_ROOT/licence-job
   prepare_job "$job" '{"id":"media-test-01","task":"probe","job":"studio-media/v1"}'
@@ -1382,7 +1406,7 @@ payload = {
 }
 Path(result_path).write_text(json.dumps(payload), encoding="utf-8")
 record = {
-    "phase": "running",
+    "phase": "result_posting",
     "job_id": "rel-secret-01",
     "pid": 99999999,
     "pgid": 99999999,
@@ -1446,8 +1470,12 @@ for blob, path in zip(blobs, paths):
     for secret in forbidden:
         if secret in blob:
             raise SystemExit("secret leaked in %s" % path.name)
-if "[REDACTED]" not in blobs[0] or "[REDACTED]" not in blobs[1]:
-    raise SystemExit("redaction marker missing from the posted result")
+if "[REDACTED]" not in blobs[0]:
+    raise SystemExit("redaction marker missing from the local outbox")
+if "details: kept in the local outbox (rel-secret-01)" not in blobs[1]:
+    raise SystemExit("public comment did not point to the local outbox")
+if "  artifacts:" in blobs[1] or "  details:" in blobs[1]:
+    raise SystemExit("public comment included details or artifacts")
 data = json.loads(blobs[0])
 if not isinstance(data.get("redactions"), int) or data["redactions"] < 1:
     raise SystemExit("redaction count missing: %s" % data.get("redactions"))
@@ -1511,6 +1539,64 @@ PY
   [ "$after" -eq "$before" ] || fail "existing result comment was posted again"
   [ ! -e "$record" ] || fail "labelled result record was kept"
   pass "result transaction redacts, resumes, and does not double-post"
+}
+
+test_private_result_includes_details() {
+  local state=$TMP_ROOT/private-result-state
+  local bin=$TMP_ROOT/private-result-bin
+  local log=$TMP_ROOT/private-result-gh.log
+  local comments=$TMP_ROOT/private-result-comments.json
+  local record=$state/running/adibirzu-mini-tools#80.json
+  local stage=$state/artifacts/private-result-01
+  local saved=$PATH
+  mkdir -p "$state/running" "$stage"
+  install_stateful_gh "$bin"
+  python3 - "$stage/result.json" "$record" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, record_path = map(Path, sys.argv[1:3])
+result_path.write_text(json.dumps({
+    "status": "succeeded",
+    "summary": "private result summary",
+    "details": "private diagnostic proof",
+    "artifacts": ["report.md"],
+    "pr": "https://example.test/private/80",
+}), encoding="utf-8")
+record_path.write_text(json.dumps({
+    "phase": "result_posting",
+    "job_id": "private-result-01",
+    "pid": 99999999,
+    "pgid": 99999999,
+    "repo": "adibirzu/mini-tools",
+    "issue": 80,
+    "agent": "release-watch",
+    "host": "mini",
+    "had_running": True,
+    "had_queued": True,
+    "stage": str(result_path.parent),
+    "job": {"id": "private-result-01", "agent": "release-watch", "task": "poll", "job": "release-watch/v1"},
+}), encoding="utf-8")
+PY
+  printf '%s\n' '{"comments":[]}' >"$comments"
+  PATH="$bin:$saved" GH_LOG="$log" GH_LIST_EMPTY=1 GH_COMMENTS_FILE="$comments" \
+    FM_AGENT_STATE="$state" python3 "$DISPATCH" loop --once --config "$CFG"
+  python3 - "$stage/comment.md" "$state/outbox/private-result-01.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+comment = Path(sys.argv[1]).read_text(encoding="utf-8")
+outbox = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+if "private diagnostic proof" not in comment or '"report.md"' not in comment:
+    raise SystemExit("private comment omitted details or artifacts")
+if "kept in the local outbox" in comment:
+    raise SystemExit("private comment used the public outbox pointer")
+if outbox.get("details") != "private diagnostic proof":
+    raise SystemExit("outbox did not retain private details")
+PY
+  pass "private result comments include details"
 }
 
 test_lock_protocol() {
@@ -2852,6 +2938,7 @@ test_claim_compare_and_set
 test_forged_claim_cannot_preempt
 test_forged_result_cannot_suppress
 test_result_transaction_and_redaction
+test_private_result_includes_details
 test_job_schema
 test_lock_protocol
 test_lock_race

@@ -153,7 +153,7 @@ trap 'rm -rf "$workdir"' EXIT
 set +e
 gh pr diff -R "$repo" "$number" >"$job_dir/pr.diff" 2>"$job_dir/gh-diff.err"
 diff_rc=$?
-gh pr view -R "$repo" "$number" --json files,headRefOid >"$job_dir/pr-view.json" 2>"$job_dir/gh-view.err"
+gh pr view -R "$repo" "$number" --json files,headRefOid,url >"$job_dir/pr-view.json" 2>"$job_dir/gh-view.err"
 view_rc=$?
 set -e
 
@@ -172,6 +172,11 @@ from pathlib import Path
 
 repo, view_path, work = sys.argv[1], sys.argv[2], Path(sys.argv[3])
 view = json.loads(Path(view_path).read_text(encoding="utf-8"))
+url = view.get("url") if isinstance(view.get("url"), str) else ""
+details_path = work / "result-details.txt"
+pr_path = work / "pr-url.txt"
+details_path.write_text("No high-signal findings.\n", encoding="utf-8")
+pr_path.write_text(url + "\n", encoding="utf-8")
 files = view.get("files") or []
 head = str(view.get("headRefOid") or "")
 note = work / "fetch-note.txt"
@@ -237,14 +242,14 @@ if [ -d "$tree" ] && command -v gitleaks >/dev/null 2>&1; then
   gitleaks_note="gitleaks exit: $gitleaks_rc"
 fi
 
-python3 - "$job_dir" "$workdir/fetch-note.txt" "$summary_file" "$report" "$semgrep_note" "$gitleaks_note" <<'PY'
+python3 - "$job_dir" "$workdir/fetch-note.txt" "$summary_file" "$report" "$workdir/result-details.txt" "$semgrep_note" "$gitleaks_note" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 job_dir = Path(sys.argv[1])
-note_path, summary_path, report_path = Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4])
-semgrep_note, gitleaks_note = sys.argv[5], sys.argv[6]
+note_path, summary_path, report_path, details_path = (Path(sys.argv[index]) for index in range(2, 6))
+semgrep_note, gitleaks_note = sys.argv[6], sys.argv[7]
 fetch_note = note_path.read_text(encoding="utf-8").strip() if note_path.is_file() else ""
 semgrep_count = 0
 top = []
@@ -290,6 +295,7 @@ else:
     lines.append("None.")
 text = "\n".join(lines) + "\n"
 report_path.write_text(text, encoding="utf-8")
+details_path.write_text("\n".join("- %s" % item for item in top[:8]) + "\n" if top else "No high-signal findings.\n", encoding="utf-8")
 summary = [
     "semgrep %s; gitleaks %s; %s" % (semgrep_count, leak_count, fetch_note),
 ]
@@ -360,5 +366,7 @@ if [ "$llm_rc" -ne 0 ]; then
   exit 0
 fi
 
-write_result succeeded "$summary_file" ""
+details=$(cat "$workdir/result-details.txt")
+pr_url=$(cat "$workdir/pr-url.txt")
+write_result succeeded "$summary_file" "$details" "$pr_url"
 exit 0
