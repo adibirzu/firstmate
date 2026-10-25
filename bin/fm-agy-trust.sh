@@ -98,6 +98,20 @@ if [ "$MODE" = secondmate-home ]; then
   [ "$SUB_MARKER_ID" = "$SUB_ID" ] || refuse "'$WT_REAL' is marked for secondmate '${SUB_MARKER_ID:-unknown}', not '$SUB_ID'"
   [ -f "$WT_REAL/AGENTS.md" ] || refuse "'$WT_REAL' has no AGENTS.md, so it is not a firstmate home"
   [ -d "$WT_REAL/bin" ] || refuse "'$WT_REAL' has no bin/, so it is not a firstmate home"
+  for sub_dir_name in data state config projects; do
+    sub_dir="$WT_REAL/$sub_dir_name"
+    if [ -L "$sub_dir" ] && [ ! -e "$sub_dir" ]; then
+      refuse "'$sub_dir' is a broken symlink, so this home's $sub_dir_name directory cannot be shown to stay inside it"
+    fi
+    [ -e "$sub_dir" ] || continue
+    [ -d "$sub_dir" ] || refuse "'$sub_dir' is not a directory, so '$WT_REAL' is not a seeded secondmate home"
+    sub_dir_real=$(real_dir "$sub_dir") || true
+    [ -n "$sub_dir_real" ] || refuse "'$sub_dir' cannot be resolved"
+    case "$sub_dir_real" in
+      "$WT_REAL"/*) ;;
+      *) refuse "'$sub_dir' resolves to '$sub_dir_real', outside the home, so '$WT_REAL' is not a safe secondmate home" ;;
+    esac
+  done
 else
   WT_TOP=$(git -C "$WT_REAL" rev-parse --show-toplevel 2>/dev/null) || true
   [ -n "$WT_TOP" ] || refuse "'$WT_REAL' is not inside a git repository"

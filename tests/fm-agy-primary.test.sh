@@ -552,6 +552,13 @@ test_agy_trust_refuses_an_unseeded_secondmate_home() {
   out=$(HOME="$home" bash "$ROOT/bin/fm-agy-trust.sh" --secondmate-home "$dir" sm-one 2>&1) \
     && fail "a symlinked marker must be refused"
   assert_contains "$out" "symlink" "the symlink refusal lacked its reason"
+  dir=$(make_secondmate_home "$TMP_ROOT/trust-escape" sm-one)
+  mkdir -p "$TMP_ROOT/trust-escape-target"
+  rm -rf "$dir/data"
+  ln -s "$TMP_ROOT/trust-escape-target" "$dir/data"
+  out=$(HOME="$home" bash "$ROOT/bin/fm-agy-trust.sh" --secondmate-home "$dir" sm-one 2>&1) \
+    && fail "a home whose data directory escapes it must be refused"
+  assert_contains "$out" "outside the home" "the escaping-directory refusal lacked its reason"
   [ ! -e "$home/.gemini/antigravity-cli/settings.json" ] || fail "a refusal still wrote the trust store"
   pass "fm-agy-trust.sh: --secondmate-home refuses a wrong id, a plain directory, and a symlinked marker"
 }
