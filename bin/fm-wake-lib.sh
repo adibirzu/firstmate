@@ -1236,9 +1236,21 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# Waits for the lock without a deadline unless the calling shell sets the
+# UNEXPORTED variable FM_LOCK_WAIT_MAX_SECONDS to a positive integer, in which
+# case a holder that outlives it makes this return 1 (FM_LOCK_HELD_PID names
+# it). Only bin/fm-watch.sh sets it, for its own poll loop: a live but hung
+# holder would otherwise strand the loop here with its beacon frozen. It is
+# deliberately not exported, so no helper script the watcher launches inherits a
+# cap that its mutation-critical lock waits never opted into.
 fm_lock_acquire_wait() {
-  local lockdir=$1
+  local lockdir=$1 deadline=''
+  case "${FM_LOCK_WAIT_MAX_SECONDS:-}" in
+    ''|*[!0-9]*|0) ;;
+    *) deadline=$((SECONDS + FM_LOCK_WAIT_MAX_SECONDS)) ;;
+  esac
   while ! fm_lock_try_acquire "$lockdir"; do
+    [ -z "$deadline" ] || [ "$SECONDS" -lt "$deadline" ] || return 1
     sleep 0.1
   done
 }
@@ -2052,7 +2064,7 @@ fm_wake_clean_field() {
 
 fm_wake_append() {
   local status=0
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   fm_wake_append_locked "$@" || status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"
@@ -2113,7 +2125,7 @@ fm_wake_queued_keys() {
     signal|stale|check|heartbeat) ;;
     *) printf 'fm_wake_queued_keys: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
   esac
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   fm_wake_queued_keys_locked "$kind"
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }

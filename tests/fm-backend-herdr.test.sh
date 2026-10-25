@@ -6189,6 +6189,10 @@ set -u
 if [ -n "${FM_FAKE_READER_READY_FILE:-}" ]; then
   : > "$FM_FAKE_READER_READY_FILE"
 fi
+if [ -n "${FM_FAKE_READER_HANG_FILE:-}" ]; then
+  printf '%s\n' "$$" > "$FM_FAKE_READER_HANG_FILE"
+  sleep 60
+fi
 printf '%s\n' "${FM_FAKE_READER_ACK:-@subscribed}"
 if [ -n "${FM_FAKE_READER_LINES:-}" ] && [ -f "$FM_FAKE_READER_LINES" ]; then
   cat "$FM_FAKE_READER_LINES"
@@ -6409,6 +6413,27 @@ test_wait_transition_reader_failure_returns_2() {
   [ "$rc" = 2 ] || fail "a reader connect/subscribe failure must return 2 (fall back to poll), got $rc"
   [ -z "$(find "$temp" -mindepth 1 -print -quit)" ] || fail "reader failure must remove its private FIFO directory"
   pass "fm_backend_herdr_wait_transition: a reader/subscribe failure falls back to polling (rc 2)"
+}
+
+test_wait_transition_hung_reader_is_bounded() {
+  local dir state agent temp fb reader lines hang rc started elapsed hung_pid
+  dir="$TMP_ROOT/wt-reader-hang"; state="$dir/state"; agent="$dir/agents"; temp="$dir/temp"; mkdir -p "$state" "$agent" "$temp"
+  fb=$(make_herdr_eventfake "$dir")
+  set_fake_agent "$agent" "wG:pQ" idle
+  reader=$(make_fake_reader "$dir"); lines="$dir/lines"; : > "$lines"; hang="$dir/hang.pid"
+  started=$(date +%s)
+  rc=$(PATH="$fb:$PATH" TMPDIR="$temp" FM_BACKEND_HERDR_EVENTS_FORCE=1 FM_FAKE_SESSION_NAME=sess FM_FAKE_SOCKET="$dir/x.sock" FM_FAKE_AGENT_DIR="$agent" \
+    FM_BACKEND_HERDR_EVENT_READER="$reader" FM_FAKE_READER_LINES="$lines" FM_FAKE_READER_HANG_FILE="$hang" \
+    FM_BACKEND_HERDR_EVENT_WAIT_MARGIN=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_wait_transition sess 1 "$1" sess:wG:pQ; echo $?' "$ROOT" "$state" | tail -1)
+  elapsed=$(( $(date +%s) - started ))
+  [ -s "$hang" ] || fail "the hanging reader never ran (vacuous case)"
+  [ "$elapsed" -lt 20 ] || fail "a reader that never acknowledges blocked the event wait for ${elapsed}s"
+  [ "$rc" = 2 ] || fail "a reader that never acknowledges must return 2 (fall back to poll), got $rc"
+  hung_pid=$(cat "$hang")
+  ! kill -0 "$hung_pid" 2>/dev/null || fail "the hung reader (pid $hung_pid) outlived the event-wait bound"
+  [ -z "$(find "$temp" -mindepth 1 -print -quit)" ] || fail "a bounded-out reader must remove its private FIFO directory"
+  pass "fm_backend_herdr_wait_transition: a reader that never acknowledges is bounded, reaped, and falls back to polling (rc 2)"
 }
 
 test_wait_transition_bad_ack_returns_2_and_cleans_up() {
@@ -6696,5 +6721,6 @@ test_wait_transition_reconcile_dedupes_when_marked
 test_wait_transition_stream_blocked_returns_record
 test_wait_transition_stream_absorb_clears_then_timeout
 test_wait_transition_reader_failure_returns_2
+test_wait_transition_hung_reader_is_bounded
 test_wait_transition_bad_ack_returns_2_and_cleans_up
 test_wait_transition_clean_timeout_returns_1

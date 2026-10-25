@@ -319,6 +319,17 @@ _beat_subcadence_cap=$(( WATCHER_STALE_GRACE / 3 ))
 # fm_watcher_stall_bound (bin/fm-wake-lib.sh) owns the derivation, shared with
 # the arm that follows this watcher.
 WATCHER_STALL_BOUND=$(fm_watcher_stall_bound "$POLL")
+# Bound on any one in-process lock wait inside the poll loop
+# (fm_lock_acquire_wait in bin/fm-wake-lib.sh owns the mechanism). A lock held by
+# a live but hung process would otherwise strand the loop in its 0.1s retry with
+# the beacon frozen: no child, state S, until the holder is killed by hand. A
+# fifth of the stale grace leaves several bounded waits per grace window.
+# Deliberately a plain shell variable, never exported: helper scripts the
+# watcher launches keep their own unbounded, mutation-critical lock waits.
+FM_LOCK_WAIT_MAX_SECONDS=${FM_WATCHER_LOCK_WAIT_MAX:-$((WATCHER_STALE_GRACE / 5))}
+case "$FM_LOCK_WAIT_MAX_SECONDS" in
+  ''|*[!0-9]*|0) FM_LOCK_WAIT_MAX_SECONDS=1 ;;
+esac
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 # Idle-fleet backoff cap. While any task is in flight the heartbeat stays on the
 # base cadence; with an empty fleet it doubles per consecutive no-change
@@ -2110,7 +2121,10 @@ procevent_surface_queued() {
   local key reason captured="" stranded="" unstarted=""
   PROCEVENT_SURFACED=
   [ -s "$FM_WAKE_QUEUE" ] || return 0
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  if ! fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
+    triage_log "wake queue lock held past ${FM_LOCK_WAIT_MAX_SECONDS}s; deferring queued process-event surfacing to the next poll"
+    return 0
+  fi
   while IFS= read -r key; do
     case "$key" in procevent:*) ;; *) continue ;; esac
     [ -e "$(procevent_surfaced_marker "$key")" ] && continue
@@ -2717,10 +2731,24 @@ fi
 # first. Publication is eventually consistent by design and every reader
 # re-derives current state from the owning home anyway, while beacon freshness
 # is what the whole supervision chain rests on.
+# detached_child_running <pid>: true while the child may still be running, by
+# either witness. The reaping `wait` in the two helpers below blocks the whole
+# poll loop if its child is in fact still running, so `wait` is reached only
+# once kill -0 AND bash's own running-job table both say the child is gone
+# (kill -0 alone reads EPERM as "gone" for a child that changed credentials).
+detached_child_running() {
+  local pid=$1 job
+  kill -0 "$pid" 2>/dev/null && return 0
+  for job in $(jobs -pr); do
+    [ "$job" = "$pid" ] && return 0
+  done
+  return 1
+}
+
 HOME_SUMMARY_PID=
 home_summary_refresh_detached() {
   if [ -n "$HOME_SUMMARY_PID" ]; then
-    if kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; then
+    if detached_child_running "$HOME_SUMMARY_PID"; then
       return 0
     fi
     wait "$HOME_SUMMARY_PID" 2>/dev/null || true
@@ -2745,7 +2773,7 @@ reconcile_requests_pending() {
 
 reconcile_requests_detached() {
   if [ -n "$RECONCILE_REQUEST_PID" ]; then
-    if kill -0 "$RECONCILE_REQUEST_PID" 2>/dev/null; then
+    if detached_child_running "$RECONCILE_REQUEST_PID"; then
       return 0
     fi
     if ! wait "$RECONCILE_REQUEST_PID" 2>/dev/null; then
@@ -2861,7 +2889,15 @@ resurface_after_downtime() {
     return 0
   fi
   if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
+    FM_LOCK_HELD_PID=
     if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
+      # A lock still held past the in-loop wait bound is a live holder being
+      # slow, not unsafe state: skip this poll and retry on the next one so the
+      # beacon keeps moving. Any other failure keeps the loud exit.
+      if [ -n "$FM_LOCK_HELD_PID" ]; then
+        triage_log "recovery state lock held by pid $FM_LOCK_HELD_PID past ${FM_LOCK_WAIT_MAX_SECONDS}s; deferring the downtime check to the next poll"
+        return 0
+      fi
       echo "watcher: recovery state could not be consumed safely" >&2
       exit 1
     fi
@@ -3024,7 +3060,11 @@ while :; do
           path=$FM_PR_POLL_SNAPSHOT_PATH
           number=$FM_PR_POLL_SNAPSHOT_NUMBER
           PR_POLL_CONTROL_LOCK="$STATE/.control-$id.lock"
-          fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || exit 1
+          if ! fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK"; then
+            PR_POLL_CONTROL_LOCK=
+            triage_log "PR poll control lock for $id held past ${FM_LOCK_WAIT_MAX_SECONDS}s; skipping its check this poll"
+            continue
+          fi
           if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
             pr_poll_control_release || exit 1
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
