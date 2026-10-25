@@ -59,6 +59,10 @@ _FM_CLASSIFY_UNAME_S=${_FM_UNAME:-$(uname -s 2>/dev/null)}
 # Overridable so tests can stub the run-step/pane verdict without a real worktree
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
+# Hard bound, in seconds, on one crew-state read. The watcher takes these reads
+# inline in its poll loop, so an unbounded one (a hung no-mistakes call under
+# load) stops the liveness beacon until somebody kills the reader by hand.
+FM_CREW_STATE_TIMEOUT="${FM_CREW_STATE_TIMEOUT:-30}"
 
 # fm_run_timed, the shared hard bound the worktree write probe below puts around
 # its one filesystem walk. bin/fm-timeout-lib.sh owns bounded execution for this
@@ -2486,6 +2490,24 @@ status_span_has_actionable() {  # <status-file> <start-offset>
   status_span_first_actionable_record "$1" "${2:-0}" > /dev/null
 }
 
+# fm_crew_state_read <id>: print bin/fm-crew-state.sh's verdict line, bounded by
+# FM_CREW_STATE_TIMEOUT. A read that hits the bound prints nothing, which every
+# caller already treats as an unreadable verdict ("none": the wake surfaces), and
+# is logged through the sourcing script's triage_log when it defines one. The
+# bound reaps the reader's whole process group (bin/fm-timeout-lib.sh).
+fm_crew_state_read() {  # <id>
+  local id=$1 out rc=0 bound=$FM_CREW_STATE_TIMEOUT
+  case "$bound" in ''|*[!0-9]*|0) bound=30 ;; esac
+  out=$(fm_run_timed "$bound" "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
+  if fm_timed_out "$rc"; then
+    if declare -F triage_log >/dev/null 2>&1; then
+      triage_log "crew-state read for $id exceeded ${bound}s; treating the verdict as unreadable"
+    fi
+    return 0
+  fi
+  printf '%s' "$out"
+}
+
 # Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
 # from bin/fm-crew-state.sh's one authoritative current-state line
 # ("state: <s> · source: <src> · <detail>"). Prints exactly one token:
@@ -2505,7 +2527,7 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 crew_absorb_class() {  # <id>
   local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(fm_crew_state_read "$id")
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
@@ -2567,7 +2589,7 @@ FM_GATE_HUMAN_DECISION='ask-user: authority decision'
 crew_gate_awaits_human_decision() {  # <id> -> <run-id> on stdout
   local id=$1 line state src rest part human='' run=''
   [ -n "$id" ] || return 1
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(fm_crew_state_read "$id")
   case "$line" in state:*) ;; *) return 1 ;; esac
   state=${line#state: }; state=${state%% *}
   [ "$state" = parked ] || return 1

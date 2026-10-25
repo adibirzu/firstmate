@@ -4281,6 +4281,16 @@ fm_backend_herdr_clear_transition() {  # <state_dir> <window>
   rm -f "$marker" 2>/dev/null || true
 }
 
+# fm_backend_herdr_stop_watchdog <pid>: retire the event-wait watchdog and the
+# sleep it is parked in, so a finished wait leaves no timer behind.
+fm_backend_herdr_stop_watchdog() {
+  local pid=${1:-}
+  [ -n "$pid" ] || return 0
+  pkill -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 # fm_backend_herdr_wait_transition: the bounded event wait. Blocks up to
 # <timeout_secs> for one of <pane_window...> ("<session>:<pane_id>") to reach a
 # fresh `blocked` edge, then prints the normalized record and returns 0.
@@ -4331,9 +4341,24 @@ fm_backend_herdr_wait_transition() {  # <session> <timeout_secs> <state_dir> <pa
   fi
   "${reader[@]}" "$sock" "$timeout" "${pane_ids[@]}" > "$fifo" 2>/dev/null &
   reader_pid=$!
+  # Hard deadline for everything below that blocks on the FIFO. The reader
+  # bounds its own socket work, but this side's open and reads have no deadline
+  # of their own: a reader that dies or stalls before it opens or acks (python
+  # starting under heavy load) leaves the open or the ack read waiting with no
+  # child and no timer, and the watcher's beacon stops. The watchdog kills the
+  # reader and briefly opens the FIFO read-write, which releases a blocked open
+  # and turns the reads into EOF, so the call returns 2 and the caller falls
+  # back to polling.
+  local watchdog_pid
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  bash -c 'sleep "$1"; pkill -P "$2" 2>/dev/null; kill "$2" 2>/dev/null; : <> "$3"' _ \
+    "$((timeout + ${FM_BACKEND_HERDR_EVENT_WAIT_MARGIN:-5}))" "$reader_pid" "$fifo" \
+    >/dev/null 2>&1 &
+  watchdog_pid=$!
   if ! exec 9< "$fifo"; then
     kill "$reader_pid" 2>/dev/null || true
     wait "$reader_pid" 2>/dev/null || true
+    fm_backend_herdr_stop_watchdog "$watchdog_pid"
     rm -rf "$fifo_dir" 2>/dev/null || true
     return 2
   fi
@@ -4395,6 +4420,7 @@ fm_backend_herdr_wait_transition() {  # <session> <timeout_secs> <state_dir> <pa
   # runtime-disable threshold).
   wait "$reader_pid" 2>/dev/null || reader_rc=$?
   exec 9<&-
+  fm_backend_herdr_stop_watchdog "$watchdog_pid"
   rm -rf "$fifo_dir" 2>/dev/null || true
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 2 ] && return 2
