@@ -1,0 +1,100 @@
+# Local studio-media model catalogue.
+# licence_check: approved | legal_review_only | internal_only | excluded
+# The runner rejects a job whose text mentions an excluded id or alias.
+models:
+  - id: wan2.2-ti2v-5b
+    licence: Apache-2.0
+    licence_check: approved
+    eu_ok: true
+    gb10: validated
+    notes: Wan 2.2 TI2V 5B, pinned ComfyUI image-to-video.
+  - id: wan2.2-animate-2-14b
+    licence: Apache-2.0
+    licence_check: approved
+    eu_ok: true
+    gb10: to_validate
+    notes: Wan 2.2 Animate 14B, pinned ComfyUI, not yet validated on GB10.
+  - id: latentsync-1.5
+    licence: Apache-2.0
+    licence_check: approved
+    eu_ok: true
+    gb10: validated
+    notes: LatentSync 1.5 lipsync, pinned ComfyUI.
+  - id: whisperx
+    licence: BSD-2
+    licence_check: approved
+    eu_ok: true
+    gb10: validated
+    notes: Transcription and alignment.
+  - id: demucs-v4
+    licence: MIT
+    licence_check: approved
+    eu_ok: true
+    gb10: validated
+    notes: Source separation.
+  - id: deepfilternet3
+    licence: MIT/Apache-2.0
+    licence_check: approved
+    eu_ok: true
+    gb10: validated
+    notes: Denoise before loudnorm.
+  - id: ace-step
+    licence: Apache-2.0
+    licence_check: legal_review_only
+    eu_ok: true
+    gb10: to_validate
+    notes: Do not generate until legal review clears the weights in use.
+  - id: ltx-2.5
+    licence: LTX Community
+    licence_check: legal_review_only
+    eu_ok: true
+    gb10: to_validate
+    notes: legal_review_only, not a production default.
+  - id: mmaudio
+    licence: CC-BY-NC
+    licence_check: internal_only
+    eu_ok: true
+    gb10: to_validate
+    notes: Internal-draft only. Weights are non-commercial.
+  - id: minimax-h3
+    licence: MiniMax H3 Community
+    licence_check: excluded
+    eu_ok: false
+    gb10: to_validate
+    notes: EU-excluded licence. Aliases minimax and h3.
+  - id: hunyuanvideo
+    licence: Hunyuan Community
+    licence_check: excluded
+    eu_ok: false
+    gb10: to_validate
+    notes: EU-excluded licence. Alias hunyuan.
+  - id: hunyuan-avatar
+    licence: Hunyuan Community
+    licence_check: excluded
+    eu_ok: false
+    gb10: to_validate
+    notes: EU-excluded licence. Alias hunyuan.
+  - id: hunyuan-foley
+    licence: Hunyuan Community
+    licence_check: excluded
+    eu_ok: false
+    gb10: to_validate
+    notes: EU-excluded licence. Alias hunyuan.
+  - id: musicgen
+    licence: CC-BY-NC
+    licence_check: excluded
+    eu_ok: true
+    gb10: to_validate
+    notes: Non-commercial weights. Excluded from production.
+  - id: thinksound
+    licence: research-only
+    licence_check: excluded
+    eu_ok: false
+    gb10: to_validate
+    notes: Research-only weights, not cleared for production.
+  - id: elevenlabs
+    licence: commercial cloud
+    licence_check: approved
+    eu_ok: true
+    gb10: to_validate
+    notes: Publishing voice via MCP only. No local weights and no voice cloning.

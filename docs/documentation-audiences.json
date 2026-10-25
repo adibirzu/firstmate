@@ -689,6 +689,38 @@
       "audience": "operator-current"
     },
     {
+      "path": "local-agents/README.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/fleet-monitor.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/issue-mapper.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/ocr-runner.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/release-watch.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/research.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/review-first-pass.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "local-agents/agents/studio-media.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
     },
