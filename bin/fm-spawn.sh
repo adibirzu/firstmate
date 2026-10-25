@@ -405,7 +405,7 @@
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
 # muse installs no hook at all - its plugin engine is off in the default build - so
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
-# log; muse, gemini, agy, and devin are crewmate/scout only and are refused for --secondmate.
+# log; muse, gemini, and devin are crewmate/scout only and are refused for --secondmate.
 # rovo installs no hook either - its eventHooks fire at tool granularity only,
 # never turn-end - so it carries no busy-source wiring at all and no turn-end
 # hook. A positional brief is dead-on-arrival (rovo loads, never works, and drops
@@ -413,14 +413,16 @@
 # only after a TUI readiness gate, then a delivery-confirmation gate - the same
 # launch-then-send shape as kimi. Its busy state is a screen-scrape fallback like
 # grok. rovo is crewmate/scout only and is refused for --secondmate, like muse.
-# agy installs no hook either - it exposes no hook surface at all - so it
-# carries no busy-source wiring and no turn-end hook. Its brief rides the launch
+# agy installs no per-task hook - its native hooks.json hooks serve the PRIMARY
+# session only (.agents/hooks.json) - so a task launch carries no busy-source
+# wiring and no turn-end hook. Its brief rides the launch
 # command, but a fresh worktree would park it on a folder-trust dialog, so the
 # spawn pre-registers the worktree in agy's own trust store through
 # bin/fm-agy-trust.sh (the claude shape, but non-fatal) and then waits for a
 # busy turn - answering the dialog first if it renders anyway - before
 # reporting success (the rovo/kimi launch-then-confirm shape). Its busy state
-# is a screen-scrape fallback like grok and rovo, and it is crewmate/scout only.
+# is a screen-scrape fallback like grok and rovo. An agy secondmate is allowed: the
+# home's own tracked .agents/hooks.json runs the Stop-hook park once the home is trusted.
 # cursor installs no per-task hook either: it writes state/<id>.cursor-session to
 # bind the pane to cursor's own conversation transcript (projects root, the exact
 # workspace path cursor records in .workspace-trusted, and the conversations that
@@ -2452,7 +2454,7 @@ case "$ARG3" in
   ;;
 esac
 
-# muse, gemini, agy, and devin are verified as CREWMATE/SCOUT adapters only. A secondmate is
+# muse, gemini, and devin are verified as CREWMATE/SCOUT adapters only. A secondmate is
 # a firstmate instance, so it needs a primary supervision protocol.
 # gemini has none: docs/supervision-protocols/ carries no gemini wake protocol
 # and this task verified only crewmate-side launch, busy state, interrupt, and
@@ -2462,11 +2464,13 @@ esac
 # asyncRewake handlers that firstmate's primary turn-end supervision is built on
 # (muse 0.1.0-R708.1). Refusing here keeps that gap loud instead of standing up a
 # secondmate whose supervision cycle could never be armed.
-# agy has none either: it exposes no hook surface for primary supervision and
-# docs/supervision-protocols/ carries no agy wake protocol (agy 1.2.0).
+# agy is NOT in this list: agy 1.4.7 exposes native SessionStart, Stop, and
+# PreToolUse hooks, and docs/supervision-protocols/agy.md carries its Stop-hook
+# park (docs/verification/agy.md owns the evidence), so an agy secondmate is stood up on
+# a verified primary supervision path.
 # devin has none either: only its worker lifecycle hooks are verified, and
 # docs/supervision-protocols/ carries no devin wake protocol (devin 3000.11.1).
-if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ] || [ "$HARNESS" = devin ] || [ "$HARNESS" = cline ] || [ "$HARNESS" = copilot ]; }; then
+if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = devin ] || [ "$HARNESS" = cline ] || [ "$HARNESS" = copilot ]; }; then
   echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
 fi
@@ -2827,8 +2831,10 @@ effort_flag_for_harness() {
     esac
     ;;
   agy)
-    # agy 1.2.0 --effort accepts exactly low|medium|high, so xhigh and max are
-    # omitted rather than passed as known-bad values (record-and-omit).
+    # agy --effort accepts low|medium|high on the models firstmate pins (1.4.7's
+    # own flag text also lists xhigh|max, but the verified secondmate pins stop at
+    # high), so xhigh and max are omitted rather than passed unverified
+    # (record-and-omit): the effort a secondmate runs at is capped at high.
     case "$effort" in
     low | medium | high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
     esac
@@ -4764,8 +4770,10 @@ spawn_assert_agent_worktree
 # preselects the safe answer, so a failed registration is not fatal here: the
 # post-launch gate (agy_wait_for_working) answers the dialog itself and, on a
 # path that was not pre-registered, refuses to count a busy turn as ready until
-# it has done so. agy is crewmate/scout only (refused above for secondmate), so
-# only the worktree shape applies.
+# it has done so. A secondmate home is pre-registered in the seed-marker mode
+# (a secondmate home may be a standalone clone, so its git shape decides
+# nothing); its hooks.json only loads once the folder is trusted, so this is
+# what lets the home's Stop-hook park own supervision from the first turn.
 AGY_TRUST_PREREGISTERED=0
 case "$HARNESS" in
 claude*)
@@ -4780,12 +4788,15 @@ claude*)
   fi
   ;;
 agy)
-  if [ "$KIND" != secondmate ]; then
-    if "$FM_ROOT/bin/fm-agy-trust.sh" "$WT" "$PROJ_ABS" >/dev/null; then
-      AGY_TRUST_PREREGISTERED=1
-    else
-      echo "warning: could not pre-register agy workspace trust for $WT; the launch will answer the folder-trust dialog in window $T instead" >&2
-    fi
+  if [ "$KIND" = secondmate ]; then
+    agy_trust_args=(--secondmate-home "$PROJ_ABS" "$ID")
+  else
+    agy_trust_args=("$WT" "$PROJ_ABS")
+  fi
+  if "$FM_ROOT/bin/fm-agy-trust.sh" "${agy_trust_args[@]}" >/dev/null; then
+    AGY_TRUST_PREREGISTERED=1
+  else
+    echo "warning: could not pre-register agy workspace trust for $WT; the launch will answer the folder-trust dialog in window $T instead" >&2
   fi
   ;;
 esac

@@ -229,7 +229,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, `cursor`, and `omp`, plus `muse`, `gemini`, `agy`, `cline`, `copilot`, and `rovo` for crewmate and scout launches only; never dispatch on an unverified adapter, and never select one of those six for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
+The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor-agent`, `cursor`, `omp`, and `agy`, plus `muse`, `gemini`, `cline`, `copilot`, and `rovo` for crewmate and scout launches only; never dispatch on an unverified adapter, and never select one of those five for a secondmate (`docs/configuration.md` "Harness support" owns the per-kind verified set).
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 The same doctrine gates gemini specifically at launch time: `bin/fm-spawn.sh`'s `gemini_binary_is_genuine` guard refuses loudly, naming the resolved path, when the `gemini` executable on PATH is not genuine gemini-cli - for example a personal PATH shim shadowing it with a different harness - rather than silently launching whatever it actually is with none of gemini's launch wiring applied (`.agents/skills/harness-adapters/references/harness/gemini.md` owns the verified gemini-cli facts this guard protects).
 

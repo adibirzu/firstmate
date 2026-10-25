@@ -43,6 +43,7 @@ Codex's interactive TUI has no tracked session-open, compaction, or re-emit chan
 | Grok | Nudge | [Grok](#grok) |
 | Cursor | Run | [Cursor](#cursor) |
 | omp | Run | [omp](#omp) |
+| agy | Run | [agy](#agy) |
 | Cursor compaction | Uncovered | [Cursor compaction](#cursor-compaction) |
 
 ### Why the run tier exists
@@ -344,6 +345,14 @@ Project hooks load only when the workspace is launched with `--trust`.
 Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session.
 So a resume re-runs the full digest.
 That is redundant and idempotent rather than a lost helm.
+
+### agy
+
+agy is a run-tier harness for session open.
+`.agents/hooks.json` registers `SessionStart` with a 180s timeout, run from `.agents/`, invoking `bin/fm-sessionstart-agy.sh --source startup`.
+agy's payload has no `source` field, so the registration supplies it, and the adapter returns the digest as an `injectSteps` `systemMessage` that the model repeats on request (verified live, agy 1.4.7).
+The hook loads only for a trusted folder, and a hook set loaded by answering the trust dialog misses that first session open; the hook's `SessionStart` then fires on the next new conversation.
+A resumed or continued conversation was not probed and stays uncovered until it is.
 
 ### omp
 
