@@ -199,6 +199,7 @@ Each enabled primary harness adapts its own turn-end mechanism to the shared gua
 | Pi | `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts` | Passive callback that schedules one follow-up |
 | omp | `session_stop` in `.omp/extensions/fm-primary-turnend-guard.ts` | Blocking hook that compels one continuation |
 | Cursor | `stop` hook in `.cursor/hooks.json` | Cannot block, so it parks and returns at most one follow-up |
+| agy | `Stop` hook in `.agents/hooks.json` | Parks, then blocks the stop with a `continue` decision carrying the wake |
 | Grok | `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` | Native blocking, or one legacy `grok --resume` fallback |
 
 The registrations in detail:
@@ -399,6 +400,18 @@ Baton invalidation and the `preCompact` surface remain deferred.
 If a passive adapter cannot invoke its SDK, or the Grok legacy fallback cannot find `grok` or a session id, the next pull-based `fm-guard.sh` call reports the problem.
 That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it always points to the active harness protocol rather than embedding another repair command.
 
+### agy park
+
+agy blocks a stop natively: a `Stop` hook that prints `{"decision":"continue","reason":...}` re-enters the loop with the reason injected as a system message.
+`bin/fm-turnend-guard-agy.sh` is the Cursor park ported to that decision object, registered in `.agents/hooks.json` with a `timeout` of 3600 and run with `.agents/` as its working directory.
+It parks on `bin/fm-watch-arm.sh` exactly as the Cursor guard does and returns an actionable close as one `watcher`-kind continuation, so `fm_supervision_model` classifies agy as `autoarm`.
+Only a `NO_TOOL_CALL` stop on a fully idle loop is guarded: a user cancel, an error, a limit stop, and a stop with background work still running return `{}` untouched.
+The loop bound is double: agy ends a forced-continuation chain after `executionNum` 10, and `FM_AGY_TURNEND_LOOP_CEILING` (default 8) bites first with one final loud notice.
+Past the ceiling the queued wakes stay durable and the captain's next message starts a fresh chain.
+A hook that overruns its registered timeout is killed and the stop proceeds, so the park's own bound (`FM_AGY_PARK_SECONDS`, default 3300) ends in a bounded checkpoint continuation inside the registered timeout.
+The supersession records are `state/.agy-park-owner` and its lock, and the repair nag budget is `state/.turnend-agy-blocks`.
+[`verification/agy.md`](verification/agy.md) owns the live evidence.
+
 ## Compatibility limits
 
 - Child crewmate and scout worktrees are outside scope.
@@ -408,6 +421,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - OpenCode headless mode and untrusted Grok project hooks remain fail-open at the host boundary.
 - Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode headless; firstmate primaries run interactive.
 - A Cursor primary must be launched with `--trust`, or its project hooks never load and the whole integration is inert.
+- An agy primary or secondmate home must be trusted, or `.agents/hooks.json` never loads; the hook set an answered trust dialog loads misses the turn already under way, and agy's `-p` print mode did not run the workspace hooks in the one probe made.
+- agy's chain limit of ten continuations bounds how many wakes one captain message can deliver; the supervision host and the away daemon are not wired for agy.
 - Cursor's `preCompact` step is deliberately unregistered.
   Its response can return only `user_message` and it is absent from Cursor's `additional_context` step set, so a post-compaction re-emit needs its own design and is deferred to a follow-up ([`sessionstart-nudge.md`](sessionstart-nudge.md) owns that uncovered surface).
 - Kimi Code CLI 0.29.1 exposes only global `[[hooks]]` configuration in `~/.kimi-code/config.toml`, including a `Stop` event with snake_case payload fields `hook_event_name`, `session_id`, `cwd`, and `stop_hook_active`.
@@ -436,6 +451,8 @@ It also covers true-reason banner wording and reason-keyed episode dedup survivi
 - Pi-host stand-down without Cursor identity and continued parking when `PI_CODING_AGENT` leaks alongside `CURSOR_AGENT` or `CURSOR_INVOKED_AS`.
 - Child-worktree exclusion.
 - That the adapter never exits 2.
+
+`tests/fm-agy-primary.test.sh` covers the agy park end to end over real processes with no harness installed: both continuation sources, the bounded repair nag, the loop ceiling, supersession, the untouched cancel, error, and not-idle stops, away-mode and lock-ownership inertness, child-worktree exclusion, and the `--agy` seatbelt renderings.
 
 `tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, refusal cases, token guard, spawn registration, and teardown cleanup.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.

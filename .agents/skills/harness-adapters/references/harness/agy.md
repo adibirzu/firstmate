@@ -1,7 +1,7 @@
 # Antigravity CLI
 
-Antigravity's `agy` TUI, verified end to end on 2026-09-10 with agy 1.2.0 on Linux through the Herdr backend.
-Verified as a CREWMATE and SCOUT adapter only; `../../../../../bin/fm-spawn.sh` refuses a secondmate launch on it because `../../../../../docs/supervision-protocols/` carries no agy wake protocol.
+Antigravity's `agy` TUI, verified end to end on 2026-09-10 with agy 1.2.0 on Linux through the Herdr backend, and re-verified as a PRIMARY and SECONDMATE harness on 2026-10-25 with agy 1.4.7 on macOS.
+Verified as a crewmate, scout, secondmate, and primary adapter; the primary and secondmate path rests on agy's native `hooks.json` surface and `../../../../../docs/supervision-protocols/agy.md`.
 `../../../../../docs/verification/agy.md` owns how every fact below was established and what is still unproven.
 
 ## Operating facts
@@ -17,10 +17,10 @@ Verified as a CREWMATE and SCOUT adapter only; `../../../../../bin/fm-spawn.sh` 
 | Interrupt | Single `Escape`, which prints the Interrupted row and leaves an idle composer with no repollution, so no clear key follows. |
 | Skill | No verified slash-skill form; use natural language. |
 | Autonomy | `--dangerously-skip-permissions` auto-approves tool calls for the run. |
-| Marker | None; a live TUI carries no `AGY_*` or `ANTIGRAVITY_*` variable. |
+| Marker | None on the TUI process; a hook child sees `ANTIGRAVITY_CONVERSATION_ID`, and hook commands run with the directory holding `hooks.json` as cwd and the live `agy` process as parent. |
 | Resume | `--continue` and `--conversation` exist but carry no verified pane-resume contract; use deterministic relaunch. |
 | Model | `--model <id>` with the bare catalog id from `agy models` (for example `gemini-3.8-flash-high`); `bin/fm-spawn.sh` refuses a requested id a reachable listing omits. The listing is a remote fetch, so the probe runs stdin-detached under the shared hard bound and an unreachable or hung listing launches unvalidated with a notice. |
-| Effort | `--effort low\|medium\|high`; `xhigh` and `max` stay in task metadata under the record-and-omit contract. |
+| Effort | `--effort low\|medium\|high`; `xhigh` and `max` stay in task metadata under the record-and-omit contract, so a secondmate pin caps at `high` (`agy gemini-4-argon-high high`, `agy gemini-3.8-flash-high high`). |
 | Composer | Borderless bare `>` row, which the shared classifier reads as `unknown` under the dead-shell rule, never `empty`; steering confirms delivery through native agent-state and the delivery footer instead, the cursor precedent. |
 
 ## Trust, and where the decision persists
@@ -40,7 +40,7 @@ The unauthenticated failure mode was not observed, so treat any auth prompt or r
 
 Detected by ancestry alone: `../../../../../bin/fm-harness.sh` matches the anchored process name `agy`, never `*agy*`.
 No environment marker is promoted: `AGENT=1` observed on a live TUI is an inherited launcher value, not an agy identity, and agy does not clear an inherited `CLAUDECODE` - but a structural agy ancestor now outranks that retained marker, which `../../../../../bin/fm-harness.sh` decides without depending on the spawn's own launch-boundary marker clearing.
-agy is deliberately absent from the session-lock name vocabulary in `../../../../../bin/fm-session-lock-lib.sh`, where muse, gemini, and rovo are also absent: a crewmate-only adapter must never own a home session lock.
+agy is in the session-lock name vocabulary in `../../../../../bin/fm-session-lock-lib.sh` as the anchored bare word `agy`, because a primary or secondmate home must be able to own the session lock; the anchor keeps any longer word containing those letters out.
 
 ## Worker busy state and turn end
 
@@ -48,10 +48,19 @@ agy is deliberately absent from the session-lock name vocabulary in `../../../..
 `fm_busy_agy_tail_busy` matches the pinned `esc to cancel` status row alone, hardcoded with no environment override, and `fm_busy_classify` reports `unknown agy-regex` rather than idle when it is absent, because a long turn can scroll the marker out of the captured tail.
 Teardown removes nothing agy-specific because the spawn leaves nothing behind.
 
-## Primary integration
+## Primary and secondmate integration
 
-Unsupported and unverified.
-`../../../../../docs/supervision-protocols/` carries no agy protocol, no turn-end guard adapter exists for it, and this adapter verified only the crewmate-side launch, busy state, interrupt, and exit.
-`references/common/primary-hooks.md`'s unsupported-boundary rule applies: never invent a wake protocol from a similar TUI.
+agy loads hooks from `hooks.json` in any customization root; firstmate registers `.agents/hooks.json` at the repo root, so a primary or secondmate started in a trusted home runs three hooks (hook commands run with `.agents/` as cwd and read a JSON payload on stdin):
+
+| Event | Adapter | Behavior |
+|---|---|---|
+| `SessionStart` | `../../../../../bin/fm-sessionstart-agy.sh` | Returns the session-start digest as an `injectSteps` `systemMessage`, which the model sees before its first turn. |
+| `Stop` | `../../../../../bin/fm-turnend-guard-agy.sh` | The park: holds the stop open on one watcher cycle, then returns `{"decision":"continue","reason":...}` carrying the wake. Registered `timeout` 3600; a hook past its timeout is killed and the stop proceeds. |
+| `PreToolUse` on `run_command` | `../../../../../bin/fm-arm-pretool-check.sh --agy`, `../../../../../bin/fm-cd-pretool-check.sh --agy` | Deny with `{"decision":"deny","reason":...}` on stdout; the command is `toolCall.args.CommandLine`. |
+
+Hooks load only after the folder-trust gate, and the set loaded by answering the dialog misses the turn already under way.
+agy ends a forced-continuation chain after `executionNum` 10, so the guard bounds itself at 8.
+`../../../../../docs/supervision-protocols/agy.md` owns the operating protocol and `../../../../../docs/turnend-guard.md` the cross-harness contract.
+The supervision host and the away daemon are not wired for agy, and `references/common/primary-hooks.md`'s unsupported-boundary rule still applies to anything not listed here.
 
 On 1.2.x the footer tokens used by 1.1.9 are gone: mid-turn reads `Running...` / `Running command...` with tool lines like `● Bash(...) (ctrl+o to expand)`, and idle is a bordered box with a bare `>` and no placeholder text.

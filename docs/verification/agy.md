@@ -1,6 +1,6 @@
-# Verification: the agy (Antigravity CLI) crewmate/scout adapter
+# Verification: the agy (Antigravity CLI) adapter
 
-Active empirical facts for firstmate's agy adapter.
+Active empirical facts for firstmate's agy adapter as a crewmate, scout, secondmate, and primary harness; the crewmate sections were measured on agy 1.2.0 and the final section on agy 1.4.7.
 The skill tree rooted at [`.agents/skills/harness-adapters/SKILL.md`](../../.agents/skills/harness-adapters/SKILL.md) owns the operating facts through [`references/harness/agy.md`](../../.agents/skills/harness-adapters/references/harness/agy.md); this record owns how they were established and what is still unproven.
 
 ## Subject
@@ -168,3 +168,55 @@ Run the portable suite and the live guard after any agy upgrade, because the pro
 bin/fm-test-run.sh tests/fm-agy-harness.test.sh
 FM_AGY_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
 ```
+
+## Primary and secondmate hooks (agy 1.4.7)
+
+Measured 2026-10-25 on macOS arm64 with `agy 1.4.7`, in a scratch git repository under the task scratchpad whose `.agents/hooks.json` registered probe hooks, driven in a detached tmux session with `gemini-3.8-flash-low`.
+agy's own customization guide (`~/.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md`) documents the contract, and every claim below was confirmed live rather than taken from it.
+The captain's global `~/.gemini/config/hooks.json` already registers Herdr and Orca hooks on `PreInvocation`, `PostInvocation`, and `Stop`, which is why Herdr's native agy status tracking works.
+
+```
+$ agy plugin validate <plugin with Stop,SessionStart,UserPromptSubmit,Notification,SessionEnd,AfterAgent,PostResponse>
+hook "hooks": unknown event "UserPromptSubmit" is ignored (events: SessionStart, PreInvocation, PostInvocation, Stop, PreToolUse, PostToolUse)
+```
+
+That is the complete event vocabulary: there is no user-prompt, notification, or session-end event.
+Hooks are read from `<root>/.agents/hooks.json` as a map of hook names to events, run through `sh -c` with the directory holding `hooks.json` as cwd, receive camelCase JSON on stdin, and carry `ANTIGRAVITY_CONVERSATION_ID` in their environment.
+A hook's parent process is the live `agy` TUI process (`ps -o comm=` reports `agy`), which is what the session-lock ancestry walk keys on.
+
+### Loading and trust
+
+- A workspace is loaded only after its folder-trust gate: the log reads `loaded 2 named hooks from 1 hooks.json file(s)` (the global set) before the dialog is answered and `loaded 3 named hooks from 2 hooks.json file(s)` after.
+- The hook set loaded by answering the dialog missed the turn already under way: the first turn after the dialog produced no hook output, and the next turn produced `PreInvocation`, `PostInvocation`, and `Stop`.
+- With the folder already trusted, a fresh session ran `SessionStart` before its first `PreInvocation`.
+- `agy -p` (print mode) in the same scratch repository wrote no hook output and hung past 120 seconds while the captain's MCP servers were still connecting, so print mode is not an evidenced hook surface and a primary must run the TUI.
+
+### Stop continuation, park, and timeout
+
+Stop payload from a normal completion: `{"conversationId":...,"executionNum":0,"fullyIdle":true,"lastUserInput":...,"modelName":...,"terminationReason":"NO_TOOL_CALL","transcriptPath":...,"workspacePaths":[...]}`.
+
+- A Stop hook that printed `{"decision":"continue","reason":"... reply with exactly CONTINUED_OK ..."}` once blocked the stop: the next `PreInvocation` followed within the same second and the pane printed `CONTINUED_OK`.
+- With the hook registered at `timeout: 120`, a 45 second sleep before the same `continue` returned normally (`PARK_START 1792915339`, `PARK_END 1792915384`) and the pane then printed `PARKED_OK`, so a Stop hook can hold the boundary open far past agy's 30 second default.
+- With the hook registered at `timeout: 20` and a 40 second sleep, the hook was killed (no `STOP_END` was ever written) and the turn ended with no continuation, so a timed-out hook fails open.
+- `agy plugin validate` accepted `"timeout": 28800`; a park longer than 120 seconds was not run, which is why the guard bounds its own park at 3300 seconds inside a 3600 second registration.
+- An always-continue Stop hook produced `executionNum` 0 through 10 (eleven Stop calls), then agy stopped the chain; a second chain started with `executionNum` 0 and ran to 10 again, and then no further calls were made for the remaining seven minutes of observation.
+  The guard therefore bounds itself at 8, and how often a fresh chain starts without a captain message was not established.
+
+### SessionStart injection and PreToolUse deny
+
+- A `SessionStart` hook that printed `{"injectSteps":[{"systemMessage":{"systemMessage":"SESSIONSTART_MARK: ... say SESSIONSTART_SEEN."}}]}` reached the model: asked for the marker, it answered `SESSIONSTART_SEEN`.
+- A `PreToolUse` hook (matcher `*`) received `{"toolCall":{"args":{"CommandLine":"echo DENYME","WaitMsBeforeAsync":5000,"toolSummary":"Run echo DENYME"},"name":"run_command"},"stepIdx":...}` and its `{"decision":"deny","reason":...}` blocked the command, with the reason relayed to the model.
+- Both arm and cd seatbelts therefore read `toolCall.args.CommandLine` and render the same decision object (`tests/fm-agy-primary.test.sh`).
+
+### Side effects of the probes
+
+Answering the folder-trust dialog appended the scratch directory to `trustedWorkspaces` in the captain's `~/.gemini/antigravity-cli/settings.json`; the probe removed exactly those entries afterwards.
+No hook, plugin, or setting was installed in the captain's agy configuration, and the tracked `.agents/hooks.json` is the only registration this adapter ships.
+
+### Still unproven
+
+- A Stop hook parked longer than 120 seconds, and the hook timeout ceiling.
+- What a user message or `Escape` does to a parked Stop hook, and whether a cancelled turn calls the hook with `USER_CANCELED` as the guide says.
+- `SessionStart` on a resumed or continued conversation, and whether a fresh chain restarts without a captain message after the continuation limit.
+- Herdr and tmux submit confirmation for a primary-side typed message, and the supervision host and away daemon, which are not wired for agy.
+- The live end-to-end of the shipped hooks against a real firstmate home: `tests/fm-agy-primary.test.sh` drives the shipped scripts with synthetic payloads in the recorded shapes, and the probes above used probe scripts.
