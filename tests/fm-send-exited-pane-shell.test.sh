@@ -89,28 +89,24 @@ capture() {
 
 # --- bring up a real shell and prove it ready --------------------------------
 
+# Own the interactive fixture rather than inheriting a login shell, startup
+# files, or echo settings. A rendered prompt proves readiness and continuation;
+# echoed input alone proves neither, and can be absent on a CI terminal.
+SHELL_COMMAND="env PS1='FM_SHELL_READY> ' PS2='FM_SHELL_CONTINUATION> ' '$BASH' --noprofile --norc -i"
 "$REAL_TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50 \
+  "$SHELL_COMMAND" \
   || fail "could not create the private tmux session"
 "$REAL_TMUX" -L "$SOCKET" new-window -d -t "$SESSION:" -n "$WINDOW" \
+  "$SHELL_COMMAND" \
   || fail "could not create the task window"
 
-SHELL_READY=0
-for _ in $(seq 1 100); do
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" C-c
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" -l "printf 'fm-shell-%s\\n' ready"
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" Enter
-  if wait_for_capture_text "fm-shell-ready" 10; then
-    SHELL_READY=1
-    break
-  fi
-done
-[ "$SHELL_READY" = 1 ] || fail "the interactive shell never became ready"
+wait_for_capture_text 'FM_SHELL_READY>' || fail "the interactive shell never became ready"
 
 # Leave the shell mid-continuation: `cat <<'FMEOF'` accepts input until the
 # delimiter line, so any later typed line is swallowed into the heredoc body
 # instead of executing.
 "$REAL_TMUX" -L "$SOCKET" send-keys -t "$TARGET" "cat <<'FMEOF'" Enter
-wait_for_capture_text "FMEOF" 20 || fail "the heredoc opener never rendered"
+wait_for_capture_text 'FM_SHELL_CONTINUATION>' 20 || fail "the shell never entered its heredoc continuation"
 
 agent=$(fm_backend_agent_state tmux "$TARGET")
 [ "$agent" = dead ] \
@@ -155,7 +151,7 @@ case "$out" in
   *"no agent is running"*) : ;;
   *) fail "the refusal should name the absent agent, got:"$'\n'"$out" ;;
 esac
-capture | grep -qF "FMEOF" \
+capture | grep -qF 'FM_SHELL_CONTINUATION>' \
   || fail "the pane should still be in its continuation after the refused steer"
 pass "fm-send: a typed steer is refused, not swallowed, by an exited pane in a shell continuation"
 
@@ -212,6 +208,7 @@ pass "fm-send/fm-control: exited-pane shell continuations can no longer swallow 
 
 RESET_WINDOW="fm-resetshapes"
 "$REAL_TMUX" -L "$SOCKET" new-window -d -t "$SESSION:" -n "$RESET_WINDOW" \
+  "$SHELL_COMMAND" \
   || fail "could not create the reset-shapes window"
 RESET_TARGET="$SESSION:$RESET_WINDOW"
 
@@ -220,10 +217,7 @@ reset_capture() {
 }
 reset_ready=0
 for _ in $(seq 1 100); do
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" C-c
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" -l "printf 'fm-reset-%s\\n' ready"
-  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$RESET_TARGET" Enter
-  case "$(reset_capture)" in *fm-reset-ready*) reset_ready=1; break ;; esac
+  case "$(reset_capture)" in *'FM_SHELL_READY>'*) reset_ready=1; break ;; esac
   sleep 0.1
 done
 [ "$reset_ready" = 1 ] || fail "the reset-probe shell never became ready"

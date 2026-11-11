@@ -546,7 +546,7 @@ fm_backend_cmux_composer_capture() {  # <target> [expected-label]
 # fm_backend_cmux_composer_caps: static capability facts, not logic (see the
 # capability model in bin/fm-composer-lib.sh).
 fm_backend_cmux_composer_caps() {
-  printf 'styled=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
+  printf 'styled=0\nviewport=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES"
 }
 
 # fm_backend_cmux_composer_state: thin adapter - capture plus capabilities in,

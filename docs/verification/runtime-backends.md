@@ -740,6 +740,58 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
+### OpenCode 1.19 native status panel
+
+The native OpenCode control guard is `tests/fm-opencode-control-live-e2e.test.sh`, selected by `bin/fm-test-run.sh` in `live-harness-optin` and gated with `fm_live_gate` as a default-on, zero-provider-inference check.
+It requires a supported 1.x `opencode` on PATH and uses a deterministic loopback HTTP model transport to drive the real binary, native tool permission UI and native busy queue.
+The transport never forwards requests, uses no real provider credential, and proves no provider allowance or inference capability.
+An unsupported executable version fails by name before launching; this guard makes no OpenCode 2.x launch or plugin claim.
+
+The supported isolated child profile explicitly sets `TERM=xterm-256color` and `COLORTERM=truecolor` and uses the default OpenCode theme.
+A second child omits `COLORTERM` and must preserve refusal for its palette-rendered placeholder and a real hint-like draft.
+Plain or palette placeholders remain unknown/pending; this is an intentional limit on what those captures can prove, including the plain Orca/cmux profiles.
+This result does not establish compatibility with custom themes or remapped shortcut cells; those require their own live proof.
+
+The shared classifier owns the bounded status-panel rule in `bin/fm-composer-lib.sh`; its real-frame portable regressions are in `tests/fm-composer-lib.test.sh`.
+OpenCode classification and selected-content extraction additionally require `viewport=1`, explicit adapter provenance that the capture contains the entire current visible viewport without tail truncation or scrollback substitution.
+Herdr supplies that provenance from `--source visible`; tmux supplies it from its full current-screen capture and retains cursor anchoring.
+Zellij's styled dump is currently trimmed to a bounded tail, Orca requests a bounded terminal tail, and cmux reads scrollback then trims a tail; these adapters explicitly report `viewport=0` and refuse the OpenCode left-bar shape as `unknown`.
+That refusal also applies to a genuinely blank OpenCode composer because these captures cannot prove that no dialog owns input above it.
+The portable backend regressions replay actual native OpenCode frames through each production capture path, proving the dialog disappears from the bounded capture while classification still refuses.
+Those transport replays do not establish native Zellij, Orca or cmux compatibility.
+Other harnesses' shape selectors and every backend's endpoint identity and semantic busy source are unchanged.
+
+Refresh with the intended 1.x executable on PATH:
+
+```sh
+bin/fm-test-run.sh tests/fm-opencode-control-live-e2e.test.sh
+```
+
+On 2026-10-16, a macOS arm64 lab used official OpenCode 1.19.0 and Herdr 0.9.1 without installing or replacing the canonical OpenCode 2.0.22 executable.
+An identical-environment comparison retained exact ANSI frames and changed only `COLORTERM=truecolor`: the idle hint changed from palette `38;5;244` and verdict `pending` to truecolor `38;2;128;128;128` and verdict `empty`.
+Real quoted hint-like draft text stayed `pending` in both profiles and in the reference terminal profile.
+The same guard then completed with the following actual 1.19.0 results on Herdr 0.9.1:
+
+```text
+ok - opencode (1.19.0): unsupported palette hint and real hint-like draft retain refusal
+ok - opencode (1.19.0): real drafts, including quoted hint text, survive refused control exit
+ok - opencode (1.19.0): native unfiltered, filtered and zero-result model dialogs preserve queries and refuse control
+ok - opencode (1.19.0): control exit preserves the exact endpoint and uncommitted work
+ok - opencode (1.19.0): real native tool permission overlay refuses injection without approving access
+ok - opencode (1.19.0): native busy queued Enter reaches the deterministic loopback model transport
+```
+
+The draft check requires the pending-text refusal reason, so an unrelated metadata refusal cannot satisfy it.
+The model-overlay check enters a real loopback-backed session in a short cwd at 120 columns by 60 rows before opening the native Select model dialog.
+It proves the blank composer is empty first, observes the native dialog above the same blank composer/floor and complete shortcut pair, then exercises unfiltered, populated-query and zero-result states without selecting a model.
+Each state must refuse classification, selected-content extraction and control exit, preserve the exact dialog/query after refusal, and close back to a proven blank composer.
+The modal veto uses the aligned title/escape controls, input-row spacing and action footer; query contents, result count and selection are deliberately excluded from its proof.
+Actual native filtered and zero-result frames reproduced unsafe `empty` and successful empty extraction before this correction; the corrected classifier returns `unknown` and refuses extraction for those same bytes.
+Portable regressions replay those frames with and without a cursor supplied as the actual positional argument, verify the cursor points inside the real composer, and deliberately move it outside to lose proof.
+Missing, false or unknown viewport provenance refuses both classification and extraction even when supplied a complete frame; the earlier wrapped-cwd overlay captures remain refusal evidence.
+The queue check requires the exact next user instruction to reach the local transport after the held native turn is released; it does not accept a title-generation request as delivery.
+A separate authorized read-only real spent-free capture retained `unknown` for the usage-exceeded upsell/retry row; it was never used as evidence for an empty composer.
+
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
 Verified on 2026-09-20 on macOS arm64 (Darwin 25.6.0) against Claude Code 2.1.236 running as Firstmate workers in Herdr 0.8.0 panes, read through Herdr's ANSI capture with its exact capability descriptor (`styled=1`, `cursor=0`, `identity=1`, `rows=20`).

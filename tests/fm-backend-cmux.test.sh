@@ -1164,3 +1164,26 @@ test_kill_is_best_effort_when_close_workspace_fails
 test_kill_recovers_stale_target_by_label
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend
+
+test_opencode_modal_above_bounded_capture() {
+  local dir fb out frame n screen
+  for frame in session-idle session-model-overlay session-model-filtered session-model-zero; do
+    dir="$TMP_ROOT/opencode-viewport-$frame"; mkdir -p "$dir/responses"
+    screen=$(cat "$ROOT/tests/fixtures/opencode-1.19/$frame.ansi")
+    for n in 1 3; do
+      cmux_panes_response "$dir" "$n" "bbbbbbbb-1111-1111-1111-111111111111"
+      cmux_read_screen_response "$dir" "$((n+1))" "$screen"
+    done
+    fb=$(make_cmux_fakebin "$dir")
+    out=$(PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+      bash -c '
+        . "$0/bin/backends/cmux.sh"
+        target=aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111
+        cap=$(fm_backend_cmux_composer_capture "$target") || exit 1
+        printf "%s\n" "$cap" | fm_composer_strip_ansi | grep -q "Select model" && exit 2
+        [ "$(fm_backend_cmux_composer_state "$target")" = unknown ] || exit 3
+      ' "$ROOT") || fail "cmux $frame partial capture authorized composer: $out"
+  done
+  pass "cmux OpenCode: production scrollback tail refuses unseen-modal ambiguity"
+}
+test_opencode_modal_above_bounded_capture

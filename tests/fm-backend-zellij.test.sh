@@ -1358,3 +1358,27 @@ test_send_text_submit_send_failed_when_pane_absent
 test_scripts_route_explicit_target_through_meta_backend
 test_scripts_verify_label_for_fm_targets
 test_scripts_reject_fm_target_label_mismatch
+
+# Transport replay, not a native Zellij verification: the actual full native
+# OpenCode frame enters dump-screen, then production capture truncates it.
+test_opencode_modal_above_bounded_capture() {
+  local dir fb out frame n
+  for frame in session-idle session-model-overlay session-model-filtered session-model-zero; do
+    dir="$TMP_ROOT/opencode-viewport-$frame"; mkdir -p "$dir/responses"
+    for n in 1 3 5; do
+      zellij_pane_response "$dir" "$n" 7 3
+      cp "$ROOT/tests/fixtures/opencode-1.19/$frame.ansi" "$dir/responses/$((n+1)).out"
+    done
+    fb=$(make_zellij_fakebin "$dir")
+    out=$(PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+      FM_ZELLIJ_SESSION_LIST=firstmate bash -c '
+        . "$0/bin/backends/zellij.sh"
+        cap=$(fm_backend_zellij_composer_capture firstmate:7) || exit 1
+        printf "%s\n" "$cap" | fm_composer_strip_ansi | grep -q "Select model" && exit 2
+        [ "$(fm_backend_zellij_composer_state firstmate:7)" = unknown ] || exit 3
+        if fm_backend_zellij_composer_content firstmate:7; then exit 4; fi
+      ' "$ROOT") || fail "zellij $frame partial capture authorized classification/extraction: $out"
+  done
+  pass "zellij OpenCode: production tail capture refuses unseen-modal ambiguity"
+}
+test_opencode_modal_above_bounded_capture

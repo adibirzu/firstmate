@@ -1062,6 +1062,8 @@ const operational = spawnSync(
   { encoding: "utf8", input: "operational watcher injection" },
 );
 if (operational.status !== 0) throw new Error(`could not create operational input: ${operational.stderr}`);
+const customStart = "Please give me a fresh system-resource report from this custom notification.";
+await fire("before_agent_start", { messageType: "custom", message: { role: "custom", content: customStart } }, mainCtx);
 await fire("before_agent_start", { prompt: operational.stdout }, mainCtx);
 entries.push({ type: "message", message: { role: "user", content: operational.stdout } });
 const unsolicitedPrompt = "Please keep responses concise while monitoring the fleet.";
@@ -1080,6 +1082,9 @@ if (sentToMain.length !== 1 || sentToMain[0].options.triggerTurn) {
   throw new Error(`unsolicited healthy result opened a main turn: ${JSON.stringify(sentToMain)}`);
 }
 const sailboat = sentToMain[0];
+if (globalThis.__fmSessions[0].ops.some((op) => op.kind === "custom" && op.message.customType === "fm-main-mirror" && op.message.content.includes(customStart))) {
+  throw new Error("a custom turn-start notification was mirrored as a captain request");
+}
 if (sailboat.message.display !== true || !sailboat.message.content.startsWith("⛵ branch-driver:")) {
   throw new Error(`unsolicited healthy result was not a rendered sailboat note: ${JSON.stringify(sailboat)}`);
 }
@@ -1971,7 +1976,7 @@ if (stolen?.messages?.some((message) => message.customType === "fm-branch-proces
 }
 await fire("agent_end", {});
 aborted = false;
-await fire("before_agent_start", { prompt: pending.message.content }, abortCtx);
+await fire("before_agent_start", { messageType: "custom", message: processingMsg }, abortCtx);
 await fire("agent_start", {}, defaultSessionCtx);
 const openedByRequest = await fire("context", { messages: [...history, processingMsg] }, abortCtx);
 if (!aborted) throw new Error("a dedicated processing turn with history was not aborted under the record");
