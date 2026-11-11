@@ -101,27 +101,27 @@ cat > "$LAB/mock-bin/orca-axi" <<'SH'
 if [ "${1:-}" = "agents" ]; then
   cat <<'JSON'
 {
-  "ok": true,
-  "scannedAt": "2026-11-11T22:45:00.000Z",
-  "summary": {
-    "totalAgents": 6,
-    "workingAgents": 4,
-    "bridgedAgents": 1,
-    "idleAgents": 1,
-    "machinesOnline": 5,
-    "machinesTotal": 5,
-    "activeProjects": 5,
-    "byHarness": { "agy": 2, "claude": 1, "codex": 1, "grok": 1, "hermes": 1 },
-    "byHost": { "adi0": 2, "adi1": 1, "adi2": 1, "macmini": 1, "adi4": 1 }
-  },
-  "machines": [
-    { "host": "adi0", "reachable": true, "os": "darwin", "agentCount": 2, "durationMs": 120 },
-    { "host": "adi1", "reachable": true, "os": "linux", "agentCount": 1, "durationMs": 310 },
-    { "host": "adi2", "reachable": true, "os": "linux", "agentCount": 1, "durationMs": 420 },
-    { "host": "macmini", "reachable": true, "os": "darwin", "agentCount": 1, "durationMs": 280 },
-    { "host": "adi4", "reachable": true, "os": "linux", "agentCount": 1, "durationMs": 390 }
-  ],
-  "agents": [
+  "agents": {
+    "generatedAt": "2026-11-11T22:45:00.000Z",
+    "localHost": "adi0",
+    "totals": {
+      "agents": 6,
+      "working": 4,
+      "bridged": 1,
+      "idle": 1,
+      "machinesOnline": 5,
+      "machinesTotal": 5,
+      "activeProjects": 5,
+      "harnesses": { "agy": 2, "claude": 1, "codex": 1, "grok": 1, "opencode": 1 }
+    },
+    "machines": [
+      { "host": "adi0", "reachable": true, "agentCount": 2, "workingCount": 2, "durationMs": 120 },
+      { "host": "adi1", "reachable": true, "agentCount": 1, "workingCount": 1, "durationMs": 310 },
+      { "host": "adi2", "reachable": true, "agentCount": 1, "workingCount": 1, "durationMs": 420 },
+      { "host": "macmini", "reachable": true, "agentCount": 1, "workingCount": 0, "durationMs": 280 },
+      { "host": "adi4", "reachable": true, "agentCount": 1, "workingCount": 1, "durationMs": 390 }
+    ],
+    "items": [
     {
       "id": "adi0:57264",
       "host": "adi0",
@@ -272,8 +272,9 @@ if [ "${1:-}" = "agents" ]; then
       "herdrPane": null,
       "orcaTerminalId": null
     }
-  ],
-  "projects": []
+    ],
+    "projects": []
+  }
 }
 JSON
   exit 0

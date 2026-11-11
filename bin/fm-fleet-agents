@@ -346,10 +346,13 @@ def match_captain(project: str, host: str, cwd: str):
     return None
 
 
-raw_agents = list(axi.get("agents") or [])
+raw_report = axi["agents"] if isinstance(axi.get("agents"), dict) else axi
+raw_agents = list(raw_report.get("items") or raw_report.get("agents") or [])
 enriched_agents = []
 
 for agent in raw_agents:
+    if not isinstance(agent, dict):
+        continue
     host = normalize_host_alias(agent.get("host", "adi0"))
     state = agent.get("state", "idle")
     harness = agent.get("harness", "unknown")
@@ -368,11 +371,13 @@ for agent in raw_agents:
 
     matched_meta = match_task(cwd or "", wt or "", host)
     captain_id = match_captain(project, host, cwd or "")
+    session_id = agent.get("sessionId") or agent.get("conversationId")
 
     enriched = {
         **agent,
         "host": host,
         "project": project,
+        "sessionId": session_id,
         "matchedTaskId": matched_meta["taskId"] if matched_meta else None,
         "matchedHome": matched_meta["ownerHome"] if matched_meta else None,
         "captain": captain_id,
@@ -433,7 +438,7 @@ for proj_name, p in sorted(
         }
     )
 
-machines = axi.get("machines") or []
+machines = raw_report.get("machines") or []
 by_harness = defaultdict(int)
 by_host = defaultdict(int)
 working_count = 0
@@ -453,7 +458,7 @@ for ag in enriched_agents:
 
 payload = {
     "schema": "fm-fleet-agents.v1",
-    "scannedAt": axi.get("scannedAt") or datetime.now(timezone.utc).isoformat(),
+    "scannedAt": raw_report.get("generatedAt") or raw_report.get("scannedAt") or datetime.now(timezone.utc).isoformat(),
     "summary": {
         "totalAgents": len(enriched_agents),
         "workingAgents": working_count,
@@ -506,10 +511,12 @@ for proj in projects_list:
         surfaces = "+".join(ag.get("surfaces") or [ag.get("surface", "terminal")])
         branch = ag.get("branch") or "-"
         issue = f" ({ag['linearIssue']})" if ag.get("linearIssue") else ""
-        conv = f" conv:{ag['conversationId'][:8]}" if ag.get("conversationId") else ""
+        sid = ag.get("sessionId") or ag.get("conversationId")
+        conv = f" conv:{str(sid)[:8]}" if sid else ""
         task = f" task:{ag['matchedTaskId']}" if ag.get("matchedTaskId") else ""
+        pid_str = str(ag["pid"]) if ag.get("pid") is not None else "-"
         print(
-            f"  - [{ag['state']:7}] {ag['host']:7} | {ag['harness']:8} | pid:{ag['pid']:<6} | "
+            f"  - [{ag['state']:7}] {ag['host']:7} | {ag['harness']:8} | pid:{pid_str:<6} | "
             f"{surfaces:<22} | {branch}{issue}{conv}{task} | {ag.get('cwd') or '-'}"
         )
 PY
