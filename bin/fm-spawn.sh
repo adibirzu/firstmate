@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> [--validation <feature|prd-finish>] --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
@@ -467,6 +467,10 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-project-skills-lib.sh
+. "$SCRIPT_DIR/fm-project-skills-lib.sh"
+# shellcheck source=bin/fm-validation-lib.sh
+. "$SCRIPT_DIR/fm-validation-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -497,6 +501,7 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 MODE=
+VALIDATION=feature
 YOLO=
 TRACEPARENT_ARG=
 HANDOFF_BRIEF=
@@ -510,6 +515,7 @@ MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
 MODE_SET=0
+VALIDATION_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
 POS=()
@@ -527,6 +533,7 @@ for a in "$@"; do
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
+      validation) VALIDATION=$a; VALIDATION_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
       handoff-brief) HANDOFF_BRIEF=$a ;;
@@ -562,6 +569,8 @@ for a in "$@"; do
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --validation) want_value=validation ;;
+    --validation=*) VALIDATION=${a#--validation=}; VALIDATION_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
@@ -645,6 +654,10 @@ if [ "$KIND" = ship ]; then
         exit 1 ;;
       *) echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2; exit 1 ;;
     esac
+  fi
+  if ! VALIDATION=$(fm_validation_normalize "$VALIDATION"); then
+    echo "error: --validation must be feature or prd-finish (got '$VALIDATION')" >&2
+    exit 1
   fi
   if [ "$YOLO_SET" -eq 1 ]; then
     case "$YOLO" in
@@ -1096,6 +1109,7 @@ spawn_abort_cleanup() {
             echo "harness=$HARNESS"
             echo "kind=$KIND"
             [ -z "${MODE:-}" ] || echo "mode=$MODE"
+            echo "validation=$VALIDATION"
             [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
             echo "tasktmp=${TASK_TMP:-}"
             [ -z "${PROVIDER:-}" ] || echo "provider=$PROVIDER"
@@ -1315,7 +1329,7 @@ fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; 
 # nothing half-created. It reads machine state and declines; it never touches
 # work that is already running. A batch re-execs this script per pair, so each
 # pair is admitted against the machine as the previous pair left it.
-fm_capacity_guard "$CONFIG" "$KIND task $ID" || exit 1
+fm_capacity_guard "$CONFIG" "$KIND task $ID" "${MODEL:-}" || exit 1
 # Role partition: spawning NEW work is MAIN-owned. A reuse-worktree relaunch of an
 # existing task is legitimate recovery (fm-control or fm-runtime-handoff drive it
 # through this same entrypoint), so only a fresh spawn refuses the branch actor
@@ -1721,7 +1735,7 @@ launch_template() {
       if [ "$kind" = secondmate ]; then
         printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow","skill":__SKILLPERM__}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     pi|pi-signed)
@@ -2742,11 +2756,19 @@ delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task
 if [ "$KIND" = ship ]; then
   PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
+  BRIEF_VALIDATION=$(sed -n 's/^Delivery contract:.*validation=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   if [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2
     exit 1
+  fi
+  if [ -n "$BRIEF_VALIDATION" ] && [ "$BRIEF_VALIDATION" != "$VALIDATION" ]; then
+    echo "error: validation mismatch for $ID: the brief says validation=$BRIEF_VALIDATION but this spawn passed --validation $VALIDATION; correct the flag or re-scaffold the brief" >&2
+    exit 1
+  fi
+  if [ -z "$BRIEF_VALIDATION" ] && [ "$VALIDATION" != feature ]; then
+    echo "warning: $BRIEF records no validation= token; launching on --validation $VALIDATION" >&2
   fi
   # The registry holds the captain's standing posture, so dropping below it is
   # allowed (a current explicit captain instruction wins) but never silent. An
@@ -4663,6 +4685,12 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT" "$MODEL") || exit 1
+# Project skill allowlist for OpenCode crewmates/scouts (deny-all except profile).
+SKILLPERM='{"*":"deny","no-mistakes":"allow"}'
+if [ "$HARNESS" = opencode ] && [ "$KIND" != secondmate ]; then
+  SKILLPERM=$(fm_project_skills_opencode_permission_json "$PROJ_ABS" "${SOURCE_BRIEF:-$BRIEF}") || SKILLPERM='{"*":"deny","no-mistakes":"allow"}'
+fi
+LAUNCH=${LAUNCH//__SKILLPERM__/$SKILLPERM}
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 if [ "$HARNESS" = rovo ]; then

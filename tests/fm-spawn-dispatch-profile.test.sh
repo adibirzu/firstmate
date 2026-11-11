@@ -650,8 +650,9 @@ test_cursor_failed_catalog_probe_does_not_block_spawn() {
 }
 
 # Crewmate/scout OpenCode overlay: Claude Code compatibility off, skill catalog
-# not widened by OPENCODE_CONFIG_CONTENT. Observed from the typed launch line
-# (fake tmux send-keys payload), never from fm-spawn.sh source bytes.
+# deny-all except the project profile (baseline = no-mistakes when no profile).
+# Observed from the typed launch line (fake tmux send-keys payload), never from
+# fm-spawn.sh source bytes.
 OPENCODE_CREW_SKILL_OVERLAY='{"permission":{"*":"allow","skill":{"*":"deny","no-mistakes":"allow"}}}'
 OPENCODE_SECONDMATE_PERMISSION_OVERLAY='{"permission":{"*":"allow"}}'
 

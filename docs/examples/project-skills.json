@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "defaults": [],
+  "projects": {
+    "transport-management": {
+      "skills": ["diagnostic-reasoning", "graphify-orientation"]
+    },
+    "hospital-inventory": {
+      "skills": ["diagnostic-reasoning", "captain-hold-lifecycle"]
+    },
+    "aetherops": {
+      "skills": ["diagnostic-reasoning", "harness-adapters"]
+    },
+    "firstmate": {
+      "skills": ["firstmate-coding-guidelines", "harness-adapters", "router-dispatch"]
+    }
+  }
+}

@@ -194,13 +194,27 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
 EOF
 }
 
-fm_dod_block() {  # <mode> <task-id>
-  local mode=$1 id=$2
+
+# Validation-phase addendum (feature vs prd-finish). Sourced lazily so this file
+# stays usable when validation-lib is present beside it.
+fm_dod_ensure_validation_lib() {
+  if declare -F fm_validation_dod_addendum >/dev/null 2>&1; then
+    return 0
+  fi
+  local dir
+  dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=bin/fm-validation-lib.sh
+  . "$dir/fm-validation-lib.sh"
+}
+
+fm_dod_block() {  # <mode> <task-id> [<validation-phase>]
+  local mode=$1 id=$2 validation=${3:-feature}
+  fm_dod_ensure_validation_lib
   case "$mode" in
     direct-PR)
       cat <<EOF
 # Definition of done
-Delivery contract: mode=direct-PR
+Delivery contract: mode=direct-PR validation=$validation
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict before opening the PR; see \`docs/code-review.md\`.
@@ -208,22 +222,24 @@ If it escalates to Stage 2 in delegate mode (exit 2), fix what the printed rules
 Push your branch, open a PR with \`gh-axi pr create --repo <owner>/<name>\` (the repository named by \`git remote get-url origin\`, never the CLI default), and paste that final Stage 1 verdict into the PR body under a \`## Code Review (Stage 1)\` heading, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
+      fm_validation_dod_addendum "$validation"
       ;;
     local-only)
       cat <<EOF
 # Definition of done
-Delivery contract: mode=local-only
+Delivery contract: mode=local-only validation=$validation
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$id\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When it is implemented and committed, append \`done: ready in branch fm/$id\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
+      fm_validation_dod_addendum "$validation"
       ;;
     no-mistakes)
       cat <<EOF
 # Definition of done
-Delivery contract: mode=no-mistakes
+Delivery contract: mode=no-mistakes validation=$validation
 The task is complete only when committed on your branch.
 Before invoking /no-mistakes, run \`bin/fm-review.sh worktree\` for the Stage 1 (deterministic, zero-LLM) code review verdict (\`docs/code-review.md\`) and fix anything it flags, so the pipeline's own reviewer sees a cleaner diff.
 This does not replace or modify the no-mistakes pipeline itself.
@@ -255,6 +271,7 @@ Two firstmate-specific rules layer on top of that guidance:
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
+      fm_validation_dod_addendum "$validation"
       ;;
     *)
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2

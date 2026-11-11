@@ -596,6 +596,8 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
 - `graphify-orientation` - load before broadly exploring unfamiliar code, discovering relevant files, mapping ownership, or tracing cross-file relationships.
 - `router-dispatch` - load before choosing a worker or reviewer runtime by task descriptor, before resolving a subscription-aware profile array, or before launching under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`).
+- `project-skill-profile` - load before scaffolding or spawning with a per-project skill allowlist, before recording that a crewmate needed an extra skill, and before choosing feature vs `prd-finish` validation (`bin/fm-project-skills-lib.sh`, `bin/fm-validation-lib.sh`).
+- `fleet-stations` - load when routing remote work, seeding or recovering a remote secondmate, attaching `herdr --remote`, mounting ExternalNVME across stations, or answering where adi1/adi2/adi3/Omarchy/CommandoPC/Home PC stations live.
 
 ## 14. Relay
 

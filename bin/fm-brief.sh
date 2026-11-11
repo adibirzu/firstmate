@@ -12,7 +12,7 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--validation <feature|prd-finish>] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -97,6 +97,10 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-validation-lib.sh
+. "$SCRIPT_DIR/fm-validation-lib.sh"
+# shellcheck source=bin/fm-project-skills-lib.sh
+. "$SCRIPT_DIR/fm-project-skills-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
 resolve_directory_input() {
@@ -128,6 +132,8 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+VALIDATION=feature
+VALIDATION_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -137,6 +143,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      validation) VALIDATION=$a; VALIDATION_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -149,6 +156,8 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --validation) want_value=validation ;;
+    --validation=*) VALIDATION=${a#--validation=}; VALIDATION_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -364,6 +373,9 @@ If the graph-first surface is unreachable, proceed with normal targeted file rea
 EOF
 GRAPH_FIRST_SECTION=${GRAPH_FIRST_SECTION%$'\n'}
 
+SKILLS_SECTION=$(fm_project_skills_brief_section "$REPO")
+SKILLS_SECTION=${SKILLS_SECTION%$'\n'}
+
 # Worktree-isolation assertion, defined once and included in both the scout and
 # ship scaffolds below (one-owner rule; firstmate-coding-guidelines): the worker's
 # first command checks that its shell is the exact worktree it was launched in,
@@ -414,6 +426,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 $ISOLATION_SECTION
 
 $GRAPH_FIRST_SECTION
+
+$SKILLS_SECTION
 
 # Rules
 1. Never push to any remote and never open a PR.
@@ -492,7 +506,11 @@ case "$MODE" in
     RULE1='1. Never push to the default branch. Never merge a PR.'
     ;;
 esac
-DOD=$(fm_dod_block "$MODE" "$ID") || exit 1
+if ! VALIDATION=$(fm_validation_normalize "$VALIDATION"); then
+  echo "error: --validation must be feature or prd-finish (got '$VALIDATION')" >&2
+  exit 1
+fi
+DOD=$(fm_dod_block "$MODE" "$ID" "$VALIDATION") || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -509,6 +527,8 @@ $ISOLATION_SECTION
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
 $GRAPH_FIRST_SECTION
+
+$SKILLS_SECTION
 
 # Rules
 $RULE1
@@ -566,4 +586,4 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "scaffolded: $BRIEF (ship, mode=$MODE, validation=$VALIDATION; replace {TASK} and {FIRSTMATE_SPEC})"
