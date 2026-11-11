@@ -43,7 +43,7 @@ case "$cmd" in
   # preflight/admiral exist precisely to be usable BEFORE there is a fleet: one
   # reports what a tier would need, the other records the opt-in that turns the
   # cross-operator tier on. Requiring a fleet for either would be circular.
-  init|budget|quota|models|pick|preflight|admiral|'') : ;;
+  init|budget|quota|models|pick|preflight|admiral|agents|'') : ;;
   # register/heartbeat/leave are how you BECOME an operator, and they already need
   # write access to the shared dir (POSIX group), so they skip the ownership check.
   register|heartbeat|leave) fm_fleet_assert_initialized "$DIR" || exit 1 ;;
@@ -65,6 +65,7 @@ case "$cmd" in
   leave)     fm_fleet_leave "$DIR" "$1" ;;
   budget)    rc=0; fm_fleet_budget_ok || rc=1; echo "$fm_fleet_budget_reason"; exit "$rc" ;;
   preflight) exec "$SCRIPT_DIR/fm-fleet-preflight.sh" "$@" ;;
+  agents)    exec "$SCRIPT_DIR/fm-fleet-agents" "$@" ;;
   # The cross-operator opt-in, following the config/berths idiom: a gitignored flag
   # file whose ABSENCE leaves this home behaving exactly as a solo home always has.
   # Enabling records consent; it installs nothing and needs no root.

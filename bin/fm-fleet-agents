@@ -1,0 +1,515 @@
+#!/usr/bin/env bash
+# fm-fleet-agents - cross-machine working agent discovery & project radar for FirstMate.
+#
+# Integrates:
+#   1. `orca-axi agents [--all-machines] --json` across adi0, adi1, adi2, macmini, adi4
+#   2. `fm-fleet-herdr-collect.sh --json --local-only` for local Herdr sessions/panes
+#   3. FirstMate task records (`$FM_HOME/state/*.meta` + local SecondMate pool homes)
+#   4. SecondMate captain domain bindings (`$FM_HOME/data/secondmates.md`)
+#
+# READ-ONLY GUARANTEE: inspects processes, sessions, worktrees, and registry files
+# without signalling, attaching to, or mutating any agent, pane, or session.
+#
+# Usage:
+#   fm-fleet-agents [--all-machines|--local-only] [--host <host>] [--project <name>]
+#                   [--harness <kind>] [--active-only] [--json]
+set -euo pipefail
+
+resolve_script_dir() {
+  local src="${BASH_SOURCE[0]}" dir target hops=0
+  while [ -L "$src" ] && [ "$hops" -lt 16 ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    target="$(readlink "$src")"
+    case "$target" in
+      /*) src="$target" ;;
+      *) src="$dir/$target" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+if [ -n "${FM_HOME:-}" ]; then
+  FM_HOME="$FM_HOME"
+elif [ -f "$FM_ROOT/data/secondmates.md" ]; then
+  FM_HOME="$FM_ROOT"
+elif [ -d "$HOME/dev/firstmate/data" ]; then
+  FM_HOME="$HOME/dev/firstmate"
+else
+  FM_HOME="$FM_ROOT"
+fi
+STATE_DIR="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA_DIR="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+SECONDMATES_FILE="$DATA_DIR/secondmates.md"
+
+resolve_orca_axi() {
+  if [ -n "${FM_ORCA_AXI_BIN:-}" ]; then
+    printf '%s\n' "$FM_ORCA_AXI_BIN"
+    return 0
+  fi
+  if [ -x "$HOME/.local/bin/orca-axi" ]; then
+    printf '%s\n' "$HOME/.local/bin/orca-axi"
+    return 0
+  fi
+  if command -v orca-axi >/dev/null 2>&1; then
+    command -v orca-axi
+    return 0
+  fi
+  return 1
+}
+
+HERDR_COLLECT_BIN="${FM_HERDR_COLLECT_BIN:-$SCRIPT_DIR/fm-fleet-herdr-collect.sh}"
+
+usage() {
+  cat <<'EOF'
+usage: fm-fleet-agents [options]
+
+Discover and organize working coding agents across FirstMate & Orca fleet hosts
+(adi0, adi1, adi2, macmini, adi4) grouped by canonical project and SecondMate captain.
+
+Options:
+  --all-machines       Probe local host + remote SSH fleet (default)
+  --local-only         Inspect local host only
+  --host <name>        Filter to a specific machine (e.g. adi0, adi1, adi2, macmini, adi4)
+  --project <name>     Case-insensitive substring filter on project name
+  --harness <kind>     Filter by harness (agy, claude, codex, grok, opencode, cursor, gemini, hermes)
+  --active-only        Include only working or bridged agents (exclude idle)
+  --json               Emit structured JSON (schema: fm-fleet-agents.v1)
+  -h, --help           Show this help message
+EOF
+}
+
+ALL_MACHINES=1
+FILTER_HOST=""
+FILTER_PROJECT=""
+FILTER_HARNESS=""
+ACTIVE_ONLY=0
+JSON_OUT=0
+
+sanitize_token() {
+  local val=$1 label=$2
+  case "$val" in
+    ''|*[!A-Za-z0-9._:/@-]*)
+      printf 'fm-fleet-agents: invalid %s value: %s\n' "$label" "$val" >&2
+      exit 2
+      ;;
+  esac
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --all-machines)
+      ALL_MACHINES=1
+      shift
+      ;;
+    --local-only)
+      ALL_MACHINES=0
+      shift
+      ;;
+    --host)
+      [ "$#" -ge 2 ] || { echo "fm-fleet-agents: --host requires a value" >&2; exit 2; }
+      sanitize_token "$2" "--host"
+      FILTER_HOST="$2"
+      shift 2
+      ;;
+    --project)
+      [ "$#" -ge 2 ] || { echo "fm-fleet-agents: --project requires a value" >&2; exit 2; }
+      sanitize_token "$2" "--project"
+      FILTER_PROJECT="$2"
+      shift 2
+      ;;
+    --harness)
+      [ "$#" -ge 2 ] || { echo "fm-fleet-agents: --harness requires a value" >&2; exit 2; }
+      sanitize_token "$2" "--harness"
+      FILTER_HARNESS="$2"
+      shift 2
+      ;;
+    --active-only)
+      ACTIVE_ONLY=1
+      shift
+      ;;
+    --json)
+      JSON_OUT=1
+      shift
+      ;;
+    *)
+      printf 'fm-fleet-agents: unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+ORCA_AXI_BIN="$(resolve_orca_axi || true)"
+if [ -z "$ORCA_AXI_BIN" ] || [ ! -x "$ORCA_AXI_BIN" ]; then
+  echo "fm-fleet-agents: orca-axi binary not found (set FM_ORCA_AXI_BIN or install ~/.local/bin/orca-axi)" >&2
+  exit 1
+fi
+
+AXI_ARGS=("agents" "--json")
+if [ "$ALL_MACHINES" -eq 1 ]; then
+  AXI_ARGS+=("--all-machines")
+fi
+
+AXI_JSON="$("$ORCA_AXI_BIN" "${AXI_ARGS[@]}")"
+
+HERDR_JSON='{"hosts":[]}'
+if [ -x "$HERDR_COLLECT_BIN" ]; then
+  HERDR_JSON="$("$HERDR_COLLECT_BIN" --json --local-only 2>/dev/null || printf '{"hosts":[]}')"
+fi
+
+AXI_TMP="$(mktemp "${TMPDIR:-/tmp}/fm-axi.XXXXXX")"
+HERDR_TMP="$(mktemp "${TMPDIR:-/tmp}/fm-herdr.XXXXXX")"
+trap 'rm -f "$AXI_TMP" "$HERDR_TMP"' EXIT
+printf '%s' "$AXI_JSON" > "$AXI_TMP"
+printf '%s' "$HERDR_JSON" > "$HERDR_TMP"
+
+python3 - "$AXI_TMP" "$HERDR_TMP" "$STATE_DIR" "$SECONDMATES_FILE" \
+  "$FILTER_HOST" "$FILTER_PROJECT" "$FILTER_HARNESS" "$ACTIVE_ONLY" "$JSON_OUT" <<'PY'
+import glob
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone
+
+(
+    axi_path,
+    herdr_path,
+    state_dir,
+    secondmates_path,
+    filter_host,
+    filter_project,
+    filter_harness,
+    active_only_str,
+    json_out_str,
+) = sys.argv[1:10]
+
+active_only = active_only_str == "1"
+json_out = json_out_str == "1"
+
+with open(axi_path, "r", encoding="utf-8") as fh:
+    axi = json.load(fh)
+
+try:
+    with open(herdr_path, "r", encoding="utf-8") as fh:
+        herdr_data = json.load(fh)
+except Exception:
+    herdr_data = {"hosts": []}
+
+
+def normalize_host_alias(raw: str) -> str:
+    h = (raw or "").strip().lower()
+    if h in ("adi2-ts", "edgexpert-33b0", "edgexpert"):
+        return "adi2"
+    if h in ("adihost4", "srv2083966"):
+        return "adi4"
+    return h
+
+
+def parse_secondmates(path: str):
+    captains = []
+    if not path or not os.path.isfile(path) or os.path.islink(path):
+        return captains
+    local_re = re.compile(
+        r"^- ([A-Za-z0-9._-]+) - (.+) \(home:\s*([^;)]*);\s*scope:\s*(.*);\s*projects:\s*([^;)]*);\s*added\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\)\s*$"
+    )
+    remote_re = re.compile(
+        r"^- ([A-Za-z0-9._-]+) - (.+) \(host:\s*([^;)]*);\s*root:\s*([^;)]*);\s*home:\s*([^;)]*);\s*scope:\s*(.*);\s*projects:\s*([^;)]*);\s*added\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\)\s*$"
+    )
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            line = raw_line.rstrip("\n")
+            m_local = local_re.match(line)
+            if m_local:
+                cid, _summary, home, scope, projs, added = m_local.groups()
+                projects = [p.strip() for p in projs.split(",") if p.strip()]
+                captains.append(
+                    {
+                        "id": cid,
+                        "host": "adi0",
+                        "home": home.strip(),
+                        "scope": scope.strip(),
+                        "projects": projects,
+                        "remote": False,
+                        "added": added,
+                    }
+                )
+                continue
+            m_remote = remote_re.match(line)
+            if m_remote:
+                cid, _summary, host, root, home, scope, projs, added = m_remote.groups()
+                projects = [p.strip() for p in projs.split(",") if p.strip()]
+                captains.append(
+                    {
+                        "id": cid,
+                        "host": normalize_host_alias(host),
+                        "rawHost": host.strip(),
+                        "root": root.strip(),
+                        "home": home.strip(),
+                        "scope": scope.strip(),
+                        "projects": projects,
+                        "remote": True,
+                        "added": added,
+                    }
+                )
+    return captains
+
+
+def load_task_metas(primary_state: str, captains):
+    state_dirs = [("main", primary_state)]
+    for cap in captains:
+        if not cap.get("remote") and cap.get("home"):
+            state_dirs.append((cap["id"], os.path.join(cap["home"], "state")))
+    metas = []
+    seen = set()
+    for owner, sdir in state_dirs:
+        if not sdir or not os.path.isdir(sdir):
+            continue
+        for meta_file in sorted(glob.glob(os.path.join(sdir, "*.meta"))):
+            if os.path.islink(meta_file) or meta_file in seen:
+                continue
+            seen.add(meta_file)
+            task_id = os.path.splitext(os.path.basename(meta_file))[0]
+            if not task_id or task_id.startswith("."):
+                continue
+            fields = {}
+            try:
+                with open(meta_file, "r", encoding="utf-8", errors="replace") as mfh:
+                    for line in mfh:
+                        if "=" in line:
+                            k, v = line.rstrip("\n").split("=", 1)
+                            fields[k.strip()] = v.strip()
+            except OSError:
+                continue
+            wt = fields.get("worktree", "")
+            if wt.startswith("/"):
+                metas.append(
+                    {
+                        "taskId": task_id,
+                        "worktree": wt.rstrip("/") or "/",
+                        "harness": fields.get("harness") or None,
+                        "model": fields.get("model") or None,
+                        "status": fields.get("status") or None,
+                        "ownerHome": owner,
+                    }
+                )
+    # Longest path wins when matching a worktree or subdirectory
+    metas.sort(key=lambda m: len(m["worktree"]), reverse=True)
+    return metas
+
+
+captains = parse_secondmates(secondmates_path)
+metas = load_task_metas(state_dir, captains)
+
+
+def match_task(cwd: str, wt: str, host: str):
+    if host != "adi0":
+        return None
+    for candidate in (wt, cwd):
+        if not candidate:
+            continue
+        norm = candidate.rstrip("/") or "/"
+        for meta in metas:
+            mwt = meta["worktree"]
+            if norm == mwt or norm.startswith(mwt + "/"):
+                return meta
+    return None
+
+
+def match_captain(project: str, host: str, cwd: str):
+    proj_lower = (project or "").lower()
+    norm_host = normalize_host_alias(host)
+    # 1. Exact project + host match first
+    for cap in captains:
+        cap_projs = [p.lower() for p in cap["projects"]]
+        if proj_lower in cap_projs and cap["host"] == norm_host:
+            return cap["id"]
+    # 2. Exact project match across fleet
+    for cap in captains:
+        cap_projs = [p.lower() for p in cap["projects"]]
+        if proj_lower in cap_projs:
+            return cap["id"]
+    # 3. Path prefix inside captain home
+    if cwd:
+        for cap in captains:
+            home = cap.get("home") or ""
+            if home and (cwd == home or cwd.startswith(home.rstrip("/") + "/")):
+                return cap["id"]
+    return None
+
+
+raw_agents = list(axi.get("agents") or [])
+enriched_agents = []
+
+for agent in raw_agents:
+    host = normalize_host_alias(agent.get("host", "adi0"))
+    state = agent.get("state", "idle")
+    harness = agent.get("harness", "unknown")
+    project = agent.get("project") or "unassigned"
+    cwd = agent.get("cwd")
+    wt = agent.get("worktreePath")
+
+    if active_only and state not in ("working", "bridged"):
+        continue
+    if filter_host and host != normalize_host_alias(filter_host):
+        continue
+    if filter_project and filter_project.lower() not in project.lower():
+        continue
+    if filter_harness and filter_harness.lower() != harness.lower():
+        continue
+
+    matched_meta = match_task(cwd or "", wt or "", host)
+    captain_id = match_captain(project, host, cwd or "")
+
+    enriched = {
+        **agent,
+        "host": host,
+        "project": project,
+        "matchedTaskId": matched_meta["taskId"] if matched_meta else None,
+        "matchedHome": matched_meta["ownerHome"] if matched_meta else None,
+        "captain": captain_id,
+    }
+    enriched_agents.append(enriched)
+
+# Group by project
+projects_map = {}
+for ag in enriched_agents:
+    proj = ag["project"]
+    entry = projects_map.setdefault(
+        proj,
+        {
+            "project": proj,
+            "captain": ag.get("captain"),
+            "agentCount": 0,
+            "workingCount": 0,
+            "hosts": set(),
+            "harnesses": set(),
+            "branches": set(),
+            "linearIssues": set(),
+            "matchedTasks": set(),
+            "agents": [],
+        },
+    )
+    if not entry["captain"] and ag.get("captain"):
+        entry["captain"] = ag["captain"]
+    entry["agentCount"] += 1
+    if ag.get("state") in ("working", "bridged"):
+        entry["workingCount"] += 1
+    entry["hosts"].add(ag["host"])
+    entry["harnesses"].add(ag["harness"])
+    if ag.get("branch"):
+        entry["branches"].add(ag["branch"])
+    if ag.get("linearIssue"):
+        entry["linearIssues"].add(ag["linearIssue"])
+    if ag.get("matchedTaskId"):
+        entry["matchedTasks"].add(ag["matchedTaskId"])
+    entry["agents"].append(ag)
+
+projects_list = []
+for proj_name, p in sorted(
+    projects_map.items(),
+    key=lambda kv: (-kv[1]["workingCount"], -kv[1]["agentCount"], kv[0]),
+):
+    projects_list.append(
+        {
+            "project": proj_name,
+            "captain": p["captain"],
+            "agentCount": p["agentCount"],
+            "workingCount": p["workingCount"],
+            "hosts": sorted(p["hosts"]),
+            "harnesses": sorted(p["harnesses"]),
+            "branches": sorted(p["branches"]),
+            "linearIssues": sorted(p["linearIssues"]),
+            "matchedTasks": sorted(p["matchedTasks"]),
+            "agents": p["agents"],
+        }
+    )
+
+machines = axi.get("machines") or []
+by_harness = defaultdict(int)
+by_host = defaultdict(int)
+working_count = 0
+bridged_count = 0
+idle_count = 0
+
+for ag in enriched_agents:
+    by_harness[ag["harness"]] += 1
+    by_host[ag["host"]] += 1
+    st = ag.get("state")
+    if st == "working":
+        working_count += 1
+    elif st == "bridged":
+        bridged_count += 1
+    else:
+        idle_count += 1
+
+payload = {
+    "schema": "fm-fleet-agents.v1",
+    "scannedAt": axi.get("scannedAt") or datetime.now(timezone.utc).isoformat(),
+    "summary": {
+        "totalAgents": len(enriched_agents),
+        "workingAgents": working_count,
+        "bridgedAgents": bridged_count,
+        "idleAgents": idle_count,
+        "machinesOnline": sum(1 for m in machines if m.get("reachable")),
+        "machinesTotal": len(machines),
+        "activeProjects": len(projects_list),
+        "byHarness": dict(sorted(by_harness.items())),
+        "byHost": dict(sorted(by_host.items())),
+    },
+    "machines": machines,
+    "projects": projects_list,
+    "agents": enriched_agents,
+    "captains": captains,
+    "herdrLocal": herdr_data.get("hosts", []),
+}
+
+if json_out:
+    print(json.dumps(payload, indent=2))
+    sys.exit(0)
+
+s = payload["summary"]
+harnesses_str = ", ".join(f"{k}:{v}" for k, v in s["byHarness"].items()) or "none"
+hosts_str = ", ".join(
+    f"{m['host']}:{'up' if m.get('reachable') else 'DOWN'}({by_host.get(normalize_host_alias(m['host']), 0)})"
+    for m in machines
+)
+print(
+    f"FirstMate Fleet Agent Radar  |  Agents: {s['totalAgents']} "
+    f"(working:{s['workingAgents']} bridged:{s['bridgedAgents']} idle:{s['idleAgents']})  |  "
+    f"Machines: {s['machinesOnline']}/{s['machinesTotal']}  |  Projects: {s['activeProjects']}"
+)
+print(f"Harnesses: {harnesses_str}")
+print(f"Machines : {hosts_str}")
+print("-" * 108)
+
+if not projects_list:
+    print("No matching agents found.")
+    sys.exit(0)
+
+for proj in projects_list:
+    cap_badge = f" [captain: {proj['captain']}]" if proj["captain"] else ""
+    issues_badge = f" [issues: {', '.join(proj['linearIssues'])}]" if proj["linearIssues"] else ""
+    print(
+        f"\nProject: {proj['project']}{cap_badge}{issues_badge} "
+        f"({proj['workingCount']} active / {proj['agentCount']} total)"
+    )
+    for ag in proj["agents"]:
+        surfaces = "+".join(ag.get("surfaces") or [ag.get("surface", "terminal")])
+        branch = ag.get("branch") or "-"
+        issue = f" ({ag['linearIssue']})" if ag.get("linearIssue") else ""
+        conv = f" conv:{ag['conversationId'][:8]}" if ag.get("conversationId") else ""
+        task = f" task:{ag['matchedTaskId']}" if ag.get("matchedTaskId") else ""
+        print(
+            f"  - [{ag['state']:7}] {ag['host']:7} | {ag['harness']:8} | pid:{ag['pid']:<6} | "
+            f"{surfaces:<22} | {branch}{issue}{conv}{task} | {ag.get('cwd') or '-'}"
+        )
+PY

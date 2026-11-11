@@ -44,13 +44,10 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     # name is the bare word `omp` (verified, omp 18.1.11) and a glob would claim
     # unrelated commands such as ompd or comp.
     *claude*|*codex*|*opencode*|*grok*|*kimi*|*rovo*|pi|pi-signed|pi-launcher|Pi|omp) printf 'agent' ;;
-    # agy (Antigravity CLI) is anchored for the same reason as muse and omp: its
-    # live process name is the bare word `agy` (verified, agy 1.2.0: a Go-compiled
-    # single binary, comm=agy with argv[0]=agy), and a glob would claim
-    # unrelated commands containing that fragment. devin is anchored the same
-    # way (verified, devin 3000.11.1: comm=devin), so a `*devin*` glob never
-    # claims an unrelated command.
-    agy|devin) printf 'agent' ;;
+    # agy (Antigravity CLI), devin, and hermes are anchored for the same reason
+    # as muse and omp: their live process names are bare words (`agy`, `devin`,
+    # `hermes`), and a glob would claim unrelated commands (e.g. baggy, hermesd).
+    agy|devin|hermes) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)
       if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
@@ -113,4 +110,63 @@ fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|othe
   else
     printf 'other'
   fi
+}
+
+# _fm_agent_process_identify_name: resolve canonical harness kind from a single
+# path or process basename. Returns 1 when not a recognized harness.
+_fm_agent_process_identify_name() {  # <path> [argv0] -> <harness-kind>
+  local path=$1 argv0=${2:-} base matched
+  base=${path##*/}
+  base=${base#-}
+  case "$base" in
+    muse|muse-bin-*) printf 'muse'; return 0 ;;
+    agy) printf 'agy'; return 0 ;;
+    devin) printf 'devin'; return 0 ;;
+    hermes) printf 'hermes'; return 0 ;;
+    omp) printf 'omp'; return 0 ;;
+    pi|pi-signed|pi-launcher|Pi) printf 'pi'; return 0 ;;
+    *claude*) printf 'claude'; return 0 ;;
+    *codex*) printf 'codex'; return 0 ;;
+    *opencode*) printf 'opencode'; return 0 ;;
+    *grok*) printf 'grok'; return 0 ;;
+    *kimi*) printf 'kimi'; return 0 ;;
+    *rovo*) printf 'rovo'; return 0 ;;
+  esac
+  if matched=$(fm_harness_path_name "$path") || matched=$(fm_harness_path_name "$argv0"); then
+    case "$matched" in
+      pi-signed) printf 'pi' ;;
+      *) printf '%s' "$matched" ;;
+    esac
+    return 0
+  fi
+  if fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
+    printf 'cursor-agent'
+    return 0
+  fi
+  return 1
+}
+
+# fm_agent_process_identify_harness: backend-neutral canonical harness kind for
+# any live agent process (`agy`, `grok`, `opencode`, `codex`, `claude`,
+# `cursor-agent`, `gemini`, `hermes`, `cline`, `pi`, `omp`, `muse`, `kimi`,
+# `devin`, `rovo`), or return 1 when the process is a shell or non-agent.
+fm_agent_process_identify_harness() {  # <name> <argv0> <args> [pid] -> <harness-kind>
+  local name=${1:-} argv0=${2:-} args=${3:-} pid=${4:-} kind
+  if kind=$(_fm_agent_process_identify_name "$name" "$argv0"); then
+    printf '%s' "$kind"
+    return 0
+  fi
+  if [ -n "$argv0" ] && kind=$(_fm_agent_process_identify_name "$argv0" "$argv0"); then
+    printf '%s' "$kind"
+    return 0
+  fi
+  if [ -n "$pid" ] && fm_gemini_pid_is_gemini "$pid"; then
+    printf 'gemini'
+    return 0
+  fi
+  if [ -n "$args" ] && fm_gemini_args_are_gemini "$args"; then
+    printf 'gemini'
+    return 0
+  fi
+  return 1
 }

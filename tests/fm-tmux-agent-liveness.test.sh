@@ -237,6 +237,27 @@ for decoy in ompd comp; do
 done
 pass "tmux liveness: unrelated omp-containing command names stay ambiguous"
 
+# --- agy and hermes bare binary names + decoys ------------------------------
+ln -s "$STANDIN_BIN" "$LAB/bin/agy"
+ln -s "$STANDIN_BIN" "$LAB/bin/hermes"
+ln -s "$STANDIN_BIN" "$LAB/bin/grok-bot"
+ln -s "$STANDIN_BIN" "$LAB/bin/baggy"
+ln -s "$STANDIN_BIN" "$LAB/bin/hermesd"
+
+for hbin in agy hermes grok-bot; do
+  new_window "h-$hbin" "$LAB/bin/$hbin" 900
+  wait_for_state "$SESSION:h-$hbin" alive \
+    || fail "$hbin foreground process must classify alive"
+done
+pass "tmux liveness: agy, hermes, and grok-bot foreground processes classify alive"
+
+for decoy in baggy hermesd; do
+  new_window "decoy-$decoy" "$LAB/bin/$decoy" 900
+  wait_for_state "$SESSION:decoy-$decoy" ambiguous \
+    || fail "'$decoy' must stay ambiguous rather than claiming an agent pane"
+done
+pass "tmux liveness: baggy and hermesd decoys stay ambiguous"
+
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that
 # Claude Code 2.1.220 reports drives the two sources apart on both supported
