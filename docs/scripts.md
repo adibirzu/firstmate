@@ -34,6 +34,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-station-bootstrap.sh` | Idempotently take a bare Linux SSH target from nothing to doctor-green (clone, entrypoint, toolchain, harness, router policy), ending at the doctor |
 | [`fm-backlog-handoff.sh`](../bin/fm-backlog-handoff.sh) | Move queued backlog items into a secondmate home; its header owns route-specific wake outcomes and retries |
 | `fm-handoff-doc.sh`      | Publish, discover, show, and fetch session handoff documents and optional ref bundles |
+| [`fm-wip-checkpoint.sh`](../bin/fm-wip-checkpoint.sh) | Snapshot a task's committed and uncommitted work plus the worker handoff file (brief rule 10) as `refs/tags/wip/<id>`, optionally pushed, so another harness, model or host can resume; its header owns the restore recipe |
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
