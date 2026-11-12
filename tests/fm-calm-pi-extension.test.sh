@@ -577,6 +577,7 @@ function makeHost(session) {
     // Pi reads its session through runtimeHost, which a session replacement swaps.
     runtimeHost: { session },
     compactionQueuedMessages: [],
+    pendingBashComponents: [],
     statuses: [],
     warnings: [],
     editorText: "",
@@ -2489,12 +2490,13 @@ JS
 # The real-Pi counterpart of test_queued_operational_rows: a watcher notification queued
 # while a tool holds the turn, then Escape, exactly as a captain would press it.
 test_queued_operational_escape_e2e() {
-  local project home config sessions version pane session_file i
-  if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
+  local project home config sessions version pane session_file i pi_bin
+  pi_bin=$(command -v pi 2>/dev/null || true)
+  if [ -z "$pi_bin" ] || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi Calm queued-row Escape E2E"
     return 0
   fi
-  version=$(pi --version 2>/dev/null || true)
+  version=$("$pi_bin" --version 2>/dev/null || true)
   record_pi_version_evidence "$version" "Pi Calm queued-row Escape E2E"
 
   project="$TMP_ROOT/queued-escape-project"
@@ -2606,7 +2608,7 @@ TS
     printf '%s\n' "$calm_state" >"$home/config/calm"
     mkdir -p "$sessions/$label"
     tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 160 -y 36 \
-      "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' QUEUED_ESCAPE_HELD='$held' QUEUED_ESCAPE_STATUS_LOG='$sessions/$label/status.log' PI_OFFLINE=1 pi --approve --no-context-files --no-skills --no-prompt-templates --no-extensions -e ./.pi/extensions/fm-calm.ts -e ./queued-escape-e2e.ts --session-dir '$sessions/$label'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 20"
+      "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' QUEUED_ESCAPE_HELD='$held' QUEUED_ESCAPE_STATUS_LOG='$sessions/$label/status.log' PI_OFFLINE=1 '$pi_bin' --approve --no-context-files --no-skills --no-prompt-templates --no-extensions -e ./.pi/extensions/fm-calm.ts -e ./queued-escape-e2e.ts --session-dir '$sessions/$label'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 20"
     wait_for_text "$TMP_ROOT/queued-escape-pane" 'queued-escape-e2e.ts' \
       || fail "Pi queued-row $label case did not reach the ready composer"
     tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/queued-escape-e2e $label"
@@ -2748,6 +2750,7 @@ description: Deterministic Calm hidden-block geometry probe.
 Read both probe files, then return the final response.
 MD
   cat >"$project/geometry-provider.ts" <<'TS'
+import * as fs from "node:fs";
 import {
   createFauxCore,
   fauxAssistantMessage,
@@ -2758,6 +2761,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI): void {
+  fs.appendFileSync("reload.count", "1\n");
   const faux = createFauxCore({
     api: "calm-geometry-e2e-api",
     provider: "calm-geometry-e2e",
@@ -2829,12 +2833,18 @@ TS
   }
 
   wait_for_geometry_transition() {
-    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0
+    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0 loads=0
     while [ "$attempt" -lt 600 ]; do
       capture_geometry_viewport "$file" || true
+      loads=$(wc -l < "$project/reload.count" 2>/dev/null | tr -d '[:space:]' || printf '0')
       if grep -Fq "$transient_text" "$file" 2>/dev/null; then
         saw_transient=1
-      elif [ "$saw_transient" -eq 1 ] && grep -Fq "$final_text" "$file" 2>/dev/null; then
+      elif [ "${loads:-0}" -ge 2 ]; then
+        sleep 0.05
+        capture_geometry_viewport "$file" || true
+        saw_transient=1
+      fi
+      if [ "$saw_transient" -eq 1 ] && ! grep -Fq "$transient_text" "$file" 2>/dev/null && grep -Fq "$final_text" "$file" 2>/dev/null; then
         return 0
       fi
       sleep 0.01

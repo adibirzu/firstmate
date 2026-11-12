@@ -834,3 +834,46 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
+
+# fm_test_standin_bin <dir>: builds (or falls back to) a long-running binary
+# inside <dir> that survives being invoked under a harness symlink name
+# (claude, pi, ...). Multicall coreutils binaries (uutils on Ubuntu 26.04+,
+# busybox) validate argv[0] against the utility name and exit immediately when
+# invoked through a harness-named symlink.
+fm_test_standin_alive() {
+  local pid
+  "$1" 60 >/dev/null 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 1; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+fm_test_standin_bin() {
+  local dir=$1 cc_bin sleep_bin probe
+  mkdir -p "$dir" || return 1
+  if [ -x "$dir/standin" ]; then
+    printf '%s\n' "$dir/standin"
+    return 0
+  fi
+  cc_bin=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
+  if [ -n "$cc_bin" ] &&
+    printf '%s\n' '#include <unistd.h>' 'int main(void){int i;for(i=0;i<600;i++)sleep(1);return 0;}' > "$dir/standin.c" &&
+    "$cc_bin" -o "$dir/standin" "$dir/standin.c" 2>/dev/null &&
+    fm_test_standin_alive "$dir/standin"; then
+    printf '%s\n' "$dir/standin"
+    return 0
+  fi
+  rm -f "$dir/standin"
+  sleep_bin=$(command -v sleep 2>/dev/null || true)
+  probe="$dir/standin-probe"
+  if [ -n "$sleep_bin" ] &&
+    ln -sf "$sleep_bin" "$probe" 2>/dev/null &&
+    fm_test_standin_alive "$probe"; then
+    ln -sf "$sleep_bin" "$dir/standin" 2>/dev/null || return 1
+    printf '%s\n' "$dir/standin"
+    return 0
+  fi
+  return 1
+}

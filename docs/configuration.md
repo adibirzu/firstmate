@@ -2460,3 +2460,8 @@ A live lock, a missing `lsof`, any failed check, or any other fetch failure keep
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Fleet host aliases (config/fleet-host-aliases.json)
+
+`bin/fm-fleet-agents` optionally reads local, gitignored `config/fleet-host-aliases.json` (under `FM_CONFIG_OVERRIDE` when set, otherwise `$FM_HOME/config`) as a flat JSON object mapping raw SSH or VPS hostnames to canonical fleet host names (`{"raw-host": "canonical-host"}`).
+Symlinks and malformed JSON are ignored safely, `<host>-ts` Tailscale suffixes normalize to `<host>` by default unless overridden in the map, and each operational home owns its own map without inheriting across secondmate homes.

@@ -563,7 +563,11 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     attempt=$((attempt + 1))
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
-    if (umask 077; mkdir "$claim") 2>/dev/null; then
+    # Pair mkdir with Bash noclobber (kernel O_CREAT|O_EXCL) so Ubuntu 26.04
+    # uutils mkdir TOCTOU races on AlreadyExists cannot grant the same sequence
+    # number to two concurrent callers.
+    if (umask 077; mkdir "$claim") 2>/dev/null \
+      && (umask 077; set -C; : > "$claim/.claimed") 2>/dev/null; then
       chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
@@ -803,6 +807,7 @@ fm_remote_job_reap_stale() { # <account-home>
         mtime=$(fm_remote_job_path_mtime "$claim" 2>/dev/null || true)
         case "$mtime" in ''|*[!0-9]*) continue ;; esac
         [ $((now - mtime)) -ge "$FM_REMOTE_JOB_SEQ_CLAIM_REAP_SECONDS" ] || continue
+        rm -f -- "$claim/.claimed" 2>/dev/null || true
         rmdir "$claim" 2>/dev/null || true
       done
     else

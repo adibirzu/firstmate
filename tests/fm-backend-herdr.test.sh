@@ -793,12 +793,13 @@ test_exhausted_settle_window_keeps_a_non_shell_foreground_live() {
 }
 
 test_registered_agent_with_an_agent_descendant_outside_the_foreground_stays_alive() {
-  local lab sleep_bin shell_pid out shell_verdict
+  local lab sleep_bin standin_bin shell_pid out shell_verdict
   sleep_bin=$(command -v sleep) || fail "sleep not found"
+  standin_bin=$(fm_test_standin_bin "$TMP_ROOT/standin") || fail "rename-safe standin binary unavailable"
   lab="$TMP_ROOT/stale-reg-descendant-bin"; mkdir -p "$lab"
-  # A symlink to a real long-running binary so the kernel records `pi` as the
-  # executable identity (a copied platform binary fails code signing on macOS).
-  ln -sf "$sleep_bin" "$lab/pi"
+  # A symlink to a rename-safe long-running binary so the kernel records `pi`
+  # as the executable identity (uutils multicall `sleep` rejects renamed argv[0]).
+  ln -sf "$standin_bin" "$lab/pi"
   # A real shell whose child is that agent-named process, while the canned
   # foreground view shows only the shell (a suspended or backgrounded agent).
   sh -c "'$lab/pi' 300; :" &
@@ -822,13 +823,13 @@ test_registered_agent_with_an_agent_descendant_outside_the_foreground_stays_aliv
 }
 
 test_agent_descendant_under_a_spaced_install_path_stays_alive() {
-  local lab sleep_bin shell_pid out
-  sleep_bin=$(command -v sleep) || fail "sleep not found"
+  local lab standin_bin shell_pid out
+  standin_bin=$(fm_test_standin_bin "$TMP_ROOT/standin") || fail "rename-safe standin binary unavailable"
   # The executable path the process table reports contains a space (the macOS
   # `/Library/Application Support/...` shape), so a field-split read of the
   # process table sees only a fragment of the name.
   lab="$TMP_ROOT/stale-reg-spaced-bin/Application Support/Some Dir"; mkdir -p "$lab"
-  ln -sf "$sleep_bin" "$lab/pi"
+  ln -sf "$standin_bin" "$lab/pi"
   sh -c "'$lab/pi' 300; :" &
   shell_pid=$!
   sleep 0.3

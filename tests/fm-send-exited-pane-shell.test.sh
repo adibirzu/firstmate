@@ -30,7 +30,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
-SLEEP_BIN=$(command -v sleep) || { echo "skip: sleep not found"; exit 0; }
 
 SEND="$ROOT/bin/fm-send.sh"
 REAL_TMUX=$(command -v tmux)
@@ -58,10 +57,11 @@ cat > "$LAB/shim/tmux" <<SH
 exec "$REAL_TMUX" -L "$SOCKET" "\$@"
 SH
 chmod +x "$LAB/shim/tmux"
-# The replacement "agent" is a sleep symlink named claude: the symlink name is
-# what the tmux liveness classifier reads as the harness identity.
+# The replacement "agent" is a rename-safe stand-in symlink named claude: the
+# symlink name is what the tmux liveness classifier reads as the harness identity.
+STANDIN_BIN=$(fm_test_standin_bin "$LAB/standin") || { echo "skip: no stand-in binary survives rename"; exit 0; }
 CLAUDE_BIN="$LAB/fakebin/claude"
-ln -s "$SLEEP_BIN" "$CLAUDE_BIN"
+ln -s "$STANDIN_BIN" "$CLAUDE_BIN"
 PATH="$LAB/shim:$LAB/fakebin:$PATH"
 export PATH
 

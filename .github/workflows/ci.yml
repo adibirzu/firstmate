@@ -115,8 +115,8 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
-          npm ls -g --depth 0 @earendil-works/pi-coding-agent
+          npm install -g @earendil-works/pi-coding-agent typescript@5.8.3
+          npm ls -g --depth 0 @earendil-works/pi-coding-agent typescript
       - name: Compute llm-router-axi / usage-axi cache key
         id: router_axi_cache_key
         run: |
@@ -279,8 +279,8 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
-          npm ls -g --depth 0 @earendil-works/pi-coding-agent
+          npm install -g @earendil-works/pi-coding-agent typescript@5.8.3
+          npm ls -g --depth 0 @earendil-works/pi-coding-agent typescript
       - name: Compute llm-router-axi / usage-axi cache key
         id: router_axi_cache_key
         run: |
