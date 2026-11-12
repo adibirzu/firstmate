@@ -715,12 +715,7 @@ ROWS
     text="$text$routine_lines"
   fi
   if [ -n "$text" ]; then
-    # Defend against shell builtins that buffer or omit write errors on fd 1:
-    # piping through `cat` performs an unbuffered write(1, ...) that exits
-    # non-zero when fd 1 is closed or unwritable.
-    if ! printf '%s' "$text" | command cat 2>/dev/null; then
-      return 1
-    fi
+    printf '%s' "$text" || return 1
   fi
   [ "$through" -gt 0 ] || return 0
   if ! "$SCRIPT_DIR/fm-branch-outcome.sh" mark-read --through "$through" >/dev/null 2>&1; then

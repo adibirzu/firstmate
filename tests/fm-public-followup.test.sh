@@ -3796,8 +3796,13 @@ test_rejection_wake_survives_a_poll_that_cannot_write() {
   assert_present "$home/state/public-followup/rejection-wakes/$event_id" \
     "a refusal must queue a wake"
 
+  # Invoke bash directly for `>&-` (Rust uutils `/usr/bin/env` on Ubuntu 26.04+
+  # sanitizes closed fds 0..2 to `/dev/null` O_RDWR before execing bash), and
+  # also verify direct shebang execution with an unwritable (`O_RDONLY`) fd 1.
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" "$POLL" >&- 2>/dev/null || true
+    FM_STATE_OVERRIDE="$home/state" bash "$POLL" >&- 2>/dev/null || true
+  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" "$POLL" 1</dev/null 2>/dev/null || true
   assert_present "$home/state/public-followup/rejection-wakes/$event_id" \
     "a wake whose line could not be written must stay queued"
   assert_contains "$(run_poll "$home")" "public-followup rejected $event_id" \
