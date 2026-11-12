@@ -80,7 +80,7 @@ SH
 # releases it, standing in for a hung helper that holds a shared queue lock.
 hold_lock() {
   local lockdir=$1 pidfile=$2 i=0
-  bash -c '. "$1"; fm_lock_try_acquire "$2" || exit 1; printf "%s\n" "$$" > "$3"; exec sleep 30' \
+  bash -c '. "$1"; j=0; while ! fm_lock_try_acquire "$2"; do j=$((j + 1)); [ "$j" -lt 80 ] || exit 1; sleep 0.05; done; printf "%s\n" "$$" > "$3"; exec sleep 30' \
     _ "$ROOT/bin/fm-wake-lib.sh" "$lockdir" "$pidfile" &
   while [ ! -s "$pidfile" ] && [ "$i" -lt 100 ]; do
     sleep 0.05

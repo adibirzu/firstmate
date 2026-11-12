@@ -2750,6 +2750,7 @@ description: Deterministic Calm hidden-block geometry probe.
 Read both probe files, then return the final response.
 MD
   cat >"$project/geometry-provider.ts" <<'TS'
+import * as fs from "node:fs";
 import {
   createFauxCore,
   fauxAssistantMessage,
@@ -2760,6 +2761,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI): void {
+  fs.appendFileSync("reload.count", "1\n");
   const faux = createFauxCore({
     api: "calm-geometry-e2e-api",
     provider: "calm-geometry-e2e",
@@ -2831,12 +2833,18 @@ TS
   }
 
   wait_for_geometry_transition() {
-    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0
+    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0 loads=0
     while [ "$attempt" -lt 600 ]; do
       capture_geometry_viewport "$file" || true
+      loads=$(wc -l < "$project/reload.count" 2>/dev/null | tr -d '[:space:]' || printf '0')
       if grep -Fq "$transient_text" "$file" 2>/dev/null; then
         saw_transient=1
-      elif [ "$saw_transient" -eq 1 ] && grep -Fq "$final_text" "$file" 2>/dev/null; then
+      elif [ "${loads:-0}" -ge 2 ]; then
+        sleep 0.05
+        capture_geometry_viewport "$file" || true
+        saw_transient=1
+      fi
+      if [ "$saw_transient" -eq 1 ] && ! grep -Fq "$transient_text" "$file" 2>/dev/null && grep -Fq "$final_text" "$file" 2>/dev/null; then
         return 0
       fi
       sleep 0.01
