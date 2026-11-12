@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # fm-fleet-agents - cross-machine working agent discovery & project radar for FirstMate.
 #
-# Integrates:
-#   1. `orca-axi agents [--all-machines] --json` across adi0, adi1, adi2, macmini, adi4
-#   2. `fm-fleet-herdr-collect.sh --json --local-only` for local Herdr sessions/panes
+# Combines:
+#   1. `orca-axi agents [--all-machines] --json` across configured fleet hosts
+#   2. `fm-fleet-herdr-collect.sh --json --local-only` for local Herdr snapshot context
 #   3. FirstMate task records (`$FM_HOME/state/*.meta` + local SecondMate pool homes)
-#   4. SecondMate captain domain bindings (`$FM_HOME/data/secondmates.md`)
+#   4. SecondMate provisioned project scopes (`$FM_HOME/data/secondmates.md`)
+#   5. Optional host alias map (`$FM_HOME/config/fleet-host-aliases.json`)
 #
 # READ-ONLY GUARANTEE: inspects processes, sessions, worktrees, and registry files
 # without signalling, attaching to, or mutating any agent, pane, or session.
@@ -31,18 +32,12 @@ resolve_script_dir() {
 
 SCRIPT_DIR="$(resolve_script_dir)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-if [ -n "${FM_HOME:-}" ]; then
-  FM_HOME="$FM_HOME"
-elif [ -f "$FM_ROOT/data/secondmates.md" ]; then
-  FM_HOME="$FM_ROOT"
-elif [ -d "$HOME/dev/firstmate/data" ]; then
-  FM_HOME="$HOME/dev/firstmate"
-else
-  FM_HOME="$FM_ROOT"
-fi
+FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE_DIR="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA_DIR="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATES_FILE="$DATA_DIR/secondmates.md"
+HOST_ALIASES_FILE="$CONFIG_DIR/fleet-host-aliases.json"
 
 resolve_orca_axi() {
   if [ -n "${FM_ORCA_AXI_BIN:-}" ]; then
@@ -66,15 +61,15 @@ usage() {
   cat <<'EOF'
 usage: fm-fleet-agents [options]
 
-Discover and organize working coding agents across FirstMate & Orca fleet hosts
-(adi0, adi1, adi2, macmini, adi4) grouped by canonical project and SecondMate captain.
+Discover and organize working coding agents across FirstMate & Orca fleet hosts,
+grouped by canonical project and provisioned SecondMate scope.
 
 Options:
   --all-machines       Probe local host + remote SSH fleet (default)
   --local-only         Inspect local host only
-  --host <name>        Filter to a specific machine (e.g. adi0, adi1, adi2, macmini, adi4)
+  --host <name>        Filter to a specific machine hostname or alias
   --project <name>     Case-insensitive substring filter on project name
-  --harness <kind>     Filter by harness (agy, claude, codex, grok, opencode, cursor, gemini, hermes)
+  --harness <kind>     Filter by harness (agy, claude, codex, grok, opencode, cursor, cursor-agent, gemini, hermes)
   --active-only        Include only working or bridged agents (exclude idle)
   --json               Emit structured JSON (schema: fm-fleet-agents.v1)
   -h, --help           Show this help message
@@ -164,13 +159,19 @@ if [ -x "$HERDR_COLLECT_BIN" ]; then
   HERDR_JSON="$("$HERDR_COLLECT_BIN" --json --local-only 2>/dev/null || printf '{"hosts":[]}')"
 fi
 
+AXI_TMP=""
+HERDR_TMP=""
+cleanup_tmp() {
+  [ -n "$AXI_TMP" ] && rm -f "$AXI_TMP"
+  [ -n "$HERDR_TMP" ] && rm -f "$HERDR_TMP"
+}
+trap cleanup_tmp EXIT
 AXI_TMP="$(mktemp "${TMPDIR:-/tmp}/fm-axi.XXXXXX")"
 HERDR_TMP="$(mktemp "${TMPDIR:-/tmp}/fm-herdr.XXXXXX")"
-trap 'rm -f "$AXI_TMP" "$HERDR_TMP"' EXIT
 printf '%s' "$AXI_JSON" > "$AXI_TMP"
 printf '%s' "$HERDR_JSON" > "$HERDR_TMP"
 
-python3 - "$AXI_TMP" "$HERDR_TMP" "$STATE_DIR" "$SECONDMATES_FILE" \
+python3 - "$AXI_TMP" "$HERDR_TMP" "$STATE_DIR" "$SECONDMATES_FILE" "$HOST_ALIASES_FILE" \
   "$FILTER_HOST" "$FILTER_PROJECT" "$FILTER_HARNESS" "$ACTIVE_ONLY" "$JSON_OUT" <<'PY'
 import glob
 import json
@@ -185,12 +186,13 @@ from datetime import datetime, timezone
     herdr_path,
     state_dir,
     secondmates_path,
+    aliases_path,
     filter_host,
     filter_project,
     filter_harness,
     active_only_str,
     json_out_str,
-) = sys.argv[1:10]
+) = sys.argv[1:11]
 
 active_only = active_only_str == "1"
 json_out = json_out_str == "1"
@@ -204,20 +206,42 @@ try:
 except Exception:
     herdr_data = {"hosts": []}
 
+host_aliases = {}
+if aliases_path and os.path.isfile(aliases_path) and not os.path.islink(aliases_path):
+    try:
+        with open(aliases_path, "r", encoding="utf-8") as afh:
+            loaded = json.load(afh)
+            if isinstance(loaded, dict):
+                host_aliases = {str(k).strip().lower(): str(v).strip().lower() for k, v in loaded.items() if k and v}
+    except Exception:
+        host_aliases = {}
 
-def normalize_host_alias(raw: str) -> str:
-    h = (raw or "").strip().lower()
-    if h in ("adi2-ts", "edgexpert-33b0", "edgexpert"):
-        return "adi2"
-    if h in ("adihost4", "srv2083966"):
-        return "adi4"
+
+def normalize_host_alias(raw) -> str:
+    h = str(raw or "").strip().lower()
+    if not h:
+        return ""
+    if h in host_aliases:
+        return host_aliases[h]
+    # Convention: `<host>-ts` Tailscale suffix normalizes to `<host>` unless overridden
+    if h.endswith("-ts") and len(h) > 3:
+        return h[:-3]
     return h
 
 
-def parse_secondmates(path: str):
-    captains = []
+def normalize_harness_filter(raw: str) -> str:
+    h = (raw or "").strip().lower()
+    return "cursor-agent" if h == "cursor" else h
+
+
+raw_report = axi["agents"] if isinstance(axi.get("agents"), dict) else axi
+local_host = normalize_host_alias(raw_report.get("localHost")) or "local"
+
+
+def parse_secondmates(path: str, default_local_host: str):
+    secondmates = []
     if not path or not os.path.isfile(path) or os.path.islink(path):
-        return captains
+        return secondmates
     local_re = re.compile(
         r"^- ([A-Za-z0-9._-]+) - (.+) \(home:\s*([^;)]*);\s*scope:\s*(.*);\s*projects:\s*([^;)]*);\s*added\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\)\s*$"
     )
@@ -231,10 +255,10 @@ def parse_secondmates(path: str):
             if m_local:
                 cid, _summary, home, scope, projs, added = m_local.groups()
                 projects = [p.strip() for p in projs.split(",") if p.strip()]
-                captains.append(
+                secondmates.append(
                     {
                         "id": cid,
-                        "host": "adi0",
+                        "host": default_local_host,
                         "home": home.strip(),
                         "scope": scope.strip(),
                         "projects": projects,
@@ -247,10 +271,10 @@ def parse_secondmates(path: str):
             if m_remote:
                 cid, _summary, host, root, home, scope, projs, added = m_remote.groups()
                 projects = [p.strip() for p in projs.split(",") if p.strip()]
-                captains.append(
+                secondmates.append(
                     {
                         "id": cid,
-                        "host": normalize_host_alias(host),
+                        "host": normalize_host_alias(host) or host.strip().lower(),
                         "rawHost": host.strip(),
                         "root": root.strip(),
                         "home": home.strip(),
@@ -260,14 +284,14 @@ def parse_secondmates(path: str):
                         "added": added,
                     }
                 )
-    return captains
+    return secondmates
 
 
-def load_task_metas(primary_state: str, captains):
+def load_task_metas(primary_state: str, secondmates):
     state_dirs = [("main", primary_state)]
-    for cap in captains:
-        if not cap.get("remote") and cap.get("home"):
-            state_dirs.append((cap["id"], os.path.join(cap["home"], "state")))
+    for sm in secondmates:
+        if not sm.get("remote") and sm.get("home"):
+            state_dirs.append((sm["id"], os.path.join(sm["home"], "state")))
     metas = []
     seen = set()
     for owner, sdir in state_dirs:
@@ -301,17 +325,16 @@ def load_task_metas(primary_state: str, captains):
                         "ownerHome": owner,
                     }
                 )
-    # Longest path wins when matching a worktree or subdirectory
     metas.sort(key=lambda m: len(m["worktree"]), reverse=True)
     return metas
 
 
-captains = parse_secondmates(secondmates_path)
-metas = load_task_metas(state_dir, captains)
+secondmates = parse_secondmates(secondmates_path, local_host)
+metas = load_task_metas(state_dir, secondmates)
 
 
 def match_task(cwd: str, wt: str, host: str):
-    if host != "adi0":
+    if host != local_host:
         return None
     for candidate in (wt, cwd):
         if not candidate:
@@ -324,41 +347,39 @@ def match_task(cwd: str, wt: str, host: str):
     return None
 
 
-def match_captain(project: str, host: str, cwd: str):
+def match_secondmate(project: str, host: str, cwd: str):
+    """Non-exclusive provisioning hint from data/secondmates.md (not ownership)."""
     proj_lower = (project or "").lower()
     norm_host = normalize_host_alias(host)
-    # 1. Exact project + host match first
-    for cap in captains:
-        cap_projs = [p.lower() for p in cap["projects"]]
-        if proj_lower in cap_projs and cap["host"] == norm_host:
-            return cap["id"]
-    # 2. Exact project match across fleet
-    for cap in captains:
-        cap_projs = [p.lower() for p in cap["projects"]]
-        if proj_lower in cap_projs:
-            return cap["id"]
-    # 3. Path prefix inside captain home
+    for sm in secondmates:
+        sm_projs = [p.lower() for p in sm["projects"]]
+        if proj_lower in sm_projs and sm["host"] == norm_host:
+            return sm["id"]
+    for sm in secondmates:
+        sm_projs = [p.lower() for p in sm["projects"]]
+        if proj_lower in sm_projs:
+            return sm["id"]
     if cwd:
-        for cap in captains:
-            home = cap.get("home") or ""
+        for sm in secondmates:
+            home = sm.get("home") or ""
             if home and (cwd == home or cwd.startswith(home.rstrip("/") + "/")):
-                return cap["id"]
+                return sm["id"]
     return None
 
 
-raw_report = axi["agents"] if isinstance(axi.get("agents"), dict) else axi
 raw_agents = list(raw_report.get("items") or raw_report.get("agents") or [])
 enriched_agents = []
+norm_filter_harness = normalize_harness_filter(filter_harness)
 
 for agent in raw_agents:
     if not isinstance(agent, dict):
         continue
-    host = normalize_host_alias(agent.get("host", "adi0"))
-    state = agent.get("state", "idle")
-    harness = agent.get("harness", "unknown")
-    project = agent.get("project") or "unassigned"
-    cwd = agent.get("cwd")
-    wt = agent.get("worktreePath")
+    host = normalize_host_alias(agent.get("host")) or local_host
+    state = str(agent.get("state") or "idle")
+    harness = str(agent.get("harness") or "unknown")
+    project = str(agent.get("project") or "unassigned")
+    cwd = str(agent.get("cwd") or "")
+    wt = str(agent.get("worktreePath") or "")
 
     if active_only and state not in ("working", "bridged"):
         continue
@@ -366,25 +387,26 @@ for agent in raw_agents:
         continue
     if filter_project and filter_project.lower() not in project.lower():
         continue
-    if filter_harness and filter_harness.lower() != harness.lower():
+    if norm_filter_harness and normalize_harness_filter(harness) != norm_filter_harness:
         continue
 
-    matched_meta = match_task(cwd or "", wt or "", host)
-    captain_id = match_captain(project, host, cwd or "")
+    matched_meta = match_task(cwd, wt, host)
+    sm_id = match_secondmate(project, host, cwd)
     session_id = agent.get("sessionId") or agent.get("conversationId")
 
     enriched = {
         **agent,
         "host": host,
+        "state": state,
+        "harness": harness,
         "project": project,
         "sessionId": session_id,
         "matchedTaskId": matched_meta["taskId"] if matched_meta else None,
         "matchedHome": matched_meta["ownerHome"] if matched_meta else None,
-        "captain": captain_id,
+        "secondmate": sm_id,
     }
     enriched_agents.append(enriched)
 
-# Group by project
 projects_map = {}
 for ag in enriched_agents:
     proj = ag["project"]
@@ -392,7 +414,7 @@ for ag in enriched_agents:
         proj,
         {
             "project": proj,
-            "captain": ag.get("captain"),
+            "secondmate": ag.get("secondmate"),
             "agentCount": 0,
             "workingCount": 0,
             "hosts": set(),
@@ -403,19 +425,19 @@ for ag in enriched_agents:
             "agents": [],
         },
     )
-    if not entry["captain"] and ag.get("captain"):
-        entry["captain"] = ag["captain"]
+    if not entry["secondmate"] and ag.get("secondmate"):
+        entry["secondmate"] = ag["secondmate"]
     entry["agentCount"] += 1
     if ag.get("state") in ("working", "bridged"):
         entry["workingCount"] += 1
     entry["hosts"].add(ag["host"])
     entry["harnesses"].add(ag["harness"])
     if ag.get("branch"):
-        entry["branches"].add(ag["branch"])
+        entry["branches"].add(str(ag["branch"]))
     if ag.get("linearIssue"):
-        entry["linearIssues"].add(ag["linearIssue"])
+        entry["linearIssues"].add(str(ag["linearIssue"]))
     if ag.get("matchedTaskId"):
-        entry["matchedTasks"].add(ag["matchedTaskId"])
+        entry["matchedTasks"].add(str(ag["matchedTaskId"]))
     entry["agents"].append(ag)
 
 projects_list = []
@@ -426,7 +448,7 @@ for proj_name, p in sorted(
     projects_list.append(
         {
             "project": proj_name,
-            "captain": p["captain"],
+            "secondmate": p["secondmate"],
             "agentCount": p["agentCount"],
             "workingCount": p["workingCount"],
             "hosts": sorted(p["hosts"]),
@@ -438,7 +460,13 @@ for proj_name, p in sorted(
         }
     )
 
-machines = raw_report.get("machines") or []
+all_machines = raw_report.get("machines") or []
+if filter_host:
+    target_host = normalize_host_alias(filter_host)
+    machines = [m for m in all_machines if normalize_host_alias(m.get("host")) == target_host]
+else:
+    machines = all_machines
+
 by_harness = defaultdict(int)
 by_host = defaultdict(int)
 working_count = 0
@@ -448,7 +476,7 @@ idle_count = 0
 for ag in enriched_agents:
     by_harness[ag["harness"]] += 1
     by_host[ag["host"]] += 1
-    st = ag.get("state")
+    st = ag["state"]
     if st == "working":
         working_count += 1
     elif st == "bridged":
@@ -458,6 +486,7 @@ for ag in enriched_agents:
 
 payload = {
     "schema": "fm-fleet-agents.v1",
+    "localHost": local_host,
     "scannedAt": raw_report.get("generatedAt") or raw_report.get("scannedAt") or datetime.now(timezone.utc).isoformat(),
     "summary": {
         "totalAgents": len(enriched_agents),
@@ -473,7 +502,7 @@ payload = {
     "machines": machines,
     "projects": projects_list,
     "agents": enriched_agents,
-    "captains": captains,
+    "secondmates": secondmates,
     "herdrLocal": herdr_data.get("hosts", []),
 }
 
@@ -484,7 +513,7 @@ if json_out:
 s = payload["summary"]
 harnesses_str = ", ".join(f"{k}:{v}" for k, v in s["byHarness"].items()) or "none"
 hosts_str = ", ".join(
-    f"{m['host']}:{'up' if m.get('reachable') else 'DOWN'}({by_host.get(normalize_host_alias(m['host']), 0)})"
+    f"{m.get('host') or 'unknown'}:{'up' if m.get('reachable') else 'DOWN'}({by_host.get(normalize_host_alias(m.get('host')), 0)})"
     for m in machines
 )
 print(
@@ -501,15 +530,17 @@ if not projects_list:
     sys.exit(0)
 
 for proj in projects_list:
-    cap_badge = f" [captain: {proj['captain']}]" if proj["captain"] else ""
+    sm_badge = f" [secondmate: {proj['secondmate']}]" if proj["secondmate"] else ""
     issues_badge = f" [issues: {', '.join(proj['linearIssues'])}]" if proj["linearIssues"] else ""
     print(
-        f"\nProject: {proj['project']}{cap_badge}{issues_badge} "
+        f"\nProject: {proj['project']}{sm_badge}{issues_badge} "
         f"({proj['workingCount']} active / {proj['agentCount']} total)"
     )
     for ag in proj["agents"]:
-        surfaces = "+".join(ag.get("surfaces") or [ag.get("surface", "terminal")])
-        branch = ag.get("branch") or "-"
+        raw_surfaces = ag.get("surfaces")
+        surfaces_list = [str(x) for x in raw_surfaces if x] if isinstance(raw_surfaces, list) else []
+        surfaces = "+".join(surfaces_list or [str(ag.get("surface") or "terminal")])
+        branch = str(ag.get("branch") or "-")
         issue = f" ({ag['linearIssue']})" if ag.get("linearIssue") else ""
         sid = ag.get("sessionId") or ag.get("conversationId")
         conv = f" conv:{str(sid)[:8]}" if sid else ""

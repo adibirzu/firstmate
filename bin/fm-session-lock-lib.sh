@@ -26,9 +26,10 @@ unset _FM_SESSION_LOCK_LIB_DIR
 
 # Known harness command names; extend when a new adapter is verified. omp is
 # anchored exactly like pi: its process name is the bare word `omp` (verified,
-# omp 18.1.11), and a substring match would claim ompd or comp. agy and hermes
-# are anchored the same way so substring matches never claim baggy or hermesd.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$|^hermes$'
+# omp 18.1.11), and a substring match would claim ompd or comp. agy is anchored
+# the same way: its process name is the bare word `agy` (verified, agy 1.4.7),
+# and a substring match would claim any word containing those three letters.
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$'
 
 # The same harnesses as exact executable names. Keep in sync with
 # FM_HARNESS_RE. Used only for the stricter path evidence below, where the
@@ -44,7 +45,7 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$|^her
 # unattributed rather than being claimed as an agent. Without this entry the
 # tmux liveness classifier reads a live cline pane as `ambiguous`, and every
 # lifecycle verb that must prove an agent is running refuses it.
-FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi cline omp agy hermes)
+FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi cline omp agy)
 
 # Print the exact harness name carried by executable path $1 - its own basename
 # or any directory component - or return 1.

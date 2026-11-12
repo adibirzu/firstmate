@@ -83,7 +83,9 @@ if fm_pf_dir_has_entry "$PF_WAKES"; then
     PF_WAKE_LINE=$(sed -n '1p' "$PF_WAKE" 2>/dev/null) || continue
     PF_WAKE_LINE=$(printf '%s\n' "$PF_WAKE_LINE" | fm_pf_bound_bytes 800)
     [ -n "$PF_WAKE_LINE" ] || continue
-    printf '%s\n' "$PF_WAKE_LINE" || continue
+    if ! printf '%s\n' "$PF_WAKE_LINE" | command cat 2>/dev/null; then
+      continue
+    fi
     rm -f -- "$PF_WAKE" 2>/dev/null || true
   done
 fi

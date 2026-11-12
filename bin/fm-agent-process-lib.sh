@@ -44,9 +44,12 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
     # name is the bare word `omp` (verified, omp 18.1.11) and a glob would claim
     # unrelated commands such as ompd or comp.
     *claude*|*codex*|*opencode*|*grok*|*kimi*|*rovo*|pi|pi-signed|pi-launcher|Pi|omp) printf 'agent' ;;
-    # agy (Antigravity CLI), devin, and hermes are anchored for the same reason
-    # as muse and omp: their live process names are bare words (`agy`, `devin`,
-    # `hermes`), and a glob would claim unrelated commands (e.g. baggy, hermesd).
+    # agy (Antigravity CLI, verified agy 1.2.0: Go-compiled single binary,
+    # comm=agy with argv[0]=agy), devin (verified devin 3000.11.1: comm=devin),
+    # and hermes (NousResearch hermes-agent CLI, observed/unverified adapter:
+    # bare word `hermes`) are anchored for the same reason as muse and omp so
+    # substring globs never claim unrelated commands (e.g. baggy, hermesd) while
+    # preventing duplicate spawns onto a live agent pane.
     agy|devin|hermes) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)
@@ -132,15 +135,15 @@ _fm_agent_process_identify_name() {  # <path> [argv0] -> <harness-kind>
     *kimi*) printf 'kimi'; return 0 ;;
     *rovo*) printf 'rovo'; return 0 ;;
   esac
+  if fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
+    printf 'cursor-agent'
+    return 0
+  fi
   if matched=$(fm_harness_path_name "$path") || matched=$(fm_harness_path_name "$argv0"); then
     case "$matched" in
       pi-signed) printf 'pi' ;;
       *) printf '%s' "$matched" ;;
     esac
-    return 0
-  fi
-  if fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
-    printf 'cursor-agent'
     return 0
   fi
   return 1

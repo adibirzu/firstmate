@@ -235,7 +235,28 @@ pass "real herdr: interrupt refuses when herdr's own agent registry reports no a
 AGENT_BIN="$SCRATCH/agentbin"
 mkdir -p "$AGENT_BIN"
 SLEEP_BIN=$(command -v sleep) || fail "sleep not found"
-ln -s "$SLEEP_BIN" "$AGENT_BIN/claude"
+standin_alive() {
+  local pid
+  "$1" 60 >/dev/null 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 1; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+STANDIN_BIN=
+CC_BIN=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
+if [ -n "$CC_BIN" ] &&
+  printf '%s\n' '#include <unistd.h>' 'int main(void){int i;for(i=0;i<600;i++)sleep(1);return 0;}' > "$AGENT_BIN/standin.c" &&
+  "$CC_BIN" -o "$AGENT_BIN/standin" "$AGENT_BIN/standin.c" 2>/dev/null &&
+  standin_alive "$AGENT_BIN/standin"; then
+  STANDIN_BIN="$AGENT_BIN/standin"
+else
+  ln -sf "$SLEEP_BIN" "$AGENT_BIN/standin-probe" 2>/dev/null || true
+  standin_alive "$AGENT_BIN/standin-probe" && STANDIN_BIN="$SLEEP_BIN"
+fi
+[ -n "$STANDIN_BIN" ] || skip "no rename-safe stand-in binary available"
+ln -s "$STANDIN_BIN" "$AGENT_BIN/claude"
 printf -v AGENT_Q '%q' "$AGENT_BIN/claude"
 
 wait_process_state() {  # <expected> <tries>
