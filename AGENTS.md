@@ -582,6 +582,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `federation` - load before reading or mutating a shared fleet KB (`bin/fm-fleet.sh` verbs, claim/handoff/routing) when this home is joined to a fleet with other operators.
 - `graphify-orientation` - load before broadly exploring unfamiliar code, discovering relevant files, mapping ownership, or tracing cross-file relationships.
 - `router-dispatch` - load before choosing a worker or reviewer runtime by task descriptor, before resolving a subscription-aware profile array, or before launching under a chosen provider account (`bin/fm-spawn-acct.sh` / `bin/fm-account-exec.sh`).
+- `paperclip-linear-sync` - load when the captain asks to sync or refresh development tasks across Paperclip, Linear, or GitHub (in chat, via an inbox or voice-handover note, or over Relay), on a `procevent` wake from a Paperclip event source, before dispatching a synced `[CYB-xxx]` task on `adi0`, or when reporting a `[CYB-xxx]` PR back to Paperclip.
 
 ## 14. Relay
 
