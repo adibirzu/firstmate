@@ -23,19 +23,19 @@
 #   fm-install-router-axi-tools.sh -h|--help
 #       Print this header.
 #
-# Pins (verified 2026-09-13: SHA builds report the version named beside it; run
+# Pins (verified 2026-11-14: SHA builds report the version named beside it; run
 # `git ls-remote <repo> HEAD` and bump both the SHA and the version together):
-#   llm-router-axi  bf42cff713ce8501301663a8377f4d6bca7c3881 -> 0.1.0
+#   llm-router-axi  99d0c0fac320e24403237187dde118b74fba236f -> 0.1.1
 #                   (P5 merged; `capacity --for suite` gates a suite start)
-#   usage-axi       b140738e6bf074f280aca46dc48a3339e8ef1f6d -> 0.1.1
+#   usage-axi       328fc42f0bb00ab515dd5b4dda21c822b2de5929 -> 0.1.3
 set -eu
 
 FM_ROUTER_AXI_LLM_REPO=https://github.com/adibirzu/llm-router-axi
-FM_ROUTER_AXI_LLM_SHA=bf42cff713ce8501301663a8377f4d6bca7c3881
-FM_ROUTER_AXI_LLM_VERSION=0.1.0
+FM_ROUTER_AXI_LLM_SHA=99d0c0fac320e24403237187dde118b74fba236f
+FM_ROUTER_AXI_LLM_VERSION=0.1.1
 FM_ROUTER_AXI_USAGE_REPO=https://github.com/adibirzu/usage-axi
-FM_ROUTER_AXI_USAGE_SHA=b140738e6bf074f280aca46dc48a3339e8ef1f6d
-FM_ROUTER_AXI_USAGE_VERSION=0.1.1
+FM_ROUTER_AXI_USAGE_SHA=328fc42f0bb00ab515dd5b4dda21c822b2de5929
+FM_ROUTER_AXI_USAGE_VERSION=0.1.3
 
 die() {
   printf 'fm-install-router-axi-tools.sh: %s\n' "$*" >&2

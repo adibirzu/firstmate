@@ -13,8 +13,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 INSTALLER="$ROOT/bin/fm-install-router-axi-tools.sh"
-LLM_SHA=bf42cff713ce8501301663a8377f4d6bca7c3881
-USAGE_SHA=b140738e6bf074f280aca46dc48a3339e8ef1f6d
+LLM_SHA=99d0c0fac320e24403237187dde118b74fba236f
+USAGE_SHA=328fc42f0bb00ab515dd5b4dda21c822b2de5929
 
 TMP_ROOT=$(fm_test_tmproot fm-install-router-axi-tools)
 FAKEBIN="$TMP_ROOT/fakebin"
@@ -44,8 +44,8 @@ case "$sub" in
     [ -f "$state_dir/.fakegit/fetched" ] || { echo "fake git: checkout without fetch" >&2; exit 1; }
     origin=$(cat "$state_dir/.fakegit/origin")
     case "$origin" in
-      *llm-router-axi*) name=llm-router-axi; version=0.1.0 ;;
-      *usage-axi*) name=usage-axi; version=0.1.1 ;;
+      *llm-router-axi*) name=llm-router-axi; version=0.1.1 ;;
+      *usage-axi*) name=usage-axi; version=0.1.3 ;;
       *) name=unknown; version=0.0.0 ;;
     esac
     printf '{"name":"%s","version":"%s"}\n' "$name" "$version" > "$state_dir/package.json" ;;
@@ -144,14 +144,14 @@ if ! OUT=$(run_installer "$DEST" 2>"$TMP_ROOT/install.err"); then
   cat "$TMP_ROOT/install.err" >&2
   fail "installer failed for a fresh destination"
 fi
-assert_contains "$(cat "$TMP_ROOT/install.err")" "building llm-router-axi 0.1.0" "must build llm-router-axi at its pin"
-assert_contains "$(cat "$TMP_ROOT/install.err")" "building usage-axi 0.1.1" "must build usage-axi at its pin"
-printf '%s\n' "$OUT" | tail -n 2 | grep -Fxq "0.1.0" || fail "installer did not print the llm-router-axi version last: $OUT"
-printf '%s\n' "$OUT" | tail -n 1 | grep -Fxq "0.1.1" || fail "installer did not print the usage-axi version last: $OUT"
+assert_contains "$(cat "$TMP_ROOT/install.err")" "building llm-router-axi 0.1.1" "must build llm-router-axi at its pin"
+assert_contains "$(cat "$TMP_ROOT/install.err")" "building usage-axi 0.1.3" "must build usage-axi at its pin"
+printf '%s\n' "$OUT" | tail -n 2 | grep -Fxq "0.1.1" || fail "installer did not print the llm-router-axi version last: $OUT"
+printf '%s\n' "$OUT" | tail -n 1 | grep -Fxq "0.1.3" || fail "installer did not print the usage-axi version last: $OUT"
 [ -x "$DEST/bin/llm-router-axi" ] || fail "llm-router-axi was not installed to <prefix>/bin"
 [ -x "$DEST/bin/usage-axi" ] || fail "usage-axi was not installed to <prefix>/bin"
-[ "$("$DEST/bin/llm-router-axi" --version)" = "0.1.0" ] || fail "installed llm-router-axi reports the wrong version"
-[ "$("$DEST/bin/usage-axi" --version)" = "0.1.1" ] || fail "installed usage-axi reports the wrong version"
+[ "$("$DEST/bin/llm-router-axi" --version)" = "0.1.1" ] || fail "installed llm-router-axi reports the wrong version"
+[ "$("$DEST/bin/usage-axi" --version)" = "0.1.3" ] || fail "installed usage-axi reports the wrong version"
 pass "fm-install-router-axi-tools.sh builds and installs both pinned tools"
 
 # The installer must fetch each repo at the exact pinned commit, not a branch.
@@ -180,7 +180,7 @@ if ! OUT=$(run_installer "$DEST" 2>"$TMP_ROOT/skip.err"); then
   fail "a satisfied prefix must skip the build, not fail"
 fi
 assert_contains "$(cat "$TMP_ROOT/skip.err")" "already installed, skipping build" "cache hit must report the skip"
-printf '%s\n' "$OUT" | tail -n 1 | grep -Fxq "0.1.1" || fail "cache hit must still print the installed versions: $OUT"
+printf '%s\n' "$OUT" | tail -n 1 | grep -Fxq "0.1.3" || fail "cache hit must still print the installed versions: $OUT"
 pass "fm-install-router-axi-tools.sh skips the build when the pinned version already exists"
 
 # --- wrong fetched commit -----------------------------------------------------
