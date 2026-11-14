@@ -733,9 +733,10 @@ Kimi was not installed on the verification machine; its bordered shape is pinned
 This guard is the refresh command after an upgrade to any matrix-covered harness; rerun it and update the versions above rather than trusting this table across releases.
 The 2026-08-23 steering-inbox doorbell run observed grok 1.0.5's idle composer classifying `unknown` (and sometimes pending-family), never `empty`.
 Issue #3436's recorded idle capture reproduced the cause on 2026-09-14: Grok 1.0.5 renders the titled bottom border three columns wider than its aligned top and content rows, so the cursorless Herdr profile rejected the otherwise complete box as ambiguous.
-The classifier now accepts only that exact three-column overhang (`FM_COMPOSER_GROK_TITLE_OVERHANG` in `bin/fm-composer-lib.sh`) carrying a typed `Grok <model> (<effort>)` title; the portable regressions feed the real capture through both the shared Herdr capability profile and `fm_backend_herdr_composer_state`, and prove idle is `empty`, typed content is `pending`, and an unrecognized oversized title remains `unknown`.
-Grok was not installed on the verification machine for this 2026-09-14 change, so the live guard still owes a refresh against the current release rather than treating the portable capture as current live evidence; the three-column width is not live-verified and may need adjustment if Grok's title rendering changes or scales with title length.
+For that Grok 1.0.5 capture, the classifier accepts only the exact three-column overhang (`FM_COMPOSER_GROK_TITLE_OVERHANG` in `bin/fm-composer-lib.sh`) carrying a typed `Grok <model> (<effort>)` title; the portable regressions feed the real capture through both the shared Herdr capability profile and `fm_backend_herdr_composer_state`, and prove idle is `empty`, typed content is `pending`, and an unrecognized oversized title remains `unknown`.
+Grok was not installed on the verification machine for this 2026-09-14 change; the three-column width remains capture-only evidence, is not live-verified, and may need adjustment if Grok's title rendering changes or scales with title length.
 This closes only #3436's idle-composer-misclassification symptom (Grok/Herdr composer read `unknown` instead of `empty`, blocking away-mode injection). The issue's second symptom - a leftover watcher never yielding and never being taken over or refused at AFK start - is unrelated to composer classification and is tracked separately in #2270, where #3436's reproduction serves as corroborating evidence.
+Grok has since changed that title again, and the newer accepted shape - the same title at the ALIGNED width carrying an approval mode - is recorded in [Grok approval-titled bottom border](#grok-approval-titled-bottom-border) so the two widths are never conflated.
 Cursor is deliberately outside this cursor-anchored empty-composer matrix because its terminal cursor is parked outside the composer; tmux's Cursor-specific, process-identity-gated cursorless fallback is covered by the [Cursor Agent CLI](#cursor-agent-cli) section's separate live evidence and drift guard.
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
@@ -791,6 +792,43 @@ Portable regressions replay those frames with and without a cursor supplied as t
 Missing, false or unknown viewport provenance refuses both classification and extraction even when supplied a complete frame; the earlier wrapped-cwd overlay captures remain refusal evidence.
 The queue check requires the exact next user instruction to reach the local transport after the held native turn is released; it does not accept a title-generation request as delivery.
 A separate authorized read-only real spent-free capture retained `unknown` for the usage-exceeded upsell/retry row; it was never used as evidence for an empty composer.
+
+### Grok approval-titled bottom border
+
+Recorded 2026-10-01; the shape was first observed on Grok 1.0.44 on 2026-09-29, on an idle composer the classifier then read as `unknown`. The classifier update was exercised again on 2026-10-15 against Grok 1.0.62; see the live-validation evidence below.
+This is the second title shape the bordered family tolerates, and its geometry is the opposite of the Grok 1.0.5 case above: Grok 1.0.44 draws the title INSIDE the rounded bottom border at exactly the width of that box's own top border, and appends its approval mode after the model/effort title joined by a mid-dot - `╰── … ── Grok 4.7 (high) · always-approve ─╯`.
+That mid-dot is neither the family's rule glyph nor printable ASCII, so under the rule as it stood the title left geometry residue, the idle pane classified `unknown`, the injection guard deferred, and `bin/fm-control.sh`'s guarded exit and relaunch refused to type `/exit` on a composer holding nothing.
+The accepted delta is the suffix on the observed rounded family alone: `_fm_composer_titled_bottom_ok` requires exactly one trailing ` · always-approve` on a typed `Grok <model> (<effort>)` title, replaces that single mid-dot column with an ASCII `.` so nothing survives the residue test, and then accepts the rounded bottom border only at the aligned width.
+Everything around it stays `unknown` by construction - a second mid-dot, a mid-dot outside this shape, another approval mode, another brand, an unlisted effort, or this suffix at any other width including Grok 1.0.5's overhang - so a release that renames the approval mode or moves the title back to an overhang falls back to the fail-safe verdict instead of fabricating an injectable composer.
+Live validation ran 2026-10-01 on Grok 1.0.46 (2765805b9442) [stable], with follow-up validation on 2026-10-15 against Grok 1.0.62. The current-release run captured idle, draft, and cleared states at 120x40, plus idle panes at 80x30 and 220x50; the real tmux adapter, pending-input guard, and backend adapter reported empty/allow, pending/defer, then empty/allow, and styled Herdr and cursorless cmux/orca profiles agreed on those same captures. See run evidence for exact artifacts and commands; no prompt was submitted.
+The same run's `FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh` proved the real idle grok 1.0.46 composer `empty` through tmux and checked that the cursorless re-read was not `pending`.
+The portable owner of the shape is `test_matrix_grok_144_approval_titled_bottom_border` in `tests/fm-composer-lib.test.sh`, which pins the `Grok 4.7 (high)` approval title's idle `empty` on tmux (with the cursor on either the content row or bottom border), herdr, and cmux/orca capability profiles, and typed `pending` on tmux and herdr only.
+It also pins idle `empty` for `Grok 4.6` at all four efforts (`low`, `medium`, `high`, `xhigh`) on tmux only, `unknown` for the tested malformed titles on tmux, rejection of light, heavy, double, and ASCII approval-title boxes on tmux, herdr, and cmux/orca profiles, and Grok 1.0.5's three-column overhang still proving `empty` for a title without the suffix on tmux.
+
+Grok 1.0.77 (50ca579fa996), verified 2026-11-12 on Rex at 80x24, keeps this aligned approval title for `grok-4.7`, `grok-4.6`, and `grok-4.5`, but titles `grok-4.7-build-fast` with a two-word model name: `╰── … ── Grok 4.7 Fast (medium) · always-approve ─╯`.
+The space in `4.7 Fast` failed the typed-title model check, so that idle composer read `unknown` and `exit` and `relaunch` refused it (#8388).
+The accepted delta is that one ` Fast` word after the model version, and only on the ` · always-approve` title; a second word, another word, and the `Fast` title at Grok 1.0.5's overhang stay `unknown`.
+The live check launched `grok --always-approve --model grok-4.7-build-fast --reasoning-effort medium` in a scratch Rex block and read it through `fm_backend_rex_composer_state` from `bin/backends/rex.sh`, with the cursor (row 19) and cursorless.
+Before the change, idle, after one turn, and after a Ctrl+C interrupt each read `unknown`, and a typed draft read `pending-unproven`.
+After the change the same states read:
+
+```text
+idle: cursor_y=19 state=empty cursorless=empty
+after Ctrl+C: cursor_y=19 state=empty cursorless=empty
+typed `draft text not sent`: cursor_y=19 state=pending cursorless=pending
+cleared with Ctrl+U: cursor_y=19 state=empty cursorless=empty
+```
+
+`test_matrix_grok_1077_fast_model_title` in `tests/fm-composer-lib.test.sh` feeds the real styled Rex captures in `tests/fixtures/rex-grok-1.0.77/` through the classifier and pins idle `empty`, typed `pending`, and the unobserved titles `unknown`.
+The live guard launches only the default model, so it does not exercise the `Fast` title; its 1.0.77 result is:
+
+```text
+$ FM_REX_COMPOSER_LIVE=1 bash tests/fm-backend-rex-composer-live-e2e.test.sh
+ok - grok (grok 1.0.77 (50ca579fa996)): real idle composer classifies empty on rex
+ok - grok (grok 1.0.77 (50ca579fa996)): the same idle screen read cursorless is not pending (verdict: empty)
+```
+
+After a Grok upgrade, rerun that live guard and refresh both this record and the 1.0.5 note above: each accepted width is pinned to an observed release, the 1.0.5 overhang has never been live-verified, and neither the approval wording nor either width carries a guarantee across a release.
 
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
@@ -901,7 +939,7 @@ ok - muse (Muse Code 0.2.1 (0.2.1-R1215.1)): the doorbell reached a real worker,
 ```
 
 All six installed harnesses honored the doorbell contract with real model turns: each listed the inbox named by the doorbell, read its record, executed the instruction inside it, and acknowledged with the atomic `mv`.
-Two findings from the run shaped the shipped behavior: an OpenCode vendor update modal swallowed the first doorbell and the single re-ring recovered it, which is exactly the watcher ladder's job; and grok 1.0.5's idle composer never classifies `empty` (a classifier drift owned by the [Composer classification matrix](#composer-classification-matrix) guard, whose refresh for grok 1.0.5 is still owed), which motivated the ring's advisory pre-check not to skip on ambiguity - a doorbell into an ambiguous composer is a recoverable constant line, while skipping on ambiguity would starve steering for any harness the classifier cannot positively identify.
+Two findings from the run shaped the shipped behavior: an OpenCode vendor update modal swallowed the first doorbell and the single re-ring recovered it, which is exactly the watcher ladder's job; and grok 1.0.5's idle composer never classified `empty` in that run (the [Composer classification matrix](#composer-classification-matrix) owns the subsequent fix, its capture-only overhang evidence, and later live results), which motivated the ring's advisory pre-check not to skip on ambiguity - a doorbell into an ambiguous composer is a recoverable constant line, while skipping on ambiguity would starve steering for any harness the classifier cannot positively identify.
 The current pending-composer ring contract is owned by `bin/fm-task-inbox-lib.sh`.
 Kimi was not installed on the verification machine; its receive path is the same one-line-plus-shell contract, and the portable ladder and enqueue regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` cover every harness-independent half.
 This guard is the refresh command after any harness upgrade; it spends a small number of real tokens per installed harness, reports an absent harness explicitly, and refuses a run that verified nothing.
