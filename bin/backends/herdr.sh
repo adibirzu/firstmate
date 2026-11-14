@@ -666,9 +666,15 @@ fm_backend_herdr_projection_journal_field() {  # <journal> <key>
 
 # fm_backend_herdr_projection_journal_snapshot: validate a version 1 attempt
 # journal or a version 2 exact projection binding without sourcing shell code.
-# Version 2 sets FM_BACKEND_HERDR_JOURNAL_* globals for same-process callers.
+# The journal is read exactly once and every field is parsed in-process, so a
+# home retaining dozens of journals does not pay one subprocess per field per
+# journal. Version 2 sets FM_BACKEND_HERDR_JOURNAL_* globals for same-process
+# callers.
 fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
-  local journal=$1 id=$2 lines expected_label exact
+  local journal=$1 id=$2 line key value lines=0 expected_label exact task_segment seen=" "
+  local version="" task_id="" projection_id="" home="" session=""
+  local workspace_id="" tab_id="" pane_id="" parent_workspace_id=""
+  local parent_label="" workspace_label="" task_label=""
   FM_BACKEND_HERDR_JOURNAL_VERSION=""
   FM_BACKEND_HERDR_JOURNAL_TASK_ID=""
   FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID=""
@@ -682,62 +688,128 @@ fm_backend_herdr_projection_journal_snapshot() {  # <journal> <task-id>
   FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL=""
   FM_BACKEND_HERDR_JOURNAL_TASK_LABEL=""
   [ -f "$journal" ] && [ ! -L "$journal" ] || return 1
-  lines=$(wc -l < "$journal" 2>/dev/null | tr -d '[:space:]')
-  FM_BACKEND_HERDR_JOURNAL_VERSION=$(fm_backend_herdr_projection_journal_field "$journal" version) || return 1
-  FM_BACKEND_HERDR_JOURNAL_TASK_ID=$(fm_backend_herdr_projection_journal_field "$journal" task_id) || return 1
-  FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID=$(fm_backend_herdr_projection_journal_field "$journal" projection_id) || return 1
-  [ "$FM_BACKEND_HERDR_JOURNAL_TASK_ID" = "$id" ] || return 1
-  [ "${#FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID}" -eq 22 ] || return 1
-  case "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" in
+  while IFS= read -r line; do
+    lines=$((lines + 1))
+    case "$line" in
+      *=*) key=${line%%=*}; value=${line#*=} ;;
+      *) return 1 ;;
+    esac
+    case "$key" in
+      version|task_id|projection_id|home|session|workspace_id|tab_id|pane_id|parent_workspace_id|parent_label|workspace_label|task_label) ;;
+      *) return 1 ;;
+    esac
+    case "$seen" in
+      *" $key "*) return 1 ;;
+    esac
+    seen="$seen$key "
+    case "$key" in
+      version) version=$value ;;
+      task_id) task_id=$value ;;
+      projection_id) projection_id=$value ;;
+      home) home=$value ;;
+      session) session=$value ;;
+      workspace_id) workspace_id=$value ;;
+      tab_id) tab_id=$value ;;
+      pane_id) pane_id=$value ;;
+      parent_workspace_id) parent_workspace_id=$value ;;
+      parent_label) parent_label=$value ;;
+      workspace_label) workspace_label=$value ;;
+      task_label) task_label=$value ;;
+    esac
+    line=
+  done < "$journal"
+  # A trailing fragment with no terminating newline is not a complete journal
+  # record; refuse it rather than validate a partially written file.
+  [ -z "$line" ] || return 1
+  [ -n "$version" ] && [ -n "$task_id" ] && [ -n "$projection_id" ] || return 1
+  [ "$task_id" = "$id" ] || return 1
+  [ "${#projection_id}" -eq 22 ] || return 1
+  case "$projection_id" in
     *[!A-Za-z0-9_-]*) return 1 ;;
   esac
-  case "$FM_BACKEND_HERDR_JOURNAL_VERSION:$lines" in
-    1:3) return 0 ;;
+  case "$version:$lines" in
+    1:3) ;;
     2:12) ;;
     *) return 1 ;;
   esac
-  FM_BACKEND_HERDR_JOURNAL_HOME=$(fm_backend_herdr_projection_journal_field "$journal" home) || return 1
-  FM_BACKEND_HERDR_JOURNAL_SESSION=$(fm_backend_herdr_projection_journal_field "$journal" session) || return 1
-  FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID=$(fm_backend_herdr_projection_journal_field "$journal" workspace_id) || return 1
-  FM_BACKEND_HERDR_JOURNAL_TAB_ID=$(fm_backend_herdr_projection_journal_field "$journal" tab_id) || return 1
-  FM_BACKEND_HERDR_JOURNAL_PANE_ID=$(fm_backend_herdr_projection_journal_field "$journal" pane_id) || return 1
-  FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID=$(fm_backend_herdr_projection_journal_field "$journal" parent_workspace_id) || return 1
-  FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL=$(fm_backend_herdr_projection_journal_field "$journal" parent_label) || return 1
-  FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL=$(fm_backend_herdr_projection_journal_field "$journal" workspace_label) || return 1
-  FM_BACKEND_HERDR_JOURNAL_TASK_LABEL=$(fm_backend_herdr_projection_journal_field "$journal" task_label) || return 1
-  case "$FM_BACKEND_HERDR_JOURNAL_HOME" in
-    /*) ;;
-    *) return 1 ;;
-  esac
-  for exact in \
-    "$FM_BACKEND_HERDR_JOURNAL_SESSION" \
-    "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" \
-    "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" \
-    "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" \
-    "$FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID"; do
-    case "$exact" in
-      ''|*[[:space:]]*) return 1 ;;
+  if [ "$version" = 2 ]; then
+    case "$home" in
+      /*) ;;
+      *) return 1 ;;
     esac
+    for exact in "$session" "$workspace_id" "$tab_id" "$pane_id" "$parent_workspace_id"; do
+      case "$exact" in
+        ''|*[[:space:]]*) return 1 ;;
+      esac
+    done
+    [ -n "$parent_label" ] && [ -n "$workspace_label" ] && [ -n "$task_label" ] || return 1
+    expected_label=$(fm_backend_herdr_projection_workspace_label "$id" "$projection_id")
+    # The task label is the legacy `fm-<id>` for a projection created before the
+    # display-name change, or the new `<prefix>-[<host>-][<owner>-]<project>-<task-id>`
+    # (bin/fm-herdr-name-lib.sh), whose task segment has one leading `fm-`
+    # stripped and whose prefix is configurable. Accept both so a legacy journal
+    # still validates for restart reclaim, and bound the charset to the label
+    # alphabet the naming owner emits.
+    task_segment=${id#fm-}
+    case "$task_label" in
+      "fm-$id"|*-"$task_segment") ;;
+      *) return 1 ;;
+    esac
+    case "$task_label" in
+      *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "$workspace_label" = "$expected_label" ] || return 1
+  fi
+  FM_BACKEND_HERDR_JOURNAL_VERSION=$version
+  # shellcheck disable=SC2034 # Output global for sourcing callers.
+  FM_BACKEND_HERDR_JOURNAL_TASK_ID=$task_id
+  FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID=$projection_id
+  FM_BACKEND_HERDR_JOURNAL_HOME=$home
+  FM_BACKEND_HERDR_JOURNAL_SESSION=$session
+  FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID=$workspace_id
+  FM_BACKEND_HERDR_JOURNAL_TAB_ID=$tab_id
+  FM_BACKEND_HERDR_JOURNAL_PANE_ID=$pane_id
+  FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID=$parent_workspace_id
+  FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL=$parent_label
+  FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL=$workspace_label
+  FM_BACKEND_HERDR_JOURNAL_TASK_LABEL=$task_label
+  return 0
+}
+
+# fm_backend_herdr_projection_journal_scan: one read-once discovery pass over
+# every ordinary journal in a state directory. Emits one record per
+# structurally valid journal, separated by the ASCII unit separator so an
+# absent binding field stays a distinct empty field: journal path, task id,
+# version, projection id, canonical version 2 home, version 2 session, version
+# 2 workspace, tab, and pane ids, and the exact expected workspace label.
+# A version 1 attempt has no home or endpoint binding, so those fields are
+# empty. Task-id policy beyond the label alphabet stays with the caller; this
+# helper only refuses a name that could not be a Firstmate task id.
+fm_backend_herdr_projection_journal_scan() {  # <state-dir>
+  local state=$1 journal id home_real label suffix sep=$'\x1f'
+  suffix=$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX
+  [ -d "$state" ] && [ ! -L "$state" ] || return 0
+  for journal in "$state"/*"$suffix"; do
+    [ -f "$journal" ] && [ ! -L "$journal" ] || continue
+    id=${journal##*/}
+    id=${id%"$suffix"}
+    case "$id" in
+      ''|.*|*[!A-Za-z0-9._-]*) continue ;;
+    esac
+    [ "${#id}" -le 64 ] || continue
+    fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || continue
+    label=$(fm_backend_herdr_projection_workspace_label "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
+    if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ]; then
+      home_real=$(fm_backend_herdr_projection_home_identity \
+        "$FM_BACKEND_HERDR_JOURNAL_HOME" 2>/dev/null) || continue
+      [ -n "$home_real" ] || continue
+      printf '%s\n' \
+        "$journal$sep$id$sep$FM_BACKEND_HERDR_JOURNAL_VERSION$sep$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID$sep$home_real$sep$FM_BACKEND_HERDR_JOURNAL_SESSION$sep$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID$sep$FM_BACKEND_HERDR_JOURNAL_TAB_ID$sep$FM_BACKEND_HERDR_JOURNAL_PANE_ID$sep$label"
+    else
+      printf '%s\n' \
+        "$journal$sep$id$sep$FM_BACKEND_HERDR_JOURNAL_VERSION$sep$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID$sep$sep$sep$sep$sep$sep$label"
+    fi
   done
-  [ -n "$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL" ] \
-    && [ -n "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" ] \
-    && [ -n "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" ] || return 1
-  expected_label=$(fm_backend_herdr_projection_workspace_label "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
-  # The task label is the legacy `fm-<id>` for a projection created before the
-  # display-name change, or the new `<prefix>-[<host>-][<owner>-]<project>-<task-id>`
-  # (bin/fm-herdr-name-lib.sh), whose task segment has one leading `fm-`
-  # stripped and whose prefix is configurable. Accept both so a legacy journal
-  # still validates for restart reclaim, and bound the charset to the label
-  # alphabet the naming owner emits.
-  local task_segment=${id#fm-}
-  case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
-    "fm-$id"|*-"$task_segment") ;;
-    *) return 1 ;;
-  esac
-  case "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" in
-    *[!A-Za-z0-9._-]*) return 1 ;;
-  esac
-  [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" = "$expected_label" ]
 }
 
 # fm_backend_herdr_projection_journal_token: validate and read either journal
