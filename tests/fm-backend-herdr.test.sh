@@ -4192,21 +4192,25 @@ test_normalize_key() {
 # tests/fm-control-herdr-smoke.test.sh; these two run everywhere.
 test_control_byte_maps_reset_keys_to_raw_control_bytes() {
   local hex
-  hex=$( . "$ROOT/bin/backends/herdr.sh"
+  hex=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
     fm_backend_herdr_control_byte C-c | od -An -tx1
     fm_backend_herdr_control_byte c-c | od -An -tx1
     fm_backend_herdr_control_byte ctrl+c | od -An -tx1
     fm_backend_herdr_control_byte C-u | od -An -tx1
     fm_backend_herdr_control_byte ctrl+u | od -An -tx1
-  )
+  ' "$ROOT")
   assert_equals " 03
  03
  03
  15
  15" "$hex" "every spelling of C-c and C-u must resolve to exactly the raw 0x03/0x15 bytes, so no spelling can quietly resolve to something else"
-  ( . "$ROOT/bin/backends/herdr.sh"
+  if bash -c '
+    . "$0/bin/backends/herdr.sh"
     fm_backend_herdr_control_byte Enter
-  ) && fail "Enter has no raw control byte here and must not resolve to one"
+  ' "$ROOT"; then
+    fail "Enter has no raw control byte here and must not resolve to one"
+  fi
   pass "fm_backend_herdr_control_byte: C-c and C-u resolve to the raw 0x03/0x15 bytes, and a key with no control byte refuses"
 }
 
