@@ -993,6 +993,32 @@ test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling() {
   pass "fm-brief.sh: ship and scout briefs forbid interactive-prompt decisions and worker-side polling loops"
 }
 
+# Rule 10: every ship and scout brief tells the worker to keep a handoff file in
+# the task's data directory, with the headings a replacement agent needs, and
+# allows exactly that one extra write outside the worktree.
+test_ship_and_scout_require_a_handoff_file() {
+  local home brief kind
+  home="$TMP_ROOT/handoff-file-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    if [ "$kind" = ship ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-handoff-$kind firstmate --mode direct-PR >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-handoff-$kind firstmate --scout >/dev/null 2>&1
+    fi
+    brief="$home/data/brief-handoff-$kind/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "10. Keep a handoff file at \`$home/data/brief-handoff-$kind/handoff.md\`" "$brief" \
+      "$kind brief does not name the task's handoff file"
+    for heading in "## Goal" "## State" "## Done" "## Next" "## Decisions" "## Blockers" "## Agent"; do
+      assert_grep "$heading" "$brief" "$kind brief handoff rule is missing the $heading heading"
+    done
+    assert_grep "never commit it" "$brief" "$kind brief must keep the handoff file out of commits"
+    assert_grep "the handoff file in rule 10" "$brief" "$kind brief rule 2 must allow the handoff file write"
+  done
+  pass "fm-brief.sh: ship and scout briefs require a current handoff file outside the worktree"
+}
+
 # The instruction-inbox contract is delivered to the crewmate exactly once per
 # brief. A merge resolution that kept both parents' placement of the section
 # emitted it twice back to back, which spends the home's startup-memory budget
@@ -1464,6 +1490,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_forbid_interactive_prompts_and_worker_side_polling
+test_ship_and_scout_require_a_handoff_file
 test_instruction_inbox_contract_is_delivered_once_per_brief
 test_ship_and_scout_carry_graph_first_instruction
 test_isolation_assertion_names_the_assigned_worktree

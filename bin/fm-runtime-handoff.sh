@@ -11,12 +11,15 @@
 # What this does (mechanism only; firstmate decides WHEN to call it):
 #   1. Reconcile the recorded worktree and endpoint ownership; refuse rather
 #      than guess when either cannot be proven safe.
-#   2. Cleanly exit the current agent using the recorded harness's verified
+#   2. Take a best-effort wip checkpoint (fm-wip-checkpoint.sh, no push) so the
+#      worktree's work survives even if the relaunch goes wrong; a failure only
+#      warns.
+#   3. Cleanly exit the current agent using the recorded harness's verified
 #      exit command (harness-adapters owns those facts).
-#   3. Keep the recorded, agent-free endpoint (pane/window) intact.
-#   4. Relaunch the chosen verified harness in the EXISTING worktree and endpoint with the
+#   4. Keep the recorded, agent-free endpoint (pane/window) intact.
+#   5. Relaunch the chosen verified harness in the EXISTING worktree and endpoint with the
 #      existing brief plus a concise progress note (brief file is not rewritten).
-#   5. Rewrite harness=/model=/effort= (and the new endpoint fields)
+#   6. Rewrite harness=/model=/effort= (and the new endpoint fields)
 #      in state/<id>.meta while preserving every other meta line (pr=, x_*, ...).
 #
 # Hard refusals:
@@ -200,6 +203,14 @@ if [ -n "$PROGRESS_NOTE_FILE" ]; then
   [ -f "$PROGRESS_NOTE_FILE" ] || { echo "error: --progress-note-file not found: $PROGRESS_NOTE_FILE" >&2; exit 1; }
   PROGRESS_NOTE=$(cat "$PROGRESS_NOTE_FILE")
 fi
+# The worker's own handoff file (brief rule 10) travels with every handoff, next
+# to any captain note, so a replacement never depends on the old agent's memory.
+WORKER_HANDOFF_FILE="$DATA/$ID/handoff.md"
+WORKER_HANDOFF=
+[ ! -s "$WORKER_HANDOFF_FILE" ] || WORKER_HANDOFF=$(cat "$WORKER_HANDOFF_FILE")
+if [ -z "$PROGRESS_NOTE" ] && [ -n "$WORKER_HANDOFF" ]; then
+  PROGRESS_NOTE="No captain note was supplied; the previous worker's handoff file follows."
+fi
 if [ -z "$PROGRESS_NOTE" ]; then
   PROGRESS_NOTE="No progress note was supplied. Inspect git status, git log, and the task status log, then continue from the original brief. Preserve all existing commits and uncommitted changes."
 fi
@@ -245,6 +256,14 @@ wait_for_non_alive() {
   done
   agent_state_of
 }
+
+# Best-effort safety snapshot of the worker's committed and uncommitted work,
+# taken before the old agent exits; it never blocks or alters the handoff.
+if ! CHECKPOINT_OUT=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-wip-checkpoint.sh" "$ID" 2>&1); then
+  echo "warning: wip checkpoint for $ID failed; continuing handoff: $CHECKPOINT_OUT" >&2
+else
+  printf '%s\n' "$CHECKPOINT_OUT"
+fi
 
 STATE_NOW=$(agent_state_of)
 case "$STATE_NOW" in
@@ -315,6 +334,7 @@ Do not create a new worktree. Do not start over from a clean tree.
 ## Progress so far
 
 $PROGRESS_NOTE
+$(if [ -n "$WORKER_HANDOFF" ]; then printf '\n## Previous worker handoff file\n\nFrom %s - keep updating that same file as you work.\n\n%s\n' "$WORKER_HANDOFF_FILE" "$WORKER_HANDOFF"; fi)
 
 ## Active pipeline
 
