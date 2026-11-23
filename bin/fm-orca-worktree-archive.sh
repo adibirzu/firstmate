@@ -3,9 +3,11 @@
 # Removes only regenerable Python bytecode (*.pyc, *.pyo inside __pycache__)
 # and ruff caches (.ruff_cache carrying a valid CACHEDIR.TAG). Never removes a
 # path tracked in the git index, never descends into top-level .git, data,
-# state, config or projects (matched by exact entry name, no globbing), never
-# follows symlinks, and never removes source files. If the index cannot be read
-# it warns and deletes nothing. Makes no network calls.
+# state, config or projects (matched case-insensitively by name and by the
+# (st_dev, st_ino) of --git-dir and --git-common-dir, no globbing), never
+# traverses a nested git repository (any .git entry, any case), never follows
+# symlinks, and never removes source files. If the index is missing or cannot
+# be read it warns and deletes nothing. Makes no network calls.
 set -euo pipefail
 
 warn() { printf 'orca-worktree-archive: warning: %s\n' "$*" >&2; }
@@ -28,6 +30,7 @@ import sys
 top = sys.argv[1]
 TAG = b"Signature: 8a477f597d28d172789f06886806bc55"
 PROTECTED = (".git", "data", "state", "config", "projects")
+protected_ids = set()
 DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -35,21 +38,46 @@ def warn(msg):
     sys.stderr.write("orca-worktree-archive: warning: %s\n" % msg)
 
 
+def git_out(*args):
+    try:
+        res = subprocess.run(
+            ["git", "-C", top] + list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        warn("cannot run git (%s); nothing cleaned" % exc)
+        sys.exit(0)
+    if res.returncode != 0:
+        warn("git index unreadable; nothing cleaned")
+        sys.exit(0)
+    return res.stdout
+
+
+def top_path(raw):
+    p = os.fsdecode(raw).rstrip("\n")
+    return p if os.path.isabs(p) else os.path.join(top, p)
+
+
+index_path = top_path(git_out("rev-parse", "--git-path", "index"))
 try:
-    res = subprocess.run(
-        ["git", "-C", top, "ls-files", "-z"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-except OSError as exc:
-    warn("cannot run git (%s); nothing cleaned" % exc)
+    if not stat.S_ISREG(os.stat(index_path).st_mode):
+        raise OSError("not a regular file")
+except OSError:
+    warn("git index missing; nothing cleaned")
     sys.exit(0)
-if res.returncode != 0:
-    warn("git index unreadable; nothing cleaned")
-    sys.exit(0)
+for opt in ("--git-dir", "--git-common-dir"):
+    try:
+        gst = os.stat(top_path(git_out("rev-parse", opt)))
+    except OSError:
+        warn("cannot resolve %s; nothing cleaned" % opt)
+        sys.exit(0)
+    protected_ids.add((gst.st_dev, gst.st_ino))
+
+listed = git_out("ls-files", "-z")
 
 tracked = set()
-for raw in res.stdout.split(b"\0"):
+for raw in listed.split(b"\0"):
     if not raw:
         continue
     try:
@@ -115,6 +143,25 @@ def has_tag(fd):
         os.close(tfd)
 
 
+def has_git_entry(fd):
+    return any(e.lower() == ".git" for e in os.listdir(fd))
+
+
+def contains_nested_git(fd):
+    for entry in os.listdir(fd):
+        if entry.lower() == ".git":
+            return True
+        sub = open_dir(entry, fd)
+        if sub is None:
+            continue
+        try:
+            if contains_nested_git(sub):
+                return True
+        finally:
+            os.close(sub)
+    return False
+
+
 def contains_tracked(fd):
     for entry in os.listdir(fd):
         try:
@@ -155,7 +202,9 @@ def purge(fd):
 
 
 def clean_ruff(fd, name, parent_fd):
-    if is_tracked_fd(fd) or not has_tag(fd) or contains_tracked(fd):
+    if is_tracked_fd(fd) or not has_tag(fd):
+        return
+    if contains_nested_git(fd) or contains_tracked(fd):
         return
     purge(fd)
     try:
@@ -166,14 +215,16 @@ def clean_ruff(fd, name, parent_fd):
 
 def walk(fd, is_top):
     for entry in os.listdir(fd):
-        if is_top and entry in PROTECTED:
+        if entry.lower() in PROTECTED and (is_top or entry.lower() == ".git"):
             continue
         sub = open_dir(entry, fd)
         if sub is None:
             continue
         try:
             st = os.fstat(sub)
-            if (st.st_dev, st.st_ino) in tracked:
+            if (st.st_dev, st.st_ino) in tracked | protected_ids:
+                continue
+            if has_git_entry(sub):
                 continue
             if entry == "__pycache__":
                 clean_pycache(sub, entry, fd)

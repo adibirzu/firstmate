@@ -176,6 +176,66 @@ check "submodule .ruff_cache preserved" test -f "$SM/vendor/submod/.ruff_cache/C
 check "submodule cache tracked file preserved" test -f "$SM/vendor/submod/.ruff_cache/inside-sub"
 check "submodule tracked file preserved" test -f "$SM/vendor/submod/subtracked.txt"
 
+# --- finding: nested repository under a tagged cache is never traversed -----
+NR="$TMP/nested"
+new_repo "$NR"
+mkdir -p "$NR/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$NR/.ruff_cache/CACHEDIR.TAG"
+new_repo "$NR/.ruff_cache/local-repo"
+printf 'src\n' >"$NR/.ruff_cache/local-repo/source.py"
+git -C "$NR/.ruff_cache/local-repo" add source.py
+git -C "$NR/.ruff_cache/local-repo" commit -q -m src
+(cd "$NR" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "nested repo archive exits 0"
+check "nested repo source preserved" test -f "$NR/.ruff_cache/local-repo/source.py"
+check "nested repo git HEAD preserved" test -f "$NR/.ruff_cache/local-repo/.git/HEAD"
+check "nested repo tracked file preserved" test -f "$NR/.ruff_cache/local-repo/tracked.txt"
+
+# --- finding: git metadata and protected dirs matched by case alias ---------
+CA="$TMP/casealias"
+new_repo "$CA"
+mkdir -p "$CA/.GIT/objects/__pycache__"
+printf 'x\n' >"$CA/.GIT/objects/__pycache__/probe.pyc"
+for d in Data STATE Config PROJECTS; do
+  mkdir -p "$CA/$d/__pycache__"
+  printf 'x\n' >"$CA/$d/__pycache__/m.pyc"
+done
+(cd "$CA" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "case alias archive exits 0"
+check "case alias .GIT pycache preserved" test -f "$CA/.GIT/objects/__pycache__/probe.pyc"
+for d in Data STATE Config PROJECTS; do
+  check "case alias $d pycache preserved" test -f "$CA/$d/__pycache__/m.pyc"
+done
+# Real rename of the git directory: where the filesystem is case-insensitive,
+# git still finds the checkout and the resolved git dir is the identity guard.
+CR="$TMP/caserename"
+new_repo "$CR"
+mv "$CR/.git" "$CR/.git-tmp-rename"
+mv "$CR/.git-tmp-rename" "$CR/.GIT"
+if git -C "$CR" rev-parse --git-dir >/dev/null 2>&1; then
+  mkdir -p "$CR/.GIT/objects/__pycache__"
+  printf 'x\n' >"$CR/.GIT/objects/__pycache__/probe.pyc"
+  (cd "$CR" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "renamed git dir archive exits 0"
+  check "renamed git dir pycache preserved" test -f "$CR/.GIT/objects/__pycache__/probe.pyc"
+else
+  pass "renamed git dir unsupported on this filesystem (skipped)"
+fi
+
+# --- finding: missing index fails closed ------------------------------------
+MI="$TMP/noindex"
+new_repo "$MI"
+mkdir -p "$MI/pkg/__pycache__"
+printf 'v1\n' >"$MI/pkg/__pycache__/committed.pyc"
+git -C "$MI" add -f pkg/__pycache__/committed.pyc
+git -C "$MI" commit -q -m pyc
+printf 'v2-modified\n' >"$MI/pkg/__pycache__/committed.pyc"
+printf 'x\n' >"$MI/pkg/__pycache__/other.pyc"
+rm -f "$MI/.git/index"
+rc=0
+miout=$(cd "$MI" && bash "$ARCHIVE" 2>&1) || rc=$?
+check "missing index archive exits 0" test "$rc" = 0
+check "missing index keeps modified committed pyc" test -f "$MI/pkg/__pycache__/committed.pyc"
+check "missing index deletes nothing else" test -f "$MI/pkg/__pycache__/other.pyc"
+case "$miout" in *[Ww]arn*) pass "missing index warns" ;; *) fail "missing index warns ($miout)" ;; esac
+
 # --- private dirs untouched -------------------------------------------------
 after=$(cd "$WT" && find data state config projects -type f | LC_ALL=C sort | xargs shasum | shasum)
 check "private dirs untouched" test "$before" = "$after"
