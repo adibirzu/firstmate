@@ -149,8 +149,32 @@ if kill -0 "$fpid" 2>/dev/null; then
 else
   pass "fifo tag archive returns promptly"
 fi
-wait "$fpid" 2>/dev/null || true
+fifo_status=0
+wait "$fpid" 2>/dev/null || fifo_status=$?
+check "fifo tag archive exits 0" test "$fifo_status" = 0
 check "fifo tag .ruff_cache preserved" test -p "$FF/.ruff_cache/CACHEDIR.TAG"
+
+# --- finding: ordinary-named tracked submodule is never entered ------------
+SMR="$TMP/submod-src"
+new_repo "$SMR"
+mkdir -p "$SMR/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$SMR/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$SMR/.ruff_cache/inside-sub"
+printf 'sub\n' >"$SMR/subtracked.txt"
+git -C "$SMR" add subtracked.txt
+git -C "$SMR" add -f .ruff_cache/inside-sub
+git -C "$SMR" commit -q -m subfiles
+SM="$TMP/submod-parent"
+new_repo "$SM"
+mkdir -p "$SM/vendor"
+git clone -q "$SMR" "$SM/vendor/submod"
+git -C "$SM" add vendor/submod 2>/dev/null
+git -C "$SM" commit -q -m addsub
+printf '%s\n' "$TAG_SIG" >"$SM/vendor/submod/.ruff_cache/CACHEDIR.TAG"
+(cd "$SM" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "submodule archive exits 0"
+check "submodule .ruff_cache preserved" test -f "$SM/vendor/submod/.ruff_cache/CACHEDIR.TAG"
+check "submodule cache tracked file preserved" test -f "$SM/vendor/submod/.ruff_cache/inside-sub"
+check "submodule tracked file preserved" test -f "$SM/vendor/submod/subtracked.txt"
 
 # --- private dirs untouched -------------------------------------------------
 after=$(cd "$WT" && find data state config projects -type f | LC_ALL=C sort | xargs shasum | shasum)

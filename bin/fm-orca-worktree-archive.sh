@@ -172,6 +172,9 @@ def walk(fd, is_top):
         if sub is None:
             continue
         try:
+            st = os.fstat(sub)
+            if (st.st_dev, st.st_ino) in tracked:
+                continue
             if entry == "__pycache__":
                 clean_pycache(sub, entry, fd)
             elif entry == ".ruff_cache":
