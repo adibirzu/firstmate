@@ -1,0 +1,5 @@
+# Orca worktree lifecycle for firstmate. Local-only helpers: no network, no secrets.
+scripts:
+  setup: bash scripts/orca-worktree-setup.sh
+  archive: bash scripts/orca-worktree-archive.sh
+setupAgentStartupPolicy: wait-for-setup
