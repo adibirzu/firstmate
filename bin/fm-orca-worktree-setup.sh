@@ -14,33 +14,54 @@ set -euo pipefail
 warn() { printf 'orca-worktree-setup: warning: %s\n' "$*" >&2; }
 
 add_excludes() {
-  local top common
-  if ! top=$(git rev-parse --show-toplevel 2>/dev/null); then
-    warn 'not inside a git worktree; skipping excludes'
-    return 0
-  fi
   if ! command -v python3 >/dev/null 2>&1; then
     warn 'python3 missing; skipping excludes'
     return 0
   fi
-  if ! common=$(git -C "$top" rev-parse --git-common-dir 2>/dev/null); then
-    warn 'cannot resolve git common dir; skipping excludes'
-    return 0
-  fi
-  case "$common" in
-    /*) ;;
-    *) common="$top/$common" ;;
-  esac
-  python3 -B -I - "$common" '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log' <<'PY'
+  # Git paths are resolved inside Python as raw bytes: shell command
+  # substitution would strip every trailing newline of a worktree name and could
+  # select a sibling checkout.
+  python3 -B -I - '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log' <<'PY'
 import fcntl
 import os
+import subprocess
 import sys
 
-common, patterns = sys.argv[1], sys.argv[2:]
+patterns = sys.argv[1:]
 
 
 def warn(msg):
     sys.stderr.write("orca-worktree-setup: warning: %s\n" % msg)
+
+
+def git_raw(*args):
+    """Run git and return stdout minus exactly one trailing LF, or None."""
+    try:
+        res = subprocess.run(
+            ["git"] + list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    if res.returncode != 0:
+        return None
+    raw = res.stdout
+    return os.fsdecode(raw[:-1] if raw.endswith(b"\n") else raw)
+
+
+top = git_raw("rev-parse", "--show-toplevel")
+if top is None:
+    warn("not inside a git worktree; skipping excludes")
+    sys.exit(0)
+exclude = git_raw("-C", top, "rev-parse", "--git-path", "info/exclude")
+if exclude is None:
+    warn("cannot resolve git common dir; skipping excludes")
+    sys.exit(0)
+if not os.path.isabs(exclude):
+    exclude = os.path.join(top, exclude)
+# <common-dir>/info/exclude: the common dir is two levels up.
+common = os.path.dirname(os.path.dirname(exclude))
 
 
 DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW

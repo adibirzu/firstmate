@@ -83,7 +83,8 @@ MAX_HOPS = 32
 def protect_path(path, required=True):
     """Record the inode of every symlink hop, at any component, and the target.
 
-    Walks the path component by component with lstat, expanding at most
+    Walks the raw path component by component with lstat, expanding each
+    symlink before any following ".." is applied, at most
     MAX_HOPS symlinks in total. Returns the visited paths (symlinks first,
     resolved target last). A required path that cannot be resolved aborts
     without deleting anything.
@@ -91,8 +92,10 @@ def protect_path(path, required=True):
     seen = []
     hops = 0
     try:
-        pending = [c for c in os.path.abspath(path).split(os.sep) if c]
-        cur = os.sep
+        # Raw components, never os.path.abspath(): collapsing "link/.." lexically
+        # would skip expanding "link" first, which POSIX resolution requires.
+        pending = [c for c in path.split(os.sep) if c]
+        cur = os.sep if os.path.isabs(path) else os.getcwd()
         pending.reverse()
         while pending:
             comp = pending.pop()
@@ -194,14 +197,15 @@ def split_env_alternates(value):
 
 
 def read_alternates(objdir):
+    alt_file = os.path.join(objdir, "info", "alternates")
+    protect_path(alt_file, required=False)
     try:
-        with open(os.path.join(objdir, "info", "alternates"), "rb") as fh:
+        with open(alt_file, "rb") as fh:
             data = os.fsdecode(fh.read())
     except OSError:
         return []
     found = []
     for line in data.split("\n"):
-        line = line.strip("\r")
         if not line or line.startswith("#"):
             continue
         if line.startswith('"'):
@@ -212,7 +216,8 @@ def read_alternates(objdir):
 
 def protect_alternates(start):
     visited = set()
-    work = [(start, 0)]
+    # Git counts the first alternate as depth 0; the primary store is not counted.
+    work = [(start, -1)]
     while work:
         objdir, depth = work.pop()
         try:
@@ -321,11 +326,15 @@ def is_bare_git_dir(fd):
         if key not in names:
             return None
         try:
-            return os.lstat(names[key], dir_fd=fd).st_mode
+            return os.stat(names[key], dir_fd=fd).st_mode
         except OSError:
             return None
 
-    head = kind("head")
+    # HEAD may be a (possibly dangling) symlink; storage is followed like Git.
+    try:
+        head = os.lstat(names["head"], dir_fd=fd).st_mode if "head" in names else None
+    except OSError:
+        head = None
     if head is None or not (stat.S_ISREG(head) or stat.S_ISLNK(head)):
         return False
     has_store = any(

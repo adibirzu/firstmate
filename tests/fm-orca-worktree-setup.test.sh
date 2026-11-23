@@ -555,6 +555,87 @@ check "bare repo: cleanup ran" test ! -e "$BG/pkg/__pycache__/stale.pyc"
 check "bare repo inside tagged cache preserved" test "$bg_before" = "$(snap "$BG/.ruff_cache/mirror.git")"
 check "bare repo tagged cache preserved" test -f "$BG/.ruff_cache/CACHEDIR.TAG"
 
+# --- fix11: symlink-before-dotdot, alternate depth/CR, registry, bare, newline setup
+# Each alternate source gets its own tagged cache so neither can mask the other.
+tag_cache() {  # <repo> -> creates a tagged .ruff_cache
+  mkdir -p "$1/.ruff_cache"
+  printf '%s\n' "$TAG_SIG" >"$1/.ruff_cache/CACHEDIR.TAG"
+}
+
+DD="$TMP/dotdot"
+new_repo "$DD"
+tag_cache "$DD"
+plant_stale "$DD"
+mkdir -p "$DD/.ruff_cache/deep/sub"
+cp "$DD/.git/index" "$DD/.ruff_cache/index"
+cp "$DD/.git/index" "$DD/index"
+ln -s "$DD/.ruff_cache/deep/sub" "$DD/.ruff_cache/link"
+(cd "$DD" && GIT_INDEX_FILE="$DD/.ruff_cache/link/../../index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "dotdot archive exits 0"
+check "dotdot: cleanup ran" test ! -e "$DD/pkg/__pycache__/stale.pyc"
+check "dotdot: symlink-resolved index preserved" test -f "$DD/.ruff_cache/index"
+check "dotdot: link preserved" test -L "$DD/.ruff_cache/link"
+
+CH="$TMP/chain6"
+new_repo "$CH"
+tag_cache "$CH"
+plant_stale "$CH"
+prev="$CH/.git/objects"
+for i in 1 2 3 4 5 6; do
+  if [ "$i" = 6 ]; then store="$CH/.ruff_cache/s6"; else store="$TMP/chain-s$i"; fi
+  mkdir -p "$store/info"
+  printf '%s\n' "$store" >>"$prev/info/alternates"
+  prev="$store"
+done
+printf 'sentinel\n' >"$CH/.ruff_cache/s6/sentinel"
+(cd "$CH" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "chain archive exits 0"
+check "chain6: cleanup ran" test ! -e "$CH/pkg/__pycache__/stale.pyc"
+check "chain6: sixth store preserved" test -f "$CH/.ruff_cache/s6/sentinel"
+
+CR="$TMP/cralt"
+new_repo "$CR"
+tag_cache "$CR"
+plant_stale "$CR"
+CR_STORE="$CR/.ruff_cache/store"$'\r'
+mkdir -p "$CR_STORE/info"
+printf 'sentinel\n' >"$CR_STORE/sentinel"
+printf '%s\n' "$CR_STORE" >"$CR/.git/objects/info/alternates"
+(cd "$CR" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "cr alternate archive exits 0"
+check "cr alternate: cleanup ran" test ! -e "$CR/pkg/__pycache__/stale.pyc"
+check "cr alternate: literal CR store preserved" test -f "$CR_STORE/sentinel"
+
+RG="$TMP/registry"
+new_repo "$RG"
+tag_cache "$RG"
+plant_stale "$RG"
+mkdir -p "$TMP/rg-store"
+cp -R "$RG/.git/objects/." "$TMP/rg-store/"
+printf '%s\n' "$TMP/rg-store" >"$RG/.ruff_cache/alt-registry"
+rm -f "$RG/.git/objects/info/alternates"
+mkdir -p "$RG/.git/objects/info"
+ln -s "$RG/.ruff_cache/alt-registry" "$RG/.git/objects/info/alternates"
+(cd "$RG" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "registry archive exits 0"
+check "registry: cleanup ran" test ! -e "$RG/pkg/__pycache__/stale.pyc"
+check "registry: symlinked alternates target preserved" test -f "$RG/.ruff_cache/alt-registry"
+
+BS="$TMP/baresym"
+new_repo "$BS"
+tag_cache "$BS"
+plant_stale "$BS"
+git init -q --bare "$BS/.ruff_cache/mirror.git"
+mv "$BS/.ruff_cache/mirror.git/objects" "$BS/.ruff_cache/real-objects"
+ln -s ../real-objects "$BS/.ruff_cache/mirror.git/objects"
+(cd "$BS" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "bare symlink archive exits 0"
+check "bare symlink: cleanup ran" test ! -e "$BS/pkg/__pycache__/stale.pyc"
+check "bare symlink: HEAD preserved" test -f "$BS/.ruff_cache/mirror.git/HEAD"
+check "bare symlink: refs preserved" test -d "$BS/.ruff_cache/mirror.git/refs"
+check "bare symlink: objects target preserved" test -d "$BS/.ruff_cache/real-objects"
+
+if [ -d "$NLW" ]; then
+  (cd "$NLW" && bash "$SETUP") >/dev/null 2>&1 || fail "newline root setup exits 0"
+  check "newline root setup: own exclude updated" grep -qxF '.ruff_cache/' "$NLW/.git/info/exclude"
+  check "newline root setup: sibling exclude untouched" test -z "$(grep -xF '.ruff_cache/' "$NLS/.git/info/exclude" || true)"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf '%s check(s) failed\n' "$fails"
   exit 1
