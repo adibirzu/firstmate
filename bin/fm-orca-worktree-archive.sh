@@ -103,10 +103,14 @@ def open_dir(name, parent_fd):
     return fd
 
 
+def is_protected(st):
+    """True for a tracked path or an active git dir / common dir inode."""
+    return (st.st_dev, st.st_ino) in tracked or (st.st_dev, st.st_ino) in protected_ids
+
+
 def is_tracked_fd(fd):
-    """True when the open directory is itself a tracked path (e.g. a gitlink)."""
-    st = os.fstat(fd)
-    return (st.st_dev, st.st_ino) in tracked
+    """True when the open directory is itself tracked or active git metadata."""
+    return is_protected(os.fstat(fd))
 
 
 def clean_pycache(fd, name, parent_fd):
@@ -119,7 +123,7 @@ def clean_pycache(fd, name, parent_fd):
             st = os.lstat(entry, dir_fd=fd)
             if not stat.S_ISREG(st.st_mode):
                 continue
-            if (st.st_dev, st.st_ino) in tracked:
+            if is_protected(st):
                 continue
             os.unlink(entry, dir_fd=fd)
         except OSError:
@@ -168,7 +172,7 @@ def contains_tracked(fd):
             st = os.lstat(entry, dir_fd=fd)
         except OSError:
             continue
-        if (st.st_dev, st.st_ino) in tracked:
+        if is_protected(st):
             return True
         if stat.S_ISDIR(st.st_mode):
             sub = open_dir(entry, fd)
@@ -186,6 +190,8 @@ def purge(fd):
     for entry in os.listdir(fd):
         try:
             st = os.lstat(entry, dir_fd=fd)
+            if is_protected(st):
+                continue
             if stat.S_ISDIR(st.st_mode):
                 sub = open_dir(entry, fd)
                 if sub is None:
@@ -222,7 +228,7 @@ def walk(fd, is_top):
             continue
         try:
             st = os.fstat(sub)
-            if (st.st_dev, st.st_ino) in tracked | protected_ids:
+            if is_protected(st):
                 continue
             if has_git_entry(sub):
                 continue

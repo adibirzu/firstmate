@@ -236,6 +236,43 @@ check "missing index keeps modified committed pyc" test -f "$MI/pkg/__pycache__/
 check "missing index deletes nothing else" test -f "$MI/pkg/__pycache__/other.pyc"
 case "$miout" in *[Ww]arn*) pass "missing index warns" ;; *) fail "missing index warns ($miout)" ;; esac
 
+# --- finding: active git metadata inside a tagged .ruff_cache ---------------
+snap() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum); }
+SG="$TMP/sepgit"
+mkdir -p "$SG/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$SG/.ruff_cache/CACHEDIR.TAG"
+git init -q --separate-git-dir="$SG/.ruff_cache/repo-metadata" "$SG"
+git -C "$SG" config user.email test@example.invalid
+git -C "$SG" config user.name test
+printf 'keep\n' >"$SG/tracked.txt"
+git -C "$SG" add tracked.txt
+git -C "$SG" commit -q -m init
+sg_before=$(snap "$SG/.ruff_cache/repo-metadata")
+(cd "$SG" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "separate git dir archive exits 0"
+check "separate git dir HEAD preserved" test -f "$SG/.ruff_cache/repo-metadata/HEAD"
+check "separate git dir index preserved" test -f "$SG/.ruff_cache/repo-metadata/index"
+check "separate git dir objects untouched" test "$sg_before" = "$(snap "$SG/.ruff_cache/repo-metadata")"
+check "separate git dir repo still valid" git -C "$SG" rev-parse --verify -q HEAD
+
+CD="$TMP/commondir-main"
+LW="$TMP/commondir-linked"
+new_repo "$CD"
+git -C "$CD" worktree add -q "$LW" -b linked-branch
+mkdir -p "$LW/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$LW/.ruff_cache/CACHEDIR.TAG"
+mv "$CD/.git" "$LW/.ruff_cache/repo-metadata"
+printf 'gitdir: %s\n' "$LW/.ruff_cache/repo-metadata" >"$CD/.git"
+printf 'gitdir: %s\n' "$LW/.ruff_cache/repo-metadata/worktrees/commondir-linked" >"$LW/.git"
+if git -C "$LW" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  cd_before=$(snap "$LW/.ruff_cache/repo-metadata")
+  (cd "$LW" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "common dir archive exits 0"
+  check "common dir HEAD preserved" test -f "$LW/.ruff_cache/repo-metadata/HEAD"
+  check "common dir objects untouched" test "$cd_before" = "$(snap "$LW/.ruff_cache/repo-metadata")"
+  check "common dir linked worktree still valid" git -C "$LW" rev-parse --verify -q HEAD
+else
+  fail "common dir fixture could not be built"
+fi
+
 # --- private dirs untouched -------------------------------------------------
 after=$(cd "$WT" && find data state config projects -type f | LC_ALL=C sort | xargs shasum | shasum)
 check "private dirs untouched" test "$before" = "$after"
