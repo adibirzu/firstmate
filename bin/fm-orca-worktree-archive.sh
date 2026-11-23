@@ -179,7 +179,7 @@ def contains_tracked(fd):
             if sub is None:
                 continue
             try:
-                if contains_tracked(sub):
+                if is_tracked_fd(sub) or contains_tracked(sub):
                     return True
             finally:
                 os.close(sub)
@@ -197,6 +197,8 @@ def purge(fd):
                 if sub is None:
                     continue
                 try:
+                    if is_tracked_fd(sub):
+                        continue
                     purge(sub)
                 finally:
                     os.close(sub)

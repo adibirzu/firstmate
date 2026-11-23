@@ -357,6 +357,42 @@ done
 check "concurrent setups leave no duplicate lines" test "$dups" = 0
 check "concurrent setups wrote patterns" grep -qxF 'firebase-debug.log' "$CC/.git/info/exclude"
 
+# --- finding: rename race between lstat and open_dir in purge ---------------
+# Simulated deterministically: when purge() lstat()s an ordinary directory
+# entry, a tracked directory is swapped into its place before open_dir().
+RR="$TMP/racepurge"
+new_repo "$RR"
+mkdir -p "$RR/.ruff_cache/victim" "$RR/trkdir"
+printf '%s\n' "$TAG_SIG" >"$RR/.ruff_cache/CACHEDIR.TAG"
+printf 'precious\n' >"$RR/trkdir/data.txt"
+rrsha=$(git -C "$RR" rev-parse HEAD)
+git -C "$RR" update-index --add --cacheinfo "160000,$rrsha,trkdir"
+git -C "$RR" commit -q -m trk
+RACE_DRIVER="$TMP/race_driver.py"
+cat >"$RACE_DRIVER" <<'PYDRV'
+import os, re, sys
+src = open(sys.argv[1]).read()
+body = re.search(r"<<'PY'\n(.*?)\nPY\n", src, re.S).group(1)
+top = sys.argv[2]
+real = os.lstat
+state = {"done": False}
+def hooked(path, *a, **k):
+    res = real(path, *a, **k)
+    if (path == "victim" and "dir_fd" in k and not state["done"]
+            and sys._getframe(1).f_code.co_name == "purge"):
+        state["done"] = True
+        base = os.path.join(top, ".ruff_cache")
+        os.rename(os.path.join(base, "victim"), os.path.join(base, "victim.old"))
+        os.rename(os.path.join(top, "trkdir"), os.path.join(base, "victim"))
+    return res
+os.lstat = hooked
+sys.argv = ["archive", top]
+exec(compile(body, "archive-body", "exec"), {"__name__": "__main__"})
+PYDRV
+(cd "$RR" && python3 -B "$RACE_DRIVER" "$ARCHIVE" "$RR") >/dev/null 2>&1 || true
+check "rename race: swapped-in tracked dir contents preserved" test -f "$RR/.ruff_cache/victim/data.txt"
+check "rename race: swapped-in tracked dir itself preserved" test -d "$RR/.ruff_cache/victim"
+
 # --- finding 4: older worktree without the hooks ---------------------------
 OLD="$TMP/old"
 new_repo "$OLD"
