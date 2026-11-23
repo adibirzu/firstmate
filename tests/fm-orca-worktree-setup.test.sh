@@ -278,9 +278,10 @@ SI="$TMP/symindex"
 new_repo "$SI"
 mkdir -p "$SI/.ruff_cache" "$SI/pkg/__pycache__"
 printf '%s\n' "$TAG_SIG" >"$SI/.ruff_cache/CACHEDIR.TAG"
-printf 'x\n' >"$SI/pkg/__pycache__/m.pyc"
+printf 'x\n' >"$SI/pkg/__pycache__/stale.pyc"
 ln -s "$SI/.git/index" "$SI/.ruff_cache/alt-index"
 (cd "$SI" && GIT_INDEX_FILE="$SI/.ruff_cache/alt-index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "symlinked index archive exits 0"
+check "symlinked index: cleanup ran" test ! -e "$SI/pkg/__pycache__/stale.pyc"
 check "symlinked index file preserved" test -L "$SI/.ruff_cache/alt-index"
 check "symlinked index tagged cache preserved" test -f "$SI/.ruff_cache/CACHEDIR.TAG"
 check "symlinked index real index preserved" test -f "$SI/.git/index"
@@ -305,9 +306,12 @@ OD="$TMP/objdir"
 new_repo "$OD"
 mkdir -p "$OD/.ruff_cache"
 printf '%s\n' "$TAG_SIG" >"$OD/.ruff_cache/CACHEDIR.TAG"
+mkdir -p "$OD/pkg/__pycache__"
+printf 'x\n' >"$OD/pkg/__pycache__/stale.pyc"
 mv "$OD/.git/objects" "$OD/.ruff_cache/object-store"
 od_before=$(snap "$OD/.ruff_cache/object-store")
 (cd "$OD" && GIT_OBJECT_DIRECTORY="$OD/.ruff_cache/object-store" bash "$ARCHIVE") >/dev/null 2>&1 || fail "object dir archive exits 0"
+check "object dir: cleanup ran" test ! -e "$OD/pkg/__pycache__/stale.pyc"
 check "object dir tagged cache preserved" test -f "$OD/.ruff_cache/CACHEDIR.TAG"
 check "object dir contents untouched" test "$od_before" = "$(snap "$OD/.ruff_cache/object-store")"
 
@@ -467,6 +471,89 @@ for cmd in "$SETUP_CMD" "$ARCHIVE_CMD"; do
   (cd "$OLD" && sh -c "$cmd") >/dev/null 2>&1 || rc=$?
   check "guarded command exits 0 without hooks" test "$rc" = 0
 done
+
+# --- fix10: quoted alternates, ancestor symlinks, newline root, bare repos ---
+# Each fixture plants a disposable __pycache__/stale.pyc; its removal proves the
+# cleanup ran rather than exiting early.
+plant_stale() {  # <repo>
+  mkdir -p "$1/pkg/__pycache__"
+  printf 'x\n' >"$1/pkg/__pycache__/stale.pyc"
+}
+
+QA="$TMP/quotedalt"
+new_repo "$QA"
+mkdir -p "$QA/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$QA/.ruff_cache/CACHEDIR.TAG"
+plant_stale "$QA"
+cp -R "$QA/.git/objects" "$QA/.ruff_cache/env:store"
+cp -R "$QA/.git/objects" "$QA/.ruff_cache/file-store"
+printf '%s\n' "$QA/.ruff_cache/file-store" >>"$QA/.git/objects/info/alternates"
+qa_env=$(printf '"%s"' "$QA/.ruff_cache/env:store")
+qa_before=$(snap "$QA/.ruff_cache/env:store")
+qb_before=$(snap "$QA/.ruff_cache/file-store")
+(cd "$QA" && GIT_ALTERNATE_OBJECT_DIRECTORIES="$qa_env" bash "$ARCHIVE") >/dev/null 2>&1 || fail "quoted alternates archive exits 0"
+check "quoted alternates: cleanup ran" test ! -e "$QA/pkg/__pycache__/stale.pyc"
+check "quoted env alternate preserved" test "$qa_before" = "$(snap "$QA/.ruff_cache/env:store")"
+check "info/alternates store preserved" test "$qb_before" = "$(snap "$QA/.ruff_cache/file-store")"
+
+AP="$TMP/ancestorsym"
+new_repo "$AP"
+mkdir -p "$AP/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$AP/.ruff_cache/CACHEDIR.TAG"
+plant_stale "$AP"
+ln -s ../.git "$AP/.ruff_cache/index-parent"
+(cd "$AP" && GIT_INDEX_FILE="$AP/.ruff_cache/index-parent/index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "ancestor symlink archive exits 0"
+check "ancestor symlink: cleanup ran" test ! -e "$AP/pkg/__pycache__/stale.pyc"
+check "ancestor directory symlink preserved" test -L "$AP/.ruff_cache/index-parent"
+check "ancestor symlink index reachable" test -f "$AP/.ruff_cache/index-parent/index"
+
+AL="$TMP/ancestorlock"
+new_repo "$AL"
+mkdir -p "$AL/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$AL/.ruff_cache/CACHEDIR.TAG"
+plant_stale "$AL"
+ln -s ../.git "$AL/.ruff_cache/index-parent"
+: >"$AL/.git/index.lock"
+rc=0
+alout=$(cd "$AL" && GIT_INDEX_FILE="$AL/.ruff_cache/index-parent/index" bash "$ARCHIVE" 2>&1) || rc=$?
+check "ancestor lock archive exits 0" test "$rc" = 0
+check "ancestor lock deletes nothing" test -f "$AL/pkg/__pycache__/stale.pyc"
+case "$alout" in *"index lock present"*) pass "ancestor lock warns" ;; *) fail "ancestor lock warns ($alout)" ;; esac
+
+NL_BASE="$TMP/nl"
+mkdir -p "$NL_BASE"
+NLS="$NL_BASE/wt"
+NLW="$NL_BASE/wt"$'\n'
+new_repo "$NLS"
+mkdir -p "$NLS/pkg/__pycache__"
+printf 'x\n' >"$NLS/pkg/__pycache__/stale.pyc"
+if mkdir -p "$NLW" 2>/dev/null; then
+  git init -q "$NLW"
+  git -C "$NLW" config user.email test@example.invalid
+  git -C "$NLW" config user.name test
+  printf 'keep\n' >"$NLW/tracked.txt"
+  git -C "$NLW" add tracked.txt
+  git -C "$NLW" commit -q -m init
+  mkdir -p "$NLW/pkg/__pycache__"
+  printf 'x\n' >"$NLW/pkg/__pycache__/stale.pyc"
+  (cd "$NLW" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "newline root archive exits 0"
+  check "newline root: own worktree cleaned" test ! -e "$NLW/pkg/__pycache__/stale.pyc"
+  check "newline root: sibling checkout untouched" test -f "$NLS/pkg/__pycache__/stale.pyc"
+else
+  pass "newline root fixture unsupported on this filesystem"
+fi
+
+BG="$TMP/baretagged"
+new_repo "$BG"
+mkdir -p "$BG/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$BG/.ruff_cache/CACHEDIR.TAG"
+plant_stale "$BG"
+git init -q --bare "$BG/.ruff_cache/mirror.git"
+bg_before=$(snap "$BG/.ruff_cache/mirror.git")
+(cd "$BG" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "bare repo archive exits 0"
+check "bare repo: cleanup ran" test ! -e "$BG/pkg/__pycache__/stale.pyc"
+check "bare repo inside tagged cache preserved" test "$bg_before" = "$(snap "$BG/.ruff_cache/mirror.git")"
+check "bare repo tagged cache preserved" test -f "$BG/.ruff_cache/CACHEDIR.TAG"
 
 if [ "$fails" -ne 0 ]; then
   printf '%s check(s) failed\n' "$fails"
