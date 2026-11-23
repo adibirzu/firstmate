@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-orca-worktree-setup.sh - Orca worktree setup and archive helpers.
+# tests/fm-orca-worktree-setup.test.sh - Orca worktree setup and archive helpers.
 # Runs both scripts inside an isolated temporary Git repo and linked worktree.
 set -euo pipefail
 
