@@ -56,6 +56,9 @@ printf 'x\n' >"$MAIN/rt/.ruff_cache/tracked-entry"
 git -C "$MAIN" add -f trk/__pycache__/tracked.pyc rt/.ruff_cache/tracked-entry
 git -C "$MAIN" commit -q -m cache-like-tracked
 git -C "$MAIN" worktree add -q -b linked "$WT"
+# Tagged cache in the linked worktree itself, next to the tracked entry, so the
+# tracked-inode guard (not the missing tag) is what preserves it.
+printf '%s\n' "$TAG_SIG" >"$WT/rt/.ruff_cache/CACHEDIR.TAG"
 
 for d in data state config projects; do
   mkdir -p "$WT/$d/__pycache__"
@@ -107,6 +110,47 @@ check "archive kept tracked file" test -f "$WT/tracked.txt"
 case "$out" in *cleaned*) pass "archive summary" ;; *) fail "archive summary ($out)" ;; esac
 (cd "$WT" && bash "$ARCHIVE") >/dev/null
 pass "archive idempotent"
+
+# --- finding: tracked cache directory (gitlink) is preserved itself --------
+GL="$TMP/gitlink"
+new_repo "$GL"
+glsha=$(git -C "$GL" rev-parse HEAD)
+mkdir -p "$GL/.ruff_cache" "$GL/gp/__pycache__"
+git -C "$GL" update-index --add --cacheinfo "160000,$glsha,.ruff_cache"
+git -C "$GL" update-index --add --cacheinfo "160000,$glsha,gp/__pycache__"
+git -C "$GL" commit -q -m gitlinks
+printf '%s\n' "$TAG_SIG" >"$GL/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$GL/.ruff_cache/untracked-inside"
+printf 'x\n' >"$GL/gp/__pycache__/m.pyc"
+tag_bytes=$(wc -c <"$GL/.ruff_cache/CACHEDIR.TAG" | tr -d ' ')
+check "gitlink tag is 43 bytes plus newline" test "$tag_bytes" = 44
+(cd "$GL" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "gitlink archive exits 0"
+check "tracked .ruff_cache dir preserved" test -d "$GL/.ruff_cache"
+check "tracked .ruff_cache tag preserved" test -f "$GL/.ruff_cache/CACHEDIR.TAG"
+check "tracked .ruff_cache contents preserved" test -f "$GL/.ruff_cache/untracked-inside"
+check "tracked __pycache__ dir preserved" test -d "$GL/gp/__pycache__"
+
+# --- finding: FIFO CACHEDIR.TAG must not hang -------------------------------
+FF="$TMP/fifo"
+new_repo "$FF"
+mkdir -p "$FF/.ruff_cache"
+mkfifo "$FF/.ruff_cache/CACHEDIR.TAG"
+(cd "$FF" && bash "$ARCHIVE") >/dev/null 2>&1 &
+fpid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$fpid" 2>/dev/null || break
+  sleep 0.5
+done
+if kill -0 "$fpid" 2>/dev/null; then
+  fail "fifo tag archive returns promptly"
+  kill "$fpid" 2>/dev/null || true
+  # Unblock the python child stuck opening the FIFO so it can exit.
+  (exec 3<>"$FF/.ruff_cache/CACHEDIR.TAG") 2>/dev/null || true
+else
+  pass "fifo tag archive returns promptly"
+fi
+wait "$fpid" 2>/dev/null || true
+check "fifo tag .ruff_cache preserved" test -p "$FF/.ruff_cache/CACHEDIR.TAG"
 
 # --- private dirs untouched -------------------------------------------------
 after=$(cd "$WT" && find data state config projects -type f | LC_ALL=C sort | xargs shasum | shasum)

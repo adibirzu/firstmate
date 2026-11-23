@@ -75,7 +75,15 @@ def open_dir(name, parent_fd):
     return fd
 
 
+def is_tracked_fd(fd):
+    """True when the open directory is itself a tracked path (e.g. a gitlink)."""
+    st = os.fstat(fd)
+    return (st.st_dev, st.st_ino) in tracked
+
+
 def clean_pycache(fd, name, parent_fd):
+    if is_tracked_fd(fd):
+        return
     for entry in os.listdir(fd):
         if not entry.endswith((".pyc", ".pyo")):
             continue
@@ -96,7 +104,7 @@ def clean_pycache(fd, name, parent_fd):
 
 def has_tag(fd):
     try:
-        tfd = os.open("CACHEDIR.TAG", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+        tfd = os.open("CACHEDIR.TAG", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     except OSError:
         return False
     try:
@@ -147,7 +155,7 @@ def purge(fd):
 
 
 def clean_ruff(fd, name, parent_fd):
-    if not has_tag(fd) or contains_tracked(fd):
+    if is_tracked_fd(fd) or not has_tag(fd) or contains_tracked(fd):
         return
     purge(fd)
     try:
