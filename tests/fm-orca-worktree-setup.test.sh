@@ -273,6 +273,44 @@ else
   fail "common dir fixture could not be built"
 fi
 
+# --- finding: symlinked GIT_INDEX_FILE inside a tagged .ruff_cache ---------
+SI="$TMP/symindex"
+new_repo "$SI"
+mkdir -p "$SI/.ruff_cache" "$SI/pkg/__pycache__"
+printf '%s\n' "$TAG_SIG" >"$SI/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$SI/pkg/__pycache__/m.pyc"
+ln -s "$SI/.git/index" "$SI/.ruff_cache/alt-index"
+(cd "$SI" && GIT_INDEX_FILE="$SI/.ruff_cache/alt-index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "symlinked index archive exits 0"
+check "symlinked index file preserved" test -L "$SI/.ruff_cache/alt-index"
+check "symlinked index tagged cache preserved" test -f "$SI/.ruff_cache/CACHEDIR.TAG"
+check "symlinked index real index preserved" test -f "$SI/.git/index"
+
+# --- finding: lock on the symlink target of the active index ---------------
+SK="$TMP/symlock"
+new_repo "$SK"
+mkdir -p "$SK/.ruff_cache" "$SK/pkg/__pycache__"
+printf '%s\n' "$TAG_SIG" >"$SK/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$SK/pkg/__pycache__/m.pyc"
+ln -s "$SK/.git/index" "$SK/.ruff_cache/alt-index"
+: >"$SK/.git/index.lock"
+rc=0
+kout=$(cd "$SK" && GIT_INDEX_FILE="$SK/.ruff_cache/alt-index" bash "$ARCHIVE" 2>&1) || rc=$?
+check "symlink target lock archive exits 0" test "$rc" = 0
+check "symlink target lock deletes pycache nothing" test -f "$SK/pkg/__pycache__/m.pyc"
+check "symlink target lock keeps tagged cache" test -f "$SK/.ruff_cache/CACHEDIR.TAG"
+case "$kout" in *"index lock present"*) pass "symlink target lock warns" ;; *) fail "symlink target lock warns ($kout)" ;; esac
+
+# --- finding: relocated GIT_OBJECT_DIRECTORY inside a tagged .ruff_cache ---
+OD="$TMP/objdir"
+new_repo "$OD"
+mkdir -p "$OD/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$OD/.ruff_cache/CACHEDIR.TAG"
+mv "$OD/.git/objects" "$OD/.ruff_cache/object-store"
+od_before=$(snap "$OD/.ruff_cache/object-store")
+(cd "$OD" && GIT_OBJECT_DIRECTORY="$OD/.ruff_cache/object-store" bash "$ARCHIVE") >/dev/null 2>&1 || fail "object dir archive exits 0"
+check "object dir tagged cache preserved" test -f "$OD/.ruff_cache/CACHEDIR.TAG"
+check "object dir contents untouched" test "$od_before" = "$(snap "$OD/.ruff_cache/object-store")"
+
 # --- private dirs untouched -------------------------------------------------
 after=$(cd "$WT" && find data state config projects -type f | LC_ALL=C sort | xargs shasum | shasum)
 check "private dirs untouched" test "$before" = "$after"

@@ -67,25 +67,57 @@ def top_path(raw):
     return p if os.path.isabs(p) else os.path.join(top, p)
 
 
+MAX_HOPS = 32
+
+
+def protect_path(path, required=True):
+    """Record the inode of path, every symlink hop and the final target.
+
+    Returns the list of paths visited (hops first, resolved target last).
+    A required path that cannot be resolved aborts without deleting anything.
+    """
+    seen = []
+    cur = path
+    try:
+        for _ in range(MAX_HOPS + 1):
+            st = os.lstat(cur)
+            protected_ids.add((st.st_dev, st.st_ino))
+            seen.append(cur)
+            if not stat.S_ISLNK(st.st_mode):
+                break
+            nxt = os.readlink(cur)
+            cur = nxt if os.path.isabs(nxt) else os.path.join(os.path.dirname(cur), nxt)
+        else:
+            raise OSError("too many symlink hops")
+        fin = os.stat(path)
+        protected_ids.add((fin.st_dev, fin.st_ino))
+    except OSError:
+        if required:
+            warn("cannot resolve %s; nothing cleaned" % path)
+            sys.exit(0)
+        return seen
+    return seen
+
+
 index_path = top_path(git_out("rev-parse", "--git-path", "index"))
-try:
-    ist = os.stat(index_path)
-    if not stat.S_ISREG(ist.st_mode):
-        raise OSError("not a regular file")
-    protected_ids.add((ist.st_dev, ist.st_ino))
-except OSError:
+index_hops = protect_path(index_path)
+if not stat.S_ISREG(os.stat(index_path).st_mode):
     warn("git index missing; nothing cleaned")
     sys.exit(0)
-if os.path.lexists(index_path + ".lock"):
+lock_cands = set(index_hops) | {index_path, os.path.realpath(index_path)}
+if any(os.path.lexists(c + ".lock") for c in lock_cands):
     warn("git index lock present; worktree busy, nothing cleaned")
     sys.exit(0)
+objects_path = top_path(git_out("rev-parse", "--git-path", "objects"))
+protect_path(objects_path)
+if not stat.S_ISDIR(os.stat(objects_path).st_mode):
+    warn("git objects dir missing; nothing cleaned")
+    sys.exit(0)
 for opt in ("--git-dir", "--git-common-dir"):
-    try:
-        gst = os.stat(top_path(git_out("rev-parse", opt)))
-    except OSError:
-        warn("cannot resolve %s; nothing cleaned" % opt)
-        sys.exit(0)
-    protected_ids.add((gst.st_dev, gst.st_ino))
+    protect_path(top_path(git_out("rev-parse", opt)))
+for alt in os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES", "").split(os.pathsep):
+    if alt:
+        protect_path(alt if os.path.isabs(alt) else os.path.join(top, alt), required=False)
 
 listed = git_out("ls-files", "-z")
 
