@@ -25,7 +25,8 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
 
-python3 -B -I - <<'PY'
+python3 -B -I -c '
+# FM_ARCHIVE_PY_START
 import collections
 import os
 import stat
@@ -190,7 +191,7 @@ def cunquote(text):
     text = raw.decode("latin-1")
     while i < len(text):
         ch = text[i]
-        if ch == '"':
+        if ch == "\"":
             break
         if ch == "\\" and i + 1 < len(text):
             i += 1
@@ -218,9 +219,9 @@ def split_env_alternates(value):
                 entries.append(cur)
             cur = ""
             i += 1
-        elif value[i] == '"' and cur == "":
+        elif value[i] == "\"" and cur == "":
             j = i + 1
-            while j < n and value[j] != '"':
+            while j < n and value[j] != "\"":
                 j += 2 if value[j] == "\\" else 1
             entries.append(cunquote(value[i:j + 1]))
             i = j + 1
@@ -255,7 +256,7 @@ def read_alternates(objdir):
     for line in data.split("\n"):
         if not line or line.startswith("#"):
             continue
-        if line.startswith('"'):
+        if line.startswith("\""):
             line = cunquote(line)
         if "\0" in line:
             continue
@@ -456,10 +457,10 @@ storage_seen = set()
 
 
 def protect_git_storage(root):
-    """Protect a Git directory's HEAD, objects, refs, commondir and alternates.
+    """Protect HEAD, objects, refs, commondir and alternates of a Git dir.
 
     Follows commondir (exact text) into the common directory, and protects
-    every object directory's pack and info subdirectories, wherever symlinked.
+    every object directory pack and info subdirectories, wherever symlinked.
     """
     try:
         st = os.stat(root)
@@ -488,9 +489,9 @@ def protect_git_storage(root):
 
 
 def protect_nested_git(path, entry):
-    """Protect a nested repository's .git (directory, symlink or gitfile).
+    """Protect a nested repository .git (directory, symlink or gitfile).
 
-    Follows symlinks the way Git's gitfile reader does: a .git symlink to a
+    Follows symlinks the way the Git gitfile reader does: a .git symlink to a
     regular gitfile is read as that gitfile, a symlink to a directory as that
     directory, and a dangling symlink still protects its own path. The gitfile
     is opened O_NONBLOCK and re-checked by fstat, so a FIFO can never hang.
@@ -527,7 +528,7 @@ def protect_nested_git(path, entry):
 
 
 def protect_bare_repos(path):
-    """Protect every bare/commondir/nested repo's storage, wherever symlinked.
+    """Protect storage for every bare/commondir/nested repo, wherever symlinked.
 
     Runs before any cache is cleaned so a repo in one tagged cache keeps the
     objects, refs, commondir, alternates and gitdir stored in another.
@@ -669,6 +670,7 @@ try:
     walk(root, True)
 finally:
     os.close(root)
-PY
+# FM_ARCHIVE_PY_END
+'
 
 printf 'orca-worktree-archive: cleaned local caches\n'

@@ -21,7 +21,7 @@ add_excludes() {
   # Git paths are resolved inside Python as raw bytes: shell command
   # substitution would strip every trailing newline of a worktree name and could
   # select a sibling checkout.
-  python3 -B -I - '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log' <<'PY'
+  python3 -B -I -c '
 import fcntl
 import os
 import subprocess
@@ -107,7 +107,7 @@ try:
         os.write(efd, out)
 finally:
     os.close(efd)
-PY
+' '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log'
 }
 
 add_excludes

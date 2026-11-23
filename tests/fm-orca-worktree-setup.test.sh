@@ -37,30 +37,32 @@ check "scripts/ dir gone" test ! -e "$ROOT/scripts"
 ORCA_SETUP_FILE="$TMP/orca-setup.cmd"
 ORCA_ARCHIVE_FILE="$TMP/orca-archive.cmd"
 parse_orca_yaml() {
-  python3 -B -I - "$1" "$ORCA_SETUP_FILE" "$ORCA_ARCHIVE_FILE" <<'PY'
+  python3 -B -I -c '
 import sys
 
 
 def strip_comment(line):
+    dq = chr(34)
+    sq = chr(39)
     quote = None
     i = 0
     n = len(line)
     while i < n:
         ch = line[i]
-        if quote == '"':
+        if quote == dq:
             if ch == "\\" and i + 1 < n:
                 i += 2
                 continue
-            if ch == '"':
+            if ch == dq:
                 quote = None
-        elif quote == "'":
-            if ch == "'":
-                if i + 1 < n and line[i + 1] == "'":
+        elif quote == sq:
+            if ch == sq:
+                if i + 1 < n and line[i + 1] == sq:
                     i += 2
                     continue
                 quote = None
         else:
-            if ch in ('"', "'"):
+            if ch in (dq, sq):
                 quote = ch
             elif ch == "#" and (i == 0 or line[i - 1].isspace()):
                 return line[:i]
@@ -69,12 +71,14 @@ def strip_comment(line):
 
 
 def parse_scalar(val):
+    dq = chr(34)
+    sq = chr(39)
     val = val.strip()
-    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+    if len(val) >= 2 and val[0] == dq and val[-1] == dq:
         out = []
         i = 1
         end = len(val) - 1
-        escapes = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}
+        escapes = {"n": "\n", "r": "\r", "t": "\t", dq: dq, "\\": "\\"}
         while i < end:
             if val[i] == "\\" and i + 1 < end:
                 i += 1
@@ -83,8 +87,8 @@ def parse_scalar(val):
                 out.append(val[i])
             i += 1
         return "".join(out)
-    if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
-        return val[1:-1].replace("''", "'")
+    if len(val) >= 2 and val[0] == sq and val[-1] == sq:
+        return val[1:-1].replace(sq * 2, sq)
     return val
 
 
@@ -146,7 +150,7 @@ with open(sys.argv[2], "w", encoding="utf-8") as fh:
     fh.write(setup_cmd)
 with open(sys.argv[3], "w", encoding="utf-8") as fh:
     fh.write(archive_cmd)
-PY
+' "$1" "$ORCA_SETUP_FILE" "$ORCA_ARCHIVE_FILE"
 }
 
 check "orca.yaml semantic contract (policy and hooks)" parse_orca_yaml "$ORCA_YAML"
@@ -165,8 +169,8 @@ chmod +x "$HP/bin/fm-orca-worktree-setup.sh" "$HP/bin/fm-orca-worktree-archive.s
 git -C "$HP" add bin/fm-orca-worktree-setup.sh bin/fm-orca-worktree-archive.sh
 git -C "$HP" commit -q -m hooks
 
-hp_out1=$(cd "$HP" && bash -c "$SETUP_CMD" 2>&1) || fail "contract present: setup run 1 exits 0"
-hp_out2=$(cd "$HP" && bash -c "$SETUP_CMD" 2>&1) || fail "contract present: setup run 2 exits 0"
+hp_out1=$(cd "$HP" && bash -c "$SETUP_CMD" </dev/null 2>&1) || fail "contract present: setup run 1 exits 0"
+hp_out2=$(cd "$HP" && bash -c "$SETUP_CMD" </dev/null 2>&1) || fail "contract present: setup run 2 exits 0"
 pass "contract present: setup ran twice"
 for pat in '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log'; do
   n=$(grep -cxF -- "$pat" "$HP/.git/info/exclude" || true)
@@ -183,7 +187,7 @@ mkdir -p "$HP/pkg/__pycache__" "$HP/tagged/.ruff_cache"
 printf 'x\n' >"$HP/pkg/__pycache__/foo.pyc"
 printf '%s\n' "$TAG_SIG" >"$HP/tagged/.ruff_cache/CACHEDIR.TAG"
 printf 'x\n' >"$HP/tagged/.ruff_cache/entry"
-(cd "$HP" && bash -c "$ARCHIVE_CMD") >/dev/null 2>&1 || fail "contract present: archive exits 0"
+(cd "$HP" && bash -c "$ARCHIVE_CMD" </dev/null) >/dev/null 2>&1 || fail "contract present: archive exits 0"
 check "contract present: archive removed pyc" test ! -e "$HP/pkg/__pycache__/foo.pyc"
 check "contract present: archive removed tagged .ruff_cache" test ! -e "$HP/tagged/.ruff_cache"
 check "contract present: archive preserved tracked file" test "$(cat "$HP/tracked.txt")" = keep
@@ -569,11 +573,12 @@ rrsha=$(git -C "$RR" rev-parse HEAD)
 git -C "$RR" update-index --add --cacheinfo "160000,$rrsha,trkdir"
 git -C "$RR" update-index --add --cacheinfo "160000,$rrsha,trkempty"
 git -C "$RR" commit -q -m trk
-RACE_DRIVER="$TMP/race_driver.py"
-cat >"$RACE_DRIVER" <<'PYDRV'
+(cd "$RR" && python3 -B -c '
 import os, re, sys
 src = open(sys.argv[1]).read()
-body = re.search(r"<<'PY'\n(.*?)\nPY\n", src, re.S).group(1)
+m = re.search(r"# FM_ARCHIVE_PY_START\n(.*?)\n# FM_ARCHIVE_PY_END", src, re.S)
+assert m is not None, "archive python body markers not found"
+body = m.group(1)
 top = sys.argv[2]
 swaps = {"victim": "trkdir", "victim-empty": "trkempty"}
 real = os.lstat
@@ -590,8 +595,7 @@ def hooked(path, *a, **k):
 os.lstat = hooked
 sys.argv = ["archive", top]
 exec(compile(body, "archive-body", "exec"), {"__name__": "__main__"})
-PYDRV
-(cd "$RR" && python3 -B "$RACE_DRIVER" "$ARCHIVE" "$RR") >/dev/null 2>&1 || true
+' "$ARCHIVE" "$RR") >/dev/null 2>&1 || true
 check "rename race: swapped-in tracked dir contents preserved" test -f "$RR/.ruff_cache/victim/data.txt"
 check "rename race: swapped-in tracked dir itself preserved" test -d "$RR/.ruff_cache/victim"
 check "rename race: swapped-in empty tracked gitlink preserved (no stray rmdir)" test -d "$RR/.ruff_cache/victim-empty"
