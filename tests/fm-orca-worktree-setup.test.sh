@@ -362,11 +362,12 @@ check "concurrent setups wrote patterns" grep -qxF 'firebase-debug.log' "$CC/.gi
 # entry, a tracked directory is swapped into its place before open_dir().
 RR="$TMP/racepurge"
 new_repo "$RR"
-mkdir -p "$RR/.ruff_cache/victim" "$RR/trkdir"
+mkdir -p "$RR/.ruff_cache/victim" "$RR/.ruff_cache/victim-empty" "$RR/trkdir" "$RR/trkempty"
 printf '%s\n' "$TAG_SIG" >"$RR/.ruff_cache/CACHEDIR.TAG"
 printf 'precious\n' >"$RR/trkdir/data.txt"
 rrsha=$(git -C "$RR" rev-parse HEAD)
 git -C "$RR" update-index --add --cacheinfo "160000,$rrsha,trkdir"
+git -C "$RR" update-index --add --cacheinfo "160000,$rrsha,trkempty"
 git -C "$RR" commit -q -m trk
 RACE_DRIVER="$TMP/race_driver.py"
 cat >"$RACE_DRIVER" <<'PYDRV'
@@ -374,16 +375,17 @@ import os, re, sys
 src = open(sys.argv[1]).read()
 body = re.search(r"<<'PY'\n(.*?)\nPY\n", src, re.S).group(1)
 top = sys.argv[2]
+swaps = {"victim": "trkdir", "victim-empty": "trkempty"}
 real = os.lstat
-state = {"done": False}
+done = set()
 def hooked(path, *a, **k):
     res = real(path, *a, **k)
-    if (path == "victim" and "dir_fd" in k and not state["done"]
+    if (path in swaps and "dir_fd" in k and path not in done
             and sys._getframe(1).f_code.co_name == "purge"):
-        state["done"] = True
+        done.add(path)
         base = os.path.join(top, ".ruff_cache")
-        os.rename(os.path.join(base, "victim"), os.path.join(base, "victim.old"))
-        os.rename(os.path.join(top, "trkdir"), os.path.join(base, "victim"))
+        os.rename(os.path.join(base, path), os.path.join(base, path + ".old"))
+        os.rename(os.path.join(top, swaps[path]), os.path.join(base, path))
     return res
 os.lstat = hooked
 sys.argv = ["archive", top]
@@ -392,6 +394,32 @@ PYDRV
 (cd "$RR" && python3 -B "$RACE_DRIVER" "$ARCHIVE" "$RR") >/dev/null 2>&1 || true
 check "rename race: swapped-in tracked dir contents preserved" test -f "$RR/.ruff_cache/victim/data.txt"
 check "rename race: swapped-in tracked dir itself preserved" test -d "$RR/.ruff_cache/victim"
+check "rename race: swapped-in empty tracked gitlink preserved (no stray rmdir)" test -d "$RR/.ruff_cache/victim-empty"
+
+# --- finding: git index lock marks the worktree busy -----------------------
+IL="$TMP/indexlock"
+new_repo "$IL"
+mkdir -p "$IL/pkg/__pycache__" "$IL/.ruff_cache"
+printf 'x\n' >"$IL/pkg/__pycache__/m.pyc"
+printf '%s\n' "$TAG_SIG" >"$IL/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$IL/.ruff_cache/c"
+: >"$IL/.git/index.lock"
+rc=0
+ilout=$(cd "$IL" && bash "$ARCHIVE" 2>&1) || rc=$?
+check "index lock archive exits 0" test "$rc" = 0
+check "index lock keeps __pycache__" test -f "$IL/pkg/__pycache__/m.pyc"
+check "index lock keeps .ruff_cache" test -f "$IL/.ruff_cache/c"
+case "$ilout" in *'index lock present'*) pass "index lock warns" ;; *) fail "index lock warns ($ilout)" ;; esac
+
+# --- finding: alternate GIT_INDEX_FILE inside a tagged .ruff_cache ---------
+AI="$TMP/altindex"
+new_repo "$AI"
+mkdir -p "$AI/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$AI/.ruff_cache/CACHEDIR.TAG"
+cp "$AI/.git/index" "$AI/.ruff_cache/alt-index"
+(cd "$AI" && GIT_INDEX_FILE="$AI/.ruff_cache/alt-index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "alt index archive exits 0"
+check "alternate index file preserved" test -f "$AI/.ruff_cache/alt-index"
+check "alternate index cache tag preserved" test -f "$AI/.ruff_cache/CACHEDIR.TAG"
 
 # --- finding 4: older worktree without the hooks ---------------------------
 OLD="$TMP/old"

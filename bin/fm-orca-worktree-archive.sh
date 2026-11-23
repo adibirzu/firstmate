@@ -7,7 +7,15 @@
 # (st_dev, st_ino) of --git-dir and --git-common-dir, no globbing), never
 # traverses a nested git repository (any .git entry, any case), never follows
 # symlinks, and never removes source files. If the index is missing or cannot
-# be read it warns and deletes nothing. Makes no network calls.
+# be read, or a git index.lock is present, it warns and deletes nothing.
+# Makes no network calls.
+#
+# Contract: this Orca archive lifecycle hook is designed for quiescent
+# worktrees. It assumes no concurrent writer mutates cache directories while it
+# runs, because POSIX unlinkat/rmdirat resolve directory entry names rather
+# than open file descriptors, so a racing rename cannot be fully excluded. The
+# lstat/open_dir identity re-checks and the index.lock guard are best-effort
+# hardening, not a substitute for quiescence.
 set -euo pipefail
 
 warn() { printf 'orca-worktree-archive: warning: %s\n' "$*" >&2; }
@@ -55,16 +63,21 @@ def git_out(*args):
 
 
 def top_path(raw):
-    p = os.fsdecode(raw).rstrip("\n")
+    p = os.fsdecode(raw[:-1] if raw.endswith(b"\n") else raw)
     return p if os.path.isabs(p) else os.path.join(top, p)
 
 
 index_path = top_path(git_out("rev-parse", "--git-path", "index"))
 try:
-    if not stat.S_ISREG(os.stat(index_path).st_mode):
+    ist = os.stat(index_path)
+    if not stat.S_ISREG(ist.st_mode):
         raise OSError("not a regular file")
+    protected_ids.add((ist.st_dev, ist.st_ino))
 except OSError:
     warn("git index missing; nothing cleaned")
+    sys.exit(0)
+if os.path.lexists(index_path + ".lock"):
+    warn("git index lock present; worktree busy, nothing cleaned")
     sys.exit(0)
 for opt in ("--git-dir", "--git-common-dir"):
     try:
