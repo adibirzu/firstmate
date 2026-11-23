@@ -488,17 +488,28 @@ def protect_git_storage(root):
 
 
 def protect_nested_git(path, entry):
-    """Protect a nested repository's .git (directory, symlink or gitfile)."""
+    """Protect a nested repository's .git (directory, symlink or gitfile).
+
+    Follows symlinks the way Git's gitfile reader does: a .git symlink to a
+    regular gitfile is read as that gitfile, a symlink to a directory as that
+    directory, and a dangling symlink still protects its own path. The gitfile
+    is opened O_NONBLOCK and re-checked by fstat, so a FIFO can never hang.
+    """
     gitpath = os.path.join(path, entry)
-    try:
-        mode = os.lstat(gitpath).st_mode
-    except OSError:
-        return
     protect_path(gitpath, required=False)
-    if stat.S_ISREG(mode):
+    try:
+        st = os.stat(gitpath)
+    except (OSError, ValueError):
+        return
+    if stat.S_ISREG(st.st_mode):
         try:
-            with open(gitpath, "rb") as fh:
-                raw = fh.read(4096).rstrip(b"\r\n")
+            fd = os.open(gitpath, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    return
+                raw = os.read(fd, 4096).rstrip(b"\r\n")
+            finally:
+                os.close(fd)
         except OSError:
             return
         if not raw.startswith(b"gitdir:") or b"\x00" in raw:
@@ -511,7 +522,7 @@ def protect_nested_git(path, entry):
         target = target if os.path.isabs(target) else os.path.join(path, target)
         protect_path(target, required=False)
         protect_git_storage(target)
-    else:
+    elif stat.S_ISDIR(st.st_mode):
         protect_git_storage(gitpath)
 
 

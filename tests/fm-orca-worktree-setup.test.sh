@@ -795,6 +795,34 @@ check "nested repo: alternate store preserved" test -f "$NG/lib/.ruff_cache/alts
 check "nested gitfile: repo preserved" test -f "$NG/.ruff_cache/nested-b/.git"
 check "nested gitfile: target gitdir preserved" test -f "$NG/vendor/.ruff_cache/gd/index"
 
+# --- P2: .git symlink to a gitfile, plus a dangling .git symlink ---
+# nested-c/.git is a symlink to a regular gitfile in lib's tagged cache; the
+# gitdir target is object storage in vendor's tagged cache, and its alternates
+# point into a third tagged cache. nested-d/.git dangles.
+SG="$TMP/symgitfile"
+new_repo "$SG"
+tag_cache "$SG"
+tag_at "$SG/lib"
+tag_at "$SG/vendor"
+tag_at "$SG/alt"
+plant_stale "$SG"
+mkdir -p "$SG/vendor/.ruff_cache/gd/objects/pack" "$SG/vendor/.ruff_cache/gd/objects/info" "$SG/alt/.ruff_cache/astore"
+printf 'sentinel\n' >"$SG/vendor/.ruff_cache/gd/objects/pack/p-x.pack"
+printf '%s\n' "$SG/alt/.ruff_cache/astore" >"$SG/vendor/.ruff_cache/gd/objects/info/alternates"
+printf 'sentinel\n' >"$SG/alt/.ruff_cache/astore/sentinel"
+printf 'gitdir: %s\n' "$SG/vendor/.ruff_cache/gd" >"$SG/lib/.ruff_cache/gd.link"
+mkdir -p "$SG/.ruff_cache/nested-c" "$SG/.ruff_cache/nested-d"
+ln -s "$SG/lib/.ruff_cache/gd.link" "$SG/.ruff_cache/nested-c/.git"
+ln -s "$SG/.ruff_cache/no-such-target" "$SG/.ruff_cache/nested-d/.git"
+(cd "$SG" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "symlink gitfile archive exits 0"
+check "symlink gitfile: cleanup ran" test ! -e "$SG/pkg/__pycache__/stale.pyc"
+check "symlink gitfile: symlink .git preserved" test -L "$SG/.ruff_cache/nested-c/.git"
+check "symlink gitfile: gitfile preserved" test -f "$SG/lib/.ruff_cache/gd.link"
+check "symlink gitfile: target pack preserved" test -f "$SG/vendor/.ruff_cache/gd/objects/pack/p-x.pack"
+check "symlink gitfile: alternate store preserved" test -f "$SG/alt/.ruff_cache/astore/sentinel"
+check "dangling .git symlink: link preserved" test -L "$SG/.ruff_cache/nested-d/.git"
+check "dangling .git symlink: repo dir preserved" test -d "$SG/.ruff_cache/nested-d"
+
 PK="$TMP/packlink"
 new_repo "$PK"
 tag_cache "$PK"
