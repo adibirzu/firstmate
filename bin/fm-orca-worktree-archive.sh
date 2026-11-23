@@ -79,23 +79,37 @@ def top_path(raw):
 
 
 MAX_HOPS = 32
-real_top = os.path.realpath(top)
+try:
+    _top_st = os.stat(top)
+except OSError:
+    warn("cannot stat worktree; nothing cleaned")
+    sys.exit(0)
+top_id = (_top_st.st_dev, _top_st.st_ino)
 
 
 def protect_inside(path):
     """Protect a directory the raw path walks through, strictly below the top.
 
-    The worktree top and every ancestor above it are never recorded.
+    Compared by (st_dev, st_ino), never by spelling, so a path that names the
+    worktree in another case or through an alias still counts. The worktree top
+    and every ancestor above it are never recorded.
     """
     try:
-        real = os.path.realpath(path)
-        if not real.startswith(real_top + os.sep):
-            return
         st = os.lstat(path)
-    except OSError:
+        if not stat.S_ISDIR(st.st_mode) or (st.st_dev, st.st_ino) == top_id:
+            return
+        anc = os.path.dirname(os.path.realpath(path))
+        while True:
+            ast = os.stat(anc)
+            if (ast.st_dev, ast.st_ino) == top_id:
+                protected_ids.add((st.st_dev, st.st_ino))
+                return
+            parent = os.path.dirname(anc)
+            if parent == anc:
+                return
+            anc = parent
+    except (OSError, ValueError):
         return
-    if stat.S_ISDIR(st.st_mode):
-        protected_ids.add((st.st_dev, st.st_ino))
 
 
 def protect_path(path, required=True):
@@ -142,7 +156,7 @@ def protect_path(path, required=True):
         fin = os.lstat(cur)
         protected_ids.add((fin.st_dev, fin.st_ino))
         seen.append(cur)
-    except OSError:
+    except (OSError, ValueError):
         if required:
             warn("cannot resolve %s; nothing cleaned" % path)
             sys.exit(0)
@@ -216,6 +230,19 @@ def split_env_alternates(value):
     return entries
 
 
+_CANON = {"head": "HEAD", "objects": "objects", "refs": "refs",
+          "reftable": "reftable", "commondir": "commondir",
+          "pack": "pack", "info": "info"}
+
+
+def candidates(entries, key):
+    """Exact-case entry first, then every other case-folded match."""
+    canon = _CANON[key]
+    out = [canon] if canon in entries else []
+    out.extend(sorted(e for e in entries if e.lower() == key and e != canon))
+    return out
+
+
 def read_alternates(objdir):
     alt_file = os.path.join(objdir, "info", "alternates")
     protect_path(alt_file, required=False)
@@ -230,8 +257,21 @@ def read_alternates(objdir):
             continue
         if line.startswith('"'):
             line = cunquote(line)
+        if "\0" in line:
+            continue
         found.append(line if os.path.isabs(line) else os.path.join(objdir, line))
     return found
+
+
+def protect_object_subdirs(objdir):
+    """Protect objects/pack and objects/info even when symlinked elsewhere."""
+    try:
+        ents = os.listdir(objdir)
+    except (OSError, ValueError):
+        return
+    for key in ("pack", "info"):
+        for name in candidates(ents, key):
+            protect_path(os.path.join(objdir, name), required=False)
 
 
 def protect_alternates(start, start_depth):
@@ -244,13 +284,14 @@ def protect_alternates(start, start_depth):
             continue
         try:
             st = os.stat(objdir)
-        except OSError:
+        except (OSError, ValueError):
             continue
         key = (st.st_dev, st.st_ino)
         if depth >= best_depth.get(key, 99):
             continue
         best_depth[key] = depth
         protect_path(objdir, required=False)
+        protect_object_subdirs(objdir)
         for alt in read_alternates(objdir):
             work.append((alt, depth + 1))
 
@@ -340,18 +381,6 @@ def has_tag(fd):
         os.close(tfd)
 
 
-_CANON = {"head": "HEAD", "objects": "objects", "refs": "refs",
-          "reftable": "reftable", "commondir": "commondir"}
-
-
-def candidates(entries, key):
-    """Exact-case entry first, then every other case-folded match."""
-    canon = _CANON[key]
-    out = [canon] if canon in entries else []
-    out.extend(sorted(e for e in entries if e.lower() == key and e != canon))
-    return out
-
-
 def has_dir(dfd, entries, *keys):
     for key in keys:
         for name in candidates(entries, key):
@@ -361,6 +390,30 @@ def has_dir(dfd, entries, *keys):
             except OSError:
                 continue
     return False
+
+
+def commondir_raws(fd, entries):
+    """Yield each usable commondir text of a Git directory, as Git reads it.
+
+    Only CR and LF are stripped (Git setup.c); spaces and tabs belong to the
+    path. Empty text and text with an embedded NUL are skipped.
+    """
+    for name in candidates(entries, "commondir"):
+        try:
+            tfd = os.open(name, os.O_RDONLY | os.O_NONBLOCK, dir_fd=fd)
+        except OSError:
+            continue
+        try:
+            if not stat.S_ISREG(os.fstat(tfd).st_mode):
+                continue
+            raw = os.read(tfd, 4096).rstrip(b"\r\n")
+        except OSError:
+            continue
+        finally:
+            os.close(tfd)
+        if not raw or b"\x00" in raw:
+            continue
+        yield raw
 
 
 def bare_layout(fd):
@@ -379,22 +432,10 @@ def bare_layout(fd):
             pass
     if not any(stat.S_ISREG(m) or stat.S_ISLNK(m) for m in heads):
         return None
-    for name in candidates(entries, "commondir"):
-        try:
-            tfd = os.open(name, os.O_RDONLY | os.O_NONBLOCK, dir_fd=fd)
-        except OSError:
-            continue
-        try:
-            if not stat.S_ISREG(os.fstat(tfd).st_mode):
-                continue
-            raw = os.read(tfd, 4096).rstrip(b" \t\r\n")
-        finally:
-            os.close(tfd)
-        if not raw:
-            continue
+    for raw in commondir_raws(fd, entries):
         try:
             cfd = os.open(raw, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
-        except OSError:
+        except (OSError, ValueError):
             continue
         try:
             cents = os.listdir(cfd)
@@ -411,11 +452,74 @@ def is_bare_git_dir(fd):
     return bare_layout(fd) is not None
 
 
+storage_seen = set()
+
+
+def protect_git_storage(root):
+    """Protect a Git directory's HEAD, objects, refs, commondir and alternates.
+
+    Follows commondir (exact text) into the common directory, and protects
+    every object directory's pack and info subdirectories, wherever symlinked.
+    """
+    try:
+        st = os.stat(root)
+        key = (st.st_dev, st.st_ino)
+        if key in storage_seen:
+            return
+        storage_seen.add(key)
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    except (OSError, ValueError):
+        return
+    try:
+        ents = os.listdir(fd)
+        commons = [os.fsdecode(r) for r in commondir_raws(fd, ents)]
+    finally:
+        os.close(fd)
+    for key in ("head", "objects", "refs", "reftable", "commondir"):
+        for name in candidates(ents, key):
+            full = os.path.join(root, name)
+            protect_path(full, required=False)
+            if key == "objects":
+                protect_alternates(full, -1)
+    for common in commons:
+        common = common if os.path.isabs(common) else os.path.join(root, common)
+        protect_path(common, required=False)
+        protect_git_storage(common)
+
+
+def protect_nested_git(path, entry):
+    """Protect a nested repository's .git (directory, symlink or gitfile)."""
+    gitpath = os.path.join(path, entry)
+    try:
+        mode = os.lstat(gitpath).st_mode
+    except OSError:
+        return
+    protect_path(gitpath, required=False)
+    if stat.S_ISREG(mode):
+        try:
+            with open(gitpath, "rb") as fh:
+                raw = fh.read(4096).rstrip(b"\r\n")
+        except OSError:
+            return
+        if not raw.startswith(b"gitdir:") or b"\x00" in raw:
+            return
+        target = os.fsdecode(raw[len(b"gitdir:"):])
+        if target.startswith(" "):
+            target = target[1:]
+        if not target:
+            return
+        target = target if os.path.isabs(target) else os.path.join(path, target)
+        protect_path(target, required=False)
+        protect_git_storage(target)
+    else:
+        protect_git_storage(gitpath)
+
+
 def protect_bare_repos(path):
-    """Protect every bare/commondir repo's storage, wherever it is symlinked.
+    """Protect every bare/commondir/nested repo's storage, wherever symlinked.
 
     Runs before any cache is cleaned so a repo in one tagged cache keeps the
-    objects, refs, commondir and alternates stored in another.
+    objects, refs, commondir, alternates and gitdir stored in another.
     """
     try:
         fd = os.open(path, DIRFLAGS)
@@ -425,8 +529,10 @@ def protect_bare_repos(path):
         names = os.listdir(fd)
         layout = bare_layout(fd)
         subs = []
+        gits = []
         for entry in names:
             if entry.lower() == ".git":
+                gits.append(entry)
                 continue
             try:
                 if stat.S_ISDIR(os.lstat(entry, dir_fd=fd).st_mode):
@@ -436,22 +542,9 @@ def protect_bare_repos(path):
     finally:
         os.close(fd)
     if layout is not None:
-        roots = [path]
-        if layout:
-            common = layout if os.path.isabs(layout) else os.path.join(path, layout)
-            protect_path(common, required=False)
-            roots.append(common)
-        for root in roots:
-            try:
-                ents = os.listdir(root)
-            except OSError:
-                continue
-            for key in ("head", "objects", "refs", "reftable", "commondir"):
-                for name in candidates(ents, key):
-                    full = os.path.join(root, name)
-                    protect_path(full, required=False)
-                    if key == "objects":
-                        protect_alternates(full, -1)
+        protect_git_storage(path)
+    for entry in gits:
+        protect_nested_git(path, entry)
     for sub in subs:
         protect_bare_repos(sub)
 
