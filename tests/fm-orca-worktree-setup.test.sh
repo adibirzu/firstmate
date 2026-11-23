@@ -30,20 +30,178 @@ new_repo() {  # <dir>
 }
 
 # --- orca.yaml contract -----------------------------------------------------
-SETUP_CMD='if [ -f bin/fm-orca-worktree-setup.sh ]; then bash bin/fm-orca-worktree-setup.sh; fi'
-ARCHIVE_CMD='if [ -f bin/fm-orca-worktree-archive.sh ]; then bash bin/fm-orca-worktree-archive.sh; fi'
 check "orca.yaml exists" test -f "$ORCA_YAML"
-check "orca.yaml guarded setup" grep -qxF "  setup: \"$SETUP_CMD\"" "$ORCA_YAML"
-check "orca.yaml guarded archive" grep -qxF "  archive: \"$ARCHIVE_CMD\"" "$ORCA_YAML"
-check "orca.yaml wait-for-setup" grep -q 'setupAgentStartupPolicy: wait-for-setup' "$ORCA_YAML"
 check "hooks executable" test -x "$SETUP" -a -x "$ARCHIVE"
 check "scripts/ dir gone" test ! -e "$ROOT/scripts"
-no_users() {
-  local needle="/Us""ers/"
-  test -f "$ORCA_YAML" -a -f "$SETUP" -a -f "$ARCHIVE" || return 1
-  ! grep -q "$needle" "$ORCA_YAML" "$SETUP" "$ARCHIVE"
+
+ORCA_SETUP_FILE="$TMP/orca-setup.cmd"
+ORCA_ARCHIVE_FILE="$TMP/orca-archive.cmd"
+parse_orca_yaml() {
+  python3 -B -I - "$1" "$ORCA_SETUP_FILE" "$ORCA_ARCHIVE_FILE" <<'PY'
+import sys
+
+
+def strip_comment(line):
+    quote = None
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if quote == '"':
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == '"':
+                quote = None
+        elif quote == "'":
+            if ch == "'":
+                if i + 1 < n and line[i + 1] == "'":
+                    i += 2
+                    continue
+                quote = None
+        else:
+            if ch in ('"', "'"):
+                quote = ch
+            elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+                return line[:i]
+        i += 1
+    return line
+
+
+def parse_scalar(val):
+    val = val.strip()
+    if len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+        out = []
+        i = 1
+        end = len(val) - 1
+        escapes = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}
+        while i < end:
+            if val[i] == "\\" and i + 1 < end:
+                i += 1
+                out.append(escapes.get(val[i], val[i]))
+            else:
+                out.append(val[i])
+            i += 1
+        return "".join(out)
+    if len(val) >= 2 and val[0] == "'" and val[-1] == "'":
+        return val[1:-1].replace("''", "'")
+    return val
+
+
+def parse_yaml_stdlib(text):
+    root = {}
+    stack = [(-1, root)]
+    for raw in text.splitlines():
+        cleaned = strip_comment(raw)
+        if not cleaned.strip():
+            continue
+        indent = len(cleaned) - len(cleaned.lstrip(" "))
+        stripped = cleaned.lstrip(" ")
+        if ":" not in stripped:
+            raise ValueError("expected mapping entry: %r" % raw)
+        idx = stripped.find(":")
+        key = stripped[:idx].strip()
+        rest = stripped[idx + 1 :]
+        if rest and not rest[0].isspace():
+            raise ValueError("invalid mapping separator: %r" % raw)
+        while len(stack) > 1 and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+        if not rest.strip():
+            child = {}
+            parent[key] = child
+            stack.append((indent, child))
+        else:
+            parent[key] = parse_scalar(rest)
+    return root
+
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    text = fh.read()
+try:
+    import yaml  # type: ignore
+    data = yaml.safe_load(text)
+    stdlib_data = parse_yaml_stdlib(text)
+    if stdlib_data != data:
+        raise AssertionError("stdlib fallback diverged from PyYAML: %r != %r" % (stdlib_data, data))
+except ImportError:
+    data = parse_yaml_stdlib(text)
+
+if not isinstance(data, dict):
+    raise AssertionError("orca.yaml root must be a mapping")
+policy = data.get("setupAgentStartupPolicy")
+if policy != "wait-for-setup":
+    raise AssertionError("unexpected setupAgentStartupPolicy: %r" % (policy,))
+scripts = data.get("scripts")
+if not isinstance(scripts, dict):
+    raise AssertionError("orca.yaml scripts must be a mapping")
+setup_cmd = scripts.get("setup")
+archive_cmd = scripts.get("archive")
+if not isinstance(setup_cmd, str) or not setup_cmd.strip():
+    raise AssertionError("scripts.setup must be a non-empty string")
+if not isinstance(archive_cmd, str) or not archive_cmd.strip():
+    raise AssertionError("scripts.archive must be a non-empty string")
+
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    fh.write(setup_cmd)
+with open(sys.argv[3], "w", encoding="utf-8") as fh:
+    fh.write(archive_cmd)
+PY
 }
-check "no hardcoded home paths" no_users
+
+check "orca.yaml semantic contract (policy and hooks)" parse_orca_yaml "$ORCA_YAML"
+SETUP_CMD=$(cat "$ORCA_SETUP_FILE")
+ARCHIVE_CMD=$(cat "$ORCA_ARCHIVE_FILE")
+check "orca.yaml setup command non-empty" test -n "$SETUP_CMD"
+check "orca.yaml archive command non-empty" test -n "$ARCHIVE_CMD"
+
+# Helpers present: extracted setup & archive hooks work end-to-end
+HP="$TMP/contract-present"
+new_repo "$HP"
+mkdir -p "$HP/bin"
+cp "$SETUP" "$HP/bin/fm-orca-worktree-setup.sh"
+cp "$ARCHIVE" "$HP/bin/fm-orca-worktree-archive.sh"
+chmod +x "$HP/bin/fm-orca-worktree-setup.sh" "$HP/bin/fm-orca-worktree-archive.sh"
+git -C "$HP" add bin/fm-orca-worktree-setup.sh bin/fm-orca-worktree-archive.sh
+git -C "$HP" commit -q -m hooks
+
+hp_out1=$(cd "$HP" && bash -c "$SETUP_CMD" 2>&1) || fail "contract present: setup run 1 exits 0"
+hp_out2=$(cd "$HP" && bash -c "$SETUP_CMD" 2>&1) || fail "contract present: setup run 2 exits 0"
+pass "contract present: setup ran twice"
+for pat in '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log'; do
+  n=$(grep -cxF -- "$pat" "$HP/.git/info/exclude" || true)
+  if [ "$n" = 1 ]; then
+    pass "contract present: exclude entry once: $pat"
+  else
+    fail "contract present: exclude entry once: $pat (got $n)"
+  fi
+done
+case "$hp_out1" in *bash*git*jq*python3*) pass "contract present: setup summary names runtime binaries" ;; *) fail "contract present: setup summary names runtime binaries ($hp_out1)" ;; esac
+case "$hp_out2" in *bash*git*jq*python3*) pass "contract present: setup run 2 summary names runtime binaries" ;; *) fail "contract present: setup run 2 summary names runtime binaries ($hp_out2)" ;; esac
+
+mkdir -p "$HP/pkg/__pycache__" "$HP/tagged/.ruff_cache"
+printf 'x\n' >"$HP/pkg/__pycache__/foo.pyc"
+printf '%s\n' "$TAG_SIG" >"$HP/tagged/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$HP/tagged/.ruff_cache/entry"
+(cd "$HP" && bash -c "$ARCHIVE_CMD") >/dev/null 2>&1 || fail "contract present: archive exits 0"
+check "contract present: archive removed pyc" test ! -e "$HP/pkg/__pycache__/foo.pyc"
+check "contract present: archive removed tagged .ruff_cache" test ! -e "$HP/tagged/.ruff_cache"
+check "contract present: archive preserved tracked file" test "$(cat "$HP/tracked.txt")" = keep
+check "contract present: archive left git status clean" test -z "$(git -C "$HP" status --short)"
+
+# Helpers absent: extracted setup & archive hooks exit 0 cleanly as no-ops
+HA="$TMP/contract-absent"
+new_repo "$HA"
+rm -f "$HA/.git/info/exclude"
+ha_setup_rc=0
+(cd "$HA" && bash -c "$SETUP_CMD") >/dev/null 2>&1 || ha_setup_rc=$?
+ha_archive_rc=0
+(cd "$HA" && bash -c "$ARCHIVE_CMD") >/dev/null 2>&1 || ha_archive_rc=$?
+check "contract absent: setup exits 0" test "$ha_setup_rc" = 0
+check "contract absent: archive exits 0" test "$ha_archive_rc" = 0
+check "contract absent: exclude not created" test ! -e "$HA/.git/info/exclude"
+check "contract absent: tracked file preserved" test "$(cat "$HA/tracked.txt")" = keep
+check "contract absent: git status clean" test -z "$(git -C "$HA" status --short)"
 
 # --- isolated repo + linked worktree ---------------------------------------
 MAIN="$TMP/main"
@@ -466,11 +624,13 @@ check "alternate index cache tag preserved" test -f "$AI/.ruff_cache/CACHEDIR.TA
 # --- finding 4: older worktree without the hooks ---------------------------
 OLD="$TMP/old"
 new_repo "$OLD"
+cp "$OLD/.git/info/exclude" "$TMP/old-exclude-before"
 for cmd in "$SETUP_CMD" "$ARCHIVE_CMD"; do
   rc=0
   (cd "$OLD" && sh -c "$cmd") >/dev/null 2>&1 || rc=$?
   check "guarded command exits 0 without hooks" test "$rc" = 0
 done
+check "guarded command leaves existing exclude untouched" cmp -s "$TMP/old-exclude-before" "$OLD/.git/info/exclude"
 
 # --- fix10: quoted alternates, ancestor symlinks, newline root, bare repos ---
 # Each fixture plants a disposable __pycache__/stale.pyc; its removal proves the
