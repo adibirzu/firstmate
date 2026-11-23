@@ -26,6 +26,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 -B -I - <<'PY'
+import collections
 import os
 import stat
 import subprocess
@@ -78,6 +79,23 @@ def top_path(raw):
 
 
 MAX_HOPS = 32
+real_top = os.path.realpath(top)
+
+
+def protect_inside(path):
+    """Protect a directory the raw path walks through, strictly below the top.
+
+    The worktree top and every ancestor above it are never recorded.
+    """
+    try:
+        real = os.path.realpath(path)
+        if not real.startswith(real_top + os.sep):
+            return
+        st = os.lstat(path)
+    except OSError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        protected_ids.add((st.st_dev, st.st_ino))
 
 
 def protect_path(path, required=True):
@@ -103,6 +121,7 @@ def protect_path(path, required=True):
                 continue
             if comp == "..":
                 cur = os.path.dirname(cur)
+                protect_inside(cur)
                 continue
             nxt = os.path.join(cur, comp)
             st = os.lstat(nxt)
@@ -119,6 +138,7 @@ def protect_path(path, required=True):
                 pending.extend(reversed(parts))
             else:
                 cur = nxt
+                protect_inside(cur)
         fin = os.lstat(cur)
         protected_ids.add((fin.st_dev, fin.st_ino))
         seen.append(cur)
@@ -214,20 +234,22 @@ def read_alternates(objdir):
     return found
 
 
-def protect_alternates(start):
-    visited = set()
-    # Git counts the first alternate as depth 0; the primary store is not counted.
-    work = [(start, -1)]
+def protect_alternates(start, start_depth):
+    """Breadth-first like Git: file order, shallowest depth wins, max depth 5."""
+    best_depth = {}
+    work = collections.deque([(start, start_depth)])
     while work:
-        objdir, depth = work.pop()
+        objdir, depth = work.popleft()
+        if depth > 5:
+            continue
         try:
             st = os.stat(objdir)
         except OSError:
             continue
         key = (st.st_dev, st.st_ino)
-        if key in visited or depth > 5:
+        if depth >= best_depth.get(key, 99):
             continue
-        visited.add(key)
+        best_depth[key] = depth
         protect_path(objdir, required=False)
         for alt in read_alternates(objdir):
             work.append((alt, depth + 1))
@@ -239,9 +261,11 @@ env_alts = [
     a if os.path.isabs(a) else os.path.join(top, a)
     for a in split_env_alternates(os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES", ""))
 ]
-protect_alternates(objects_path)
+# The primary store is not counted; its first alternate is depth 0 and an
+# environment entry is itself depth 0 (Git odb.c).
+protect_alternates(objects_path, -1)
 for alt in env_alts:
-    protect_alternates(alt)
+    protect_alternates(alt, 0)
 
 listed = git_out("ls-files", "-z")
 
@@ -316,34 +340,120 @@ def has_tag(fd):
         os.close(tfd)
 
 
-def is_bare_git_dir(fd):
-    """True for a bare Git repository layout (HEAD, objects/commondir, refs)."""
-    names = {}
-    for e in os.listdir(fd):
-        names[e.lower()] = e
+_CANON = {"head": "HEAD", "objects": "objects", "refs": "refs",
+          "reftable": "reftable", "commondir": "commondir"}
 
-    def kind(key):
-        if key not in names:
-            return None
+
+def candidates(entries, key):
+    """Exact-case entry first, then every other case-folded match."""
+    canon = _CANON[key]
+    out = [canon] if canon in entries else []
+    out.extend(sorted(e for e in entries if e.lower() == key and e != canon))
+    return out
+
+
+def has_dir(dfd, entries, *keys):
+    for key in keys:
+        for name in candidates(entries, key):
+            try:
+                if stat.S_ISDIR(os.stat(name, dir_fd=dfd).st_mode):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def bare_layout(fd):
+    """Return None, or the raw commondir text ("" if none) of a Git directory.
+
+    Mirrors Git setup.c: HEAD plus objects and refs/reftable, either local or
+    supplied by the directory a readable commondir file points at. Case-folded
+    entries never shadow an exact-case match.
+    """
+    entries = os.listdir(fd)
+    heads = []
+    for name in candidates(entries, "head"):
         try:
-            return os.stat(names[key], dir_fd=fd).st_mode
+            heads.append(os.lstat(name, dir_fd=fd).st_mode)
         except OSError:
-            return None
+            pass
+    if not any(stat.S_ISREG(m) or stat.S_ISLNK(m) for m in heads):
+        return None
+    for name in candidates(entries, "commondir"):
+        try:
+            tfd = os.open(name, os.O_RDONLY | os.O_NONBLOCK, dir_fd=fd)
+        except OSError:
+            continue
+        try:
+            if not stat.S_ISREG(os.fstat(tfd).st_mode):
+                continue
+            raw = os.read(tfd, 4096).rstrip(b" \t\r\n")
+        finally:
+            os.close(tfd)
+        if not raw:
+            continue
+        try:
+            cfd = os.open(raw, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        except OSError:
+            continue
+        try:
+            cents = os.listdir(cfd)
+            if has_dir(cfd, cents, "objects") and has_dir(cfd, cents, "refs", "reftable"):
+                return os.fsdecode(raw)
+        finally:
+            os.close(cfd)
+    if has_dir(fd, entries, "objects") and has_dir(fd, entries, "refs", "reftable"):
+        return ""
+    return None
 
-    # HEAD may be a (possibly dangling) symlink; storage is followed like Git.
+
+def is_bare_git_dir(fd):
+    return bare_layout(fd) is not None
+
+
+def protect_bare_repos(path):
+    """Protect every bare/commondir repo's storage, wherever it is symlinked.
+
+    Runs before any cache is cleaned so a repo in one tagged cache keeps the
+    objects, refs, commondir and alternates stored in another.
+    """
     try:
-        head = os.lstat(names["head"], dir_fd=fd).st_mode if "head" in names else None
+        fd = os.open(path, DIRFLAGS)
     except OSError:
-        head = None
-    if head is None or not (stat.S_ISREG(head) or stat.S_ISLNK(head)):
-        return False
-    has_store = any(
-        m is not None and stat.S_ISDIR(m) for m in (kind("objects"), kind("commondir"))
-    ) or "commondir" in names
-    has_refs = any(
-        m is not None and stat.S_ISDIR(m) for m in (kind("refs"), kind("reftable"))
-    )
-    return has_store and has_refs
+        return
+    try:
+        names = os.listdir(fd)
+        layout = bare_layout(fd)
+        subs = []
+        for entry in names:
+            if entry.lower() == ".git":
+                continue
+            try:
+                if stat.S_ISDIR(os.lstat(entry, dir_fd=fd).st_mode):
+                    subs.append(os.path.join(path, entry))
+            except OSError:
+                continue
+    finally:
+        os.close(fd)
+    if layout is not None:
+        roots = [path]
+        if layout:
+            common = layout if os.path.isabs(layout) else os.path.join(path, layout)
+            protect_path(common, required=False)
+            roots.append(common)
+        for root in roots:
+            try:
+                ents = os.listdir(root)
+            except OSError:
+                continue
+            for key in ("head", "objects", "refs", "reftable", "commondir"):
+                for name in candidates(ents, key):
+                    full = os.path.join(root, name)
+                    protect_path(full, required=False)
+                    if key == "objects":
+                        protect_alternates(full, -1)
+    for sub in subs:
+        protect_bare_repos(sub)
 
 
 def has_git_entry(fd):
@@ -445,6 +555,7 @@ def walk(fd, is_top):
             os.close(sub)
 
 
+protect_bare_repos(top)
 try:
     root = os.open(top, os.O_RDONLY | os.O_DIRECTORY)
 except OSError as exc:

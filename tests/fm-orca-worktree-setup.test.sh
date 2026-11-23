@@ -486,15 +486,17 @@ mkdir -p "$QA/.ruff_cache"
 printf '%s\n' "$TAG_SIG" >"$QA/.ruff_cache/CACHEDIR.TAG"
 plant_stale "$QA"
 cp -R "$QA/.git/objects" "$QA/.ruff_cache/env:store"
-cp -R "$QA/.git/objects" "$QA/.ruff_cache/file-store"
-printf '%s\n' "$QA/.ruff_cache/file-store" >>"$QA/.git/objects/info/alternates"
+mkdir -p "$QA/lib/.ruff_cache"
+printf '%s\n' "$TAG_SIG" >"$QA/lib/.ruff_cache/CACHEDIR.TAG"
+cp -R "$QA/.git/objects" "$QA/lib/.ruff_cache/file-store"
+printf '%s\n' "$QA/lib/.ruff_cache/file-store" >>"$QA/.git/objects/info/alternates"
 qa_env=$(printf '"%s"' "$QA/.ruff_cache/env:store")
 qa_before=$(snap "$QA/.ruff_cache/env:store")
-qb_before=$(snap "$QA/.ruff_cache/file-store")
+qb_before=$(snap "$QA/lib/.ruff_cache/file-store")
 (cd "$QA" && GIT_ALTERNATE_OBJECT_DIRECTORIES="$qa_env" bash "$ARCHIVE") >/dev/null 2>&1 || fail "quoted alternates archive exits 0"
 check "quoted alternates: cleanup ran" test ! -e "$QA/pkg/__pycache__/stale.pyc"
 check "quoted env alternate preserved" test "$qa_before" = "$(snap "$QA/.ruff_cache/env:store")"
-check "info/alternates store preserved" test "$qb_before" = "$(snap "$QA/.ruff_cache/file-store")"
+check "info/alternates store preserved" test "$qb_before" = "$(snap "$QA/lib/.ruff_cache/file-store")"
 
 AP="$TMP/ancestorsym"
 new_repo "$AP"
@@ -629,6 +631,119 @@ check "bare symlink: cleanup ran" test ! -e "$BS/pkg/__pycache__/stale.pyc"
 check "bare symlink: HEAD preserved" test -f "$BS/.ruff_cache/mirror.git/HEAD"
 check "bare symlink: refs preserved" test -d "$BS/.ruff_cache/mirror.git/refs"
 check "bare symlink: objects target preserved" test -d "$BS/.ruff_cache/real-objects"
+
+# --- fix12: alternate order/depth, intermediate dirs, split bare storage, commondir
+# Each store lives in its own tagged cache so every assertion is independent.
+tag_at() {  # <dir> -> creates a tagged .ruff_cache inside <dir>
+  mkdir -p "$1/.ruff_cache"
+  printf '%s\n' "$TAG_SIG" >"$1/.ruff_cache/CACHEDIR.TAG"
+}
+
+AO="$TMP/altorder"
+new_repo "$AO"
+tag_cache "$AO"
+plant_stale "$AO"
+mkdir -p "$TMP/ao-x/info" "$AO/.ruff_cache/ystore/info"
+printf 'sentinel\n' >"$AO/.ruff_cache/ystore/sentinel"
+printf '%s\n' "$AO/.ruff_cache/ystore" >"$TMP/ao-x/info/alternates"
+printf '%s\n' "$TMP/ao-x" >"$AO/.git/objects/info/alternates"
+for i in 1 2 3 4 5; do mkdir -p "$TMP/ao-c$i/info"; done
+for i in 1 2 3 4; do printf '%s\n' "$TMP/ao-c$((i + 1))" >"$TMP/ao-c$i/info/alternates"; done
+# Only c1 is a direct entry; the chain c1..c5 then reaches x at depth 5.
+printf '%s\n' "$TMP/ao-x" >"$AO/.git/objects/info/alternates"
+printf '%s\n' "$TMP/ao-c1" >>"$AO/.git/objects/info/alternates"
+printf '%s\n' "$TMP/ao-x" >"$TMP/ao-c5/info/alternates"
+(cd "$AO" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "alt order archive exits 0"
+check "alt order: cleanup ran" test ! -e "$AO/pkg/__pycache__/stale.pyc"
+check "alt order: child of shallow-and-deep store preserved" test -f "$AO/.ruff_cache/ystore/sentinel"
+
+AD="$TMP/altdepth"
+new_repo "$AD"
+tag_cache "$AD"
+tag_at "$AD/lib"
+plant_stale "$AD"
+prev="$TMP/ad-e"
+mkdir -p "$prev/info"
+for i in 1 2 3 4; do
+  mkdir -p "$TMP/ad-a$i/info"
+  printf '%s\n' "$TMP/ad-a$i" >"$prev/info/alternates"
+  prev="$TMP/ad-a$i"
+done
+mkdir -p "$AD/lib/.ruff_cache/s5/info" "$AD/.ruff_cache/s6/info"
+printf 'sentinel\n' >"$AD/lib/.ruff_cache/s5/sentinel"
+printf 'sentinel\n' >"$AD/.ruff_cache/s6/sentinel"
+printf '%s\n' "$AD/lib/.ruff_cache/s5" >"$prev/info/alternates"
+printf '%s\n' "$AD/.ruff_cache/s6" >"$AD/lib/.ruff_cache/s5/info/alternates"
+(cd "$AD" && GIT_ALTERNATE_OBJECT_DIRECTORIES="$TMP/ad-e" bash "$ARCHIVE") >/dev/null 2>&1 || fail "alt depth archive exits 0"
+check "alt depth: cleanup ran" test ! -e "$AD/pkg/__pycache__/stale.pyc"
+check "alt depth: env store at depth 5 preserved" test -f "$AD/lib/.ruff_cache/s5/sentinel"
+check "alt depth: store beyond Git depth limit not protected" test ! -e "$AD/.ruff_cache/s6/sentinel"
+
+IM="$TMP/intermed"
+new_repo "$IM"
+tag_cache "$IM"
+plant_stale "$IM"
+mkdir -p "$IM/.ruff_cache/sub"
+ln -s .ruff_cache/sub "$IM/link"
+(cd "$IM" && GIT_INDEX_FILE="$IM/link/../../.git/index" bash "$ARCHIVE") >/dev/null 2>&1 || fail "intermediate archive exits 0"
+check "intermediate: cleanup ran" test ! -e "$IM/pkg/__pycache__/stale.pyc"
+check "intermediate: raw index path still reachable" test -f "$IM/link/../../.git/index"
+check "intermediate: symlink target dir preserved" test -d "$IM/.ruff_cache/sub"
+
+BX="$TMP/baresplit"
+new_repo "$BX"
+tag_cache "$BX"
+tag_at "$BX/lib"
+tag_at "$BX/vendor"
+plant_stale "$BX"
+git init -q --bare "$BX/.ruff_cache/mirror.git"
+mv "$BX/.ruff_cache/mirror.git/objects" "$BX/lib/.ruff_cache/real-objects"
+mv "$BX/.ruff_cache/mirror.git/refs" "$BX/lib/.ruff_cache/real-refs"
+ln -s "$BX/lib/.ruff_cache/real-objects" "$BX/.ruff_cache/mirror.git/objects"
+ln -s "$BX/lib/.ruff_cache/real-refs" "$BX/.ruff_cache/mirror.git/refs"
+mkdir -p "$BX/vendor/.ruff_cache/alt-store" "$BX/lib/.ruff_cache/real-objects/info"
+printf 'sentinel\n' >"$BX/vendor/.ruff_cache/alt-store/sentinel"
+printf '%s\n' "$BX/vendor/.ruff_cache/alt-store" >"$BX/lib/.ruff_cache/real-objects/info/alternates"
+(cd "$BX" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "split bare archive exits 0"
+check "split bare: cleanup ran" test ! -e "$BX/pkg/__pycache__/stale.pyc"
+check "split bare: HEAD preserved" test -f "$BX/.ruff_cache/mirror.git/HEAD"
+check "split bare: objects storage preserved" test -d "$BX/lib/.ruff_cache/real-objects/pack"
+check "split bare: refs storage preserved" test -d "$BX/lib/.ruff_cache/real-refs/heads"
+check "split bare: alternates target preserved" test -f "$BX/vendor/.ruff_cache/alt-store/sentinel"
+
+CD="$TMP/commondir"
+new_repo "$CD"
+tag_cache "$CD"
+tag_at "$CD/lib"
+plant_stale "$CD"
+git init -q --bare "$CD/lib/.ruff_cache/common.git"
+mkdir -p "$CD/.ruff_cache/wt.git"
+printf 'ref: refs/heads/main\n' >"$CD/.ruff_cache/wt.git/HEAD"
+printf '../../lib/.ruff_cache/common.git\n' >"$CD/.ruff_cache/wt.git/commondir"
+cd_before=$(snap "$CD/lib/.ruff_cache/common.git")
+(cd "$CD" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "commondir archive exits 0"
+check "commondir: cleanup ran" test ! -e "$CD/pkg/__pycache__/stale.pyc"
+check "commondir: gitdir preserved" test -f "$CD/.ruff_cache/wt.git/commondir"
+check "commondir: common dir preserved" test "$cd_before" = "$(snap "$CD/lib/.ruff_cache/common.git")"
+
+SH="$TMP/shadow"
+new_repo "$SH"
+tag_cache "$SH"
+plant_stale "$SH"
+git init -q --bare "$SH/.ruff_cache/mirror.git"
+{ : >"$SH/.ruff_cache/mirror.git/OBJECTS"; } 2>/dev/null || true
+sh_n=0
+for sh_e in "$SH/.ruff_cache/mirror.git"/[oO][bB][jJ][eE][cC][tT][sS]; do
+  [ -e "$sh_e" ] && sh_n=$((sh_n + 1))
+done
+if [ "$sh_n" = 2 ]; then
+  sh_before=$(snap "$SH/.ruff_cache/mirror.git")
+  (cd "$SH" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "shadow archive exits 0"
+  check "shadow: cleanup ran" test ! -e "$SH/pkg/__pycache__/stale.pyc"
+  check "shadow: bare repo preserved" test "$sh_before" = "$(snap "$SH/.ruff_cache/mirror.git")"
+else
+  pass "shadow fixture needs a case-sensitive filesystem"
+fi
 
 if [ -d "$NLW" ]; then
   (cd "$NLW" && bash "$SETUP") >/dev/null 2>&1 || fail "newline root setup exits 0"
