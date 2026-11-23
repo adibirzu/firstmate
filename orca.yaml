@@ -1,5 +1,6 @@
 # Orca worktree lifecycle for firstmate. Local-only helpers: no network, no secrets.
+# Guards keep older worktrees (without the helpers) from failing setup or archive.
 scripts:
-  setup: bash scripts/orca-worktree-setup.sh
-  archive: bash scripts/orca-worktree-archive.sh
+  setup: "if [ -f bin/fm-orca-worktree-setup.sh ]; then bash bin/fm-orca-worktree-setup.sh; fi"
+  archive: "if [ -f bin/fm-orca-worktree-archive.sh ]; then bash bin/fm-orca-worktree-archive.sh; fi"
 setupAgentStartupPolicy: wait-for-setup

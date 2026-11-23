@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # tests/fm-orca-worktree-setup.test.sh - Orca worktree setup and archive helpers.
-# Runs both scripts inside an isolated temporary Git repo and linked worktree.
+# Runs both hooks inside isolated temporary Git repos and linked worktrees.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SETUP="$ROOT/scripts/orca-worktree-setup.sh"
-ARCHIVE="$ROOT/scripts/orca-worktree-archive.sh"
+SETUP="$ROOT/bin/fm-orca-worktree-setup.sh"
+ARCHIVE="$ROOT/bin/fm-orca-worktree-archive.sh"
 ORCA_YAML="$ROOT/orca.yaml"
+TAG_SIG='Signature: 8a477f597d28d172789f06886806bc55'
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-orca-wt-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -19,13 +20,24 @@ check() {  # <label> <command...>
   shift
   if "$@"; then pass "$label"; else fail "$label"; fi
 }
+new_repo() {  # <dir>
+  git init -q "$1"
+  git -C "$1" config user.email test@example.invalid
+  git -C "$1" config user.name test
+  printf 'keep\n' >"$1/tracked.txt"
+  git -C "$1" add tracked.txt
+  git -C "$1" commit -q -m init
+}
 
 # --- orca.yaml contract -----------------------------------------------------
+SETUP_CMD='if [ -f bin/fm-orca-worktree-setup.sh ]; then bash bin/fm-orca-worktree-setup.sh; fi'
+ARCHIVE_CMD='if [ -f bin/fm-orca-worktree-archive.sh ]; then bash bin/fm-orca-worktree-archive.sh; fi'
 check "orca.yaml exists" test -f "$ORCA_YAML"
-check "orca.yaml setup script" grep -q 'setup: bash scripts/orca-worktree-setup.sh' "$ORCA_YAML"
-check "orca.yaml archive script" grep -q 'archive: bash scripts/orca-worktree-archive.sh' "$ORCA_YAML"
+check "orca.yaml guarded setup" grep -qxF "  setup: \"$SETUP_CMD\"" "$ORCA_YAML"
+check "orca.yaml guarded archive" grep -qxF "  archive: \"$ARCHIVE_CMD\"" "$ORCA_YAML"
 check "orca.yaml wait-for-setup" grep -q 'setupAgentStartupPolicy: wait-for-setup' "$ORCA_YAML"
-check "scripts executable" test -x "$SETUP" -a -x "$ARCHIVE"
+check "hooks executable" test -x "$SETUP" -a -x "$ARCHIVE"
+check "scripts/ dir gone" test ! -e "$ROOT/scripts"
 no_users() {
   local needle="/Us""ers/"
   test -f "$ORCA_YAML" -a -f "$SETUP" -a -f "$ARCHIVE" || return 1
@@ -36,12 +48,13 @@ check "no hardcoded home paths" no_users
 # --- isolated repo + linked worktree ---------------------------------------
 MAIN="$TMP/main"
 WT="$TMP/linked"
-git init -q "$MAIN"
-git -C "$MAIN" config user.email test@example.invalid
-git -C "$MAIN" config user.name test
-printf 'keep\n' >"$MAIN/tracked.txt"
-git -C "$MAIN" add tracked.txt
-git -C "$MAIN" commit -q -m init
+new_repo "$MAIN"
+mkdir -p "$MAIN/trk/__pycache__" "$MAIN/rt/.ruff_cache"
+printf 'x\n' >"$MAIN/trk/__pycache__/tracked.pyc"
+printf '%s\n' "$TAG_SIG" >"$MAIN/rt/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$MAIN/rt/.ruff_cache/tracked-entry"
+git -C "$MAIN" add -f trk/__pycache__/tracked.pyc rt/.ruff_cache/tracked-entry
+git -C "$MAIN" commit -q -m cache-like-tracked
 git -C "$MAIN" worktree add -q -b linked "$WT"
 
 for d in data state config projects; do
@@ -56,7 +69,7 @@ out1=$(run_setup 2>&1) || fail "setup run 1 exits 0"
 out2=$(run_setup 2>&1) || fail "setup run 2 exits 0"
 pass "setup ran twice"
 
-exclude=$(cd "$WT" && git rev-parse --git-path info/exclude)
+exclude="$MAIN/.git/info/exclude"
 for pat in '__pycache__/' '*.pyc' '.ruff_cache/' 'firebase-debug.log'; do
   n=$(grep -cxF -- "$pat" "$exclude" || true)
   if [ "$n" = 1 ]; then pass "exclude entry once: $pat"; else fail "exclude entry once: $pat (got $n)"; fi
@@ -65,21 +78,33 @@ case "$out1" in *bash*git*jq*python3*) pass "summary names runtime binaries" ;; 
 lines=$(printf '%s\n' "$out2" | wc -l | tr -d ' ')
 if [ "$lines" -le 2 ]; then pass "compact output"; else fail "compact output ($lines lines)"; fi
 
-mkdir -p "$WT/pkg/__pycache__"
+mkdir -p "$WT/pkg/__pycache__" "$WT/untagged/.ruff_cache" "$WT/tagged/.ruff_cache/sub"
 printf 'x\n' >"$WT/pkg/__pycache__/foo.pyc"
+printf 'x\n' >"$WT/pkg/__pycache__/foo.pyo"
+printf 'src\n' >"$WT/pkg/__pycache__/notes.py"
 printf 'x\n' >"$WT/firebase-debug.log"
-mkdir -p "$WT/.ruff_cache"
-printf 'x\n' >"$WT/.ruff_cache/c"
+printf 'x\n' >"$WT/untagged/.ruff_cache/c"
+printf '%s\n' "$TAG_SIG" >"$WT/tagged/.ruff_cache/CACHEDIR.TAG"
+printf 'x\n' >"$WT/tagged/.ruff_cache/sub/c"
 printf 'src\n' >"$WT/pkg/mod.py"
-st=$(cd "$WT" && git status --short | grep -v -E '^\?\? (data|state|config|projects)/' || true)
-case "$st" in *firebase-debug.log*|*__pycache__*|*.pyc*|*.ruff_cache*) fail "scratch ignored by git status ($st)" ;; *) pass "scratch ignored by git status" ;; esac
+st=$(cd "$WT" && git status --short --untracked-files=all | grep -v -E '^\?\? (data|state|config|projects)/' || true)
+case "$st" in
+  *firebase-debug.log*|*foo.pyc*|*foo.pyo*|*.ruff_cache*) fail "scratch ignored by git status ($st)" ;;
+  *) pass "scratch ignored by git status" ;;
+esac
 
 # --- archive ---------------------------------------------------------------
-(cd "$WT" && bash "$ARCHIVE") >/dev/null
-check "archive removed pkg/__pycache__" test ! -e "$WT/pkg/__pycache__"
-check "archive removed .ruff_cache" test ! -e "$WT/.ruff_cache"
+out=$(cd "$WT" && bash "$ARCHIVE" 2>&1) || fail "archive exits 0"
+check "archive removed pyc" test ! -e "$WT/pkg/__pycache__/foo.pyc"
+check "archive removed pyo" test ! -e "$WT/pkg/__pycache__/foo.pyo"
+check "archive kept untracked source in __pycache__" test -f "$WT/pkg/__pycache__/notes.py"
+check "archive kept tracked file in __pycache__" test -f "$WT/trk/__pycache__/tracked.pyc"
+check "archive kept untagged .ruff_cache" test -f "$WT/untagged/.ruff_cache/c"
+check "archive removed tagged .ruff_cache" test ! -e "$WT/tagged/.ruff_cache"
+check "archive kept tagged .ruff_cache with tracked entry" test -f "$WT/rt/.ruff_cache/tracked-entry"
 check "archive kept regular file" test -f "$WT/pkg/mod.py"
 check "archive kept tracked file" test -f "$WT/tracked.txt"
+case "$out" in *cleaned*) pass "archive summary" ;; *) fail "archive summary ($out)" ;; esac
 (cd "$WT" && bash "$ARCHIVE") >/dev/null
 pass "archive idempotent"
 
@@ -89,6 +114,92 @@ check "private dirs untouched" test "$before" = "$after"
 check "private pycache preserved" test -f "$WT/data/__pycache__/m.pyc"
 tracked_dirty=$(cd "$WT" && git status --short --untracked-files=no)
 check "tracked files unmodified" test -z "$tracked_dirty"
+
+# --- finding 3: bracketed worktree path ------------------------------------
+BR="$TMP/firstmate[old]"
+new_repo "$BR"
+for d in data state config projects; do
+  mkdir -p "$BR/$d/__pycache__" "$BR/$d/.ruff_cache"
+  printf 'x\n' >"$BR/$d/__pycache__/m.pyc"
+  printf '%s\n' "$TAG_SIG" >"$BR/$d/.ruff_cache/CACHEDIR.TAG"
+done
+mkdir -p "$BR/pkg/__pycache__"
+printf 'x\n' >"$BR/pkg/__pycache__/m.pyc"
+(cd "$BR" && bash "$ARCHIVE") >/dev/null 2>&1 || fail "bracketed archive exits 0"
+for d in data state config projects; do
+  check "bracketed path keeps $d pycache" test -f "$BR/$d/__pycache__/m.pyc"
+  check "bracketed path keeps $d ruff cache" test -f "$BR/$d/.ruff_cache/CACHEDIR.TAG"
+done
+check "bracketed path still cleans pkg" test ! -e "$BR/pkg/__pycache__"
+
+# --- finding 1: corrupt index fails closed ---------------------------------
+CI="$TMP/corrupt"
+new_repo "$CI"
+mkdir -p "$CI/pkg/__pycache__"
+printf 'x\n' >"$CI/pkg/__pycache__/m.pyc"
+printf 'garbage-not-an-index' >"$CI/.git/index"
+rc=0
+cout=$(cd "$CI" && bash "$ARCHIVE" 2>&1) || rc=$?
+check "corrupt index archive exits 0" test "$rc" = 0
+check "corrupt index deletes nothing" test -f "$CI/pkg/__pycache__/m.pyc"
+case "$cout" in *[Ww]arn*|*skip*|*refus*) pass "corrupt index warns" ;; *) fail "corrupt index warns ($cout)" ;; esac
+
+# --- finding 5: symlink refusal --------------------------------------------
+SL="$TMP/symexcl"
+new_repo "$SL"
+printf 'target-original\n' >"$TMP/sym-target"
+rm -f "$SL/.git/info/exclude"
+ln -s "$TMP/sym-target" "$SL/.git/info/exclude"
+rc=0
+sout=$(cd "$SL" && bash "$SETUP" 2>&1) || rc=$?
+check "symlinked exclude setup exits 0" test "$rc" = 0
+check "symlinked exclude target unmodified" test "$(cat "$TMP/sym-target")" = target-original
+case "$sout" in *[Ww]arn*|*refus*|*skip*) pass "symlinked exclude warns" ;; *) fail "symlinked exclude warns ($sout)" ;; esac
+
+SP="$TMP/symparent"
+new_repo "$SP"
+mkdir "$TMP/sym-dir"
+rm -rf "$SP/.git/info"
+ln -s "$TMP/sym-dir" "$SP/.git/info"
+rc=0
+pout=$(cd "$SP" && bash "$SETUP" 2>&1) || rc=$?
+check "symlinked info setup exits 0" test "$rc" = 0
+check "symlinked info target untouched" test -z "$(ls -A "$TMP/sym-dir")"
+case "$pout" in *[Ww]arn*|*refus*|*skip*) pass "symlinked info warns" ;; *) fail "symlinked info warns ($pout)" ;; esac
+
+# --- finding 2: unterminated exclude line ----------------------------------
+NL="$TMP/nonl"
+new_repo "$NL"
+printf 'existing-rule' >"$NL/.git/info/exclude"
+(cd "$NL" && bash "$SETUP") >/dev/null 2>&1 || fail "no-newline setup exits 0"
+check "existing rule preserved on own line" grep -qxF 'existing-rule' "$NL/.git/info/exclude"
+check "no joined rule" test -z "$(grep -F 'existing-rule__' "$NL/.git/info/exclude" || true)"
+check "patterns appended after rule" grep -qxF '__pycache__/' "$NL/.git/info/exclude"
+
+# --- finding 5: concurrent setups in sibling worktrees ---------------------
+CC="$TMP/conc"
+new_repo "$CC"
+git -C "$CC" worktree add -q -b wa "$TMP/conc-a"
+git -C "$CC" worktree add -q -b wb "$TMP/conc-b"
+dups=0
+for _ in 1 2 3 4 5; do
+  : >"$CC/.git/info/exclude"
+  (cd "$TMP/conc-a" && bash "$SETUP") >/dev/null 2>&1 &
+  (cd "$TMP/conc-b" && bash "$SETUP") >/dev/null 2>&1 &
+  wait
+  dups=$((dups + $(sort "$CC/.git/info/exclude" | uniq -d | wc -l | tr -d ' ')))
+done
+check "concurrent setups leave no duplicate lines" test "$dups" = 0
+check "concurrent setups wrote patterns" grep -qxF 'firebase-debug.log' "$CC/.git/info/exclude"
+
+# --- finding 4: older worktree without the hooks ---------------------------
+OLD="$TMP/old"
+new_repo "$OLD"
+for cmd in "$SETUP_CMD" "$ARCHIVE_CMD"; do
+  rc=0
+  (cd "$OLD" && sh -c "$cmd") >/dev/null 2>&1 || rc=$?
+  check "guarded command exits 0 without hooks" test "$rc" = 0
+done
 
 if [ "$fails" -ne 0 ]; then
   printf '%s check(s) failed\n' "$fails"
