@@ -1,0 +1,192 @@
+ok   orca.yaml exists
+ok   hooks executable
+ok   scripts/ dir gone
+ok   orca.yaml semantic contract (policy and hooks)
+ok   orca.yaml setup command non-empty
+ok   orca.yaml archive command non-empty
+ok   contract present: setup ran twice
+ok   contract present: exclude entry once: __pycache__/
+ok   contract present: exclude entry once: *.pyc
+ok   contract present: exclude entry once: .ruff_cache/
+ok   contract present: exclude entry once: firebase-debug.log
+ok   contract present: setup summary names runtime binaries
+ok   contract present: setup run 2 summary names runtime binaries
+ok   contract present: archive removed pyc
+ok   contract present: archive removed tagged .ruff_cache
+ok   contract present: archive preserved tracked file
+ok   contract present: archive left git status clean
+ok   contract absent: setup exits 0
+ok   contract absent: archive exits 0
+ok   contract absent: exclude not created
+ok   contract absent: tracked file preserved
+ok   contract absent: git status clean
+ok   setup ran twice
+ok   exclude entry once: __pycache__/
+ok   exclude entry once: *.pyc
+ok   exclude entry once: .ruff_cache/
+ok   exclude entry once: firebase-debug.log
+ok   summary names runtime binaries
+ok   compact output
+ok   scratch ignored by git status
+ok   archive removed pyc
+ok   archive removed pyo
+ok   archive kept untracked source in __pycache__
+ok   archive kept tracked file in __pycache__
+ok   archive kept untagged .ruff_cache
+ok   archive removed tagged .ruff_cache
+ok   archive kept tagged .ruff_cache with tracked entry
+ok   archive kept regular file
+ok   archive kept tracked file
+ok   archive summary
+ok   archive idempotent
+ok   gitlink tag is 43 bytes plus newline
+ok   tracked .ruff_cache dir preserved
+ok   tracked .ruff_cache tag preserved
+ok   tracked .ruff_cache contents preserved
+ok   tracked __pycache__ dir preserved
+ok   fifo tag archive returns promptly
+ok   fifo tag archive exits 0
+ok   fifo tag .ruff_cache preserved
+ok   submodule .ruff_cache preserved
+ok   submodule cache tracked file preserved
+ok   submodule tracked file preserved
+ok   nested repo source preserved
+ok   nested repo git HEAD preserved
+ok   nested repo tracked file preserved
+ok   case alias .GIT pycache preserved
+ok   case alias Data pycache preserved
+ok   case alias STATE pycache preserved
+ok   case alias Config pycache preserved
+ok   case alias PROJECTS pycache preserved
+ok   renamed git dir pycache preserved
+ok   missing index archive exits 0
+ok   missing index keeps modified committed pyc
+ok   missing index deletes nothing else
+ok   missing index warns
+ok   separate git dir HEAD preserved
+ok   separate git dir index preserved
+ok   separate git dir objects untouched
+070fc95cab38fcccf6a14a02405e442bef1293f0
+ok   separate git dir repo still valid
+ok   common dir HEAD preserved
+ok   common dir objects untouched
+bbe50a85f539facdee3988112787d87a9676596a
+ok   common dir linked worktree still valid
+ok   symlinked index: cleanup ran
+ok   symlinked index file preserved
+ok   symlinked index tagged cache preserved
+ok   symlinked index real index preserved
+ok   symlink target lock archive exits 0
+ok   symlink target lock deletes pycache nothing
+ok   symlink target lock keeps tagged cache
+ok   symlink target lock warns
+ok   object dir: cleanup ran
+ok   object dir tagged cache preserved
+ok   object dir contents untouched
+ok   private dirs untouched
+ok   private pycache preserved
+ok   tracked files unmodified
+ok   bracketed path keeps data pycache
+ok   bracketed path keeps data ruff cache
+ok   bracketed path keeps state pycache
+ok   bracketed path keeps state ruff cache
+ok   bracketed path keeps config pycache
+ok   bracketed path keeps config ruff cache
+ok   bracketed path keeps projects pycache
+ok   bracketed path keeps projects ruff cache
+ok   bracketed path still cleans pkg
+ok   corrupt index archive exits 0
+ok   corrupt index deletes nothing
+ok   corrupt index warns
+ok   symlinked exclude setup exits 0
+ok   symlinked exclude target unmodified
+ok   symlinked exclude warns
+ok   symlinked info setup exits 0
+ok   symlinked info target untouched
+ok   symlinked info warns
+ok   existing rule preserved on own line
+ok   no joined rule
+ok   patterns appended after rule
+ok   concurrent setups leave no duplicate lines
+ok   concurrent setups wrote patterns
+ok   rename race: swapped-in tracked dir contents preserved
+ok   rename race: swapped-in tracked dir itself preserved
+ok   rename race: swapped-in empty tracked gitlink preserved (no stray rmdir)
+ok   index lock archive exits 0
+ok   index lock keeps __pycache__
+ok   index lock keeps .ruff_cache
+ok   index lock warns
+ok   alternate index file preserved
+ok   alternate index cache tag preserved
+ok   guarded command exits 0 without hooks
+ok   guarded command exits 0 without hooks
+ok   guarded command leaves existing exclude untouched
+ok   quoted alternates: cleanup ran
+ok   quoted env alternate preserved
+ok   info/alternates store preserved
+ok   ancestor symlink: cleanup ran
+ok   ancestor directory symlink preserved
+ok   ancestor symlink index reachable
+ok   ancestor lock archive exits 0
+ok   ancestor lock deletes nothing
+ok   ancestor lock warns
+ok   newline root: own worktree cleaned
+ok   newline root: sibling checkout untouched
+ok   bare repo: cleanup ran
+ok   bare repo inside tagged cache preserved
+ok   bare repo tagged cache preserved
+ok   dotdot: cleanup ran
+ok   dotdot: symlink-resolved index preserved
+ok   dotdot: link preserved
+ok   chain6: cleanup ran
+ok   chain6: sixth store preserved
+ok   cr alternate: cleanup ran
+ok   cr alternate: literal CR store preserved
+ok   registry: cleanup ran
+ok   registry: symlinked alternates target preserved
+ok   bare symlink: cleanup ran
+ok   bare symlink: HEAD preserved
+ok   bare symlink: refs preserved
+ok   bare symlink: objects target preserved
+ok   alt order: cleanup ran
+ok   alt order: child of shallow-and-deep store preserved
+ok   alt depth: cleanup ran
+ok   alt depth: env store at depth 5 preserved
+ok   alt depth: store beyond Git depth limit not protected
+ok   intermediate: cleanup ran
+ok   intermediate: raw index path still reachable
+ok   intermediate: symlink target dir preserved
+ok   split bare: cleanup ran
+ok   split bare: HEAD preserved
+ok   split bare: objects storage preserved
+ok   split bare: refs storage preserved
+ok   split bare: alternates target preserved
+ok   commondir: cleanup ran
+ok   commondir: gitdir preserved
+ok   commondir: common dir preserved
+ok   case top: cleanup ran
+ok   case top: intermediate dir preserved
+ok   case top: raw index path reachable
+ok   trailing space: cleanup ran
+ok   trailing space: gitdir preserved
+ok   trailing space: common dir preserved
+ok   nul commondir: cleanup ran
+ok   nul commondir: unrelated dirs untouched
+ok   nested repo: cleanup ran
+ok   nested repo: non-bare repo preserved
+ok   nested repo: alternate store preserved
+ok   nested gitfile: repo preserved
+ok   nested gitfile: target gitdir preserved
+ok   symlink gitfile: cleanup ran
+ok   symlink gitfile: symlink .git preserved
+ok   symlink gitfile: gitfile preserved
+ok   symlink gitfile: target pack preserved
+ok   symlink gitfile: alternate store preserved
+ok   dangling .git symlink: link preserved
+ok   dangling .git symlink: repo dir preserved
+ok   pack symlink: cleanup ran
+ok   pack symlink: pack file preserved
+ok   shadow fixture needs a case-sensitive filesystem
+ok   newline root setup: own exclude updated
+ok   newline root setup: sibling exclude untouched
+all checks passed
