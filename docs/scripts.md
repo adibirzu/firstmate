@@ -49,6 +49,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-hc-ci-cleanup.sh`    | Snapshot and tear down only job-owned `fm-hclab-*` sessions in the herdr-core CI lane |
 | `fm-rex-marks.sh`        | Opt-in: turn each Rex task's latest status into one badge and notification on its pane, plus validation progress and an optional tint (`plan`, `sync`, `clear`); the watcher runs `sync` each poll while the option or a cached record exists, and cleanup runs `clear` |
 | `fm-osc7501.sh`          | Launch-driven [OSC 7501 worker status bridge](configuration.md#osc-7501-worker-status-reporting); its header owns commands and reporting rules |
+| `fm-orca-worktree-setup.sh` | Orca worktree setup hook (`orca.yaml`): idempotent clone-local scratch excludes plus a read-only core-runtime check |
+| `fm-orca-worktree-archive.sh` | Orca worktree archive hook (`orca.yaml`): fail-closed prune of regenerable Python and ruff cache artifacts, preserving tracked files and git metadata |
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, bounded concurrency, budgets, coverage guard, timing/JSON; refuses to execute in the repository primary checkout when `FM_TASK_ID` marks a task worker |
 | `fm-test-isolation-proof.sh` | Concurrent isolation harness and portable candidate set owner |
 | `fm-ensure-agents-md.sh` | Manually initialize project agent-memory files (see the helper's header and help) |
